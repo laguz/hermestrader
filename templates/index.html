@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Option Backtesting Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Option Backtester</h1>
+        </header>
+
+        <main>
+            <div class="control-panel">
+                <h2>Strategy Configuration</h2>
+                <form id="backtest-form">
+                    <div class="form-group">
+                        <label for="symbol">Symbol</label>
+                        <input type="text" id="symbol" name="symbol" value="SPY" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="strategy">Strategy</label>
+                        <select id="strategy" name="strategy">
+                            <option value="credit_spread">Credit Spread (Smart Entry)</option>
+                            <option value="long_call">Long Call</option>
+                            <option value="long_put">Long Put</option>
+                            <option value="covered_call">Covered Call</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="start_date">Start Date</label>
+                        <input type="date" id="start_date" name="start_date" required>
+                    </div>
+
+                    <button type="submit" class="btn-primary">Run Backtest</button>
+                </form>
+            </div>
+
+            <div class="results-panel">
+                <div id="loading" class="hidden">Running backtest...</div>
+                <div id="chart-container"></div>
+                <div id="metrics-container"></div>
+                <div id="trades-container" class="hidden">
+                    <h3>Trade History</h3>
+                    <div class="table-responsive">
+                        <table id="trades-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Action</th>
+                                    <th>Price/Credit</th>
+                                    <th>PnL</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+
+</html>
