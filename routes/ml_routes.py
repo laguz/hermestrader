@@ -8,12 +8,13 @@ ml_bp = Blueprint('ml', __name__)
 def train_model():
     data = request.json
     symbol = data.get('symbol', 'SPY')
+    model_type = data.get('model_type', 'rf')
     
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
     
     try:
-        result = ml_service.train_model(symbol)
+        result = ml_service.train_model(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
         return jsonify(result)
@@ -25,12 +26,13 @@ def train_model():
 def predict_price():
     data = request.json
     symbol = data.get('symbol', 'SPY')
+    model_type = data.get('model_type', 'rf')
     
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
     
     try:
-        result = ml_service.predict_next_day(symbol)
+        result = ml_service.predict_next_day(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
         return jsonify(result)
@@ -42,12 +44,13 @@ def predict_price():
 def evaluate_model():
     data = request.json
     symbol = data.get('symbol', 'SPY')
+    model_type = data.get('model_type', 'rf')
     
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
     
     try:
-        result = ml_service.evaluate_model(symbol)
+        result = ml_service.evaluate_model(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
         return jsonify(result)

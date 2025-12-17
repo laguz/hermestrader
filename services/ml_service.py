@@ -3,9 +3,13 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import MinMaxScaler
 import os
 import joblib
 from datetime import datetime, timedelta
+import tensorflow as tf
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
 
@@ -18,6 +22,7 @@ class MLService:
         
         # Features to use for prediction
         self.features = ['close', 'volume', 'rsi', 'upper_bb', 'lower_bb', 'mid_bb', 'macd', 'macd_signal', 'atr', 'sma_50']
+        self.sequence_length = 60 # Lookback for LSTM
 
     def prepare_data(self, df):
         df = df.copy()
@@ -50,8 +55,41 @@ class MLService:
         
         return df
 
-    def train_model(self, symbol):
-        print(f"Starting Random Forest training for {symbol}...")
+    def _prepare_lstm_data(self, df, fit_scaler=False, scaler=None):
+        """Prepare sequences for LSTM"""
+        data = df[self.features].values
+        target = df['target'].values
+        
+        if fit_scaler:
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            scaled_data = scaler.fit_transform(data)
+        else:
+            if not scaler:
+                 raise ValueError("Scaler required for transforming data")
+            scaled_data = scaler.transform(data)
+            
+        X, y = [], []
+        # Create sequences
+        for i in range(self.sequence_length, len(scaled_data)):
+            X.append(scaled_data[i-self.sequence_length:i])
+            y.append(target[i])
+            
+        return np.array(X), np.array(y), scaler
+
+    def _build_lstm_model(self, input_shape):
+        model = Sequential()
+        model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
+        model.add(Dropout(0.2))
+        model.add(LSTM(50, return_sequences=False))
+        model.add(Dropout(0.2))
+        model.add(Dense(25))
+        model.add(Dense(1)) # Predict price directly
+        
+        model.compile(optimizer='adam', loss='mean_squared_error')
+        return model
+
+    def train_model(self, symbol, model_type='rf'):
+        print(f"Starting {model_type.upper()} training for {symbol}...")
         
         # 1. Fetch Data (2 years)
         end_date = datetime.now().strftime('%Y-%m-%d')
@@ -69,45 +107,56 @@ class MLService:
         
         if len(df) < 100:
             return {"error": "Not enough data for training"}
-
-        X = df[self.features]
-        y = df['target']
         
-        # 3. Train Test Split
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        mse = 0
         
-        # 4. Train Model
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-        model.fit(X_train, y_train)
+        if model_type == 'lstm':
+            X, y, scaler = self._prepare_lstm_data(df, fit_scaler=True)
+            
+            # Split
+            split = int(len(X) * 0.8)
+            X_train, X_test = X[:split], X[split:]
+            y_train, y_test = y[:split], y[split:]
+            
+            model = self._build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+            model.fit(X_train, y_train, batch_size=32, epochs=20, validation_data=(X_test, y_test), verbose=1)
+            
+            predictions = model.predict(X_test)
+            mse = mean_squared_error(y_test, predictions)
+            
+            # Save
+            model.save(f"{self.model_dir}/{symbol}_lstm.keras")
+            joblib.dump(scaler, f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
+            
+        else: # Random Forest
+            X = df[self.features]
+            y = df['target']
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+            
+            model = RandomForestRegressor(n_estimators=100, random_state=42)
+            model.fit(X_train, y_train)
+            
+            predictions = model.predict(X_test)
+            mse = mean_squared_error(y_test, predictions)
+            joblib.dump(model, f"{self.model_dir}/{symbol}_rf.pkl")
         
-        # Evaluate
-        predictions = model.predict(X_test)
-        mse = mean_squared_error(y_test, predictions)
-        print(f"Model MSE: {mse}")
-        
-        # 5. Save Model
-        joblib.dump(model, f"{self.model_dir}/{symbol}_rf.pkl")
+        print(f"Model ({model_type}) MSE: {mse}")
         
         return {
             "status": "trained", 
             "symbol": symbol, 
+            "type": model_type,
             "data_points": len(df),
             "mse": round(mse, 4)
         }
 
-    def predict_next_day(self, symbol):
-        model_path = f"{self.model_dir}/{symbol}_rf.pkl"
-        
-        if not os.path.exists(model_path):
-            return {"error": "Model not found. Please train first."}
-
-        # Load Model
-        model = joblib.load(model_path)
+    def predict_next_day(self, symbol, model_type='rf'):
         
         # Fetch recent data
-        # We need enough data to calculate indicators (~60 days buffer is safe)
         end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+        # Increase lookback for LSTM (need 60 sequence + 50 warmup + buffer)
+        # 365 calendar days ~ 250 trading days, plenty.
+        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
         
         history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
         if not history:
@@ -116,41 +165,90 @@ class MLService:
         df = pd.DataFrame(history)
         df['date'] = pd.to_datetime(df['date'])
         
-        # Prepare latest features
+        # Prepare features (calculates indicators)
+        # Note: prepare_data shifts target, but we need features for the LATEST day(s)
+        # So we run prepare_data but ignore the target dropping at the end for the very last row?
+        # Actually prepare_data drops NaNs.
+        # We need to leverage the prepare_data logic but be careful about the last row.
+        
+        # Let's copy prepare_data logic partially or use it and retrieve the last rows.
+        # If we use prepare_data, it drops the last row because it doesn't have a target (tomorrow).
+        # We need that last row (today) to predict tomorrow.
+        
+        # HACK: Duplicate the last row with dummy target so prepare_data keeps it?
+        # Or just re-calc indicators manually here?
+        # Better: Refactor prepare_data to optionally not drop last row.
+        # For minimal disruption, let's just calc indicators on 'df' directly here like prepare_data does but without drops.
+        
         df['close'] = df['close'].astype(float)
+        # ... standard conversions ...
         if 'high' in df.columns: df['high'] = df['high'].astype(float)
         if 'low' in df.columns: df['low'] = df['low'].astype(float)
         if 'volume' in df.columns: df['volume'] = df['volume'].astype(float)
 
         df['rsi'] = calculate_rsi(df['close'])
         df['upper_bb'], df['mid_bb'], df['lower_bb'] = calculate_bollinger_bands(df['close'])
-        
         df['macd'], df['macd_signal'], _ = calculate_macd(df['close'])
         df['sma_50'] = calculate_sma(df['close'], window=50)
-        
         if 'high' in df.columns and 'low' in df.columns:
             df['atr'] = calculate_atr(df['high'], df['low'], df['close'])
         else:
             df['atr'] = 0.0
-        
-        # We need the very last row which corresponds to "today" to predict "tomorrow"
-        # Since prepare_data shifts target, we just want the features of the last available day
+            
+        # Check sufficient data
+        if pd.isna(df.iloc[-1]['rsi']) or pd.isna(df.iloc[-1]['sma_50']):
+             return {"error": "Not enough data for indicators"}
+
+        prediction = 0
         last_row = df.iloc[-1]
         
-        # Check if indicators are valid
-        if pd.isna(last_row['rsi']) or pd.isna(last_row['sma_50']):
-             return {"error": "Not enough data to calculate recent indicators (need > 50 days)"}
-        
-        # Predict
-        features_df = pd.DataFrame([last_row[self.features]])
-        prediction = model.predict(features_df)[0]
-        
+        if model_type == 'lstm':
+            model_path = f"{self.model_dir}/{symbol}_lstm.keras"
+            scaler_path = f"{self.model_dir}/{symbol}_lstm_scaler.pkl"
+            
+            if not os.path.exists(model_path):
+                return {"error": f"LSTM model for {symbol} not found."}
+                
+            model = load_model(model_path)
+            scaler = joblib.load(scaler_path)
+            
+            # Get last 60 days of features
+            # We need the FEATURES, not just close price.
+            # features list: ['close', 'volume', 'rsi', ...]
+            
+            # Ensure we have clean data (indicators might be NaN at start)
+            clean_df = df.dropna()
+            
+            last_sequence_df = clean_df.tail(self.sequence_length)
+            if len(last_sequence_df) < self.sequence_length:
+                return {"error": f"Not enough valid data for LSTM sequence. Has {len(last_sequence_df)}, need {self.sequence_length}"}
+                
+            data = last_sequence_df[self.features].values
+            scaled_data = scaler.transform(data) # (60, n_features)
+            
+            # Reshape for LSTM (1, 60, n_features)
+            X_input = np.array([scaled_data])
+            pred_scaled = model.predict(X_input)
+            
+            # Prediction is price directly (if we trained on raw targets)
+            prediction = float(pred_scaled[0][0])
+            
+        else: # RF
+            model_path = f"{self.model_dir}/{symbol}_rf.pkl"
+            if not os.path.exists(model_path):
+                return {"error": "RF Model not found."}
+            model = joblib.load(model_path)
+            
+            features_df = pd.DataFrame([last_row[self.features]])
+            prediction = model.predict(features_df)[0]
+            
         last_close = last_row['close']
         change = prediction - last_close
         percent_change = (change / last_close) * 100
         
         return {
             "symbol": symbol,
+            "model": model_type,
             "predicted_price": round(float(prediction), 2),
             "last_close": round(float(last_close), 2),
             "change": round(float(change), 2),
@@ -158,94 +256,110 @@ class MLService:
             "prediction_date": (last_row['date'] + timedelta(days=1)).strftime('%Y-%m-%d')
         }
 
-    def evaluate_model(self, symbol, days=60):
+    def evaluate_model(self, symbol, days=60, model_type='rf'):
         """
-        Evaluate the saved model against recent historical data (backtest).
+        Evaluate the saved model.
         """
-        model_path = f"{self.model_dir}/{symbol}_rf.pkl"
-        if not os.path.exists(model_path):
-            return {"error": "Model not found. Please train first."}
+        if model_type == 'lstm':
+            model_path = f"{self.model_dir}/{symbol}_lstm.keras"
+            if not os.path.exists(model_path): return {"error": "LSTM Model not found."}
+            model = load_model(model_path)
+            scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
+        else:
+            model_path = f"{self.model_dir}/{symbol}_rf.pkl"
+            if not os.path.exists(model_path): return {"error": "RF Model not found."}
+            model = joblib.load(model_path)
 
-        model = joblib.load(model_path)
-
-        # Fetch enough data: days to evaluate + buffer for indicators (100 days)
-        # We want to test 'days' amount of predictions.
         end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=days + 150)).strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=days + 200)).strftime('%Y-%m-%d')
 
         history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
-        if not history:
-            return {"error": "Not enough data for evaluation"}
+        if not history: return {"error": "Not enough data"}
 
         df = pd.DataFrame(history)
         df['date'] = pd.to_datetime(df['date'])
-
-        # Prepare features for the whole set
-        df = self.prepare_data(df)
         
-        # We can only evaluate on rows where we have targets (next day price known)
-        # prepare_data drops NaNs, so df should be clean.
-        # We take the last 'days' rows
-        eval_df = df.tail(days).copy()
+        # Calc indicators on full set (don't drop yet)
+        df['close'] = df['close'].astype(float)
+        # ... (indicators same as predict)
+        # Use prepare_data to get clean dataset with indicators + target
+        clean_df = self.prepare_data(df) # This drops last row (target unknown) + NaNs
         
-        if len(eval_df) < 10:
-             return {"error": "Not enough clean data after indicator calc for evaluation"}
-
-        X = eval_df[self.features]
-        y_actual = eval_df['target']
-        dates = eval_df['date'] # this is T (feature date), prediction is for T+1 target
-
-        predictions = model.predict(X)
+        # Logic: we need sequences for LSTM
+        # We want to evaluate roughly 'days' targets.
+        
+        eval_df = clean_df.tail(days + (60 if model_type=='lstm' else 0)) # Grab extra for LSTM sequences
         
         results = []
         squared_errors = []
         absolute_errors = []
         correct_direction = 0
-        total_predictions = len(predictions)
+        
+        if model_type == 'lstm':
+             # Need to regenerate sequences from the eval slice?
+             # actually _prepare_lstm will generate sequences from the provided DF.
+             # We want sequences corresponding to the last 'days' targets.
+             # X, y, _ = self._prepare_lstm_data(clean_df, fit_scaler=False, scaler=scaler)
+             # X will be (N, 60, feat).
+             # We just take the last 'days' items from X and y.
+             
+             X_all, y_all, _ = self._prepare_lstm_data(clean_df, fit_scaler=False, scaler=scaler)
+             if len(X_all) < days:
+                 return {"error": "Not enough data for evaluation constraints"}
+                 
+             X = X_all[-days:]
+             y_actual = y_all[-days:]
+             # Dates? corresponding to these targets.
+             # clean_df has 'date'. The target for row i is T+1. 
+             # sequence i ends at row i.
+             # So indices align.
+             dates = clean_df['date'].values[self.sequence_length:][-days:]
+             close_list = clean_df['close'].values[self.sequence_length:][-days:] # Close at T
+             
+             predictions = model.predict(X) 
+             # predictions shape (days, 1)
+             predictions = [float(p[0]) for p in predictions]
+             
+        else:
+            X = eval_df[self.features].tail(days)
+            y_actual = eval_df['target'].tail(days).values
+            dates = eval_df['date'].tail(days).values
+            close_list = eval_df['close'].tail(days).values
+            predictions = model.predict(X)
 
-        # Iterate to build result list
-        # Align indices
-        y_actual_list = y_actual.values
-        dates_list = dates.values
-        close_list = eval_df['close'].values # Current day close, to check direction
-
-        for i in range(total_predictions):
-            actual = y_actual_list[i]
+        # Loop metrics
+        for i in range(len(predictions)):
+            actual = y_actual[i]
             predicted = predictions[i]
             current_close = close_list[i]
-            date_t = pd.to_datetime(dates_list[i])
-            date_target = date_t + timedelta(days=1) # Approx T+1 (ignoring weekends logic for display)
-            # Actually, date_target is just the date of the target. 
-            # Note: prepare_data shifts target = shift(-1). So target for date T is price at T+1.
             
             err = actual - predicted
             squared_errors.append(err ** 2)
             absolute_errors.append(abs(err))
             
-            # Directional accuracy: Did we correctly predict up/down relative to current close?
             actual_move = actual - current_close
             predicted_move = predicted - current_close
             
-            if (actual_move > 0 and predicted_move > 0) or (actual_move < 0 and predicted_move < 0):
+            if (actual_move * predicted_move) > 0:
                 correct_direction += 1
-            elif abs(actual_move) < 0.01 and abs(predicted_move) < 0.01: # Flat
+            elif abs(actual_move) < 0.01 and abs(predicted_move) < 0.01:
                 correct_direction += 1
                 
             results.append({
-                "date": date_t.strftime('%Y-%m-%d'),
+                "date": pd.to_datetime(dates[i]).strftime('%Y-%m-%d'),
                 "actual": round(actual, 2),
                 "predicted": round(predicted, 2),
                 "error": round(err, 2)
             })
 
-        mse = np.mean(squared_errors)
-        mae = np.mean(absolute_errors)
-        direction_accuracy = (correct_direction / total_predictions) * 100
+        mse = np.mean(squared_errors) if squared_errors else 0
+        mae = np.mean(absolute_errors) if absolute_errors else 0
+        acc = (correct_direction / len(predictions) * 100) if predictions else 0
 
         return {
             "symbol": symbol,
             "mse": round(mse, 4),
             "mae": round(mae, 4),
-            "accuracy": round(direction_accuracy, 2),
+            "accuracy": round(acc, 2),
             "predictions": results
         }

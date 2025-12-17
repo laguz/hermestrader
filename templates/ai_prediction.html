@@ -13,15 +13,109 @@
         <label for="symbol" class="md-text-field-label">Symbol</label>
     </div>
 
-    <div class="ai-controls">
-        <button id="btn-train" class="md-button md-button--tonal">Train Model</button>
-        <button id="btn-predict" class="md-button md-button--filled">Predict Next Day</button>
+    <div class="md-text-field-container" style="max-width: 300px;">
+        <select id="model-type" class="md-text-field" style="padding: 12px 16px;">
+            <option value="rf">Random Forest</option>
+            <option value="lstm">LSTM (TensorFlow)</option>
+        </select>
+        <label for="model-type" class="md-text-field-label">Model Architecture</label>
     </div>
 
-    <div id="ai-loading" class="hidden">Processing...</div>
+    <div class="action-buttons">
+        <button id="btn-train" class="md-button md-button--filled">Train Model</button>
+        <button id="btn-predict" class="md-button md-button--text">Predict Next Day</button>
+    </div>
 
-    <div id="ai-result" class="hidden">
-        <!-- Results populated by JS -->
+    <div id="loading" class="hidden">Processing...</div>
+</div>
+
+<div id="results-panel" class="md-card hidden">
+    <h3 class="md-card__headline">Prediction Results</h3>
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <h3>Predicted Price</h3>
+            <p id="res-price">-</p>
+        </div>
+        <div class="metric-card">
+            <h3>Expected Change</h3>
+            <p id="res-change" class="positive">+0.00%</p>
+        </div>
+        <div class="metric-card">
+            <h3>Last Close</h3>
+            <p id="res-last">-</p>
+        </div>
+    </div>
+    <div style="margin-top: 1rem; color: var(--md-sys-color-on-surface-variant); font-size: 0.9em;">
+        Prediction for: <span id="res-date"></span><br>
+        <span id="res-model-info"></span>
     </div>
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const btnTrain = document.getElementById('btn-train');
+        const btnPredict = document.getElementById('btn-predict');
+        const symbolInput = document.getElementById('symbol');
+        const modelSelect = document.getElementById('model-type');
+        const loading = document.getElementById('loading');
+        const resultsPanel = document.getElementById('results-panel');
+
+        const showLoading = (show) => {
+            if (show) loading.classList.remove('hidden');
+            else loading.classList.add('hidden');
+        };
+
+        btnTrain.addEventListener('click', async () => {
+            showLoading(true);
+            const symbol = symbolInput.value;
+            const modelType = modelSelect.value;
+            try {
+                const res = await fetch('/api/train', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, model_type: modelType })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                alert(`Training Complete! MSE: ${data.mse} (${data.type})`);
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                showLoading(false);
+            }
+        });
+
+        btnPredict.addEventListener('click', async () => {
+            showLoading(true);
+            resultsPanel.classList.add('hidden');
+            const symbol = symbolInput.value;
+            const modelType = modelSelect.value;
+            try {
+                const res = await fetch('/api/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol, model_type: modelType })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                document.getElementById('res-price').textContent = `$${data.predicted_price}`;
+                document.getElementById('res-last').textContent = `$${data.last_close}`;
+
+                const changeEl = document.getElementById('res-change');
+                changeEl.textContent = `${data.change > 0 ? '+' : ''}${data.change} (${data.percent_change_str})`;
+                changeEl.className = data.change >= 0 ? 'positive' : 'negative';
+
+                document.getElementById('res-date').textContent = data.prediction_date;
+                document.getElementById('res-model-info').textContent = `Model: ${data.model.toUpperCase()}`;
+
+                resultsPanel.classList.remove('hidden');
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                showLoading(false);
+            }
+        });
+    });
+</script>
 {% endblock %}

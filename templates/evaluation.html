@@ -14,6 +14,14 @@
         <label for="symbol" class="md-text-field-label">Symbol</label>
     </div>
 
+    <div class="md-text-field-container" style="max-width: 300px;">
+        <select id="model-type" class="md-text-field" style="padding: 12px 16px;">
+            <option value="rf">Random Forest</option>
+            <option value="lstm">LSTM (TensorFlow)</option>
+        </select>
+        <label for="model-type" class="md-text-field-label">Model Architecture</label>
+    </div>
+
     <button id="btn-evaluate" class="md-button md-button--filled">Run Evaluation</button>
     <div id="eval-loading" class="hidden" style="margin-top: 1rem;">Running evaluation...</div>
 </div>
@@ -50,6 +58,7 @@
 
         btnEvaluate.addEventListener('click', async () => {
             const symbol = document.getElementById('symbol').value;
+            const modelType = document.getElementById('model-type').value;
             if (!symbol) return alert('Please enter a symbol');
 
             loading.classList.remove('hidden');
@@ -59,7 +68,7 @@
                 const response = await fetch('/api/evaluate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol })
+                    body: JSON.stringify({ symbol, model_type: modelType })
                 });
                 const data = await response.json();
 
@@ -91,7 +100,7 @@
                 };
 
                 const layout = {
-                    title: 'Model Fit Analysis (Last 60 Days)',
+                    title: `Model Fit Analysis (${modelType.toUpperCase()})`,
                     paper_bgcolor: 'rgba(0,0,0,0)',
                     plot_bgcolor: 'rgba(0,0,0,0)',
                     font: { color: '#94a3b8' },
