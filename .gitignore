@@ -1,1 +1,9 @@
 .env
+# LEAN
+**/__pycache__
+*.pyc
+data/
+
+.lean/
+.DS_Store
+algorithms/backtests
