@@ -1,224 +1,337 @@
 :root {
-    --bg-color: #0f172a;
-    --card-bg: #1e293b;
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --accent-color: #3b82f6;
-    --accent-hover: #2563eb;
-    --border-color: #334155;
-    --font-family: 'Inter', sans-serif;
+    /* MD3 Dark Theme Colors (Ref: Material Theme Builder) */
+    --md-sys-color-primary: #a8c7fa;
+    --md-sys-color-on-primary: #003062;
+    --md-sys-color-primary-container: #00478a;
+    --md-sys-color-on-primary-container: #d6e3ff;
+
+    --md-sys-color-secondary: #bdc7dc;
+    --md-sys-color-on-secondary: #273141;
+    --md-sys-color-secondary-container: #3e4758;
+    --md-sys-color-on-secondary-container: #d9e3f9;
+
+    --md-sys-color-background: #111318;
+    --md-sys-color-on-background: #e2e2e9;
+
+    --md-sys-color-surface: #111318;
+    --md-sys-color-on-surface: #e2e2e9;
+    --md-sys-color-surface-container: #1d2024;
+    --md-sys-color-surface-container-high: #282a2f;
+
+    --md-sys-color-outline: #8e9099;
+    --md-sys-color-outline-variant: #44474f;
+
+    --md-ref-typeface-brand: 'Roboto', sans-serif;
+    --md-ref-typeface-plain: 'Roboto', sans-serif;
 }
 
 body {
-    background-color: var(--bg-color);
-    color: var(--text-primary);
-    font-family: var(--font-family);
+    background-color: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-background);
+    font-family: var(--md-ref-typeface-plain);
     margin: 0;
     padding: 0;
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 2rem;
-}
-
-header {
-    margin-bottom: 2rem;
-    border-bottom: 1px solid var(--border-color);
-    padding-bottom: 1rem;
-}
-
-h1 {
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-main {
-    display: grid;
-    grid-template-columns: 300px 1fr;
-    gap: 2rem;
-}
-
-.control-panel,
-.results-panel {
-    background-color: var(--card-bg);
-    padding: 1.5rem;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-}
-
-.form-group {
-    margin-bottom: 1.5rem;
-}
-
-label {
-    display: block;
-    margin-bottom: 0.5rem;
-    color: var(--text-secondary);
-    font-size: 0.875rem;
-}
-
-input,
-select {
-    width: 100%;
-    padding: 0.75rem;
-    background-color: var(--bg-color);
-    border: 1px solid var(--border-color);
-    color: var(--text-primary);
-    border-radius: 6px;
-    box-sizing: border-box;
-    /* Fix width issue */
-}
-
-input:focus,
-select:focus {
-    outline: none;
-    border-color: var(--accent-color);
-    box-shadow: 0 0 0 2px var(--accent-color);
-}
-
-.btn-primary {
-    width: 100%;
-    padding: 0.75rem;
-    background-color: var(--accent-color);
-    color: white;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: background-color 0.2s;
-}
-
-.btn-primary:hover {
-    background-color: var(--accent-hover);
-}
-
-.hidden {
-    display: none;
-}
-
-#chart-container {
-    min-height: 400px;
-}
-
-/* Metrics Grid */
-.metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-    margin-top: 1.5rem;
-}
-
-.metric-card {
-    background: rgba(255, 255, 255, 0.05);
-    padding: 1.5rem;
-    border-radius: 12px;
-    text-align: center;
-    border: 1px solid var(--border-color);
-}
-
-.metric-card h3 {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    margin-bottom: 0.5rem;
-}
-
-.metric-card p {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-/* AI Panel */
-.ai-panel {
-    background-color: var(--card-bg);
-    padding: 2rem;
-    border-radius: 16px;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    border: 1px solid var(--border-color);
-}
-
-.ai-controls {
+.app-container {
     display: flex;
-    gap: 1rem;
-    margin-bottom: 1rem;
+    flex-direction: column;
+    min-height: 100vh;
 }
 
-.btn-secondary {
-    background-color: transparent;
-    border: 1px solid var(--accent-color);
-    color: var(--accent-color);
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    font-weight: 600;
+/* --- Components: Top App Bar --- */
+.md-top-app-bar {
+    background-color: var(--md-sys-color-surface);
+    color: var(--md-sys-color-on-surface);
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    /* Small app bar usually 64px height, but we have tabs */
+}
+
+.md-top-app-bar__row {
+    height: 64px;
+    display: flex;
+    align-items: center;
+}
+
+.md-top-app-bar__title {
+    font-size: 22px;
+    line-height: 28px;
+    font-weight: 400;
+    /* Regular */
+    margin-left: 12px;
+}
+
+/* --- Components: Navigation Tab Bar --- */
+.md-navigation-tab-bar {
+    display: flex;
+    justify-content: center;
+    /* Center tabs */
+    background-color: var(--md-sys-color-surface);
+}
+
+.md-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 16px;
+    min-width: 90px;
+    text-decoration: none;
+    color: var(--md-sys-color-on-surface);
+    opacity: 0.7;
+    position: relative;
     cursor: pointer;
     transition: all 0.2s;
 }
 
-.btn-secondary:hover {
-    background-color: rgba(59, 130, 246, 0.1);
+.md-tab.active,
+.md-tab:hover {
+    color: var(--md-sys-color-primary);
+    opacity: 1;
 }
 
-#ai-result {
-    margin-top: 1rem;
-    padding: 1rem;
-    background: rgba(59, 130, 246, 0.1);
-    border-radius: 8px;
-    border: 1px solid var(--accent-color);
+/* Active indicator pill (simple version) */
+.md-tab.active::before {
+    content: '';
+    position: absolute;
+    top: 5px;
+    /* Adjust based on icon size */
+    width: 64px;
+    height: 32px;
+    background-color: var(--md-sys-color-primary-container);
+    border-radius: 16px;
+    z-index: -1;
+}
+
+.md-tab .material-symbols-outlined {
+    font-size: 24px;
+    margin-bottom: 4px;
+}
+
+.md-tab__label {
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+}
+
+/* --- Layout: Main --- */
+main {
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 24px;
+}
+
+/* --- Components: Cards --- */
+.md-card {
+    background-color: var(--md-sys-color-surface-container);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.md-card__headline {
+    margin: 0 0 16px 0;
+    font-size: 22px;
+    /* Headline Small */
+    font-weight: 400;
+    color: var(--md-sys-color-on-surface);
+}
+
+/* --- Components: Text Fields (Outlined) --- */
+/* Structure: .md-text-field-container > input + label */
+.md-text-field-container {
+    position: relative;
+    margin-bottom: 24px;
+    padding-top: 8px;
+    /* Space for label to float */
+}
+
+.md-text-field {
+    width: 100%;
+    background-color: transparent;
+    border: 1px solid var(--md-sys-color-outline);
+    border-radius: 4px;
+    padding: 16px 16px;
+    font-size: 16px;
+    color: var(--md-sys-color-on-surface);
+    font-family: inherit;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+
+.md-text-field:focus {
+    outline: none;
+    border: 2px solid var(--md-sys-color-primary);
+    border-color: var(--md-sys-color-primary);
+    padding: 15px 15px;
+    /* Adjust for 2px border to prevent layout shift */
+}
+
+.md-text-field-label {
+    position: absolute;
+    left: 16px;
+    top: 24px;
+    /* Center in input */
+    transform: translateY(-50%);
+    background-color: var(--md-sys-color-surface-container);
+    /* Match card bg */
+    padding: 0 4px;
+    color: var(--md-sys-color-on-surface);
+    font-size: 16px;
+    transition: all 0.2s;
+    pointer-events: none;
+}
+
+.md-text-field:focus+.md-text-field-label,
+.md-text-field:not(:placeholder-shown)+.md-text-field-label {
+    top: 8px;
+    font-size: 12px;
+    color: var(--md-sys-color-primary);
+}
+
+/* Fix for Select elements which act similar but maybe different interactions */
+select.md-text-field {
+    appearance: none;
+    background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23e2e2e9%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E');
+    background-repeat: no-repeat;
+    background-position: right 16px top 50%;
+    background-size: 12px auto;
+}
+
+/* --- Components: Buttons --- */
+.md-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 40px;
+    padding: 0 24px;
+    border-radius: 20px;
+    /* Stadium shape */
+    font-family: var(--md-ref-typeface-brand);
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.1px;
+    cursor: pointer;
+    border: none;
+    transition: background-color 0.2s, box-shadow 0.2s;
+    text-transform: capitalize;
+    width: 100%;
+    /* Keep full width for panel buttons */
+}
+
+.md-button--filled {
+    background-color: var(--md-sys-color-primary);
+    color: var(--md-sys-color-on-primary);
+}
+
+.md-button--filled:hover {
+    box-shadow: 0 1px 3px 1px rgba(0, 0, 0, 0.15);
+    background-color: #acc7f6;
+    /* Slight hover lighten or use strict state layer opacity */
+    opacity: 0.9;
+}
+
+.md-button--tonal {
+    background-color: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
+}
+
+.md-button--tonal:hover {
+    opacity: 0.9;
+}
+
+/* --- Utilities --- */
+.hidden {
+    display: none !important;
+}
+
+.col-span-full {
+    grid-column: 1 / -1;
+}
+
+/* --- Specific: Results --- */
+.results-panel {
+    /* Inherits md-card by adding class in HTML */
+    min-height: 500px;
+}
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+}
+
+.metric-card {
+    background-color: var(--md-sys-color-surface);
+    /* Darker than container */
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+    border: 1px solid var(--md-sys-color-outline-variant);
+}
+
+.metric-card h3 {
+    margin: 0;
+    font-size: 14px;
+    color: var(--md-sys-color-secondary);
+    font-weight: 500;
+}
+
+.metric-card p {
+    margin: 8px 0 0 0;
+    font-size: 24px;
+    color: var(--md-sys-color-on-surface);
 }
 
 /* Trades Table */
-#trades-container {
-    margin-top: 2rem;
-    background-color: var(--card-bg);
+.md-table-container {
+    border: 1px solid var(--md-sys-color-outline-variant);
     border-radius: 8px;
-    border: 1px solid var(--border-color);
-    padding: 1rem;
     overflow: hidden;
-}
-
-#trades-container h3 {
-    margin-top: 0;
-    margin-bottom: 1rem;
-    font-size: 1.1rem;
-    color: var(--text-primary);
-}
-
-.table-responsive {
-    overflow-x: auto;
+    margin-top: 24px;
 }
 
 table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.9rem;
 }
 
 th,
 td {
-    padding: 0.75rem;
+    padding: 12px 16px;
     text-align: left;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    font-size: 14px;
 }
 
 th {
-    color: var(--text-secondary);
+    background-color: var(--md-sys-color-surface-container-high);
+    color: var(--md-sys-color-on-surface);
     font-weight: 500;
-}
-
-td {
-    color: var(--text-primary);
 }
 
 tr:last-child td {
     border-bottom: none;
 }
 
-.trade-action {
-    font-family: monospace;
-    font-weight: 600;
-    color: var(--accent-color);
+#trades-container h3 {
+    font-size: 22px;
+    font-weight: 400;
+    margin-top: 0;
+}
+
+/* AI Panel specific */
+.ai-controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
 }

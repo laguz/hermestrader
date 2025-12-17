@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="md-card col-span-full">
+    <h2 class="md-card__headline">AI Model Evaluation (Backtest)</h2>
+    <p style="color: var(--md-sys-color-on-surface-variant); margin-bottom: 2rem;">
+        Evaluate the latest trained model performance against the last 60 days of actual data.
+        This is a "fit analysis" to see how well the model predicts price movement on unseen data (if using a test set
+        logic) or generally tracking logic.
+    </p>
+
+    <div class="md-text-field-container" style="max-width: 300px;">
+        <input type="text" id="symbol" name="symbol" class="md-text-field" value="SPY" placeholder=" " required>
+        <label for="symbol" class="md-text-field-label">Symbol</label>
+    </div>
+
+    <button id="btn-evaluate" class="md-button md-button--filled">Run Evaluation</button>
+    <div id="eval-loading" class="hidden" style="margin-top: 1rem;">Running evaluation...</div>
+</div>
+
+<div id="eval-results" class="col-span-full hidden">
+    <!-- Metrics Grid -->
+    <div class="metrics-grid" style="margin-bottom: 24px;">
+        <div class="metric-card">
+            <h3>MSE (Mean Squared Error)</h3>
+            <p id="metric-mse">-</p>
+        </div>
+        <div class="metric-card">
+            <h3>MAE (Mean Absolute Error)</h3>
+            <p id="metric-mae">-</p>
+        </div>
+        <div class="metric-card">
+            <h3>Directional Accuracy</h3>
+            <p id="metric-accuracy">-</p>
+        </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="md-card">
+        <h3 class="md-card__headline">Actual vs Predicted Price</h3>
+        <div id="eval-chart"></div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const btnEvaluate = document.getElementById('btn-evaluate');
+        const loading = document.getElementById('eval-loading');
+        const resultsPanel = document.getElementById('eval-results');
+
+        btnEvaluate.addEventListener('click', async () => {
+            const symbol = document.getElementById('symbol').value;
+            if (!symbol) return alert('Please enter a symbol');
+
+            loading.classList.remove('hidden');
+            resultsPanel.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/evaluate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol })
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    if (data.error.includes("Model not found")) {
+                        alert('Model not found. Please go to AI Prediction and train a model for ' + symbol + ' first.');
+                        return;
+                    }
+                    throw new Error(data.error);
+                }
+
+                // Render Metrics
+                document.getElementById('metric-mse').textContent = data.mse;
+                document.getElementById('metric-mae').textContent = data.mae;
+                document.getElementById('metric-accuracy').textContent = data.accuracy + '%';
+
+                // Render Chart
+                const dates = data.predictions.map(r => r.date);
+                const actuals = data.predictions.map(r => r.actual);
+                const predicteds = data.predictions.map(r => r.predicted);
+
+                const traceActual = {
+                    x: dates, y: actuals, type: 'scatter', mode: 'lines', name: 'Actual',
+                    line: { color: '#a8c7fa', width: 2 }
+                };
+                const tracePredicted = {
+                    x: dates, y: predicteds, type: 'scatter', mode: 'lines', name: 'Predicted',
+                    line: { color: '#ef4444', width: 2, dash: 'dot' }
+                };
+
+                const layout = {
+                    title: 'Model Fit Analysis (Last 60 Days)',
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    font: { color: '#94a3b8' },
+                    xaxis: { gridcolor: '#334155' },
+                    yaxis: { gridcolor: '#334155' },
+                    legend: { orientation: 'h', y: -0.2 }
+                };
+
+                Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout);
+
+                resultsPanel.classList.remove('hidden');
+
+            } catch (e) {
+                console.error(e);
+                alert('Evaluation Error: ' + e.message);
+            } finally {
+                loading.classList.add('hidden');
+            }
+        });
+    });
+</script>
+{% endblock %}

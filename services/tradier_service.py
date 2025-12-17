@@ -67,6 +67,26 @@ class TradierService:
             print(f"Error fetching history for {symbol}: {e}")
             return None
 
+    def get_positions(self):
+        """Fetch open positions for the account."""
+        url = f"{self.endpoint}/accounts/{self.account_id}/positions"
+        try:
+            response = requests.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            # positions can be None if empty, or a dict with 'position' list/dict
+            positions_data = data.get('positions', {})
+            if positions_data == 'null' or positions_data is None:
+                return []
+                
+            position_entry = positions_data.get('position', [])
+            if isinstance(position_entry, dict):
+                return [position_entry]
+            return position_entry
+        except requests.RequestException as e:
+            print(f"Error fetching positions: {e}")
+            return []
+
     def check_connection(self):
         """Simple check to verify connectivity/auth by fetching a quote for SPY."""
         quote = self.get_quote('SPY')

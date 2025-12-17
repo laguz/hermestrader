@@ -6,17 +6,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Laguz Tech Investment</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 
 <body>
-    <div class="container">
-        <header>
-            <h1>Laguz Tech Investment</h1>
-            <nav class="main-nav">
-                <a href="/" class="{{ 'active' if request.path == '/' else '' }}">Backtester</a>
-                <a href="/ai" class="{{ 'active' if request.path == '/ai' else '' }}">AI Prediction</a>
+    <div class="app-container">
+        <header class="md-top-app-bar">
+            <div class="md-top-app-bar__row">
+                <span class="md-top-app-bar__title">Laguz Tech Investment</span>
+            </div>
+            <nav class="md-navigation-tab-bar">
+                <a href="/" class="md-tab {{ 'active' if request.path == '/' else '' }}">
+                    <span class="material-symbols-outlined">dashboard</span>
+                    <span class="md-tab__label">Dashboard</span>
+                </a>
+                <a href="/backtester" class="md-tab {{ 'active' if request.path == '/backtester' else '' }}">
+                    <span class="material-symbols-outlined">analytics</span>
+                    <span class="md-tab__label">Backtester</span>
+                </a>
+                <a href="/ai" class="md-tab {{ 'active' if request.path == '/ai' else '' }}">
+                    <span class="material-symbols-outlined">psychology</span>
+                    <span class="md-tab__label">AI Prediction</span>
+                </a>
+                <a href="/evaluation" class="md-tab {{ 'active' if request.path == '/evaluation' else '' }}">
+                    <span class="material-symbols-outlined">query_stats</span>
+                    <span class="md-tab__label">Evaluation</span>
+                </a>
             </nav>
         </header>
 

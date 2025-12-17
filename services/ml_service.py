@@ -157,3 +157,95 @@ class MLService:
             "percent_change_str": f"{percent_change:.2f}%",
             "prediction_date": (last_row['date'] + timedelta(days=1)).strftime('%Y-%m-%d')
         }
+
+    def evaluate_model(self, symbol, days=60):
+        """
+        Evaluate the saved model against recent historical data (backtest).
+        """
+        model_path = f"{self.model_dir}/{symbol}_rf.pkl"
+        if not os.path.exists(model_path):
+            return {"error": "Model not found. Please train first."}
+
+        model = joblib.load(model_path)
+
+        # Fetch enough data: days to evaluate + buffer for indicators (100 days)
+        # We want to test 'days' amount of predictions.
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=days + 150)).strftime('%Y-%m-%d')
+
+        history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
+        if not history:
+            return {"error": "Not enough data for evaluation"}
+
+        df = pd.DataFrame(history)
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Prepare features for the whole set
+        df = self.prepare_data(df)
+        
+        # We can only evaluate on rows where we have targets (next day price known)
+        # prepare_data drops NaNs, so df should be clean.
+        # We take the last 'days' rows
+        eval_df = df.tail(days).copy()
+        
+        if len(eval_df) < 10:
+             return {"error": "Not enough clean data after indicator calc for evaluation"}
+
+        X = eval_df[self.features]
+        y_actual = eval_df['target']
+        dates = eval_df['date'] # this is T (feature date), prediction is for T+1 target
+
+        predictions = model.predict(X)
+        
+        results = []
+        squared_errors = []
+        absolute_errors = []
+        correct_direction = 0
+        total_predictions = len(predictions)
+
+        # Iterate to build result list
+        # Align indices
+        y_actual_list = y_actual.values
+        dates_list = dates.values
+        close_list = eval_df['close'].values # Current day close, to check direction
+
+        for i in range(total_predictions):
+            actual = y_actual_list[i]
+            predicted = predictions[i]
+            current_close = close_list[i]
+            date_t = pd.to_datetime(dates_list[i])
+            date_target = date_t + timedelta(days=1) # Approx T+1 (ignoring weekends logic for display)
+            # Actually, date_target is just the date of the target. 
+            # Note: prepare_data shifts target = shift(-1). So target for date T is price at T+1.
+            
+            err = actual - predicted
+            squared_errors.append(err ** 2)
+            absolute_errors.append(abs(err))
+            
+            # Directional accuracy: Did we correctly predict up/down relative to current close?
+            actual_move = actual - current_close
+            predicted_move = predicted - current_close
+            
+            if (actual_move > 0 and predicted_move > 0) or (actual_move < 0 and predicted_move < 0):
+                correct_direction += 1
+            elif abs(actual_move) < 0.01 and abs(predicted_move) < 0.01: # Flat
+                correct_direction += 1
+                
+            results.append({
+                "date": date_t.strftime('%Y-%m-%d'),
+                "actual": round(actual, 2),
+                "predicted": round(predicted, 2),
+                "error": round(err, 2)
+            })
+
+        mse = np.mean(squared_errors)
+        mae = np.mean(absolute_errors)
+        direction_accuracy = (correct_direction / total_predictions) * 100
+
+        return {
+            "symbol": symbol,
+            "mse": round(mse, 4),
+            "mae": round(mae, 4),
+            "accuracy": round(direction_accuracy, 2),
+            "predictions": results
+        }

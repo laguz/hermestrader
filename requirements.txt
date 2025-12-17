@@ -6,3 +6,4 @@ plotly==5.17.0
 gunicorn==21.2.0
 numpy
 scikit-learn
+
