@@ -1,18 +1,34 @@
 document.addEventListener('DOMContentLoaded', () => {
+
+    // --- Backtester Logic ---
     const form = document.getElementById('backtest-form');
+    if (form) {
+        initBacktester(form);
+    }
+
+    // --- AI Logic ---
+    const btnTrain = document.getElementById('btn-train');
+    if (btnTrain) {
+        initAI();
+    }
+
+});
+
+function initBacktester(form) {
     const loading = document.getElementById('loading');
     const chartContainer = document.getElementById('chart-container');
     const metricsContainer = document.getElementById('metrics-container');
 
     // Set default start date to 6 months ago
-    const today = new Date();
-    const sixMonthsAgo = new Date(today.getTime() - (180 * 24 * 60 * 60 * 1000));
-    document.getElementById('start_date').valueAsDate = sixMonthsAgo;
+    const startDateInput = document.getElementById('start_date');
+    if (startDateInput) {
+        const today = new Date();
+        const sixMonthsAgo = new Date(today.getTime() - (180 * 24 * 60 * 60 * 1000));
+        startDateInput.valueAsDate = sixMonthsAgo;
+    }
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-
-        // Basic frontend validation or preparation could go here
 
         loading.classList.remove('hidden');
         chartContainer.innerHTML = '';
@@ -26,9 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const response = await fetch('/api/backtest', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data)
             });
 
@@ -89,21 +103,19 @@ document.addEventListener('DOMContentLoaded', () => {
             // Render Trades Table
             const tradesContainer = document.getElementById('trades-container');
             const tradesTableBody = document.querySelector('#trades-table tbody');
-            tradesTableBody.innerHTML = ''; // Clear previous
+            tradesTableBody.innerHTML = '';
 
             if (result.trades && result.trades.length > 0) {
                 tradesContainer.classList.remove('hidden');
                 result.trades.forEach(trade => {
                     const row = document.createElement('tr');
 
-                    // Format PnL color
                     let pnlHtml = '-';
                     if (trade.pnl !== undefined) {
                         const color = trade.pnl >= 0 ? '#4ade80' : '#ef4444';
                         pnlHtml = `<span style="color: ${color}">$${trade.pnl.toFixed(2)}</span>`;
                     }
 
-                    // Value column (Credit or Price)
                     let valueHtml = '';
                     if (trade.credit) valueHtml = `Credit: $${trade.credit.toFixed(2)}`;
                     else if (trade.price) valueHtml = `Price: $${trade.price.toFixed(2)}`;
@@ -127,4 +139,81 @@ document.addEventListener('DOMContentLoaded', () => {
             loading.classList.add('hidden');
         }
     });
-});
+}
+
+function initAI() {
+    const btnTrain = document.getElementById('btn-train');
+    const btnPredict = document.getElementById('btn-predict');
+    const aiLoading = document.getElementById('ai-loading');
+    const aiResult = document.getElementById('ai-result');
+
+    btnTrain.addEventListener('click', async () => {
+        const symbol = document.getElementById('symbol').value;
+        if (!symbol) return alert('Please enter a symbol');
+
+        aiLoading.classList.remove('hidden');
+        aiLoading.innerText = `Training Random Forest for ${symbol}...`;
+        aiResult.classList.add('hidden');
+
+        try {
+            const response = await fetch('/api/train', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol })
+            });
+            const res = await response.json();
+
+            if (res.error) throw new Error(res.error);
+
+            aiResult.classList.remove('hidden');
+            aiResult.innerHTML = `<p>✅ Model trained successfully! (MSE: ${res.mse})</p>`;
+
+        } catch (e) {
+            alert('Training Error: ' + e.message);
+        } finally {
+            aiLoading.classList.add('hidden');
+        }
+    });
+
+    btnPredict.addEventListener('click', async () => {
+        const symbol = document.getElementById('symbol').value;
+        if (!symbol) return alert('Please enter a symbol');
+
+        aiLoading.classList.remove('hidden');
+        aiLoading.innerText = `Predicting next day price for ${symbol}...`;
+        aiResult.classList.add('hidden');
+
+        try {
+            const response = await fetch('/api/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ symbol })
+            });
+            const res = await response.json();
+
+            if (res.error) throw new Error(res.error);
+
+            const color = res.change >= 0 ? '#4ade80' : '#ef4444';
+            const arrow = res.change >= 0 ? '▲' : '▼';
+
+            aiResult.classList.remove('hidden');
+            aiResult.innerHTML = `
+                <div style="text-align: center;">
+                    <h3>Prediction for ${res.prediction_date}</h3>
+                    <div style="font-size: 2rem; font-weight: bold; margin: 10px 0;">
+                        $${res.predicted_price.toFixed(2)}
+                    </div>
+                    <div style="color: ${color}; font-size: 1.1rem;">
+                        ${arrow} ${res.change.toFixed(2)} (${res.percent_change_str})
+                    </div>
+                    <small>Previous Close: $${res.last_close}</small>
+                </div>
+            `;
+
+        } catch (e) {
+            alert('Prediction Error: ' + e.message);
+        } finally {
+            aiLoading.classList.add('hidden');
+        }
+    });
+}

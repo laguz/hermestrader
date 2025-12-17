@@ -35,3 +35,31 @@ def calculate_support_resistance(series, window=20):
     resistance = series.rolling(window=window).max()
     support = series.rolling(window=window).min()
     return support, resistance
+
+def calculate_sma(series, window=50):
+    """Calculate Simple Moving Average."""
+    return series.rolling(window=window).mean()
+
+def calculate_macd(series, fast=12, slow=26, signal=9):
+    """
+    Calculate MACD.
+    Returns: (macd_line, signal_line, histogram)
+    """
+    exp1 = series.ewm(span=fast, adjust=False).mean()
+    exp2 = series.ewm(span=slow, adjust=False).mean()
+    macd = exp1 - exp2
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    histogram = macd - signal_line
+    return macd, signal_line, histogram
+
+def calculate_atr(high, low, close, window=14):
+    """Calculate Average True Range."""
+    high_low = high - low
+    high_close = (high - close.shift()).abs()
+    low_close = (low - close.shift()).abs()
+    
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    
+    atr = true_range.rolling(window=window).mean()
+    return atr

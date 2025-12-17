@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="ai-panel">
+    <h2>AI Price Prediction (Random Forest)</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+        Train a Random Forest model on historical data to predict the next day's closing price.
+        Features include Price, RSI, Bollinger Bands, MACD, ATR, SMA, and Volume.
+    </p>
+
+    <div class="form-group" style="max-width: 200px; margin-bottom: 1.5rem;">
+        <label for="symbol">Symbol</label>
+        <input type="text" id="symbol" name="symbol" value="SPY" required>
+    </div>
+
+    <div class="ai-controls">
+        <button id="btn-train" class="btn-secondary">Train Model</button>
+        <button id="btn-predict" class="btn-primary">Predict Next Day</button>
+    </div>
+
+    <div id="ai-loading" class="hidden">Processing...</div>
+
+    <div id="ai-result" class="hidden">
+        <!-- Results populated by JS -->
+    </div>
+</div>
+{% endblock %}

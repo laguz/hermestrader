@@ -18,6 +18,10 @@ def get_tradier_service():
 def index():
     return render_template('index.html')
 
+@app.route('/ai')
+def ai_prediction():
+    return render_template('ai_prediction.html')
+
 from services.backtest_service import BacktestService
 
 @app.route('/api/status')
@@ -59,6 +63,42 @@ def run_backtest():
         return jsonify(result), 400
         
     return jsonify(result)
+
+from services.ml_service import MLService
+
+@app.route('/api/train', methods=['POST'])
+def train_model():
+    data = request.json
+    symbol = data.get('symbol', 'SPY')
+    
+    tradier = get_tradier_service()
+    ml_service = MLService(tradier)
+    
+    try:
+        result = ml_service.train_model(symbol)
+        if "error" in result:
+             return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        print(f"Train Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/predict', methods=['POST'])
+def predict_price():
+    data = request.json
+    symbol = data.get('symbol', 'SPY')
+    
+    tradier = get_tradier_service()
+    ml_service = MLService(tradier)
+    
+    try:
+        result = ml_service.predict_next_day(symbol)
+        if "error" in result:
+             return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        print(f"Predict Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
