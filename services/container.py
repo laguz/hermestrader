@@ -29,8 +29,11 @@ class Container:
         if cls._db is None:
             client = cls.get_mongo_client()
             if client:
-                # Use a default database name 'investment_db' or parse from URI if needed.
-                # Usually URI might have path /dbname? but often we pick one.
                 cls._db = client['investment_db']
         return cls._db
+
+    @classmethod
+    def get_ml_service(cls):
+        from services.ml_service import MLService
+        return MLService(cls.get_tradier_service())
 

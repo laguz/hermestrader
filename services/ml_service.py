@@ -8,10 +8,15 @@ import os
 import joblib
 import json
 from datetime import datetime, timedelta
-import tensorflow as tf
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
-from tensorflow.keras.callbacks import EarlyStopping
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential, load_model
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+    from tensorflow.keras.callbacks import EarlyStopping
+    HAS_TENSORFLOW = True
+except ImportError:
+    print("Warning: TensorFlow not found. LSTM model will be disabled.")
+    HAS_TENSORFLOW = False
 
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
 from services.container import Container
@@ -170,6 +175,7 @@ class MLService:
         return model
 
     def train_model(self, symbol, model_type='rf'):
+        symbol = symbol.upper()
         print(f"Starting {model_type.upper()} training for {symbol} using local DB...")
         
         if self.db is None:
@@ -301,6 +307,7 @@ class MLService:
         }
 
     def predict_next_day(self, symbol, model_type='rf'):
+        symbol = symbol.upper()
         if self.db is None:
             return {"error": "Database not available"}
 
@@ -440,13 +447,18 @@ class MLService:
             "used_features": features
         }
 
-    def get_prediction_history(self, symbol, limit=20):
+    def get_prediction_history(self, symbol=None, limit=100):
         """
-        Retrieves recent predictions for a symbol.
+        Retrieves recent predictions. If symbol is provided, filters by symbol.
         """
+        query = {}
+        if symbol:
+            symbol = symbol.upper().strip()
+            query["symbol"] = symbol
+
         try:
             cursor = self.db['predictions'].find(
-                {"symbol": symbol},
+                query,
                 {"_id": 0}
             ).sort("prediction_date", -1).limit(limit)
             
@@ -457,6 +469,7 @@ class MLService:
             return []
 
     def evaluate_model(self, symbol, days=60, model_type='rf'):
+        symbol = symbol.upper()
         if self.db is None: return {"error": "DB Unavailable"}
 
         cutoff_date = (datetime.now() - timedelta(days=days + 400)).strftime('%Y-%m-%d')

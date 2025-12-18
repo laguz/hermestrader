@@ -67,6 +67,7 @@ def evaluate_model():
         print(f"Evaluate Error: {e}")
         return jsonify({"error": str(e)}), 500
 
+@ml_bp.route('/api/history', defaults={'symbol': None}, methods=['GET'])
 @ml_bp.route('/api/history/<symbol>', methods=['GET'])
 def get_prediction_history(symbol):
     try:

@@ -93,10 +93,9 @@
         const symbolInput = document.getElementById('symbol');
 
         const fetchHistory = async () => {
-            const symbol = symbolInput.value;
-            if (!symbol) return;
             try {
-                const res = await fetch(`/api/history/${symbol}`);
+                // Fetch ALL history (endpoint handles no symbol)
+                const res = await fetch(`/api/history`);
                 const history = await res.json();
                 if (history.error) throw new Error(history.error);
 
@@ -105,7 +104,8 @@
                 if (history.length > 0) {
                     historyPanel.classList.remove('hidden');
                 } else {
-                    historyPanel.classList.add('hidden');
+                    historyPanel.classList.remove('hidden');
+                    historyTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px;">No history data found.</td></tr>';
                 }
 
                 // Calculate History MAE
@@ -142,12 +142,13 @@
 
                 if (errorCount > 0) {
                     const mae = totalError / errorCount;
-                    document.getElementById('history-mae').textContent = `Avg Error (MAE): $${mae.toFixed(2)}`;
+                    document.getElementById('history-mae').textContent = `Avg Error (All): $${mae.toFixed(2)}`;
                 } else {
                     document.getElementById('history-mae').textContent = '';
                 }
             } catch (e) {
                 console.error("Error fetching history:", e);
+                historyTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--md-sys-color-error)">Error: ${e.message}</td></tr>`;
             }
         };
 
@@ -159,7 +160,7 @@
             loading.classList.remove('hidden');
             loading.classList.remove('hidden');
             resultsPanel.classList.add('hidden');
-            historyPanel.classList.add('hidden'); // Ensure history is hidden if reloading logic existed there cleanly
+
             if (chartContainer) chartContainer.classList.add('hidden');
 
             try {
@@ -213,7 +214,7 @@
                 Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout);
 
                 resultsPanel.classList.remove('hidden');
-                fetchHistory(); // Update history when evaluating
+                fetchHistory(); // Update history again (which shows all, not just evaluated symbol, but stays fresh)
 
             } catch (e) {
                 console.error(e);
@@ -223,9 +224,8 @@
             }
         });
 
-
         // Load history on start
-        if (symbolInput.value) fetchHistory();
+        fetchHistory();
     });
 </script>
 {% endblock %}
