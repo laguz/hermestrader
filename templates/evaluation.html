@@ -1,6 +1,31 @@
 {% extends "base.html" %}
 
+{% block main_class %}full-width-layout{% endblock %}
+
 {% block content %}
+<div id="history-panel" class="md-card hidden col-span-full">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 class="md-card__headline" style="margin:0;">Prediction History</h3>
+        <span id="history-mae" style="font-size: 0.9em; color: var(--md-sys-color-on-surface-variant);"></span>
+    </div>
+    <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
+        <table class="md-table" style="width: 100%; border-collapse: collapse;">
+            <thead>
+                <tr style="border-bottom: 1px solid var(--md-sys-color-outline-variant);">
+                    <th style="padding: 12px; text-align: left;">Symbol</th>
+                    <th style="padding: 12px; text-align: left;">Date</th>
+                    <th style="padding: 12px; text-align: right;">Predicted</th>
+                    <th style="padding: 12px; text-align: right;">Actual</th>
+                    <th style="padding: 12px; text-align: right;">Diff</th>
+                    <th style="padding: 12px; text-align: center;">Model</th>
+                </tr>
+            </thead>
+            <tbody id="history-table-body">
+            </tbody>
+        </table>
+    </div>
+</div>
+
 <div class="md-card col-span-full">
     <h2 class="md-card__headline">AI Model Evaluation (Backtest)</h2>
     <p style="color: var(--md-sys-color-on-surface-variant); margin-bottom: 2rem;">
@@ -43,26 +68,99 @@
         </div>
     </div>
 
+</div>
+</div>
+
+
+
+<div id="eval-chart-container" class="col-span-full hidden" style="margin-top: 1rem;">
     <!-- Chart -->
-    <div class="md-card">
-        <h3 class="md-card__headline">Actual vs Predicted Price</h3>
-        <div id="eval-chart"></div>
+    <div class="md-card chart-card">
+        <div id="eval-chart" style="height: 100%; width: 100%;"></div>
     </div>
 </div>
+
+
 
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const btnEvaluate = document.getElementById('btn-evaluate');
         const loading = document.getElementById('eval-loading');
         const resultsPanel = document.getElementById('eval-results');
+        const historyPanel = document.getElementById('history-panel');
+        const chartContainer = document.getElementById('eval-chart-container');
+        const historyTableBody = document.getElementById('history-table-body');
+        const symbolInput = document.getElementById('symbol');
+
+        const fetchHistory = async () => {
+            const symbol = symbolInput.value;
+            if (!symbol) return;
+            try {
+                const res = await fetch(`/api/history/${symbol}`);
+                const history = await res.json();
+                if (history.error) throw new Error(history.error);
+
+                historyTableBody.innerHTML = '';
+
+                if (history.length > 0) {
+                    historyPanel.classList.remove('hidden');
+                } else {
+                    historyPanel.classList.add('hidden');
+                }
+
+                // Calculate History MAE
+                let totalError = 0;
+                let errorCount = 0;
+
+                history.forEach(row => {
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid var(--md-sys-color-outline-variant)';
+
+                    const actualObj = row.actual_close_price ? `$${row.actual_close_price.toFixed(2)}` : '-';
+                    let diff = '-';
+                    let diffColor = 'inherit';
+
+                    if (row.actual_close_price) {
+                        const error = row.actual_close_price - row.predicted_price;
+                        diff = error.toFixed(2);
+                        diffColor = error >= 0 ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-error)';
+
+                        totalError += Math.abs(error);
+                        errorCount++;
+                    }
+
+                    tr.innerHTML = `
+                        <td style="padding: 12px;">${row.symbol}</td>
+                        <td style="padding: 12px;">${row.prediction_date}</td>
+                        <td style="padding: 12px; text-align: right;">$${row.predicted_price.toFixed(2)}</td>
+                        <td style="padding: 12px; text-align: right;">${actualObj}</td>
+                        <td style="padding: 12px; text-align: right; color: ${diffColor}">${diff}</td>
+                        <td style="padding: 12px; text-align: center;">${row.model_type}</td>
+                    `;
+                    historyTableBody.appendChild(tr);
+                });
+
+                if (errorCount > 0) {
+                    const mae = totalError / errorCount;
+                    document.getElementById('history-mae').textContent = `Avg Error (MAE): $${mae.toFixed(2)}`;
+                } else {
+                    document.getElementById('history-mae').textContent = '';
+                }
+            } catch (e) {
+                console.error("Error fetching history:", e);
+            }
+        };
 
         btnEvaluate.addEventListener('click', async () => {
-            const symbol = document.getElementById('symbol').value;
+            const symbol = symbolInput.value;
             const modelType = document.getElementById('model-type').value;
             if (!symbol) return alert('Please enter a symbol');
 
             loading.classList.remove('hidden');
+            loading.classList.remove('hidden');
             resultsPanel.classList.add('hidden');
+            historyPanel.classList.add('hidden'); // Ensure history is hidden if reloading logic existed there cleanly
+            if (chartContainer) chartContainer.classList.add('hidden');
 
             try {
                 const response = await fetch('/api/evaluate', {
@@ -101,6 +199,8 @@
 
                 const layout = {
                     title: `Model Fit Analysis (${modelType.toUpperCase()})`,
+                    autosize: true,
+                    margin: { l: 50, r: 20, t: 50, b: 50 }, // Tight margins
                     paper_bgcolor: 'rgba(0,0,0,0)',
                     plot_bgcolor: 'rgba(0,0,0,0)',
                     font: { color: '#94a3b8' },
@@ -109,9 +209,11 @@
                     legend: { orientation: 'h', y: -0.2 }
                 };
 
+                if (chartContainer) chartContainer.classList.remove('hidden');
                 Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout);
 
                 resultsPanel.classList.remove('hidden');
+                fetchHistory(); // Update history when evaluating
 
             } catch (e) {
                 console.error(e);
@@ -120,6 +222,10 @@
                 loading.classList.add('hidden');
             }
         });
+
+
+        // Load history on start
+        if (symbolInput.value) fetchHistory();
     });
 </script>
 {% endblock %}

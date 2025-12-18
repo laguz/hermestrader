@@ -26,7 +26,7 @@ class Container:
 
     @classmethod
     def get_db(cls):
-        if not cls._db:
+        if cls._db is None:
             client = cls.get_mongo_client()
             if client:
                 # Use a default database name 'investment_db' or parse from URI if needed.

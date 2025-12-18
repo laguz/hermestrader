@@ -129,6 +129,21 @@ main {
     gap: 24px;
 }
 
+.full-width-layout {
+    max-width: 100%;
+    display: block;
+    padding: 12px;
+    /* Reduced from 24px */
+}
+
+.chart-card {
+    padding: 0 !important;
+    /* Remove padding for maximum chart area */
+    overflow: hidden;
+    height: 90vh;
+    /* Force card height */
+}
+
 /* --- Components: Cards --- */
 .md-card {
     background-color: var(--md-sys-color-surface-container);

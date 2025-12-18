@@ -1,6 +1,26 @@
 {% extends "base.html" %}
 
+{% block main_class %}full-width-layout{% endblock %}
+
 {% block content %}
+<div class="md-card col-span-full">
+    <h2 class="md-card__headline">Account Overview</h2>
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <h3>Total Equity</h3>
+            <p id="acc-total-equity">-</p>
+        </div>
+        <div class="metric-card">
+            <h3>Option Buying Power</h3>
+            <p id="acc-option-bp">-</p>
+        </div>
+        <div class="metric-card">
+            <h3>Stock Buying Power</h3>
+            <p id="acc-stock-bp">-</p>
+        </div>
+    </div>
+</div>
+
 <div class="md-card col-span-full">
     <h2 class="md-card__headline">Open Positions</h2>
     <div id="loading-positions" class="hidden">Loading positions...</div>
@@ -28,8 +48,30 @@
 
 <script>
     document.addEventListener('DOMContentLoaded', function () {
+        loadAccountData();
         loadPositions();
     });
+
+    function loadAccountData() {
+        fetch('/api/account')
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    console.error("Account API Error:", data.error);
+                    return;
+                }
+
+                const fmtMoney = (val) => {
+                    if (val === undefined || val === null) return '-';
+                    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+                };
+
+                document.getElementById('acc-total-equity').textContent = fmtMoney(data.total_equity);
+                document.getElementById('acc-option-bp').textContent = fmtMoney(data.option_buying_power);
+                document.getElementById('acc-stock-bp').textContent = fmtMoney(data.stock_buying_power);
+            })
+            .catch(err => console.error("Error loading account data:", err));
+    }
 
     function loadPositions() {
         const tableBody = document.querySelector('#positions-table tbody');

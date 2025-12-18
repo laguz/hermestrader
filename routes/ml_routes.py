@@ -6,14 +6,17 @@ ml_bp = Blueprint('ml', __name__)
 
 @ml_bp.route('/api/train', methods=['POST'])
 def train_model():
-    data = request.json
-    symbol = data.get('symbol', 'SPY')
-    model_type = data.get('model_type', 'rf')
-    
-    tradier = Container.get_tradier_service()
-    ml_service = MLService(tradier)
-    
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON or missing body"}), 400
+            
+        symbol = data.get('symbol', 'SPY')
+        model_type = data.get('model_type', 'rf')
+        
+        tradier = Container.get_tradier_service()
+        ml_service = MLService(tradier)
+    
         result = ml_service.train_model(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
@@ -24,14 +27,17 @@ def train_model():
 
 @ml_bp.route('/api/predict', methods=['POST'])
 def predict_price():
-    data = request.json
-    symbol = data.get('symbol', 'SPY')
-    model_type = data.get('model_type', 'rf')
-    
-    tradier = Container.get_tradier_service()
-    ml_service = MLService(tradier)
-    
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON or missing body"}), 400
+
+        symbol = data.get('symbol', 'SPY')
+        model_type = data.get('model_type', 'rf')
+        
+        tradier = Container.get_tradier_service()
+        ml_service = MLService(tradier)
+    
         result = ml_service.predict_next_day(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
@@ -42,18 +48,33 @@ def predict_price():
 
 @ml_bp.route('/api/evaluate', methods=['POST'])
 def evaluate_model():
-    data = request.json
-    symbol = data.get('symbol', 'SPY')
-    model_type = data.get('model_type', 'rf')
-    
-    tradier = Container.get_tradier_service()
-    ml_service = MLService(tradier)
-    
     try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Invalid JSON or missing body"}), 400
+
+        symbol = data.get('symbol', 'SPY')
+        model_type = data.get('model_type', 'rf')
+        
+        tradier = Container.get_tradier_service()
+        ml_service = MLService(tradier)
+    
         result = ml_service.evaluate_model(symbol, model_type=model_type)
         if "error" in result:
              return jsonify(result), 400
         return jsonify(result)
     except Exception as e:
         print(f"Evaluate Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@ml_bp.route('/api/history/<symbol>', methods=['GET'])
+def get_prediction_history(symbol):
+    try:
+        tradier = Container.get_tradier_service()
+        ml_service = MLService(tradier)
+    
+        history = ml_service.get_prediction_history(symbol)
+        return jsonify(history)
+    except Exception as e:
+        print(f"History Error: {e}")
         return jsonify({"error": str(e)}), 500

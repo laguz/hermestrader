@@ -23,8 +23,8 @@ function initBacktester(form) {
     const startDateInput = document.getElementById('start_date');
     if (startDateInput) {
         const today = new Date();
-        const sixMonthsAgo = new Date(today.getTime() - (180 * 24 * 60 * 60 * 1000));
-        startDateInput.valueAsDate = sixMonthsAgo;
+        const oneYearAgo = new Date(today.getTime() - (365 * 24 * 60 * 60 * 1000));
+        startDateInput.valueAsDate = oneYearAgo;
     }
 
     form.addEventListener('submit', async (e) => {

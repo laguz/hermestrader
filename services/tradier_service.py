@@ -67,6 +67,41 @@ class TradierService:
             print(f"Error fetching history for {symbol}: {e}")
             return None
 
+    def get_account_balances(self):
+        """Fetch account balances including total equity and option buying power."""
+        url = f"{self.endpoint}/accounts/{self.account_id}/balances"
+        try:
+            response = requests.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            balances = data.get('balances', {})
+            
+            # Buying power can be nested under 'pdt', 'margin', or 'cash'
+            # Priority: pdt > margin > cash
+            account_type = balances.get('account_type')
+            sub_account = balances.get('pdt') or balances.get('margin') or balances.get('cash') or {}
+            
+            option_bp = sub_account.get('option_buying_power')
+            stock_bp = sub_account.get('stock_buying_power')
+            
+            # Fallback for cash accounts
+            if account_type == 'cash':
+                 # In cash accounts, stock bp is usually cash available
+                 if stock_bp is None:
+                     stock_bp = balances.get('total_cash')
+                 if option_bp is None:
+                     option_bp = balances.get('total_cash')
+
+            return {
+                "total_equity": balances.get('total_equity'),
+                "option_buying_power": option_bp,
+                "stock_buying_power": stock_bp,
+                "cash": balances.get('total_cash')
+            }
+        except requests.RequestException as e:
+            print(f"Error fetching account balances: {e}")
+            return None
+
     def get_positions(self):
         """Fetch open positions for the account."""
         url = f"{self.endpoint}/accounts/{self.account_id}/positions"

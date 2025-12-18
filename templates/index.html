@@ -1,51 +1,55 @@
 {% extends "base.html" %}
 
+{% block main_class %}full-width-layout{% endblock %}
+
 {% block content %}
-<div class="md-card">
-    <h2 class="md-card__headline">Strategy Configuration</h2>
-    <form id="backtest-form">
-        <div class="md-text-field-container">
-            <input type="text" id="symbol" name="symbol" class="md-text-field" value="SPY" placeholder=" " required>
-            <label for="symbol" class="md-text-field-label">Symbol</label>
-        </div>
+<div style="display: grid; grid-template-columns: 1fr 3fr; gap: 24px; align-items: start;">
+    <div class="md-card">
+        <h2 class="md-card__headline">Strategy Configuration</h2>
+        <form id="backtest-form">
+            <div class="md-text-field-container">
+                <input type="text" id="symbol" name="symbol" class="md-text-field" value="SPY" placeholder=" " required>
+                <label for="symbol" class="md-text-field-label">Symbol</label>
+            </div>
 
-        <div class="md-text-field-container">
-            <select id="strategy" name="strategy" class="md-text-field">
-                <option value="credit_spread">Credit Spread (Smart Entry)</option>
-                <option value="long_call">Long Call</option>
-                <option value="long_put">Long Put</option>
-                <option value="covered_call">Covered Call</option>
-            </select>
-            <label for="strategy" class="md-text-field-label">Strategy</label>
-        </div>
+            <div class="md-text-field-container">
+                <select id="strategy" name="strategy" class="md-text-field">
+                    <option value="credit_spread">Credit Spread (Smart Entry)</option>
+                    <option value="long_call">Long Call</option>
+                    <option value="long_put">Long Put</option>
+                    <option value="covered_call">Covered Call</option>
+                </select>
+                <label for="strategy" class="md-text-field-label">Strategy</label>
+            </div>
 
-        <div class="md-text-field-container">
-            <input type="date" id="start_date" name="start_date" class="md-text-field" placeholder=" " required>
-            <label for="start_date" class="md-text-field-label">Start Date</label>
-        </div>
+            <div class="md-text-field-container">
+                <input type="date" id="start_date" name="start_date" class="md-text-field" placeholder=" " required>
+                <label for="start_date" class="md-text-field-label">Start Date</label>
+            </div>
 
-        <button type="submit" class="md-button md-button--filled">Run Backtest</button>
-    </form>
-</div>
+            <button type="submit" class="md-button md-button--filled">Run Backtest</button>
+        </form>
+    </div>
 
-<div class="md-card results-panel">
-    <div id="loading" class="hidden">Running backtest...</div>
-    <div id="chart-container"></div>
-    <div id="metrics-container" class="metrics-grid"></div>
-    <div id="trades-container" class="hidden">
-        <h3>Trade History</h3>
-        <div class="md-table-container">
-            <table id="trades-table">
-                <thead>
-                    <tr>
-                        <th>Date</th>
-                        <th>Action</th>
-                        <th>Price/Credit</th>
-                        <th>PnL</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
+    <div class="md-card results-panel" style="min-height: 80vh;">
+        <div id="loading" class="hidden">Running backtest...</div>
+        <div id="chart-container" style="height: 60vh;"></div>
+        <div id="metrics-container" class="metrics-grid"></div>
+        <div id="trades-container" class="hidden">
+            <h3>Trade History</h3>
+            <div class="md-table-container">
+                <table id="trades-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Action</th>
+                            <th>Price/Credit</th>
+                            <th>PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>
