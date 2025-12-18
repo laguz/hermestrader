@@ -26,13 +26,20 @@
                     <span class="material-symbols-outlined">analytics</span>
                     <span class="md-tab__label">Backtester</span>
                 </a>
-                <a href="/ai" class="md-tab {{ 'active' if request.path == '/ai' else '' }}">
+                <a href="{{ url_for('main.ai_prediction') }}"
+                    class="md-tab {% if request.endpoint == 'main.ai_prediction' %}active{% endif %}">
                     <span class="material-symbols-outlined">psychology</span>
-                    <span class="md-tab__label">AI Prediction</span>
+                    <span class="md-tab__label">Training</span>
                 </a>
-                <a href="/evaluation" class="md-tab {{ 'active' if request.path == '/evaluation' else '' }}">
-                    <span class="material-symbols-outlined">query_stats</span>
+                <a href="{{ url_for('main.evaluation') }}"
+                    class="md-tab {% if request.endpoint == 'main.evaluation' %}active{% endif %}">
+                    <span class="material-symbols-outlined">analytics</span>
                     <span class="md-tab__label">Evaluation</span>
+                </a>
+                <a href="{{ url_for('analysis.entry_point_page') }}"
+                    class="md-tab {% if request.endpoint == 'analysis.entry_point_page' %}active{% endif %}">
+                    <span class="material-symbols-outlined">login</span>
+                    <span class="md-tab__label">Entry Point</span>
                 </a>
             </nav>
         </header>

@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block main_class %}full-width-layout{% endblock %}
+
+{% block content %}
+<div class="md-grid" style="grid-template-columns: repeat(12, 1fr); gap: 24px;">
+
+    <!-- Control Panel -->
+    <div class="md-card col-span-12">
+        <h2 class="md-card__headline">Algorithmic Entry Point Analysis</h2>
+        <div style="display: flex; gap: 16px; align-items: center; margin-top: 16px;">
+            <div class="md-text-field-container" style="max-width: 200px; margin-bottom: 0;">
+                <input type="text" id="symbol" class="md-text-field" value="SPY" placeholder="Symbol">
+                <label class="md-text-field-label">Symbol</label>
+            </div>
+            <button id="btn-analyze" class="md-button md-button--filled">Analyze</button>
+        </div>
+    </div>
+
+    <!-- AI Prediction & Price -->
+    <div id="prediction-card" class="md-card col-span-12 hidden">
+        <div style="display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 20px;">
+            <div style="text-align: center;">
+                <div class="md-subhead" style="color: var(--md-sys-color-on-surface-variant);">Current Price</div>
+                <div id="disp-current-price" style="font-size: 1.8rem; font-weight: 700;">--</div>
+            </div>
+            <div style="width: 1px; height: 50px; background: var(--md-sys-color-outline-variant);"></div>
+            <div style="text-align: center;">
+                <div class="md-subhead" style="color: var(--md-sys-color-on-surface-variant);">AI Prediction (Next Day)
+                </div>
+                <div style="display: flex; gap: 10px; align-items: baseline;">
+                    <span id="disp-pred-price" style="font-size: 1.8rem; font-weight: 700;">--</span>
+                    <span id="disp-pred-change" style="font-size: 1rem; font-weight: 500;">--</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sell Put (Bullish) Strategy -->
+    <div id="sp-card" class="md-card col-span-6 hidden" style="border-top: 4px solid var(--md-sys-color-primary);">
+        <h3 class="md-card__headline" style="color: var(--md-sys-color-primary);">Sell Put Entry (Bullish)</h3>
+        <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Confidence</span>
+                <div id="sp-confidence" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            </div>
+            <div style="text-align: right;">
+                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Score</span>
+                <div id="sp-score" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            </div>
+        </div>
+        <div class="md-divider" style="margin: 16px 0;"></div>
+        <h4 class="md-subhead">Reasons</h4>
+        <ul id="sp-reasons" style="margin-top: 8px; padding-left: 20px; color: var(--md-sys-color-on-surface-variant);">
+        </ul>
+    </div>
+
+    <!-- Sell Call (Bearish) Strategy -->
+    <div id="sc-card" class="md-card col-span-6 hidden" style="border-top: 4px solid var(--md-sys-color-error);">
+        <h3 class="md-card__headline" style="color: var(--md-sys-color-error);">Sell Call Entry (Bearish)</h3>
+        <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
+            <div>
+                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Confidence</span>
+                <div id="sc-confidence" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            </div>
+            <div style="text-align: right;">
+                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Score</span>
+                <div id="sc-score" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            </div>
+        </div>
+        <div class="md-divider" style="margin: 16px 0;"></div>
+        <h4 class="md-subhead">Reasons</h4>
+        <ul id="sc-reasons" style="margin-top: 8px; padding-left: 20px; color: var(--md-sys-color-on-surface-variant);">
+        </ul>
+    </div>
+
+    <!-- Indicators Grid -->
+    <div id="indicators-card" class="md-card col-span-12 hidden">
+        <h3 class="md-card__headline">Technical Indicators</h3>
+        <div
+            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px; text-align: center;">
+            <div>
+                <div class="md-subhead">RSI (14)</div>
+                <div id="ind-rsi" style="font-size: 1.2rem; font-weight: 600;">--</div>
+            </div>
+            <div>
+                <div class="md-subhead">MACD</div>
+                <div id="ind-macd" style="font-size: 1.2rem; font-weight: 600;">--</div>
+            </div>
+            <div>
+                <div class="md-subhead">Support</div>
+                <div id="ind-support" style="font-size: 1.2rem; font-weight: 600; color: var(--md-sys-color-primary);">
+                    --</div>
+            </div>
+            <div>
+                <div class="md-subhead">Resistance</div>
+                <div id="ind-resistance" style="font-size: 1.2rem; font-weight: 600; color: var(--md-sys-color-error);">
+                    --</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart -->
+    <div id="chart-container" class="md-card col-span-12 hidden" style="height: 500px;">
+        <div id="analysis-chart" style="width: 100%; height: 100%;"></div>
+    </div>
+
+</div>
+
+<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const btnAnalyze = document.getElementById('btn-analyze');
+        const symbolInput = document.getElementById('symbol');
+
+        // Cards
+        const predictionCard = document.getElementById('prediction-card');
+        const spCard = document.getElementById('sp-card');
+        const scCard = document.getElementById('sc-card');
+        const indicatorsCard = document.getElementById('indicators-card');
+        const chartContainer = document.getElementById('chart-container');
+
+        const analyze = async () => {
+            const symbol = symbolInput.value;
+            if (!symbol) return;
+
+            // Reset UI
+            [predictionCard, spCard, scCard, indicatorsCard, chartContainer].forEach(el => el.classList.add('hidden'));
+
+            try {
+                const res = await fetch(`/api/analysis/${symbol}`);
+
+                if (!res.ok) {
+                    const text = await res.text();
+                    try {
+                        const json = JSON.parse(text);
+                        throw new Error(json.error || `Server Error: ${res.status}`);
+                    } catch (e) {
+                        throw new Error(`Server Error: ${res.status} - ${text.substring(0, 100)}`);
+                    }
+                }
+
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                // --- Prediction & Price ---
+                document.getElementById('disp-current-price').textContent = `$${data.current_price.toFixed(2)}`;
+                if (data.prediction.price) {
+                    document.getElementById('disp-pred-price').textContent = `$${data.prediction.price.toFixed(2)}`;
+                    const change = data.prediction.change_pct;
+                    const changeEl = document.getElementById('disp-pred-change');
+                    changeEl.textContent = `(${change > 0 ? '+' : ''}${change}%)`;
+                    changeEl.style.color = change > 0 ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-error)';
+                } else {
+                    document.getElementById('disp-pred-price').textContent = "N/A";
+                    document.getElementById('disp-pred-change').textContent = "";
+                }
+
+                // --- Sell Put (Bullish) ---
+                document.getElementById('sp-score').textContent = data.sell_put_entry.score;
+                document.getElementById('sp-confidence').textContent = data.sell_put_entry.confidence;
+                const spList = document.getElementById('sp-reasons');
+                spList.innerHTML = '';
+                data.sell_put_entry.reasons.forEach(r => {
+                    const li = document.createElement('li');
+                    li.textContent = r;
+                    spList.appendChild(li);
+                });
+
+                // --- Sell Call (Bearish) ---
+                document.getElementById('sc-score').textContent = data.sell_call_entry.score;
+                document.getElementById('sc-confidence').textContent = data.sell_call_entry.confidence;
+                const scList = document.getElementById('sc-reasons');
+                scList.innerHTML = '';
+                data.sell_call_entry.reasons.forEach(r => {
+                    const li = document.createElement('li');
+                    li.textContent = r;
+                    scList.appendChild(li);
+                });
+
+                // --- Indicators ---
+                const rsiEl = document.getElementById('ind-rsi');
+                rsiEl.textContent = data.indicators.rsi;
+                if (data.indicators.rsi > 70) rsiEl.style.color = 'var(--md-sys-color-error)';
+                else if (data.indicators.rsi < 30) rsiEl.style.color = 'var(--md-sys-color-primary)';
+                else rsiEl.style.color = 'inherit';
+
+                document.getElementById('ind-macd').textContent = data.indicators.macd;
+                document.getElementById('ind-support').textContent = `$${data.indicators.support}`;
+                document.getElementById('ind-resistance').textContent = `$${data.indicators.resistance}`;
+
+                // --- Chart ---
+                const dates = data.chart_data.dates;
+                const tracePrice = {
+                    x: dates, y: data.chart_data.close, type: 'scatter', mode: 'lines', name: 'Price',
+                    line: { color: '#a8c7fa', width: 2 }
+                };
+                const traceSupport = {
+                    x: dates, y: data.chart_data.support, type: 'scatter', mode: 'lines', name: 'Support',
+                    line: { color: '#4ade80', width: 1, dash: 'dash' }
+                };
+                const traceResistance = {
+                    x: dates, y: data.chart_data.resistance, type: 'scatter', mode: 'lines', name: 'Resistance',
+                    line: { color: '#ef4444', width: 1, dash: 'dash' }
+                };
+
+                const layout = {
+                    title: `${symbol.toUpperCase()} Analysis`,
+                    autosize: true,
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    font: { color: '#94a3b8' },
+                    xaxis: { gridcolor: '#334155', range: [dates[0], dates[dates.length - 1]] },
+                    yaxis: { gridcolor: '#334155' },
+                    margin: { t: 40, b: 40, l: 40, r: 20 },
+                    legend: { orientation: 'h', y: -0.1 }
+                };
+
+                Plotly.newPlot('analysis-chart', [tracePrice, traceSupport, traceResistance], layout);
+
+                // Reveal
+                [predictionCard, spCard, scCard, indicatorsCard, chartContainer].forEach(el => el.classList.remove('hidden'));
+
+            } catch (e) {
+                console.error(e);
+                alert("Analysis Error: " + e.message);
+            }
+        };
+
+        btnAnalyze.addEventListener('click', analyze);
+        symbolInput.addEventListener('keyup', (e) => { if (e.key === 'Enter') analyze(); });
+
+        // Auto load default
+        if (symbolInput.value) analyze();
+    });
+</script>
+{% endblock %}

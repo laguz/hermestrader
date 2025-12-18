@@ -21,7 +21,7 @@ class Container:
                 # Fallback or Error? Ideally log warning.
                 print("WARNING: MONGODB_URI_LOCAL not set. MongoDB features will fail.")
                 return None
-            cls._mongo_client = MongoClient(mongo_uri)
+            cls._mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
         return cls._mongo_client
 
     @classmethod

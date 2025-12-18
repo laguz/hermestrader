@@ -19,5 +19,8 @@ app.register_blueprint(backtest_bp)
 app.register_blueprint(ml_bp)
 app.register_blueprint(account_bp)
 
+from routes.analysis_routes import analysis_bp
+app.register_blueprint(analysis_bp)
+
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
