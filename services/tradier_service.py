@@ -204,3 +204,15 @@ class TradierService:
         except requests.RequestException as e:
             print(f"Error placing order: {e}")
             return {'error': str(e)}
+
+    def get_clock(self):
+        """Fetch market clock/status."""
+        url = f"{self.endpoint}/markets/clock"
+        try:
+            response = requests.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            return data.get('clock', {})
+        except requests.RequestException as e:
+            print(f"Error fetching market clock: {e}")
+            return None

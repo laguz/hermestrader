@@ -21,6 +21,9 @@ app.register_blueprint(ml_bp)
 app.register_blueprint(account_bp)
 app.register_blueprint(trading_bp)
 
+from routes.market_routes import market_bp
+app.register_blueprint(market_bp)
+
 from routes.analysis_routes import analysis_bp
 app.register_blueprint(analysis_bp)
 

@@ -50,7 +50,30 @@
     document.addEventListener('DOMContentLoaded', function () {
         loadAccountData();
         loadPositions();
+        startPolling();
     });
+
+    const POLL_INTERVAL = 600000; // 10 minutes
+
+    function startPolling() {
+        console.log("Starting market status polling...");
+        setInterval(checkMarketStatus, POLL_INTERVAL);
+    }
+
+    function checkMarketStatus() {
+        fetch('/api/market/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.clock && data.clock.state === 'open') {
+                    console.log("Market is open. Refreshing data...");
+                    loadAccountData();
+                    loadPositions();
+                } else {
+                    console.log("Market is closed. Skipping refresh.");
+                }
+            })
+            .catch(err => console.error("Error checking market status:", err));
+    }
 
     function loadAccountData() {
         fetch('/api/account')
