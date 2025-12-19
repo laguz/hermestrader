@@ -33,11 +33,46 @@
                     <label class="md-text-field-label">Underlying Symbol</label>
                 </div>
 
-                <!-- Option Symbol (Hidden for Equity) -->
-                <div class="md-text-field-container hidden" id="option-symbol-container">
-                    <input type="text" id="option_symbol" class="md-text-field" placeholder="OCC Symbol">
-                    <label class="md-text-field-label">Option Symbol</label>
+                <!-- Option Chain Selection (Hidden for Equity) -->
+                <div id="option-chain-container" class="hidden" style="display: contents;">
+
+                    <!-- Expiration -->
+                    <div class="md-text-field-container">
+                        <select id="expiration" class="md-text-field" style="background:transparent; color:white;">
+                            <option value="" disabled selected>Select Expiration</option>
+                        </select>
+                        <label class="md-text-field-label">Expiration</label>
+                    </div>
+
+                    <!-- Option Type Selector -->
+                    <div class="md-text-field-container">
+                        <select id="option_type" class="md-text-field" style="background:transparent; color:white;"
+                            disabled>
+                            <option value="" disabled selected>Select Type</option>
+                            <option value="call" style="color:black;">Call</option>
+                            <option value="put" style="color:black;">Put</option>
+                        </select>
+                        <label class="md-text-field-label">Option Type</label>
+                    </div>
+
+                    <!-- Strike Selector -->
+                    <div class="md-text-field-container">
+                        <select id="option_strike" class="md-text-field" style="background:transparent; color:white;"
+                            disabled>
+                            <option value="" disabled selected>Select Strike</option>
+                        </select>
+                        <label class="md-text-field-label">Strike</label>
+                    </div>
+
+                    <!-- Hidden Option Symbol -->
+                    <input type="hidden" id="option_symbol">
                 </div>
+            </div>
+
+            <!-- Fetch Chain Button (Hidden for Equity) -->
+            <div id="fetch-chain-container" class="hidden" style="margin-bottom: 16px;">
+                <button type="button" id="btn-fetch-expirations" class="md-button md-button--tonal"
+                    style="width:100%">Fetch Expirations</button>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
@@ -117,7 +152,16 @@
         const orderForm = document.getElementById('order-form');
         const orderClassInput = document.getElementById('order_class');
         const classBtns = document.querySelectorAll('.class-btn');
-        const optionSymbolContainer = document.getElementById('option-symbol-container');
+
+        const symbolInput = document.getElementById('symbol');
+        const optionChainContainer = document.getElementById('option-chain-container');
+        const fetchChainContainer = document.getElementById('fetch-chain-container');
+        const btnFetchExpirations = document.getElementById('btn-fetch-expirations');
+
+        const expirationSelect = document.getElementById('expiration');
+        const optionTypeSelect = document.getElementById('option_type');
+        const optionStrikeSelect = document.getElementById('option_strike');
+        const optionSymbolInput = document.getElementById('option_symbol');
 
         const typeSelect = document.getElementById('type');
         const priceContainer = document.getElementById('price-container');
@@ -125,6 +169,8 @@
 
         const statusMessage = document.getElementById('status-message');
         const btnSubmit = document.getElementById('btn-submit');
+
+        let currentChain = [];
 
         // Toggle Class
         classBtns.forEach(btn => {
@@ -143,24 +189,133 @@
                 });
 
                 if (val === 'option') {
-                    optionSymbolContainer.classList.remove('hidden');
+                    optionChainContainer.classList.remove('hidden');
+                    fetchChainContainer.classList.remove('hidden');
                 } else {
-                    optionSymbolContainer.classList.add('hidden');
+                    optionChainContainer.classList.add('hidden');
+                    fetchChainContainer.classList.add('hidden');
                 }
             });
+        });
+
+        // Fetch Expirations
+        btnFetchExpirations.addEventListener('click', async () => {
+            const sym = symbolInput.value.toUpperCase();
+            if (!sym) {
+                alert('Please enter a symbol first');
+                return;
+            }
+
+            btnFetchExpirations.textContent = 'Loading...';
+            try {
+                const res = await fetch(`/api/options/expirations?symbol=${sym}`);
+                const data = await res.json();
+
+                if (data.error) throw new Error(data.error);
+
+                expirationSelect.innerHTML = '<option value="" disabled selected>Select Expiration</option>';
+                data.expirations.forEach(date => {
+                    const opt = document.createElement('option');
+                    opt.value = date;
+                    opt.style.color = 'black';
+                    opt.textContent = date;
+                    expirationSelect.appendChild(opt);
+                });
+
+                btnFetchExpirations.textContent = 'Fetch Expirations';
+
+                // Reset downstream
+                optionTypeSelect.disabled = true;
+                optionTypeSelect.value = "";
+                optionStrikeSelect.innerHTML = '<option value="" disabled selected>Select Strike</option>';
+                optionStrikeSelect.disabled = true;
+
+            } catch (e) {
+                console.error(e);
+                alert('Error fetching expirations: ' + e.message);
+                btnFetchExpirations.textContent = 'Fetch Expirations';
+            }
+        });
+
+        // Fetch Chain on Expiration Change
+        expirationSelect.addEventListener('change', async () => {
+            const sym = symbolInput.value.toUpperCase();
+            const date = expirationSelect.value;
+
+            optionTypeSelect.disabled = true;
+            optionStrikeSelect.disabled = true;
+            optionStrikeSelect.innerHTML = '<option value="" disabled selected>Loading Chain...</option>';
+
+            try {
+                const res = await fetch(`/api/options/chain?symbol=${sym}&expiration=${date}`);
+                const data = await res.json();
+
+                if (data.error) throw new Error(data.error);
+
+                currentChain = data.chain || [];
+
+                // Enable Type Selector
+                optionTypeSelect.disabled = false;
+                optionTypeSelect.value = "";
+
+                optionStrikeSelect.innerHTML = '<option value="" disabled selected>Select Option Type First</option>';
+
+            } catch (e) {
+                console.error(e);
+                optionStrikeSelect.innerHTML = '<option value="" disabled selected>Error loading chain</option>';
+                alert('Error fetching chain: ' + e.message);
+            }
+        });
+
+        // Filter Chain on Type Change
+        optionTypeSelect.addEventListener('change', () => {
+            const type = optionTypeSelect.value; // 'call' or 'put'
+
+            optionStrikeSelect.innerHTML = '<option value="" disabled selected>Select Strike</option>';
+
+            if (!currentChain || currentChain.length === 0) return;
+
+            const filtered = currentChain.filter(opt => opt.option_type === type).sort((a, b) => a.strike - b.strike);
+
+            filtered.forEach(opt => {
+                const el = document.createElement('option');
+                el.value = opt.symbol; // OCC Symbol
+                el.style.color = 'black';
+
+                // Format: Strike | Price | Delta
+                // Delta usually in greeks map, Tradier structure varies. Assuming flat or nested.
+                // Checking common Tradier response keys: 'greeks' -> {'delta': ...} or flat 'delta'
+                let delta = '-';
+                if (opt.greeks && opt.greeks.delta !== undefined) {
+                    delta = opt.greeks.delta;
+                } else if (opt.delta !== undefined) {
+                    delta = opt.delta;
+                }
+
+                // Price: Last > Bid
+                const price = opt.last || opt.bid || '-';
+
+                el.textContent = `${opt.strike} ($${price}) Δ ${delta}`;
+                optionStrikeSelect.appendChild(el);
+            });
+
+            optionStrikeSelect.disabled = false;
+        });
+
+        // Update hidden option symbol on selection
+        optionStrikeSelect.addEventListener('change', () => {
+            optionSymbolInput.value = optionStrikeSelect.value;
         });
 
         // Toggle Type Fields
         typeSelect.addEventListener('change', () => {
             const val = typeSelect.value;
-
             // Limit price visibility
             if (val === 'limit' || val === 'stop_limit') {
                 priceContainer.classList.remove('hidden');
             } else {
                 priceContainer.classList.add('hidden');
             }
-
             // Stop price visibility
             if (val === 'stop' || val === 'stop_limit') {
                 stopContainer.classList.remove('hidden');

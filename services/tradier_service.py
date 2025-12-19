@@ -33,6 +33,25 @@ class TradierService:
             print(f"Error fetching quote for {symbol}: {e}")
             return None
 
+    def get_option_expirations(self, symbol):
+        """Fetch option expirations for a given symbol."""
+        url = f"{self.endpoint}/markets/options/expirations"
+        params = {'symbol': symbol}
+        try:
+            response = requests.get(url, params=params, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            # Tradier returns {'expirations': {'date': ['2023-01-01', ...]}}
+            # or just a list if only one? Sandbox behavior can vary.
+            # Usually it's date list.
+            exps = data.get('expirations', {}).get('date', [])
+            if isinstance(exps, str):
+                return [exps]
+            return exps
+        except requests.RequestException as e:
+            print(f"Error fetching expirations for {symbol}: {e}")
+            return []
+
     def get_option_chains(self, symbol, expiration):
         """Fetch option chains for a given symbol and expiration date."""
         url = f"{self.endpoint}/markets/options/chains"

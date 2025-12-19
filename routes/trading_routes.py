@@ -53,3 +53,35 @@ def place_order():
     except Exception as e:
         print(f"Order Placement Error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/options/expirations', methods=['GET'])
+def get_expirations():
+    """Get option expirations for a symbol."""
+    symbol = request.args.get('symbol')
+    if not symbol:
+        return jsonify({'error': 'Symbol required'}), 400
+        
+    try:
+        tradier_service = Container.get_tradier_service()
+        expirations = tradier_service.get_option_expirations(symbol)
+        return jsonify({'expirations': expirations})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/options/chain', methods=['GET'])
+def get_option_chain():
+    """Get option chain for a symbol and expiration."""
+    symbol = request.args.get('symbol')
+    expiration = request.args.get('expiration')
+    
+    if not symbol or not expiration:
+        return jsonify({'error': 'Symbol and expiration required'}), 400
+        
+    try:
+        tradier_service = Container.get_tradier_service()
+        chain = tradier_service.get_option_chains(symbol, expiration)
+        # Tradier returns a list of dicts. We can just return it.
+        # Each item has: symbol (OCC), strike, type, last, bid, ask, etc.
+        return jsonify({'chain': chain})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
