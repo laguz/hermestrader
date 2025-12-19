@@ -78,10 +78,11 @@ function initBacktester(form) {
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 font: { color: '#94a3b8' },
                 xaxis: { gridcolor: '#334155', title: 'Date' },
-                yaxis: { gridcolor: '#334155', title: 'Portfolio Value ($)' }
+                yaxis: { gridcolor: '#334155', title: 'Portfolio Value ($)' },
+                autosize: true
             };
 
-            Plotly.newPlot('chart-container', [trace], layout);
+            Plotly.newPlot('chart-container', [trace], layout, { responsive: true });
 
             metricsContainer.innerHTML = `
                 <div class="metrics-grid">

@@ -11,11 +11,12 @@ def entry_point_page():
 @analysis_bp.route('/api/analysis/<symbol>', methods=['GET'])
 def analyze_symbol(symbol):
     print(f"Received analysis request for: {symbol}")
+    period = request.args.get('period', '1y')
     try:
         tradier = Container.get_tradier_service()
         ml_service = Container.get_ml_service()
         service = AnalysisService(tradier, ml_service)
-        result = service.analyze_symbol(symbol)
+        result = service.analyze_symbol(symbol, period=period)
         
         if "error" in result:
              return jsonify(result), 404

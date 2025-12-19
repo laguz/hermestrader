@@ -17,6 +17,68 @@
         </div>
     </div>
 
+    <!-- Key Levels Panel -->
+    <div class="md-card col-span-12 hidden" id="levels-card">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+            <h3 class="md-card__headline" style="margin:0;">Key Levels</h3>
+
+            <!-- Period Selector -->
+            <div class="md-segmented-button" style="display: flex; gap: 8px;">
+                <button class="md-button md-button--tonal period-btn" data-period="3m">3 Months</button>
+                <button class="md-button md-button--tonal period-btn" data-period="6m">6 Months</button>
+                <button class="md-button md-button--filled period-btn" data-period="1y">1 Year</button>
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 16px;">
+            <!-- Support -->
+            <div>
+                <div class="md-subhead" style="color: var(--md-sys-color-primary); margin-bottom: 8px;">Support Levels
+                </div>
+                <div id="list-support" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <!-- Tags will go here -->
+                </div>
+            </div>
+            <!-- Resistance -->
+            <div>
+                <div class="md-subhead" style="color: var(--md-sys-color-error); margin-bottom: 8px;">Resistance Levels
+                </div>
+                <div id="list-resistance" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <!-- Tags will go here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Entry Points (Calculated) -->
+        <!-- Entry Points (Calculated) -->
+        <div style="margin-top: 24px; border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: 16px;">
+            <div class="md-subhead" style="color: var(--md-sys-color-primary); margin-bottom: 8px;">Calculated Entry
+                Points (Rounded)</div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+                <!-- Put Entry Points (Support) -->
+                <div>
+                    <div
+                        style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: #4ade80;">
+                        Put Entry (Support)</div>
+                    <div id="list-put-entries" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <!-- Tags -->
+                    </div>
+                </div>
+
+                <!-- Call Entry Points (Resistance) -->
+                <div>
+                    <div
+                        style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: #ef4444;">
+                        Call Entry (Resistance)</div>
+                    <div id="list-call-entries" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        <!-- Tags -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- AI Prediction & Price -->
     <div id="prediction-card" class="md-card col-span-12 hidden">
         <div style="display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 20px;">
@@ -120,15 +182,41 @@
         const indicatorsCard = document.getElementById('indicators-card');
         const chartContainer = document.getElementById('chart-container');
 
+        const periodBtns = document.querySelectorAll('.period-btn');
+        let currentPeriod = '1y';
+
+        const updatePeriodUI = (period) => {
+            periodBtns.forEach(btn => {
+                if (btn.dataset.period === period) {
+                    btn.classList.remove('md-button--tonal');
+                    btn.classList.add('md-button--filled');
+                } else {
+                    btn.classList.remove('md-button--filled');
+                    btn.classList.add('md-button--tonal');
+                }
+            });
+            currentPeriod = period;
+        };
+
+        periodBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                updatePeriodUI(btn.dataset.period);
+                analyze();
+            });
+        });
+
+        const levelsCard = document.getElementById('levels-card');
+
         const analyze = async () => {
             const symbol = symbolInput.value;
             if (!symbol) return;
 
-            // Reset UI
-            [predictionCard, spCard, scCard, indicatorsCard, chartContainer].forEach(el => el.classList.add('hidden'));
+            // Reset UI (hide everything while loading or just update?)
+            // Better to hide to avoid confusion
+            [predictionCard, spCard, scCard, indicatorsCard, chartContainer, levelsCard].forEach(el => el.classList.add('hidden'));
 
             try {
-                const res = await fetch(`/api/analysis/${symbol}`);
+                const res = await fetch(`/api/analysis/${symbol}?period=${currentPeriod}`);
 
                 if (!res.ok) {
                     const text = await res.text();
@@ -155,6 +243,83 @@
                     document.getElementById('disp-pred-price').textContent = "N/A";
                     document.getElementById('disp-pred-change').textContent = "";
                 }
+
+                // --- Key Levels ---
+                const listSupport = document.getElementById('list-support');
+                const listResistance = document.getElementById('list-resistance');
+                listSupport.innerHTML = '';
+                listResistance.innerHTML = '';
+
+                if (data.key_levels && data.key_levels.length > 0) {
+                    data.key_levels.forEach(lvl => {
+                        const tag = document.createElement('div');
+                        tag.style.padding = '4px 12px';
+                        tag.style.borderRadius = '16px';
+                        tag.style.fontSize = '0.9rem';
+
+                        // Style support vs resistance
+                        if (lvl.type === 'support') {
+                            tag.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
+                            tag.style.color = '#4ade80';
+                            tag.style.border = '1px solid #4ade80';
+                            tag.textContent = `$${lvl.price.toFixed(2)}`;
+                            listSupport.appendChild(tag);
+                        } else {
+                            tag.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+                            tag.style.color = '#ef4444';
+                            tag.style.border = '1px solid #ef4444';
+                            tag.textContent = `$${lvl.price.toFixed(2)}`;
+                            listResistance.appendChild(tag);
+                        }
+                    });
+                } else {
+                    listSupport.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None found</span>';
+                    listResistance.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None found</span>';
+                }
+
+                // --- Entry Points ---
+                const listPut = document.getElementById('list-put-entries');
+                const listCall = document.getElementById('list-call-entries');
+                listPut.innerHTML = '';
+                listCall.innerHTML = '';
+
+                const createEntryTag = (ep, type) => {
+                    const tag = document.createElement('div');
+                    tag.style.padding = '4px 12px';
+                    tag.style.borderRadius = '16px';
+                    tag.style.fontSize = '0.9rem';
+                    tag.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+                    tag.style.border = '1px solid var(--md-sys-color-outline)';
+
+                    if (type === 'put') {
+                        tag.style.borderColor = '#4ade80';
+                        tag.style.color = '#4ade80';
+                    } else {
+                        tag.style.borderColor = '#ef4444';
+                        tag.style.color = '#ef4444';
+                    }
+                    tag.textContent = `$${ep.price}`;
+                    return tag;
+                };
+
+                // Put Entries
+                if (data.put_entry_points && data.put_entry_points.length > 0) {
+                    data.put_entry_points.forEach(ep => {
+                        listPut.appendChild(createEntryTag(ep, 'put'));
+                    });
+                } else {
+                    listPut.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None</span>';
+                }
+
+                // Call Entries
+                if (data.call_entry_points && data.call_entry_points.length > 0) {
+                    data.call_entry_points.forEach(ep => {
+                        listCall.appendChild(createEntryTag(ep, 'call'));
+                    });
+                } else {
+                    listCall.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None</span>';
+                }
+
 
                 // --- Sell Put (Bullish) ---
                 document.getElementById('sp-score').textContent = data.sell_put_entry.score;
@@ -205,7 +370,7 @@
                 };
 
                 const layout = {
-                    title: `${symbol.toUpperCase()} Analysis`,
+                    title: `${symbol.toUpperCase()} Analysis (${currentPeriod.toUpperCase()})`,
                     autosize: true,
                     paper_bgcolor: 'rgba(0,0,0,0)',
                     plot_bgcolor: 'rgba(0,0,0,0)',
@@ -216,10 +381,10 @@
                     legend: { orientation: 'h', y: -0.1 }
                 };
 
-                Plotly.newPlot('analysis-chart', [tracePrice, traceSupport, traceResistance], layout);
+                Plotly.newPlot('analysis-chart', [tracePrice, traceSupport, traceResistance], layout, { responsive: true });
 
                 // Reveal
-                [predictionCard, spCard, scCard, indicatorsCard, chartContainer].forEach(el => el.classList.remove('hidden'));
+                [predictionCard, spCard, scCard, indicatorsCard, chartContainer, levelsCard].forEach(el => el.classList.remove('hidden'));
 
             } catch (e) {
                 console.error(e);

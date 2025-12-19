@@ -63,3 +63,86 @@ def calculate_atr(high, low, close, window=14):
     
     atr = true_range.rolling(window=window).mean()
     return atr
+
+def find_key_levels(series, window=5, threshold=0.03):
+    """
+    Find key Support and Resistance levels based on local minima and maxima.
+    Returns: [{'price': float, 'type': 'support'|'resistance', 'strength': int}]
+    """
+    levels = []
+    
+    # Simple local extrema detection using rolling window
+    # We check if a point is the min/max of its neighborhood (+/- window)
+    
+    # Convert series to list for easier indexing if needed, or iterate
+    prices = series.values
+    n = len(prices)
+    
+    raw_levels = []
+    
+    for i in range(window, n - window):
+        segment = prices[i-window : i+window+1]
+        center_val = prices[i]
+        
+        # Local Max (Resistance)
+        if center_val == max(segment):
+             raw_levels.append({'price': center_val, 'type': 'resistance'})
+             
+        # Local Min (Support)
+        elif center_val == min(segment):
+             raw_levels.append({'price': center_val, 'type': 'support'})
+             
+    # Cluster levels
+    # We will sort by price and group those within 'threshold' percent
+    if not raw_levels:
+        return []
+        
+    raw_levels.sort(key=lambda x: x['price'])
+    
+    grouped_levels = []
+    current_group = [raw_levels[0]]
+    
+    for i in range(1, len(raw_levels)):
+        lvl = raw_levels[i]
+        last_lvl_avg = np.mean([x['price'] for x in current_group])
+        
+        # If within threshold% of the group average
+        if abs(lvl['price'] - last_lvl_avg) / last_lvl_avg <= threshold:
+            current_group.append(lvl)
+        else:
+            # Process current group
+            avg_price = np.mean([x['price'] for x in current_group])
+            # Determine type by majority vote or just count
+            res_count = sum(1 for x in current_group if x['type'] == 'resistance')
+            sup_count = sum(1 for x in current_group if x['type'] == 'support')
+            
+            l_type = 'resistance' if res_count > sup_count else 'support'
+            if res_count == sup_count: l_type = 'pivot' # Mixed interest
+            
+            grouped_levels.append({
+                'price': float(avg_price),
+                'type': l_type,
+                'strength': len(current_group)
+            })
+            current_group = [lvl]
+            
+    # Process last group
+    if current_group:
+        avg_price = np.mean([x['price'] for x in current_group])
+        res_count = sum(1 for x in current_group if x['type'] == 'resistance')
+        sup_count = sum(1 for x in current_group if x['type'] == 'support')
+        l_type = 'resistance' if res_count > sup_count else 'support'
+        grouped_levels.append({
+            'price': float(avg_price),
+            'type': l_type,
+            'strength': len(current_group)
+        })
+        
+    # Sort by strength descending, then filter? Or return sorted by price?
+    # Usually users want to find nearest levels. Sorting by price makes sense for display.
+    # But usually we want "Key" levels implies Strong levels.
+    # Let's return sorted by price, the UI can filter or highlight.
+    
+    grouped_levels.sort(key=lambda x: x['price'])
+    
+    return grouped_levels

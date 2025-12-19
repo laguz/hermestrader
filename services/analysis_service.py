@@ -7,11 +7,21 @@ class AnalysisService:
         self.tradier_service = tradier_service
         self.ml_service = ml_service
 
-    def analyze_symbol(self, symbol):
+    def analyze_symbol(self, symbol, period='1y'):
         from datetime import datetime, timedelta
+        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels
         
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=365)
+        
+        days_map = {
+            '3m': 90,
+            '6m': 180,
+            '1y': 365
+        }
+        days = days_map.get(period, 365)
+        
+        # Fetch extra data for rolling calculations (e.g. 50 days buffer)
+        start_date = end_date - timedelta(days=days + 60)
         
         quotes = self.tradier_service.get_historical_pricing(
             symbol,
@@ -29,6 +39,11 @@ class AnalysisService:
         df['volume'] = df['volume'].astype(float)
         df['date'] = pd.to_datetime(df['date'])
         
+        # Filter to requested period for display/levels, but keep history for indicators
+        # Actually indicators need history.
+        # Let's calculate indicators on full DF then slice for "Key Levels" calculation if we want levels ONLY from that period.
+        # Yes, user said "use ... data to create a list ... for the selected period".
+        
         # 2. Calculate Indicators
         # RSI
         df['rsi'] = calculate_rsi(df['close'], period=14)
@@ -36,11 +51,66 @@ class AnalysisService:
         # MACD
         df['macd'], df['signal'], df['hist'] = calculate_macd(df['close'])
         
-        # Support & Resistance (Rolling 20)
+        # Support & Resistance (Rolling 20 - Dynamic)
         df['support'], df['resistance'] = calculate_support_resistance(df['close'], window=20)
         
         # Volume SMA
         df['vol_sma'] = calculate_sma(df['volume'], window=20)
+        
+        # Slice for the specific period analysis (visualization and key levels)
+        # However, ML prediction might rely on latest? 
+        # Logic below relies on df.iloc[-1]. That should be "Latest available data" regardless of "view period".
+        # BUT the chart data should respect the period.
+        # And Key Levels should respect the period.
+        
+        # Date cutoff
+        cutoff_date = end_date - timedelta(days=days)
+        period_df = df[df['date'] >= cutoff_date].copy()
+        
+        if period_df.empty:
+            period_df = df.tail(days) # Fallback
+            
+        # Recalculate Key Levels specifically on this period data
+        key_levels = find_key_levels(period_df['close'])
+
+        # Calculate Entry Points (Rounded Key Levels)
+        put_entry_points = []
+        call_entry_points = []
+        
+        seen_put_prices = set()
+        seen_call_prices = set()
+        
+        for level in key_levels:
+            price = level['price']
+            level_type = level['type']
+            
+            if price > 100:
+                rounded_price = 5 * round(price / 5)
+            else:
+                rounded_price = round(price)
+            
+            rounded_price = int(rounded_price)
+
+            if level_type == 'support':
+                 if rounded_price not in seen_put_prices:
+                    seen_put_prices.add(rounded_price)
+                    put_entry_points.append({
+                        'price': rounded_price,
+                        'type': 'support',
+                        'strength': level.get('strength', 1)
+                    })
+            elif level_type == 'resistance':
+                 if rounded_price not in seen_call_prices:
+                    seen_call_prices.add(rounded_price)
+                    call_entry_points.append({
+                        'price': rounded_price,
+                        'type': 'resistance',
+                        'strength': level.get('strength', 1)
+                    })
+        
+        # Sort entry points by price
+        put_entry_points.sort(key=lambda x: x['price'])
+        call_entry_points.sort(key=lambda x: x['price'])
 
         # Get latest data point
         latest = df.iloc[-1]
@@ -147,8 +217,8 @@ class AnalysisService:
 
 
         # Prepare Chart Data
-        # Truncate to last 100 days for display
-        chart_df = df.tail(100)
+        # Use period_df to reflect the requested timeframe
+        chart_df = period_df
         
         chart_data = {
             "dates": chart_df['date'].dt.strftime('%Y-%m-%d').tolist(),
@@ -163,6 +233,9 @@ class AnalysisService:
         return {
             "symbol": symbol.upper(),
             "current_price": current_price,
+            "key_levels": key_levels,
+            "put_entry_points": put_entry_points,
+            "call_entry_points": call_entry_points,
             "prediction": {
                 "price": predicted_price,
                 "change_pct": round(pred_change_pct * 100, 2)

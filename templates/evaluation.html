@@ -246,7 +246,7 @@
                 };
 
                 if (chartContainer) chartContainer.classList.remove('hidden');
-                Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout);
+                Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout, { responsive: true });
 
                 resultsPanel.classList.remove('hidden');
                 fetchHistory(); // Update history again (which shows all, not just evaluated symbol, but stays fresh)
