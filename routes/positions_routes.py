@@ -30,6 +30,13 @@ def get_positions():
             for p in positions:
                 sym = p.get('symbol')
                 if sym in quote_map:
-                    p['current_price'] = quote_map[sym].get('last')
+                    q = quote_map[sym]
+                    p['current_price'] = q.get('last')
+                    # Enrich option details if available
+                    if q.get('expiration_date'):
+                         p['expiration_date'] = q.get('expiration_date')
+                         p['option_type'] = q.get('option_type')
+                         p['strike'] = q.get('strike')
+                         p['underlying'] = q.get('underlying') # helpful for display
                     
     return jsonify(positions)

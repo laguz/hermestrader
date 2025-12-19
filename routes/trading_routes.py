@@ -25,12 +25,21 @@ def place_order():
         stop = data.get('stop')
         option_symbol = data.get('option_symbol')
         order_class = data.get('class', 'equity')
+        legs = data.get('legs')
         
         # Helper to get account ID (should ideally be from context/user but using env/service default for single user app)
         account_id = tradier_service.account_id
         
-        if not symbol or not side or not quantity or not order_type:
+        # Validation
+        if not symbol or not order_type:
              return jsonify({'error': 'Missing required fields'}), 400
+             
+        if order_class == 'multileg':
+            if not legs or not isinstance(legs, list):
+                return jsonify({'error': 'Legs required for multileg order'}), 400
+        else:
+            if not side or not quantity:
+                return jsonify({'error': 'Side and Quantity required for equity/option orders'}), 400
 
         result = tradier_service.place_order(
             account_id=account_id,
@@ -42,7 +51,8 @@ def place_order():
             price=price,
             stop=stop,
             option_symbol=option_symbol,
-            order_class=order_class
+            order_class=order_class,
+            legs=legs
         )
         
         if 'error' in result:
@@ -83,5 +93,19 @@ def get_option_chain():
         # Tradier returns a list of dicts. We can just return it.
         # Each item has: symbol (OCC), strike, type, last, bid, ask, etc.
         return jsonify({'chain': chain})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/quotes', methods=['GET'])
+def get_quote():
+    """Get quote for a symbol."""
+    symbol = request.args.get('symbol')
+    if not symbol:
+         return jsonify({'error': 'Symbol required'}), 400
+         
+    try:
+        tradier_service = Container.get_tradier_service()
+        quote = tradier_service.get_quote(symbol)
+        return jsonify({'quote': quote})
     except Exception as e:
         return jsonify({'error': str(e)}), 500

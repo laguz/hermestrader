@@ -113,18 +113,31 @@
                     const cost_basis = pos.cost_basis;
                     const current_price = pos.current_price;
 
+                    // Option Details
+                    const isOption = pos.expiration_date !== undefined;
+                    let displaySymbol = symbol;
+                    if (isOption) {
+                        displaySymbol = `
+                            <div><span style="font-weight:bold">${pos.underlying || symbol}</span></div>
+                            <div style="font-size:0.8em; opacity:0.8;">
+                                ${pos.option_type === 'call' ? 'C' : 'P'} ${pos.strike} ${pos.expiration_date}
+                            </div>
+                            <div style="font-size:0.75em; opacity:0.5; font-family:monospace;">${symbol}</div>
+                        `;
+                    } else {
+                        displaySymbol = `<span style="font-weight:500">${symbol}</span>`;
+                    }
+
                     let market_value = '-';
                     let pnl = '-';
                     let pnl_pct = '-';
 
                     if (current_price && qty) {
-                        market_value = current_price * qty;
-                        // If short, cost basis is proceeds (positive), so we track liability.
-                        // Usually cost_basis from Tradier is negative for debit?
-                        // Let's assume standard Long: PnL = (Price - Cost) * Qty
-                        // Tradier 'cost_basis' is total cost? Or per share?
-                        // Documentation says: cost_basis is TOTAL cost of position.
-                        // So PnL = Market Value - Cost Basis.
+                        market_value = current_price * qty * (isOption ? 100 : 1); // Adjust for option multiplier? 
+                        // Note: Tradier positions already define cost_basis as total cost. 
+                        // But market_value needs calculation. 
+                        // If qty is contracts, need * 100.
+                        // Tradier API: qty is contracts. 
 
                         pnl = market_value - cost_basis;
                         if (cost_basis !== 0) {
@@ -136,7 +149,7 @@
                     const pnlColor = pnl > 0 ? 'var(--md-sys-color-primary)' : (pnl < 0 ? 'var(--md-sys-color-error, #ffb4ab)' : 'inherit');
 
                     row.innerHTML = `
-                    <td>${symbol}</td>
+                    <td>${displaySymbol}</td>
                     <td>${qty}</td>
                     <td>${fmtMoney(cost_basis)}</td>
                     <td>${fmtMoney(current_price)}</td>

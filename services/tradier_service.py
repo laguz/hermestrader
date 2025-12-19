@@ -146,7 +146,7 @@ class TradierService:
         quote = self.get_quote('SPY')
         return quote is not None
 
-    def place_order(self, account_id, symbol, side, quantity, order_type, duration='day', price=None, stop=None, option_symbol=None, order_class='equity'):
+    def place_order(self, account_id, symbol, side, quantity, order_type, duration='day', price=None, stop=None, option_symbol=None, order_class='equity', legs=None):
         """
         Place an order with Tradier.
         Params:
@@ -160,20 +160,30 @@ class TradierService:
             stop: float (Required for stop orders)
             option_symbol: str (Required for option orders)
             order_class: str ('equity', 'option', 'multileg', 'combo')
+            legs: list of dicts [{'option_symbol': '...', 'side': '...', 'quantity': 1}, ...] (Required for multileg)
         """
         url = f"{self.endpoint}/accounts/{account_id}/orders"
         
         data = {
             'class': order_class,
             'symbol': symbol,
-            'side': side,
-            'quantity': quantity,
             'type': order_type,
             'duration': duration,
         }
+        
+        # For equity/option/combo, use top-level fields
+        if order_class in ['equity', 'option', 'combo']:
+            data['side'] = side
+            data['quantity'] = quantity
+            if option_symbol:
+                data['option_symbol'] = option_symbol
 
-        if option_symbol:
-            data['option_symbol'] = option_symbol
+        # For multileg, map legs to indexed fields
+        if order_class == 'multileg' and legs:
+            for i, leg in enumerate(legs):
+                data[f'option_symbol[{i}]'] = leg.get('option_symbol')
+                data[f'side[{i}]'] = leg.get('side')
+                data[f'quantity[{i}]'] = leg.get('quantity')
             
         if price:
             data['price'] = price
