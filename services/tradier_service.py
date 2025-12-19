@@ -55,7 +55,7 @@ class TradierService:
     def get_option_chains(self, symbol, expiration):
         """Fetch option chains for a given symbol and expiration date."""
         url = f"{self.endpoint}/markets/options/chains"
-        params = {'symbol': symbol, 'expiration': expiration}
+        params = {'symbol': symbol, 'expiration': expiration, 'greeks': 'true'}
         try:
             response = requests.get(url, params=params, headers=self._get_headers())
             response.raise_for_status()

@@ -40,8 +40,20 @@ class TestTradingAPI(unittest.TestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {
             'options': {'option': [
-                {'symbol': 'SPY230120C00400000', 'strike': 400.0, 'option_type': 'call', 'last': 5.20},
-                {'symbol': 'SPY230120P00390000', 'strike': 390.0, 'option_type': 'put', 'last': 4.50}
+                {
+                    'symbol': 'SPY230120C00400000', 
+                    'strike': 400.0, 
+                    'option_type': 'call', 
+                    'last': 5.20,
+                    'greeks': {'delta': 0.54}
+                },
+                {
+                    'symbol': 'SPY230120P00390000', 
+                    'strike': 390.0, 
+                    'option_type': 'put', 
+                    'last': 4.50,
+                    'greeks': {'delta': -0.32}
+                }
             ]}
         }
         mock_get.return_value = mock_response
@@ -49,12 +61,14 @@ class TestTradingAPI(unittest.TestCase):
         # Test
         chain = self.service.get_option_chains('SPY', '2023-01-20')
         print(f"Chain item count: {len(chain)}")
+        print(f"First item delta: {chain[0].get('greeks', {}).get('delta')}")
         
         self.assertEqual(len(chain), 2)
         self.assertEqual(chain[0]['symbol'], 'SPY230120C00400000')
+        self.assertEqual(chain[0]['greeks']['delta'], 0.54)
         mock_get.assert_called_with(
             'https://sandbox.tradier.com/v1/markets/options/chains', 
-            params={'symbol': 'SPY', 'expiration': '2023-01-20'}, 
+            params={'symbol': 'SPY', 'expiration': '2023-01-20', 'greeks': 'true'}, 
             headers={'Authorization': 'Bearer mock_token', 'Accept': 'application/json'}
         )
 

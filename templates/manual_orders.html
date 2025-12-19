@@ -69,12 +69,6 @@
                 </div>
             </div>
 
-            <!-- Fetch Chain Button (Hidden for Equity) -->
-            <div id="fetch-chain-container" class="hidden" style="margin-bottom: 16px;">
-                <button type="button" id="btn-fetch-expirations" class="md-button md-button--tonal"
-                    style="width:100%">Fetch Expirations</button>
-            </div>
-
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
                 <!-- Side -->
                 <div class="md-text-field-container">
@@ -155,14 +149,13 @@
 
         const symbolInput = document.getElementById('symbol');
         const optionChainContainer = document.getElementById('option-chain-container');
-        const fetchChainContainer = document.getElementById('fetch-chain-container');
-        const btnFetchExpirations = document.getElementById('btn-fetch-expirations');
 
         const expirationSelect = document.getElementById('expiration');
         const optionTypeSelect = document.getElementById('option_type');
         const optionStrikeSelect = document.getElementById('option_strike');
         const optionSymbolInput = document.getElementById('option_symbol');
 
+        const sideSelect = document.getElementById('side');
         const typeSelect = document.getElementById('type');
         const priceContainer = document.getElementById('price-container');
         const stopContainer = document.getElementById('stop-container');
@@ -171,6 +164,73 @@
         const btnSubmit = document.getElementById('btn-submit');
 
         let currentChain = [];
+
+        // Define Side Options
+        const equitySides = [
+            { value: 'buy', text: 'Buy' },
+            { value: 'sell', text: 'Sell' },
+            { value: 'buy_to_cover', text: 'Buy to Cover' },
+            { value: 'sell_short', text: 'Sell Short' }
+        ];
+
+        const optionSides = [
+            { value: 'buy_to_open', text: 'Buy to Open' },
+            { value: 'buy_to_close', text: 'Buy to Close' },
+            { value: 'sell_to_open', text: 'Sell to Open' },
+            { value: 'sell_to_close', text: 'Sell to Close' }
+        ];
+
+        const updateSideOptions = (assetClass) => {
+            const sides = assetClass === 'option' ? optionSides : equitySides;
+            sideSelect.innerHTML = '';
+            sides.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.value;
+                opt.textContent = s.text;
+                opt.style.color = 'black';
+                sideSelect.appendChild(opt);
+            });
+        };
+
+        // Initialize Side Options
+        updateSideOptions('equity');
+
+        // Fetch Expirations Function
+        const fetchExpirations = async () => {
+            const sym = symbolInput.value.toUpperCase();
+            if (orderClassInput.value !== 'option' || !sym) return;
+
+            expirationSelect.innerHTML = '<option value="" disabled selected>Loading...</option>';
+            expirationSelect.disabled = true;
+
+            try {
+                const res = await fetch(`/api/options/expirations?symbol=${sym}`);
+                const data = await res.json();
+
+                if (data.error) throw new Error(data.error);
+
+                expirationSelect.innerHTML = '<option value="" disabled selected>Select Expiration</option>';
+                data.expirations.forEach(date => {
+                    const opt = document.createElement('option');
+                    opt.value = date;
+                    opt.style.color = 'black';
+                    opt.textContent = date;
+                    expirationSelect.appendChild(opt);
+                });
+                expirationSelect.disabled = false;
+
+                // Reset downstream
+                optionTypeSelect.disabled = true;
+                optionTypeSelect.value = "";
+                optionStrikeSelect.innerHTML = '<option value="" disabled selected>Select Strike</option>';
+                optionStrikeSelect.disabled = true;
+
+            } catch (e) {
+                console.error(e);
+                expirationSelect.innerHTML = '<option value="" disabled selected>Error loading expirations</option>';
+                console.log('Error fetching expirations: ' + e.message);
+            }
+        };
 
         // Toggle Class
         classBtns.forEach(btn => {
@@ -190,50 +250,23 @@
 
                 if (val === 'option') {
                     optionChainContainer.classList.remove('hidden');
-                    fetchChainContainer.classList.remove('hidden');
+                    // Try fetch if symbol is already present
+                    fetchExpirations();
                 } else {
                     optionChainContainer.classList.add('hidden');
-                    fetchChainContainer.classList.add('hidden');
                 }
+                updateSideOptions(val);
             });
         });
 
-        // Fetch Expirations
-        btnFetchExpirations.addEventListener('click', async () => {
-            const sym = symbolInput.value.toUpperCase();
-            if (!sym) {
-                alert('Please enter a symbol first');
-                return;
-            }
+        // Trigger fetch on symbol blur
+        symbolInput.addEventListener('blur', fetchExpirations);
 
-            btnFetchExpirations.textContent = 'Loading...';
-            try {
-                const res = await fetch(`/api/options/expirations?symbol=${sym}`);
-                const data = await res.json();
-
-                if (data.error) throw new Error(data.error);
-
-                expirationSelect.innerHTML = '<option value="" disabled selected>Select Expiration</option>';
-                data.expirations.forEach(date => {
-                    const opt = document.createElement('option');
-                    opt.value = date;
-                    opt.style.color = 'black';
-                    opt.textContent = date;
-                    expirationSelect.appendChild(opt);
-                });
-
-                btnFetchExpirations.textContent = 'Fetch Expirations';
-
-                // Reset downstream
-                optionTypeSelect.disabled = true;
-                optionTypeSelect.value = "";
-                optionStrikeSelect.innerHTML = '<option value="" disabled selected>Select Strike</option>';
-                optionStrikeSelect.disabled = true;
-
-            } catch (e) {
-                console.error(e);
-                alert('Error fetching expirations: ' + e.message);
-                btnFetchExpirations.textContent = 'Fetch Expirations';
+        // Also enter key
+        symbolInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                symbolInput.blur();
             }
         });
 
@@ -283,13 +316,11 @@
                 el.style.color = 'black';
 
                 // Format: Strike | Price | Delta
-                // Delta usually in greeks map, Tradier structure varies. Assuming flat or nested.
-                // Checking common Tradier response keys: 'greeks' -> {'delta': ...} or flat 'delta'
                 let delta = '-';
                 if (opt.greeks && opt.greeks.delta !== undefined) {
-                    delta = opt.greeks.delta;
+                    delta = Number(opt.greeks.delta).toFixed(2);
                 } else if (opt.delta !== undefined) {
-                    delta = opt.delta;
+                    delta = Number(opt.delta).toFixed(2);
                 }
 
                 // Price: Last > Bid
