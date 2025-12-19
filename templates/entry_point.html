@@ -25,8 +25,8 @@
             <!-- Period Selector -->
             <div class="md-segmented-button" style="display: flex; gap: 8px;">
                 <button class="md-button md-button--tonal period-btn" data-period="3m">3 Months</button>
-                <button class="md-button md-button--tonal period-btn" data-period="6m">6 Months</button>
-                <button class="md-button md-button--filled period-btn" data-period="1y">1 Year</button>
+                <button class="md-button md-button--filled period-btn" data-period="6m">6 Months</button>
+                <button class="md-button md-button--tonal period-btn" data-period="1y">1 Year</button>
             </div>
         </div>
 
@@ -183,7 +183,7 @@
         const chartContainer = document.getElementById('chart-container');
 
         const periodBtns = document.querySelectorAll('.period-btn');
-        let currentPeriod = '1y';
+        let currentPeriod = '6m';
 
         const updatePeriodUI = (period) => {
             periodBtns.forEach(btn => {

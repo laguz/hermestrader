@@ -126,3 +126,52 @@ class TradierService:
         """Simple check to verify connectivity/auth by fetching a quote for SPY."""
         quote = self.get_quote('SPY')
         return quote is not None
+
+    def place_order(self, account_id, symbol, side, quantity, order_type, duration='day', price=None, stop=None, option_symbol=None, order_class='equity'):
+        """
+        Place an order with Tradier.
+        Params:
+            account_id: str
+            symbol: str (Underlying symbol)
+            side: str ('buy', 'sell', 'buy_to_open', etc.)
+            quantity: int
+            order_type: str ('market', 'limit', 'stop', 'stop_limit')
+            duration: str ('day', 'gtc')
+            price: float (Required for limit orders)
+            stop: float (Required for stop orders)
+            option_symbol: str (Required for option orders)
+            order_class: str ('equity', 'option', 'multileg', 'combo')
+        """
+        url = f"{self.endpoint}/accounts/{account_id}/orders"
+        
+        data = {
+            'class': order_class,
+            'symbol': symbol,
+            'side': side,
+            'quantity': quantity,
+            'type': order_type,
+            'duration': duration,
+        }
+
+        if option_symbol:
+            data['option_symbol'] = option_symbol
+            
+        if price:
+            data['price'] = price
+            
+        if stop:
+            data['stop'] = stop
+            
+        try:
+            print(f"Placing order: {data}")
+            response = requests.post(url, data=data, headers=self._get_headers())
+            
+            if response.status_code not in [200, 201]:
+                print(f"Order failed: {response.text}")
+                return {'error': response.text} # Return error structure
+            
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            print(f"Error placing order: {e}")
+            return {'error': str(e)}

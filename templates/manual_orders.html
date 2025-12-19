@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block main_class %}full-width-layout{% endblock %}
+
+{% block content %}
+<div class="md-grid" style="grid-template-columns: repeat(12, 1fr); gap: 24px; max-width: 800px; margin: 0 auto;">
+
+    <!-- Order Form Card -->
+    <div class="md-card col-span-12">
+        <h2 class="md-card__headline">Manual Order Entry</h2>
+
+        <form id="order-form" style="margin-top: 16px;">
+
+            <!-- Class Selection -->
+            <div style="margin-bottom: 24px;">
+                <label class="md-text-field-label" style="position:static; display:block; margin-bottom:8px;">Asset
+                    Class</label>
+                <div class="md-segmented-button">
+                    <button type="button" class="md-button md-button--filled class-btn" data-value="equity">Equity
+                        (Stock)</button>
+                    <button type="button" class="md-button md-button--tonal class-btn"
+                        data-value="option">Option</button>
+                    <!-- multileg/combo future support -->
+                </div>
+                <input type="hidden" id="order_class" value="equity">
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+
+                <!-- Symbol -->
+                <div class="md-text-field-container">
+                    <input type="text" id="symbol" class="md-text-field" placeholder="Symbol (e.g. TSLA)" required>
+                    <label class="md-text-field-label">Underlying Symbol</label>
+                </div>
+
+                <!-- Option Symbol (Hidden for Equity) -->
+                <div class="md-text-field-container hidden" id="option-symbol-container">
+                    <input type="text" id="option_symbol" class="md-text-field" placeholder="OCC Symbol">
+                    <label class="md-text-field-label">Option Symbol</label>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+                <!-- Side -->
+                <div class="md-text-field-container">
+                    <select id="side" class="md-text-field" style="background:transparent; color:white;">
+                        <option value="buy" style="color:black;">Buy</option>
+                        <option value="sell" style="color:black;">Sell</option>
+                        <option value="buy_to_open" style="color:black;">Buy to Open</option>
+                        <option value="buy_to_close" style="color:black;">Buy to Close</option>
+                        <option value="sell_to_open" style="color:black;">Sell to Open</option>
+                        <option value="sell_to_close" style="color:black;">Sell to Close</option>
+                    </select>
+                    <label class="md-text-field-label">Side</label>
+                </div>
+
+                <!-- Quantity -->
+                <div class="md-text-field-container">
+                    <input type="number" id="quantity" class="md-text-field" placeholder="Quantity" min="1" value="1"
+                        required>
+                    <label class="md-text-field-label">Quantity</label>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+                <!-- Type -->
+                <div class="md-text-field-container">
+                    <select id="type" class="md-text-field" style="background:transparent; color:white;">
+                        <option value="market" style="color:black;">Market</option>
+                        <option value="limit" style="color:black;">Limit</option>
+                        <option value="stop" style="color:black;">Stop</option>
+                        <option value="stop_limit" style="color:black;">Stop Limit</option>
+                    </select>
+                    <label class="md-text-field-label">Order Type</label>
+                </div>
+
+                <!-- Duration -->
+                <div class="md-text-field-container">
+                    <select id="duration" class="md-text-field" style="background:transparent; color:white;">
+                        <option value="day" style="color:black;">Day</option>
+                        <option value="gtc" style="color:black;">GTC</option>
+                        <option value="pre" style="color:black;">Pre-Market</option>
+                        <option value="post" style="color:black;">Post-Market</option>
+                    </select>
+                    <label class="md-text-field-label">Duration</label>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+                <!-- Price (Hidden for Market) -->
+                <div class="md-text-field-container hidden" id="price-container">
+                    <input type="number" id="price" class="md-text-field" placeholder="Limit Price" step="0.01">
+                    <label class="md-text-field-label">Limit Price</label>
+                </div>
+
+                <!-- Stop Price (Hidden for non-Stop) -->
+                <div class="md-text-field-container hidden" id="stop-container">
+                    <input type="number" id="stop" class="md-text-field" placeholder="Stop Price" step="0.01">
+                    <label class="md-text-field-label">Stop Price</label>
+                </div>
+            </div>
+
+            <!-- Submit -->
+            <div style="margin-top: 24px; text-align: right;">
+                <div id="status-message" style="margin-bottom: 16px; font-weight: 500;"></div>
+                <button type="submit" id="btn-submit" class="md-button md-button--filled"
+                    style="width: 100%; padding: 12px;">Place Order</button>
+            </div>
+
+        </form>
+    </div>
+
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const orderForm = document.getElementById('order-form');
+        const orderClassInput = document.getElementById('order_class');
+        const classBtns = document.querySelectorAll('.class-btn');
+        const optionSymbolContainer = document.getElementById('option-symbol-container');
+
+        const typeSelect = document.getElementById('type');
+        const priceContainer = document.getElementById('price-container');
+        const stopContainer = document.getElementById('stop-container');
+
+        const statusMessage = document.getElementById('status-message');
+        const btnSubmit = document.getElementById('btn-submit');
+
+        // Toggle Class
+        classBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const val = btn.dataset.value;
+                orderClassInput.value = val;
+
+                classBtns.forEach(b => {
+                    if (b.dataset.value === val) {
+                        b.classList.remove('md-button--tonal');
+                        b.classList.add('md-button--filled');
+                    } else {
+                        b.classList.remove('md-button--filled');
+                        b.classList.add('md-button--tonal');
+                    }
+                });
+
+                if (val === 'option') {
+                    optionSymbolContainer.classList.remove('hidden');
+                } else {
+                    optionSymbolContainer.classList.add('hidden');
+                }
+            });
+        });
+
+        // Toggle Type Fields
+        typeSelect.addEventListener('change', () => {
+            const val = typeSelect.value;
+
+            // Limit price visibility
+            if (val === 'limit' || val === 'stop_limit') {
+                priceContainer.classList.remove('hidden');
+            } else {
+                priceContainer.classList.add('hidden');
+            }
+
+            // Stop price visibility
+            if (val === 'stop' || val === 'stop_limit') {
+                stopContainer.classList.remove('hidden');
+            } else {
+                stopContainer.classList.add('hidden');
+            }
+        });
+
+        // Submit
+        orderForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            btnSubmit.disabled = true;
+            statusMessage.textContent = 'Submitting order...';
+            statusMessage.style.color = 'var(--md-sys-color-on-surface)';
+
+            const payload = {
+                class: orderClassInput.value,
+                symbol: document.getElementById('symbol').value,
+                side: document.getElementById('side').value,
+                quantity: document.getElementById('quantity').value,
+                type: typeSelect.value,
+                duration: document.getElementById('duration').value
+            };
+
+            // Add conditional fields
+            if (payload.class === 'option') {
+                payload.option_symbol = document.getElementById('option_symbol').value;
+            }
+
+            if (!priceContainer.classList.contains('hidden')) {
+                payload.price = document.getElementById('price').value;
+            }
+
+            if (!stopContainer.classList.contains('hidden')) {
+                payload.stop = document.getElementById('stop').value;
+            }
+
+            try {
+                const res = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Failed to place order');
+
+                statusMessage.textContent = `Success! Order ID: ${data.order.id} (${data.order.status})`;
+                statusMessage.style.color = 'var(--md-sys-color-primary)';
+
+            } catch (err) {
+                console.error(err);
+                statusMessage.textContent = `Error: ${err.message}`;
+                statusMessage.style.color = 'var(--md-sys-color-error)';
+            } finally {
+                btnSubmit.disabled = false;
+            }
+        });
+    });
+</script>
+{% endblock %}

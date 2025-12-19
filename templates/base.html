@@ -22,6 +22,10 @@
                     <span class="material-symbols-outlined">dashboard</span>
                     <span class="md-tab__label">Dashboard</span>
                 </a>
+                <a href="/manual_orders" class="md-tab {{ 'active' if request.path == '/manual_orders' else '' }}">
+                    <span class="material-symbols-outlined">api</span>
+                    <span class="md-tab__label">Manual Orders</span>
+                </a>
                 <a href="/backtester" class="md-tab {{ 'active' if request.path == '/backtester' else '' }}">
                     <span class="material-symbols-outlined">analytics</span>
                     <span class="md-tab__label">Backtester</span>
