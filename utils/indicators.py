@@ -64,85 +64,112 @@ def calculate_atr(high, low, close, window=14):
     atr = true_range.rolling(window=window).mean()
     return atr
 
-def find_key_levels(series, window=5, threshold=0.03):
+from sklearn.cluster import KMeans
+from scipy.signal import argrelextrema
+
+def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
     """
-    Find key Support and Resistance levels based on local minima and maxima.
-    Returns: [{'price': float, 'type': 'support'|'resistance', 'strength': int}]
-    """
-    levels = []
+    Find key Support and Resistance levels using K-Means Clustering on Pivots.
     
-    # Simple local extrema detection using rolling window
-    # We check if a point is the min/max of its neighborhood (+/- window)
-    
-    # Convert series to list for easier indexing if needed, or iterate
-    prices = series.values
-    n = len(prices)
-    
-    raw_levels = []
-    
-    for i in range(window, n - window):
-        segment = prices[i-window : i+window+1]
-        center_val = prices[i]
+    Args:
+        close_series (pd.Series): Closing prices.
+        volume_series (pd.Series): Volume data (optional).
+        window (int): Window for pivot detection.
+        n_clusters (int): Number of price clusters to identify.
         
-        # Local Max (Resistance)
-        if center_val == max(segment):
-             raw_levels.append({'price': center_val, 'type': 'resistance'})
-             
-        # Local Min (Support)
-        elif center_val == min(segment):
-             raw_levels.append({'price': center_val, 'type': 'support'})
-             
-    # Cluster levels
-    # We will sort by price and group those within 'threshold' percent
-    if not raw_levels:
+    Returns:
+        List[dict]: [{'price': float, 'type': 'support'|'resistance', 'strength': float}]
+    """
+    if close_series.empty:
         return []
         
-    raw_levels.sort(key=lambda x: x['price'])
+    prices = close_series.values
+    n = len(prices)
     
-    grouped_levels = []
-    current_group = [raw_levels[0]]
+    # 1. Find Pivots (Local Minima and Maxima)
+    # iloc indices
+    max_idx = argrelextrema(prices, np.greater, order=window)[0]
+    min_idx = argrelextrema(prices, np.less, order=window)[0]
     
-    for i in range(1, len(raw_levels)):
-        lvl = raw_levels[i]
-        last_lvl_avg = np.mean([x['price'] for x in current_group])
-        
-        # If within threshold% of the group average
-        if abs(lvl['price'] - last_lvl_avg) / last_lvl_avg <= threshold:
-            current_group.append(lvl)
-        else:
-            # Process current group
-            avg_price = np.mean([x['price'] for x in current_group])
-            # Determine type by majority vote or just count
-            res_count = sum(1 for x in current_group if x['type'] == 'resistance')
-            sup_count = sum(1 for x in current_group if x['type'] == 'support')
-            
-            l_type = 'resistance' if res_count > sup_count else 'support'
-            if res_count == sup_count: l_type = 'pivot' # Mixed interest
-            
-            grouped_levels.append({
-                'price': float(avg_price),
-                'type': l_type,
-                'strength': len(current_group)
-            })
-            current_group = [lvl]
-            
-    # Process last group
-    if current_group:
-        avg_price = np.mean([x['price'] for x in current_group])
-        res_count = sum(1 for x in current_group if x['type'] == 'resistance')
-        sup_count = sum(1 for x in current_group if x['type'] == 'support')
-        l_type = 'resistance' if res_count > sup_count else 'support'
-        grouped_levels.append({
-            'price': float(avg_price),
-            'type': l_type,
-            'strength': len(current_group)
+    pivots = []
+    
+    for idx in max_idx:
+        pivots.append({
+            'index': idx,
+            'price': prices[idx],
+            'type': 'resistance',
+            'volume': volume_series.iloc[idx] if volume_series is not None else 1
         })
         
-    # Sort by strength descending, then filter? Or return sorted by price?
-    # Usually users want to find nearest levels. Sorting by price makes sense for display.
-    # But usually we want "Key" levels implies Strong levels.
-    # Let's return sorted by price, the UI can filter or highlight.
+    for idx in min_idx:
+        pivots.append({
+            'index': idx,
+            'price': prices[idx],
+            'type': 'support',
+            'volume': volume_series.iloc[idx] if volume_series is not None else 1
+        })
+        
+    if not pivots:
+        return []
+        
+    # 2. Prepare Data for Clustering
+    # We cluster on Price primarily.
+    pivot_data = pd.DataFrame(pivots)
+    X = pivot_data[['price']].values
     
-    grouped_levels.sort(key=lambda x: x['price'])
+    # Adaptive K: If we don't have enough pivots, reduce K
+    k = min(n_clusters, len(pivots))
+    if k < 1: 
+        return []
+        
+    kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+    kmeans.fit(X)
     
-    return grouped_levels
+    pivot_data['cluster'] = kmeans.labels_
+    
+    # 3. Analyze Clusters
+    key_levels = []
+    current_price = prices[-1]
+    
+    for cluster_id in range(k):
+        cluster_points = pivot_data[pivot_data['cluster'] == cluster_id]
+        if cluster_points.empty:
+            continue
+            
+        # Weighted Average Level based on Volume and Recency
+        # Recency: Higher weight for higher index
+        # Weight = Volume * (Index / N)^2  (Exponential decay impact)
+        
+        # Normalize index to 0-1
+        cluster_points = cluster_points.copy()
+        cluster_points['recency'] = cluster_points['index'] / n
+        cluster_points['weight'] = cluster_points['volume'] * (cluster_points['recency'] ** 2)
+        
+        # If weights are zero (e.g. index 0), handle
+        total_weight = cluster_points['weight'].sum()
+        if total_weight == 0:
+            avg_price = cluster_points['price'].mean()
+        else:
+            avg_price = (cluster_points['price'] * cluster_points['weight']).sum() / total_weight
+            
+        # Strength = Sum of weights (Volume + Recency support validity)
+        # Normalize strength for UI (1-10 scale approximation?)
+        # Let's just use raw score relative to others, or count
+        count = len(cluster_points)
+        strength = count # Simple touch count for now, robustness
+        
+        # Determine Major Type (Support or Resistance relative to CURRENT PRICE)
+        # Traditionally, below = Support, above = Resistance
+        level_type = 'support' if avg_price < current_price else 'resistance'
+        
+        key_levels.append({
+            'price': float(avg_price),
+            'type': level_type,
+            'strength': int(strength),
+            'touches': int(count)
+        })
+        
+    # Sort by price
+    key_levels.sort(key=lambda x: x['price'])
+    
+    return key_levels

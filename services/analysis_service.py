@@ -71,7 +71,8 @@ class AnalysisService:
             period_df = df.tail(days) # Fallback
             
         # Recalculate Key Levels specifically on this period data
-        key_levels = find_key_levels(period_df['close'])
+        # Using new KMeans algo which expects Volume
+        key_levels = find_key_levels(period_df['close'], period_df['volume'])
 
         # Calculate Entry Points (Rounded Key Levels)
         put_entry_points = []
