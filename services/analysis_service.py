@@ -7,7 +7,7 @@ class AnalysisService:
         self.tradier_service = tradier_service
         self.ml_service = ml_service
 
-    def analyze_symbol(self, symbol, period='1y'):
+    def analyze_symbol(self, symbol, period='6m'):
         from datetime import datetime, timedelta
         from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels
         
