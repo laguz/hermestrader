@@ -11,7 +11,7 @@ def train_model():
         if not data:
             return jsonify({"error": "Invalid JSON or missing body"}), 400
             
-        symbol = data.get('symbol', 'SPY')
+        symbol = data.get('symbol', 'TSLA')
         model_type = data.get('model_type', 'rf')
         
         tradier = Container.get_tradier_service()
@@ -32,7 +32,7 @@ def predict_price():
         if not data:
             return jsonify({"error": "Invalid JSON or missing body"}), 400
 
-        symbol = data.get('symbol', 'SPY')
+        symbol = data.get('symbol', 'TSLA')
         model_type = data.get('model_type', 'rf')
         
         tradier = Container.get_tradier_service()
@@ -53,7 +53,7 @@ def evaluate_model():
         if not data:
             return jsonify({"error": "Invalid JSON or missing body"}), 400
 
-        symbol = data.get('symbol', 'SPY')
+        symbol = data.get('symbol', 'TSLA')
         model_type = data.get('model_type', 'rf')
         
         tradier = Container.get_tradier_service()
@@ -78,4 +78,14 @@ def get_prediction_history(symbol):
         return jsonify(history)
     except Exception as e:
         print(f"History Error: {e}")
+        return jsonify({"error": str(e)}), 500
+@ml_bp.route('/api/history/refresh', methods=['POST'])
+def refresh_history():
+    try:
+        tradier = Container.get_tradier_service()
+        ml_service = MLService(tradier)
+        result = ml_service.refresh_prediction_actuals()
+        return jsonify(result)
+    except Exception as e:
+        print(f"Refresh Error: {e}")
         return jsonify({"error": str(e)}), 500

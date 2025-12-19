@@ -5,7 +5,12 @@
 {% block content %}
 <div id="history-panel" class="md-card hidden col-span-full">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 class="md-card__headline" style="margin:0;">Prediction History</h3>
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <h3 class="md-card__headline" style="margin:0;">Prediction History</h3>
+            <button id="btn-refresh-history" class="md-button md-button--text" style="padding: 0 8px; min-width: auto;">
+                Refresh Data
+            </button>
+        </div>
         <span id="history-mae" style="font-size: 0.9em; color: var(--md-sys-color-on-surface-variant);"></span>
     </div>
     <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
@@ -35,7 +40,7 @@
     </p>
 
     <div class="md-text-field-container" style="max-width: 300px;">
-        <input type="text" id="symbol" name="symbol" class="md-text-field" value="SPY" placeholder=" " required>
+        <input type="text" id="symbol" name="symbol" class="md-text-field" value="TSLA" placeholder=" " required>
         <label for="symbol" class="md-text-field-label">Symbol</label>
     </div>
 
@@ -91,6 +96,8 @@
         const chartContainer = document.getElementById('eval-chart-container');
         const historyTableBody = document.getElementById('history-table-body');
         const symbolInput = document.getElementById('symbol');
+
+        const btnRefreshHistory = document.getElementById('btn-refresh-history');
 
         const fetchHistory = async () => {
             try {
@@ -151,6 +158,34 @@
                 historyTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--md-sys-color-error)">Error: ${e.message}</td></tr>`;
             }
         };
+
+        if (btnRefreshHistory) {
+            btnRefreshHistory.addEventListener('click', async () => {
+                const originalText = btnRefreshHistory.innerHTML;
+                btnRefreshHistory.innerHTML = 'Refreshing...';
+                btnRefreshHistory.disabled = true;
+
+                try {
+                    const res = await fetch('/api/history/refresh', { method: 'POST' });
+                    const data = await res.json();
+
+                    if (data.error) throw new Error(data.error);
+
+                    // Reload history
+                    await fetchHistory();
+
+                    if (data.message) {
+                        // Optional: Show toast or just rely on updated table
+                        console.log(data.message);
+                    }
+                } catch (e) {
+                    alert("Refresh failed: " + e.message);
+                } finally {
+                    btnRefreshHistory.innerHTML = originalText;
+                    btnRefreshHistory.disabled = false;
+                }
+            });
+        }
 
         btnEvaluate.addEventListener('click', async () => {
             const symbol = symbolInput.value;

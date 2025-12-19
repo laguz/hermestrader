@@ -1,1 +1,1 @@
-["mid_bb", "upper_bb", "close", "low", "high", "close_lag_5", "open", "close_lag_1", "rsi", "daily_return_lag_1"]
+["mid_bb", "upper_bb", "close", "high", "low", "close_lag_5", "close_lag_2", "open", "sma_50", "atr"]

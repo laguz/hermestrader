@@ -15,7 +15,7 @@ def verify_mongo():
     db = Container.get_db()
     
     if db is None:
-        print("ERROR: Could not get database instance. Check MONGODB_URI_LOCAL.")
+        print("ERROR: Could not get database instance. Check MONGODB_URI.")
         return
 
     print("Success: Database instance retrieved.")

@@ -450,6 +450,7 @@ class MLService:
     def get_prediction_history(self, symbol=None, limit=100):
         """
         Retrieves recent predictions. If symbol is provided, filters by symbol.
+        Checks for missing actual_close_price and backfills if available.
         """
         query = {}
         if symbol:
@@ -463,10 +464,112 @@ class MLService:
             ).sort("prediction_date", -1).limit(limit)
             
             history = list(cursor)
+            
+            # Lazy update of actuals
+            for record in history:
+                if record.get('actual_close_price') is None:
+                    pred_date = record.get('prediction_date')
+                    rec_symbol = record.get('symbol')
+                    
+                    if pred_date and rec_symbol:
+                        # Check market data
+                        market_doc = self.db['market_data'].find_one({"symbol": rec_symbol, "date": pred_date})
+                        if market_doc and 'close' in market_doc:
+                            actual_price = float(market_doc['close'])
+                            
+                            # Update DB
+                            self.db['predictions'].update_one(
+                                {
+                                    "symbol": rec_symbol, 
+                                    "prediction_date": pred_date, 
+                                    "model_type": record.get('model_type')
+                                },
+                                {"$set": {"actual_close_price": actual_price}}
+                            )
+                            
+                            # Update memory
+                            record['actual_close_price'] = actual_price
+            
             return history
         except Exception as e:
             print(f"Error fetching history: {e}")
             return []
+
+    def refresh_prediction_actuals(self):
+        """
+        Scans for predictions with missing actuals, fetches recent market data,
+        and updates the database.
+        """
+        if self.db is None: return {"error": "DB unavailable"}
+        
+        # Find pending predictions from last 30 days
+        cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        pending = list(self.db['predictions'].find({
+            "actual_close_price": None,
+            "prediction_date": {"$gte": cutoff}
+        }))
+        
+        if not pending:
+            return {"message": "No pending predictions to refresh."}
+            
+        symbols = list(set([p['symbol'] for p in pending]))
+        updated_count = 0
+        
+        print(f"Refreshing actuals for {len(symbols)} symbols: {symbols}")
+        
+        # Refresh market data for these symbols (last 14 days is enough to cover recent gaps)
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d')
+        
+        updated_symbols = []
+
+        for symbol in symbols:
+            try:
+                # Fetch fresh data
+                history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
+                if history:
+                    # Update Market Data
+                    collection = self.db['market_data']
+                    for record in history:
+                         doc = {
+                            "symbol": symbol,
+                            "date": record['date'],
+                            "open": float(record['open']),
+                            "high": float(record['high']),
+                            "low": float(record['low']),
+                            "close": float(record['close']),
+                            "volume": float(record['volume'])
+                        }
+                         collection.update_one(
+                            {"symbol": symbol, "date": record['date']},
+                            {"$set": doc},
+                            upsert=True
+                        )
+                    updated_symbols.append(symbol)
+            except Exception as e:
+                print(f"Error refreshing {symbol}: {e}")
+                
+        # Now update the predictions
+        # We can just re-run the lazy update logic essentially, but explicitly
+        # Re-fetch pending to be safe or iterate pending list
+        
+        for p in pending:
+            symbol = p['symbol']
+            p_date = p['prediction_date']
+            
+            market_doc = self.db['market_data'].find_one({"symbol": symbol, "date": p_date})
+            if market_doc and 'close' in market_doc:
+                actual = float(market_doc['close'])
+                self.db['predictions'].update_one(
+                    {"_id": p['_id']}, 
+                    {"$set": {"actual_close_price": actual}}
+                )
+                updated_count += 1
+                
+        return {
+            "message": f"Refreshed {len(updated_symbols)} symbols. Updated {updated_count} prediction records.",
+            "updated_count": updated_count
+        }
 
     def evaluate_model(self, symbol, days=60, model_type='rf'):
         symbol = symbol.upper()
