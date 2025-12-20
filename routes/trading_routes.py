@@ -8,6 +8,11 @@ def manual_orders():
     """Render the manual orders page."""
     return render_template('manual_orders.html')
 
+@trading_bp.route('/automated_trading')
+def automated_trading():
+    """Render the automated trading page."""
+    return render_template('automated_trading.html')
+
 @trading_bp.route('/api/orders', methods=['POST'])
 def place_order():
     """Place a manual order using Tradier Service."""

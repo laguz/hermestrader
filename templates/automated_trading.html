@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="md-layout-grid">
+    <div class="md-layout-grid__inner">
+        <div class="md-layout-grid__cell--span-12">
+            <div class="md-card">
+                <div class="md-card__primary-action">
+                    <div class="md-card__media">
+                        <h2 class="md-headline-4">Automated Trading</h2>
+                        <h3 class="md-subtitle-1">Bot Status & Control</h3>
+                    </div>
+                </div>
+                <div class="md-card__supporting-text">
+                    <p>Automated trading controls will be implemented here.</p>
+
+                    <div class="bot-status-panel"
+                        style="margin-top: 20px; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span class="material-symbols-outlined" style="color: grey;">radio_button_unchecked</span>
+                            <span>Status: <strong>Offline</strong></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="md-card__actions">
+                    <button class="md-button md-button--raised md-button--disabled">Start Bot</button>
+                    <button class="md-button md-button--outlined md-button--disabled">Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

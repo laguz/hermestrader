@@ -26,6 +26,11 @@
                     <span class="material-symbols-outlined">api</span>
                     <span class="md-tab__label">Manual Orders</span>
                 </a>
+                <a href="/automated_trading"
+                    class="md-tab {{ 'active' if request.path == '/automated_trading' else '' }}">
+                    <span class="material-symbols-outlined">smart_toy</span>
+                    <span class="md-tab__label">Automated Trading</span>
+                </a>
                 <a href="/backtester" class="md-tab {{ 'active' if request.path == '/backtester' else '' }}">
                     <span class="material-symbols-outlined">analytics</span>
                     <span class="md-tab__label">Backtester</span>
