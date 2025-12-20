@@ -285,20 +285,51 @@
 
                 const createEntryTag = (ep, type) => {
                     const tag = document.createElement('div');
+                    tag.style.display = 'flex';
+                    tag.style.alignItems = 'center';
+                    tag.style.gap = '8px';
                     tag.style.padding = '4px 12px';
                     tag.style.borderRadius = '16px';
                     tag.style.fontSize = '0.9rem';
                     tag.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
                     tag.style.border = '1px solid var(--md-sys-color-outline)';
 
+                    const priceSpan = document.createElement('span');
+                    priceSpan.textContent = `$${ep.price}`;
+                    priceSpan.style.fontWeight = '600';
+
                     if (type === 'put') {
                         tag.style.borderColor = '#4ade80';
-                        tag.style.color = '#4ade80';
+                        priceSpan.style.color = '#4ade80';
                     } else {
                         tag.style.borderColor = '#ef4444';
-                        tag.style.color = '#ef4444';
+                        priceSpan.style.color = '#ef4444';
                     }
-                    tag.textContent = `$${ep.price}`;
+                    
+                    tag.appendChild(priceSpan);
+
+                    if (ep.pop) {
+                        const popBadge = document.createElement('span');
+                        popBadge.textContent = `${ep.pop}% PoP`;
+                        popBadge.style.fontSize = '0.75rem';
+                        popBadge.style.padding = '2px 6px';
+                        popBadge.style.borderRadius = '4px';
+                        
+                        // Color scale for PoP
+                        if (ep.pop >= 90) {
+                            popBadge.style.backgroundColor = 'rgba(74, 222, 128, 0.2)';
+                            popBadge.style.color = '#4ade80';
+                        } else if (ep.pop >= 75) {
+                            popBadge.style.backgroundColor = 'rgba(250, 204, 21, 0.2)';
+                            popBadge.style.color = '#facc15';
+                        } else {
+                            popBadge.style.backgroundColor = 'rgba(239, 68, 68, 0.2)';
+                            popBadge.style.color = '#ef4444';
+                        }
+                        
+                        tag.appendChild(popBadge);
+                    }
+
                     return tag;
                 };
 

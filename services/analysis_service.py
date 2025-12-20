@@ -9,7 +9,7 @@ class AnalysisService:
 
     def analyze_symbol(self, symbol, period='6m'):
         from datetime import datetime, timedelta
-        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels
+        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels, calculate_historical_volatility, calculate_prob_it_expires_otm
         
         end_date = datetime.now()
         
@@ -74,6 +74,19 @@ class AnalysisService:
         # Using new KMeans algo which expects Volume
         key_levels = find_key_levels(period_df['close'], period_df['volume'])
 
+        # Calculate Volatility (Annualized from daily returns)
+        # Using full available history for better accuracy or just period?
+        # Standard to use last 1 year or 30 days depending on context. 
+        # using the period_df (which is at least 3m)
+        volatility = calculate_historical_volatility(df['close'], window=30) # Short term vol for near term expiry? Or 252?
+        # Utilizing a blend or standard 252 day vol if possible, checking data len
+        if len(df) > 30:
+            volatility = calculate_historical_volatility(df['close'], window=min(len(df)-1, 252))
+        else:
+            volatility = 0.5 # Default high vol fallback
+            
+        current_price = df.iloc[-1]['close']
+
         # Calculate Entry Points (Rounded Key Levels)
         put_entry_points = []
         call_entry_points = []
@@ -108,6 +121,17 @@ class AnalysisService:
                         'type': 'resistance',
                         'strength': level.get('strength', 1)
                     })
+                    
+        # Calculate PoP for all entry points (assuming 30 DTE)
+        # This gives user "If I sold 30 days out at this level..."
+        
+        for ep in put_entry_points:
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], volatility, days_to_expiry=30)
+            ep['pop'] = round(pop * 100, 1)
+            
+        for ep in call_entry_points:
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], volatility, days_to_expiry=30)
+            ep['pop'] = round(pop * 100, 1)
         
         # Sort entry points by price
         put_entry_points.sort(key=lambda x: x['price'])
@@ -256,7 +280,9 @@ class AnalysisService:
                 "macd": round(latest['macd'], 2),
                 "support": round(latest['support'], 2),
                 "resistance": round(latest['resistance'], 2),
-                "volume_rel": round(latest['volume'] / latest['vol_sma'], 2)
+                "resistance": round(latest['resistance'], 2),
+                "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
+                "volatility": round(volatility * 100, 1)
             },
             "chart_data": chart_data
         }

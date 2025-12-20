@@ -173,3 +173,63 @@ def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
     key_levels.sort(key=lambda x: x['price'])
     
     return key_levels
+
+from scipy.stats import norm
+
+def calculate_historical_volatility(close_series, window=252):
+    """
+    Calculate Annualized Historical Volatility.
+    """
+    log_returns = np.log(close_series / close_series.shift(1))
+    volatility = log_returns.rolling(window=window).std() * np.sqrt(252)
+    return volatility.iloc[-1]
+
+def calculate_prob_it_expires_otm(current_price, strike_price, volatility, days_to_expiry=30):
+    """
+    Calculate the Probability of Profit (Probability IT expires OTM).
+    Using standard distribution of returns (simplified Black-Scholes logic).
+    """
+    if volatility == 0 or days_to_expiry == 0:
+        return 0.5
+        
+    # Convert days to years
+    t = days_to_expiry / 365.0
+    
+    # Expected move (Standard Deviation)
+    # sigma * sqrt(T)
+    # This is percentage move
+    # Price move = P * sigma * sqrt(T)
+    
+    # Calculate Z-Score
+    # ln(Strike / Current) / (Vol * sqrt(T))
+    # We ignore drift (risk free rate) for short durations as broad approximation or include it?
+    # Let's stick to simple "Probability of Touching" approximation usually assumes Drift=0
+    
+    denom = volatility * np.sqrt(t)
+    z_score = np.log(strike_price / current_price) / denom
+    
+    # If Selling Put (Bullish), Strike < Current. Z is negative.
+    # We want prob return > Z
+    # If Selling Call (Bearish), Strike > Current. Z is positive.
+    # We want prob return < Z
+    
+    if strike_price < current_price:
+        # Put: We profit if price stays ABOVE strike.
+        # This corresponds to N(d2). 
+        # Using simple Normal Distribution CDN:
+        # Probability Price > Strike
+        # return norm.cdf(z_score) # This gives prob of being below? No.
+        
+        # Z is negative. CDF(Z) is probability of being BELOW Z (ITM).
+        # We want probability of being ABOVE Z (OTM).
+        # So 1 - CDF(Z)
+        prob_otm = 1 - norm.cdf(z_score) # z_score is negative, cdf is small (e.g. 0.05). result 0.95. Correct.
+        
+    else:
+        # Call: We profit if price stays BELOW strike.
+        # Z is positive.
+        # We want probability of being BELOW Z (OTM).
+        # So CDF(Z)
+        prob_otm = norm.cdf(z_score)
+        
+    return prob_otm
