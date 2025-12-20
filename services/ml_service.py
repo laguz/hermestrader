@@ -20,6 +20,7 @@ except ImportError:
 
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
 from services.container import Container
+from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError
 
 class MLService:
     def __init__(self, tradier_service):
@@ -179,7 +180,7 @@ class MLService:
         print(f"Starting {model_type.upper()} training for {symbol} using local DB...")
         
         if self.db is None:
-            return {"error": "Database not available"}
+            raise ExternalServiceError("Database not available")
 
         # 1. Fetch Data from MongoDB
         collection = self.db['market_data']
@@ -196,10 +197,10 @@ class MLService:
                 cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
                 data = list(cursor)
             else:
-                return {"error": f"No data found for {symbol} and backfill failed."}
+                raise ExternalServiceError(f"No data found for {symbol} and backfill failed.")
             
             if not data:
-                 return {"error": f"No data found in DB for {symbol} after backfill"}
+                 raise ExternalServiceError(f"No data found in DB for {symbol} after backfill")
             
         df = pd.DataFrame(data)
         if '_id' in df.columns: df.drop(columns=['_id'], inplace=True)
@@ -215,7 +216,7 @@ class MLService:
         df.dropna(inplace=True)
         
         if len(df) < 100:
-            return {"error": "Not enough data for training after processing"}
+            raise ValidationError("Not enough data for training after processing")
         
         # 3. Feature Selection
         top_features = self.select_top_features(df)
@@ -309,7 +310,7 @@ class MLService:
     def predict_next_day(self, symbol, model_type='rf'):
         symbol = symbol.upper()
         if self.db is None:
-            return {"error": "Database not available"}
+            raise ExternalServiceError("Database not available")
 
         # Fetch recent data from DB
         # Lookback needs to cover enough for lags (max lag 5) + indicators (e.g. sma 50, rsi 14) + LSTM sequence (60)
@@ -326,10 +327,10 @@ class MLService:
                  cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
                  data = list(cursor)
              else:
-                 return {"error": f"No recent data found in DB and backfill failed"}
+                 raise ExternalServiceError(f"No recent data found in DB and backfill failed")
 
         if not data:
-             return {"error": "No recent data found in DB after backfill"}
+             raise ExternalServiceError("No recent data found in DB after backfill")
 
         df = pd.DataFrame(data)
         if '_id' in df.columns: df.drop(columns=['_id'], inplace=True)
@@ -349,13 +350,13 @@ class MLService:
 
         if df.iloc[-1].isna().any():
              df_clean = df.dropna()
-             if df_clean.empty: return {"error": "Not enough data for indicators"}
+             if df_clean.empty: raise ValidationError("Not enough data for indicators")
              pass
 
         last_row = df.iloc[-1]
         
         if df[features].iloc[-1].isna().any():
-             return {"error": "Latest data has NaNs in required features."}
+             raise ValidationError("Latest data has NaNs in required features.")
 
         prediction = 0
         
@@ -365,7 +366,7 @@ class MLService:
             target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
             
             if not os.path.exists(model_path):
-                return {"error": f"LSTM model for {symbol} not found."}
+                raise ResourceNotFoundError(f"LSTM model for {symbol} not found.")
                 
             model = load_model(model_path)
             scaler = joblib.load(scaler_path)
@@ -374,7 +375,7 @@ class MLService:
             last_sequence_df = df_clean.tail(self.sequence_length)
             
             if len(last_sequence_df) < self.sequence_length:
-                return {"error": f"Not enough valid data for LSTM sequence."}
+                raise ValidationError(f"Not enough valid data for LSTM sequence.")
                 
             data = last_sequence_df[features].values
             scaled_data = scaler.transform(data) 
@@ -391,7 +392,7 @@ class MLService:
         else: # RF
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"
             if not os.path.exists(model_path):
-                return {"error": "RF Model not found."}
+                raise ResourceNotFoundError("RF Model not found.")
             model = joblib.load(model_path)
             
             features_df = pd.DataFrame([last_row[features]])
@@ -500,7 +501,7 @@ class MLService:
         Scans for predictions with missing actuals, fetches recent market data,
         and updates the database.
         """
-        if self.db is None: return {"error": "DB unavailable"}
+        if self.db is None: raise ExternalServiceError("DB unavailable")
         
         # Find pending predictions from last 30 days
         cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
@@ -573,14 +574,14 @@ class MLService:
 
     def evaluate_model(self, symbol, days=60, model_type='rf'):
         symbol = symbol.upper()
-        if self.db is None: return {"error": "DB Unavailable"}
+        if self.db is None: raise ExternalServiceError("DB Unavailable")
 
         cutoff_date = (datetime.now() - timedelta(days=days + 400)).strftime('%Y-%m-%d')
         collection = self.db['market_data']
         cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
         data = list(cursor)
         
-        if not data: return {"error": "Not enough data"}
+        if not data: raise ValidationError("Not enough data")
 
         df = pd.DataFrame(data)
         if '_id' in df.columns: df.drop(columns=['_id'], inplace=True)
@@ -602,12 +603,12 @@ class MLService:
 
         if model_type == 'lstm':
             model_path = f"{self.model_dir}/{symbol}_lstm.keras"
-            if not os.path.exists(model_path): return {"error": "Model not found"}
+            if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
             model = load_model(model_path)
             scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
             
             X_all, y_all, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
-            if len(X_all) < days: return {"error": "Not enough eval data"}
+            if len(X_all) < days: raise ValidationError("Not enough eval data")
             
             X = X_all[-days:]
             # y_actual = y_all[-days:] # This is scaled
@@ -639,7 +640,7 @@ class MLService:
             
         else:
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"
-            if not os.path.exists(model_path): return {"error": "Model not found"}
+            if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
             model = joblib.load(model_path)
             
             eval_df = df.tail(days)

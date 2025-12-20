@@ -28,7 +28,7 @@ class TradierService:
             response.raise_for_status()
             data = response.json()
             # Tradier response structure for quotes can be nested
-            return data.get('quotes', {}).get('quote', {})
+            return (data.get('quotes') or {}).get('quote', {})
         except requests.RequestException as e:
             print(f"Error fetching quote for {symbol}: {e}")
             return None
@@ -44,7 +44,7 @@ class TradierService:
             # Tradier returns {'expirations': {'date': ['2023-01-01', ...]}}
             # or just a list if only one? Sandbox behavior can vary.
             # Usually it's date list.
-            exps = data.get('expirations', {}).get('date', [])
+            exps = (data.get('expirations') or {}).get('date', [])
             if isinstance(exps, str):
                 return [exps]
             return exps
@@ -60,7 +60,7 @@ class TradierService:
             response = requests.get(url, params=params, headers=self._get_headers())
             response.raise_for_status()
             data = response.json()
-            return data.get('options', {}).get('option', [])
+            return (data.get('options') or {}).get('option', [])
         except requests.RequestException as e:
             print(f"Error fetching option chains for {symbol} on {expiration}: {e}")
             return None
@@ -81,7 +81,7 @@ class TradierService:
             response = requests.get(url, params=params, headers=self._get_headers())
             response.raise_for_status()
             data = response.json()
-            return data.get('history', {}).get('day', [])
+            return (data.get('history') or {}).get('day', [])
         except requests.RequestException as e:
             print(f"Error fetching history for {symbol}: {e}")
             return None

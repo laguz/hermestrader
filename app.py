@@ -27,5 +27,19 @@ app.register_blueprint(market_bp)
 from routes.analysis_routes import analysis_bp
 app.register_blueprint(analysis_bp)
 
+from flask import jsonify
+from exceptions import AppError
+
+@app.errorhandler(AppError)
+def handle_app_error(error):
+    response = jsonify(error.to_dict())
+    response.status_code = error.status_code
+    return response
+
+@app.errorhandler(Exception)
+def handle_generic_error(error):
+    app.logger.error(f"Unhandled Exception: {error}", exc_info=True)
+    return jsonify({"error": "An internal error occurred"}), 500
+
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
