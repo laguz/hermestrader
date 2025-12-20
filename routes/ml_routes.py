@@ -56,7 +56,8 @@ def get_prediction_history(symbol):
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
 
-    history = ml_service.get_prediction_history(symbol)
+    days = request.args.get('days', 3)
+    history = ml_service.get_prediction_history(symbol, days=days)
     return jsonify(history)
 
 @ml_bp.route('/api/history/refresh', methods=['POST'])

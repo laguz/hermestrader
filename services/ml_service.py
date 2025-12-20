@@ -407,6 +407,47 @@ class MLService:
             prediction = last_close_val * (1 + pred_return)
             
         last_close = last_row['close']
+        
+        prediction_date = (last_row['date'] + timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # ---------------------------------------------------------
+        # Bias Correction Mechanism: Self-Correction using Evaluation Data
+        # ---------------------------------------------------------
+        raw_prediction = prediction
+        bias_correction = 0.0
+        
+        try:
+            # Fetch last 30 completed predictions
+            recent_evals = list(self.db['predictions'].find({
+                "symbol": symbol,
+                "model_type": model_type,
+                "actual_close_price": {"$ne": None},
+                "prediction_date": {"$lt": prediction_date} 
+            }).sort("prediction_date", -1).limit(30))
+            
+            if recent_evals and len(recent_evals) > 5:
+                # bias = predicted - actual
+                # If bias > 0, we over-predict. We should SUBTRACT it.
+                # If bias < 0, we under-predict. We should SUBTRACT it (add).
+                biases = [(p['predicted_price'] - p['actual_close_price']) for p in recent_evals]
+                mean_bias = np.mean(biases)
+                
+                # Apply correction
+                bias_correction = float(mean_bias)
+                prediction = raw_prediction - bias_correction
+                
+                # Sanity check: Don't flip to negative (unlikely but safe)
+                if prediction < 0:
+                    prediction = raw_prediction
+                    bias_correction = 0.0
+                    
+                print(f"Applying Bias Correction for {symbol}: Raw={raw_prediction:.2f}, Bias={bias_correction:.2f}, Final={prediction:.2f}")
+
+        except Exception as e:
+            print(f"Error calculating bias correction: {e}")
+
+        
+        last_close = last_row['close']
         change = prediction - last_close
         percent_change = (change / last_close) * 100
         
@@ -423,6 +464,8 @@ class MLService:
                 "model_type": model_type,
                 "prediction_date": prediction_date,
                 "predicted_price": float(prediction),
+                "raw_prediction": float(raw_prediction),
+                "bias_correction": float(bias_correction),
                 "actual_close_price": float(actual_close_price) if actual_close_price else None,
                 "created_at": datetime.now(),
                 "used_features": features
@@ -452,15 +495,25 @@ class MLService:
             "used_features": features
         }
 
-    def get_prediction_history(self, symbol=None, limit=100):
+    def get_prediction_history(self, symbol=None, limit=100, days=None):
         """
         Retrieves recent predictions. If symbol is provided, filters by symbol.
         Checks for missing actual_close_price and backfills if available.
+        If days is provided, limits to predictions made in the last 'days' days.
         """
         query = {}
         if symbol:
             symbol = symbol.upper().strip()
             query["symbol"] = symbol
+            
+        if days:
+            try:
+                days_int = int(days)
+                cutoff = (datetime.now() - timedelta(days=days_int)).strftime('%Y-%m-%d')
+                query["prediction_date"] = {"$gte": cutoff}
+            except ValueError:
+                pass # Ignore invalid days
+
 
         try:
             cursor = self.db['predictions'].find(
