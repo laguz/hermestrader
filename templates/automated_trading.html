@@ -12,22 +12,122 @@
                     </div>
                 </div>
                 <div class="md-card__supporting-text">
-                    <p>Automated trading controls will be implemented here.</p>
+                    <p>Manage the background trading bot. The bot scans the market every few minutes and executes trades
+                        based on the configured strategy.</p>
 
                     <div class="bot-status-panel"
                         style="margin-top: 20px; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px;">
                         <div style="display: flex; align-items: center; gap: 10px;">
-                            <span class="material-symbols-outlined" style="color: grey;">radio_button_unchecked</span>
-                            <span>Status: <strong>Offline</strong></span>
+                            <span id="status-icon" class="material-symbols-outlined"
+                                style="color: grey;">radio_button_unchecked</span>
+                            <span>Status: <strong id="status-text">Checking...</strong></span>
+                        </div>
+                        <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
+                            Last Heartbeat: <span id="last-heartbeat">Never</span>
                         </div>
                     </div>
+
+                    <!-- Terminal / Logs -->
+                    <div style="margin-top: 20px;">
+                        <h4>Recent Logs</h4>
+                        <div id="bot-logs"
+                            style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 4px; font-family: monospace; height: 200px; overflow-y: auto; font-size: 0.85rem;">
+                            <div style="color: #666;">Waiting for logs...</div>
+                        </div>
+                    </div>
+
                 </div>
                 <div class="md-card__actions">
-                    <button class="md-button md-button--raised md-button--disabled">Start Bot</button>
-                    <button class="md-button md-button--outlined md-button--disabled">Settings</button>
+                    <button id="btn-start" class="md-button md-button--raised" onclick="startBot()">Start Bot</button>
+                    <button id="btn-stop" class="md-button md-button--outlined" onclick="stopBot()"
+                        style="color: #d32f2f; border-color: #d32f2f; display: none;">Stop Bot</button>
+                    <!-- <button class="md-button md-button--text">Settings</button> -->
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<script>
+    const statusIcon = document.getElementById('status-icon');
+    const statusText = document.getElementById('status-text');
+    const lastHeartbeat = document.getElementById('last-heartbeat');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const logsContainer = document.getElementById('bot-logs');
+
+    function updateUI(status) {
+        if (status.status === 'RUNNING') {
+            statusIcon.textContent = 'radio_button_checked';
+            statusIcon.style.color = '#4caf50'; // Green
+            statusText.textContent = 'RUNNING';
+            btnStart.style.display = 'none';
+            btnStop.style.display = 'inline-block';
+        } else {
+            statusIcon.textContent = 'radio_button_unchecked';
+            statusIcon.style.color = 'grey';
+            statusText.textContent = 'STOPPED';
+            btnStart.style.display = 'inline-block';
+            btnStop.style.display = 'none';
+        }
+
+        if (status.last_heartbeat) {
+            lastHeartbeat.textContent = new Date(status.last_heartbeat).toLocaleString();
+        }
+
+        // Update Logs
+        if (status.logs && status.logs.length > 0) {
+            logsContainer.innerHTML = status.logs.map(log => {
+                const time = new Date(log.timestamp).toLocaleTimeString();
+                return `<div><span style="color: #888;">[${time}]</span> ${log.message}</div>`;
+            }).join('');
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+    }
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch('/api/bot/status');
+            const data = await res.json();
+            updateUI(data);
+        } catch (e) {
+            console.error(e);
+            statusText.textContent = "Error fetching status";
+        }
+    }
+
+    async function startBot() {
+        btnStart.disabled = true;
+        try {
+            const res = await fetch('/api/bot/start', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                fetchStatus();
+            } else {
+                alert('Error: ' + data.message);
+            }
+        } catch (e) { alert(e); }
+        btnStart.disabled = false;
+    }
+
+    async function stopBot() {
+        btnStop.disabled = true;
+        try {
+            const res = await fetch('/api/bot/stop', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                fetchStatus();
+            } else {
+                alert('Error: ' + data.message);
+            }
+        } catch (e) { alert(e); }
+        btnStop.disabled = false;
+    }
+
+    // Poll every 3 seconds
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+
+</script>
 {% endblock %}
+```

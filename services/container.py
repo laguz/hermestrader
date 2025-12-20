@@ -37,3 +37,8 @@ class Container:
         from services.ml_service import MLService
         return MLService(cls.get_tradier_service())
 
+    @classmethod
+    def get_bot_service(cls):
+        from services.bot_service import BotService
+        return BotService()
+

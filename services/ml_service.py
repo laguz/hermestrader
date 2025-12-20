@@ -8,6 +8,11 @@ import os
 import joblib
 import json
 from datetime import datetime, timedelta
+import pandas as pd
+from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday, nearest_workday, \
+    USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay, USThanksgivingDay, GoodFriday
+from pandas.tseries.offsets import CustomBusinessDay
+
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential, load_model
@@ -17,6 +22,20 @@ try:
 except ImportError:
     print("Warning: TensorFlow not found. LSTM model will be disabled.")
     HAS_TENSORFLOW = False
+
+class NYSEHolidayCalendar(AbstractHolidayCalendar):
+    rules = [
+        Holiday('NewYearsDay', month=1, day=1, observance=nearest_workday),
+        USMartinLutherKingJr,
+        USPresidentsDay,
+        GoodFriday,
+        USMemorialDay,
+        Holiday('Juneteenth', month=6, day=19, observance=nearest_workday),
+        Holiday('USIndependenceDay', month=7, day=4, observance=nearest_workday),
+        USLaborDay,
+        USThanksgivingDay,
+        Holiday('Christmas', month=12, day=25, observance=nearest_workday)
+    ]
 
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
 from services.container import Container
@@ -408,7 +427,13 @@ class MLService:
             
         last_close = last_row['close']
         
-        prediction_date = (last_row['date'] + timedelta(days=1)).strftime('%Y-%m-%d')
+        # Calculate next trading day (skip weekends and holidays)
+        nyse_trading_day = CustomBusinessDay(calendar=NYSEHolidayCalendar())
+        
+        # DEBUG
+        print(f"DEBUG: Last Date={last_row['date']}, Offset={nyse_trading_day}, Next={last_row['date'] + nyse_trading_day}")
+        
+        prediction_date = (last_row['date'] + nyse_trading_day).strftime('%Y-%m-%d')
 
         # ---------------------------------------------------------
         # Bias Correction Mechanism: Self-Correction using Evaluation Data
@@ -450,8 +475,6 @@ class MLService:
         last_close = last_row['close']
         change = prediction - last_close
         percent_change = (change / last_close) * 100
-        
-        prediction_date = (last_row['date'] + timedelta(days=1)).strftime('%Y-%m-%d')
         
         # PERSISTENCE: Save to MongoDB
         # Check if we have the ACTUAL close price for the target date (unlikely for future, possible for backtest)

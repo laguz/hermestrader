@@ -114,3 +114,37 @@ def get_quote():
         return jsonify({'quote': quote})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# ---------------------------------------------------------------------
+# Bot Control Routes
+# ---------------------------------------------------------------------
+
+@trading_bp.route('/api/bot/status', methods=['GET'])
+def bot_status():
+    try:
+        service = Container.get_bot_service()
+        status = service.get_status()
+        # Ensure _id is str if present
+        if '_id' in status: status['_id'] = str(status['_id'])
+        return jsonify(status)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/start', methods=['POST'])
+def start_bot():
+    try:
+        service = Container.get_bot_service()
+        result = service.start_bot()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/stop', methods=['POST'])
+def stop_bot():
+    try:
+        service = Container.get_bot_service()
+        result = service.stop_bot()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
