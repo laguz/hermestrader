@@ -166,6 +166,38 @@ def update_watchlist():
             return jsonify({'error': 'Failed to update watchlist'}), 500
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/dry_run', methods=['POST'])
+def run_dry_run():
+    try:
+        tradier_service = Container.get_tradier_service()
+        db = Container.get_db()
+        from bot.strategies.credit_spreads import CreditSpreadStrategy
+        
+        # Determine watchlist
+        # Try to get from request or DB, else default
+        data = request.json or {}
+        watchlist = data.get('watchlist')
+        
+        if not watchlist:
+             # Fetch from DB if available
+             bot_config = db.bot_config.find_one({"_id": "main_bot"})
+             if bot_config and 'watchlist' in bot_config:
+                 # Check nested structure or flat
+                 # Current UI saves to settings.watchlist_credit_spreads
+                 settings = bot_config.get('settings', {})
+                 watchlist = settings.get('watchlist_credit_spreads', [])
+                 
+        if not watchlist:
+            watchlist = ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA']
+
+        strategy = CreditSpreadStrategy(tradier_service, db, dry_run=True)
+        logs = strategy.execute(watchlist)
+        
+        return jsonify({'status': 'success', 'logs': logs})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 @trading_bp.route('/bot_performance')
 def bot_performance():
     """Render the bot performance page."""

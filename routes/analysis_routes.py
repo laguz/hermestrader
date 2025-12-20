@@ -15,7 +15,8 @@ def analyze_symbol(symbol):
     try:
         tradier = Container.get_tradier_service()
         ml_service = Container.get_ml_service()
-        service = AnalysisService(tradier, ml_service)
+        db = Container.get_db()
+        service = AnalysisService(tradier, ml_service, db)
         result = service.analyze_symbol(symbol, period=period)
         
         if "error" in result:

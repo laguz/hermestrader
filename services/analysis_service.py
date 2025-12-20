@@ -3,9 +3,10 @@ import numpy as np
 from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, calculate_bollinger_bands
 
 class AnalysisService:
-    def __init__(self, tradier_service, ml_service):
+    def __init__(self, tradier_service, ml_service, db=None):
         self.tradier_service = tradier_service
         self.ml_service = ml_service
+        self.db = db
 
     def analyze_symbol(self, symbol, period='6m'):
         from datetime import datetime, timedelta
@@ -72,6 +73,8 @@ class AnalysisService:
             
         # Recalculate Key Levels specifically on this period data
         # Using new KMeans algo which expects Volume
+        from utils.indicators import find_key_levels
+        
         key_levels = find_key_levels(period_df['close'], period_df['volume'])
 
         # Calculate Volatility (Annualized from daily returns)
@@ -255,7 +258,7 @@ class AnalysisService:
             "signal": chart_df['signal'].fillna(0).tolist()
         }
 
-        return {
+        result = {
             "symbol": symbol.upper(),
             "current_price": current_price,
             "key_levels": key_levels,
@@ -286,3 +289,19 @@ class AnalysisService:
             },
             "chart_data": chart_data
         }
+
+        # Upsert entry to DB
+        if self.db is not None:
+            try:
+                # Add timestamp
+                result['updated_at'] = datetime.now()
+                self.db.entries.update_one(
+                    {'symbol': symbol.upper()},
+                    {'$set': result},
+                    upsert=True
+                )
+                print(f"Saved analysis for {symbol} to entries collection.")
+            except Exception as e:
+                print(f"Error saving entry to DB: {e}")
+        
+        return result

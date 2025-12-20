@@ -39,7 +39,10 @@
                                         onclick="startBot()">Start Bot</button>
                                     <button id="btn-stop" class="md-button md-button--outlined" onclick="stopBot()"
                                         style="color: #d32f2f; border-color: #d32f2f; display: none;">Stop Bot</button>
-                                </div>
+                                    <button id="btn-dry-run" class="md-button md-button--outlined" 
+                                        onclick="runDryRun()" style="margin-left: 10px; color: #1976d2; border-color: #1976d2;">
+                                        Test Dry Run
+                                    </button>
                             </div>
 
                             <!-- Terminal / Logs -->
@@ -93,6 +96,22 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Dry Run Results Modal -->
+<div id="dry-run-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: white; width: 80%; max-width: 800px; max-height: 80vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;">
+        <div style="padding: 15px 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0;">Dry Run Execution Log</h3>
+            <button onclick="closeDryRunModal()" style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+        </div>
+        <div id="dry-run-logs" style="padding: 20px; overflow-y: auto; background: #f5f5f5; font-family: monospace; white-space: pre-wrap;">
+            Running...
+        </div>
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right;">
+            <button class="md-button" onclick="closeDryRunModal()">Close</button>
         </div>
     </div>
 </div>
@@ -242,6 +261,46 @@
             }
         } catch (e) { alert(e); }
         btnStop.disabled = false;
+    }
+
+    async function runDryRun() {
+        const btn = document.getElementById('btn-dry-run');
+        const modal = document.getElementById('dry-run-modal');
+        const logsDiv = document.getElementById('dry-run-logs');
+        
+        btn.disabled = true;
+        btn.textContent = "Running...";
+        
+        modal.style.display = 'flex';
+        logsDiv.textContent = "Initializing Dry Run...\nCalling Strategy for Watchlist: " + currentWatchlists.credit_spreads.join(', ');
+        
+        try {
+            const res = await fetch('/api/bot/dry_run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watchlist: currentWatchlists.credit_spreads })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success') {
+                if (data.logs && data.logs.length > 0) {
+                    logsDiv.textContent = data.logs.join('\n');
+                } else {
+                    logsDiv.textContent = "Dry Run Complete. No logs returned (Strategy executed silently?).";
+                }
+            } else {
+                logsDiv.textContent = "Error: " + (data.error || "Unknown error");
+            }
+        } catch (e) {
+            logsDiv.textContent = "Criticial Error: " + e;
+        }
+        
+        btn.disabled = false;
+        btn.textContent = "Test Dry Run";
+    }
+
+    function closeDryRunModal() {
+        document.getElementById('dry-run-modal').style.display = 'none';
     }
 
     // Poll every 3 seconds

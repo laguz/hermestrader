@@ -22,6 +22,14 @@ class BotService:
         self.db = Container.get_db()
         self.tradier = Container.get_tradier_service()
         self.ml_service = None # Lazy load to avoid circular deps if any
+        self.ml_service = None # Lazy load to avoid circular deps if any
+        
+        # Initialize Strategies
+        from bot.strategies.credit_spreads import CreditSpreadStrategy
+        from bot.strategies.wheel import WheelStrategy
+        self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
+        self.wheel_strategy = WheelStrategy(self.tradier, self.db)
+        
         self._init_db_config()
         # Reset state on startup to avoid phantom running state
         self._update_status("STOPPED")
@@ -43,8 +51,8 @@ class BotService:
                  "last_heartbeat": None,
                  "logs": [],
                  "settings": {
-                     "watchlist_credit_spreads": ["SPY", "IWM"],
-                     "watchlist_wheel": ["TSLA", "AMD"],
+                     "watchlist_credit_spreads": [], # Start empty, user adds via UI
+                     "watchlist_wheel": [],         # Start empty, user adds via UI
                      "max_drawdown": 500,
                      "max_position_size": 1000
                  }
@@ -57,9 +65,9 @@ class BotService:
                  settings = status.get('settings', {})
                  updates = {}
                  if 'watchlist_credit_spreads' not in settings:
-                     updates['settings.watchlist_credit_spreads'] = defaults['settings']['watchlist_credit_spreads']
+                     updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_wheel' not in settings:
-                     updates['settings.watchlist_wheel'] = defaults['settings']['watchlist_wheel']
+                     updates['settings.watchlist_wheel'] = []
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -201,16 +209,25 @@ class BotService:
                 if self._stop_event.is_set(): break
                 self._update_status("RUNNING")
                 
-                # 3. Dummy Strategy Logic
+                # 3. Strategy Execution
                 config = self.get_status().get('settings', {})
                 wl_spreads = config.get('watchlist_credit_spreads', [])
                 wl_wheel = config.get('watchlist_wheel', [])
                 
-                self._log(f"Scanning Spreads: {wl_spreads} | Wheel: {wl_wheel}...")
+                # Dynamic Import/Reload or just use instance
+                # We want to run them if we have symbols
                 
+                if wl_spreads:
+                    self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
+                    self.credit_spread_strategy.execute(wl_spreads)
+                    
+                if wl_wheel:
+                    self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
+                    self.wheel_strategy.execute(wl_wheel)
+                    
                 # Sleep cycle - responsive wait
-                # Wait for 10 seconds or until stop event is set
-                if self._stop_event.wait(timeout=10):
+                # Wait for 60 seconds (strategies shouldn't run too hot) or until stop event
+                if self._stop_event.wait(timeout=60):
                     break
                     
             except Exception as e:

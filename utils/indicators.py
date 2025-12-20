@@ -67,7 +67,7 @@ def calculate_atr(high, low, close, window=14):
 from sklearn.cluster import KMeans
 from scipy.signal import argrelextrema
 
-def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
+def find_key_levels(close_series, volume_series=None, window=5, n_clusters=6):
     """
     Find key Support and Resistance levels using K-Means Clustering on Pivots.
     
@@ -81,7 +81,10 @@ def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
         List[dict]: [{'price': float, 'type': 'support'|'resistance', 'strength': float}]
     """
     if close_series.empty:
+        print(f"DEBUG: find_key_levels called with EMPTY series")
         return []
+    
+    print(f"DEBUG: find_key_levels called with {len(close_series)} points")
         
     prices = close_series.values
     n = len(prices)
@@ -90,6 +93,9 @@ def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
     # iloc indices
     max_idx = argrelextrema(prices, np.greater, order=window)[0]
     min_idx = argrelextrema(prices, np.less, order=window)[0]
+    
+    # print(f"DEBUG: KeyLevels - Prices Len: {len(prices)}, MaxIdx: {len(max_idx)}, MinIdx: {len(min_idx)}")
+    print(f"DEBUG: KeyLevels - Prices Len: {len(prices)}, MaxIdx: {len(max_idx)}, MinIdx: {len(min_idx)}")
     
     pivots = []
     
@@ -109,8 +115,31 @@ def find_key_levels(close_series, volume_series=None, window=10, n_clusters=6):
             'volume': volume_series.iloc[idx] if volume_series is not None else 1
         })
         
-    if not pivots:
-        return []
+    
+    # Ensure we have at least one Support and one Resistance
+    has_support = any(p['type'] == 'support' for p in pivots)
+    has_resistance = any(p['type'] == 'resistance' for p in pivots)
+    
+    avg_vol = volume_series.mean() if volume_series is not None else 1
+    
+    if not has_support:
+        min_p_idx = np.argmin(prices)
+        pivots.append({
+            'index': min_p_idx,
+            'price': prices[min_p_idx],
+            'type': 'support',
+            'volume': avg_vol
+        })
+        
+    if not has_resistance:
+        max_p_idx = np.argmax(prices)
+        pivots.append({
+            'index': max_p_idx,
+            'price': prices[max_p_idx],
+            'type': 'resistance',
+            'volume': avg_vol
+        })
+        
         
     # 2. Prepare Data for Clustering
     # We cluster on Price primarily.
