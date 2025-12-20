@@ -20,7 +20,7 @@ except ImportError:
 
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
 from services.container import Container
-from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError
+from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError, AppError
 
 class MLService:
     def __init__(self, tradier_service):
@@ -228,6 +228,8 @@ class MLService:
         mse = 0
         
         if model_type == 'lstm':
+            if not HAS_TENSORFLOW:
+                raise AppError("LSTM training requires TensorFlow, but it is not installed.", 501)
             X, y, scaler = self._prepare_lstm_data(df, top_features, fit_scaler=True)
             
             # Scale Target
@@ -361,6 +363,8 @@ class MLService:
         prediction = 0
         
         if model_type == 'lstm':
+            if not HAS_TENSORFLOW:
+                raise AppError("LSTM prediction requires TensorFlow, but it is not installed.", 501)
             model_path = f"{self.model_dir}/{symbol}_lstm.keras"
             scaler_path = f"{self.model_dir}/{symbol}_lstm_scaler.pkl"
             target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
@@ -602,6 +606,8 @@ class MLService:
             features = [f for f in self.default_features if f in df.columns]
 
         if model_type == 'lstm':
+            if not HAS_TENSORFLOW:
+                raise AppError("LSTM evaluation requires TensorFlow, but it is not installed.", 501)
             model_path = f"{self.model_dir}/{symbol}_lstm.keras"
             if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
             model = load_model(model_path)
