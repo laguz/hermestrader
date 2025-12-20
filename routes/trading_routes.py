@@ -148,3 +148,43 @@ def stop_bot():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@trading_bp.route('/api/bot/watchlist', methods=['POST'])
+def update_watchlist():
+    try:
+        data = request.json
+        watchlist = data.get('watchlist')
+        list_type = data.get('type', 'credit_spreads')
+        
+        if watchlist is None:
+             return jsonify({'error': 'watchlist is required'}), 400
+             
+        service = Container.get_bot_service()
+        success = service.update_watchlist(watchlist, list_type)
+        if success:
+            return jsonify({"message": f"Watchlist ({list_type}) updated", "watchlist": watchlist})
+        else:
+            return jsonify({'error': 'Failed to update watchlist'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+@trading_bp.route('/bot_performance')
+def bot_performance():
+    """Render the bot performance page."""
+    return render_template('bot_performance.html')
+
+@trading_bp.route('/api/bot/performance', methods=['GET'])
+def get_bot_performance():
+    try:
+        service = Container.get_bot_service()
+        stats = service.get_performance_summary()
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/trades', methods=['GET'])
+def get_bot_trades():
+    try:
+        service = Container.get_bot_service()
+        trades = service.get_trades()
+        return jsonify({'trades': trades})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

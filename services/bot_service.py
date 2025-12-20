@@ -23,6 +23,8 @@ class BotService:
         self.tradier = Container.get_tradier_service()
         self.ml_service = None # Lazy load to avoid circular deps if any
         self._init_db_config()
+        # Reset state on startup to avoid phantom running state
+        self._update_status("STOPPED")
         self.initialized = True
         
         # Resurrect state on app start? 
@@ -33,18 +35,34 @@ class BotService:
         """Ensure initial bot configuration exists in DB."""
         if self.db is not None:
              status = self.db['bot_config'].find_one({"_id": "main_bot"})
+             
+             # prepare default structure
+             defaults = {
+                 "_id": "main_bot",
+                 "status": "STOPPED", # STOPPED, RUNNING, ERROR
+                 "last_heartbeat": None,
+                 "logs": [],
+                 "settings": {
+                     "watchlist_credit_spreads": ["SPY", "IWM"],
+                     "watchlist_wheel": ["TSLA", "AMD"],
+                     "max_drawdown": 500,
+                     "max_position_size": 1000
+                 }
+             }
+
              if not status:
-                 self.db['bot_config'].insert_one({
-                     "_id": "main_bot",
-                     "status": "STOPPED", # STOPPED, RUNNING, ERROR
-                     "last_heartbeat": None,
-                     "logs": [],
-                     "settings": {
-                         "watchlist": ["SPY", "QQQ", "TSLA"],
-                         "max_drawdown": 500,
-                         "max_position_size": 1000
-                     }
-                 })
+                 self.db['bot_config'].insert_one(defaults)
+             else:
+                 # Migration: Ensure new fields exist if old doc exists
+                 settings = status.get('settings', {})
+                 updates = {}
+                 if 'watchlist_credit_spreads' not in settings:
+                     updates['settings.watchlist_credit_spreads'] = defaults['settings']['watchlist_credit_spreads']
+                 if 'watchlist_wheel' not in settings:
+                     updates['settings.watchlist_wheel'] = defaults['settings']['watchlist_wheel']
+                 
+                 if updates:
+                     self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
 
     def get_status(self):
         if self.db is None: return {"status": "ERROR", "message": "DB Unavailable"}
@@ -63,7 +81,13 @@ class BotService:
         return {"message": "Bot started."}
 
     def stop_bot(self):
+        # Check if thread is alive
         if not self._thread or not self._thread.is_alive():
+            # If thread is dead but DB says otherwise, sync it.
+            current = self.get_status().get('status')
+            if current != 'STOPPED':
+                 self._update_status("STOPPED")
+                 self._log("Bot state synchronized (was phantom RUNNING).")
             return {"message": "Bot is not running."}
             
         self._stop_event.set()
@@ -77,6 +101,81 @@ class BotService:
             {"_id": "main_bot"},
             {"$set": {"status": status, "last_heartbeat": datetime.now()}}
         )
+
+    def update_watchlist(self, watchlist, list_type="credit_spreads"):
+        """Update the watchlist in settings. list_type: 'credit_spreads' or 'wheel'"""
+        if self.db is None: return False
+        # Validate input (list of strings)
+        if not isinstance(watchlist, list):
+            return False
+        
+        # Upper case and dedup
+        clean_list = list(set([str(s).upper().strip() for s in watchlist if s]))
+        
+        # Map frontend type to DB key
+        db_key = f"settings.watchlist_{list_type}"
+        # Safety check to only allow specific keys
+        if list_type not in ['credit_spreads', 'wheel']:
+            self._log(f"Error: Invalid watchlist type {list_type}")
+            return False
+
+        self.db['bot_config'].update_one(
+            {"_id": "main_bot"},
+            {"$set": {db_key: clean_list}}
+        )
+        self._log(f"Watchlist ({list_type}) updated: {clean_list}")
+        return True
+
+    # ... (logs, status methods unchanged) ...
+
+    def get_trades(self, limit=50):
+        """Fetch recent bot trades."""
+        if self.db is None: return []
+        cursor = self.db['auto_trades'].find().sort("entry_date", -1).limit(limit)
+        
+        trades = []
+        for doc in cursor:
+            doc['_id'] = str(doc['_id'])
+            trades.append(doc)
+        return trades
+
+    def get_performance_summary(self):
+        """Calculate P&L metrics."""
+        if self.db is None: return {}
+        
+        pipeline = [
+            {
+                "$group": {
+                    "_id": None,
+                    "total_pnl": {"$sum": "$pnl"},
+                    "total_trades": {"$sum": 1},
+                    "wins": {
+                        "$sum": { 
+                            "$cond": [ { "$gt": [ "$pnl", 0 ] }, 1, 0 ] 
+                        }
+                    }
+                }
+            }
+        ]
+        
+        result = list(self.db['auto_trades'].aggregate(pipeline))
+        if not result:
+            return {
+                "total_pnl": 0.0,
+                "total_trades": 0,
+                "win_rate": 0.0
+            }
+            
+        stats = result[0]
+        total = stats['total_trades']
+        wins = stats['wins']
+        win_rate = (wins / total * 100) if total > 0 else 0.0
+        
+        return {
+            "total_pnl": stats['total_pnl'],
+            "total_trades": total,
+            "win_rate": round(win_rate, 2)
+        }
 
     def _log(self, message):
         """Append log to DB."""
@@ -96,42 +195,30 @@ class BotService:
         """Main execution loop."""
         self._log("Entering main loop.")
         
-        # Lazy load ML Service here
-        # (Assuming container handles it)
-        # from services.ml_service import MLService
-        # self.ml_service = MLService(self.tradier) 
-        
         while not self._stop_event.is_set():
             try:
-                # 1. Heartbeat
+                # 1. Heartbeat - Only update if not stopping
+                if self._stop_event.is_set(): break
                 self._update_status("RUNNING")
-                
-                # 2. Market Hours Check (Simulated for now)
-                # if not self._is_market_open():
-                #     self._log("Market closed. Sleeping...")
-                #     time.sleep(60)
-                #     continue
                 
                 # 3. Dummy Strategy Logic
                 config = self.get_status().get('settings', {})
-                watchlist = config.get('watchlist', [])
+                wl_spreads = config.get('watchlist_credit_spreads', [])
+                wl_wheel = config.get('watchlist_wheel', [])
                 
-                self._log(f"Scanning watchlist: {watchlist}...")
+                self._log(f"Scanning Spreads: {wl_spreads} | Wheel: {wl_wheel}...")
                 
-                # TODO: Implement real analysis here
-                # for symbol in watchlist:
-                #     prediction = self.ml_service.predict_next_day(symbol)
-                #     self._log(f"Analyzed {symbol}: {prediction}")
-                
-                # Sleep cycle (e.g. 10 seconds for demo, 5 mins for real)
-                for _ in range(10): 
-                    if self._stop_event.is_set(): break
-                    time.sleep(1)
+                # Sleep cycle - responsive wait
+                # Wait for 10 seconds or until stop event is set
+                if self._stop_event.wait(timeout=10):
+                    break
                     
             except Exception as e:
                 traceback.print_exc()
                 self._log(f"Error in loop: {e}")
-                time.sleep(10) # Prevent tight loop on error
+                # Prevent tight loop on error (wait 10s)
+                if self._stop_event.wait(timeout=10):
+                    break
         
         self._update_status("STOPPED")
         self._log("Bot loop ended.")

@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block main_class %}full-width-layout{% endblock %}
+
+{% block content %}
+<div class="md-layout-grid">
+    <div class="md-layout-grid__inner">
+        <div class="md-layout-grid__cell--span-12">
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 class="md-headline-4" style="margin: 0;">Bot Performance</h2>
+                <div style="color: #666; font-size: 0.9em;">
+                    Tracking realized performance of automated trades.
+                </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div class="metrics-grid" style="margin-bottom: 30px;">
+                <div class="metric-card">
+                    <h3>Total P&L</h3>
+                    <p id="kpi-pnl" style="color: #666;">$0.00</p>
+                </div>
+                <div class="metric-card">
+                    <h3>Win Rate</h3>
+                    <p id="kpi-winrate">0%</p>
+                </div>
+                <div class="metric-card">
+                    <h3>Total Trades</h3>
+                    <p id="kpi-trades">0</p>
+                </div>
+            </div>
+
+            <!-- Chart (Placeholder) -->
+            <!-- <div id="pnl-chart" style="height: 300px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 30px;"></div> -->
+
+            <!-- Trades Table -->
+            <div class="md-card">
+                <h3 class="md-title">Trade History</h3>
+                <div class="md-table-container">
+                    <table id="trades-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Symbol</th>
+                                <th>Strategy</th>
+                                <th>Type</th>
+                                <th>Entry</th>
+                                <th>Exit</th>
+                                <th>P&L</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="8" style="text-align: center;">Loading...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+    async function loadPerformance() {
+        try {
+            // Load Summary
+            const resStats = await fetch('/api/bot/performance');
+            const stats = await resStats.json();
+
+            const pnlEl = document.getElementById('kpi-pnl');
+            pnlEl.textContent = `$${stats.total_pnl.toFixed(2)}`;
+            pnlEl.style.color = stats.total_pnl >= 0 ? '#4caf50' : '#f44336';
+
+            document.getElementById('kpi-winrate').textContent = `${stats.win_rate}%`;
+            document.getElementById('kpi-trades').textContent = stats.total_trades;
+
+            // Load Trades
+            const resTrades = await fetch('/api/bot/trades');
+            const data = await resTrades.json();
+            const trades = data.trades || [];
+
+            const tbody = document.querySelector('#trades-table tbody');
+
+            if (trades.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: #888;">No trades recorded yet.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = trades.map(t => {
+                const date = t.entry_date ? new Date(t.entry_date).toLocaleDateString() : '-';
+                const pnlClass = (t.pnl || 0) >= 0 ? 'color: #4caf50;' : 'color: #f44336;';
+                const pnlText = t.pnl !== undefined ? `$${t.pnl.toFixed(2)}` : '-';
+
+                return `
+                    <tr>
+                        <td>${date}</td>
+                        <td style="font-weight: 500;">${t.symbol}</td>
+                        <td>${t.strategy || '-'}</td>
+                        <td>${t.type || '-'}</td>
+                        <td>${t.entry_price || '-'}</td>
+                        <td>${t.exit_price || '-'}</td>
+                        <td style="${pnlClass}">${pnlText}</td>
+                        <td>
+                            <span style="
+                                padding: 2px 8px; 
+                                border-radius: 4px; 
+                                border: 1px solid ${t.status === 'CLOSED' ? '#4caf50' : '#ff9800'};
+                                color: ${t.status === 'CLOSED' ? '#4caf50' : '#ff9800'};
+                                font-size: 0.85em;
+                            ">
+                                ${t.status || 'OPEN'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    loadPerformance();
+</script>
+{% endblock %}

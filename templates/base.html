@@ -31,6 +31,10 @@
                     <span class="material-symbols-outlined">smart_toy</span>
                     <span class="md-tab__label">Automated Trading</span>
                 </a>
+                <a href="/bot_performance" class="md-tab {{ 'active' if request.path == '/bot_performance' else '' }}">
+                    <span class="material-symbols-outlined">query_stats</span>
+                    <span class="md-tab__label">Bot P&L</span>
+                </a>
                 <a href="/backtester" class="md-tab {{ 'active' if request.path == '/backtester' else '' }}">
                     <span class="material-symbols-outlined">analytics</span>
                     <span class="md-tab__label">Backtester</span>

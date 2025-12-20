@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% block main_class %}full-width-layout{% endblock %}
+
 {% block content %}
 <div class="md-layout-grid">
     <div class="md-layout-grid__inner">
@@ -15,33 +17,80 @@
                     <p>Manage the background trading bot. The bot scans the market every few minutes and executes trades
                         based on the configured strategy.</p>
 
-                    <div class="bot-status-panel"
-                        style="margin-top: 20px; padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px;">
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <span id="status-icon" class="material-symbols-outlined"
-                                style="color: grey;">radio_button_unchecked</span>
-                            <span>Status: <strong id="status-text">Checking...</strong></span>
-                        </div>
-                        <div style="margin-top: 10px; font-size: 0.9em; color: #666;">
-                            Last Heartbeat: <span id="last-heartbeat">Never</span>
-                        </div>
-                    </div>
+                    <div style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;">
 
-                    <!-- Terminal / Logs -->
-                    <div style="margin-top: 20px;">
-                        <h4>Recent Logs</h4>
-                        <div id="bot-logs"
-                            style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 4px; font-family: monospace; height: 200px; overflow-y: auto; font-size: 0.85rem;">
-                            <div style="color: #666;">Waiting for logs...</div>
-                        </div>
-                    </div>
+                        <!-- LEFT COLUMN: Status & Logs -->
+                        <div style="flex: 35; min-width: 300px;">
+                            <!-- Status Panel -->
+                            <div class="bot-status-panel"
+                                style="padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <div style="display: flex; align-items: center; gap: 10px;">
+                                        <span id="status-icon" class="material-symbols-outlined"
+                                            style="color: grey;">radio_button_unchecked</span>
+                                        <span>Status: <strong id="status-text">Checking...</strong></span>
+                                    </div>
+                                    <div style="font-size: 0.85em; color: #666;">
+                                        Last Heartbeat: <span id="last-heartbeat">Never</span>
+                                    </div>
+                                </div>
+                                <div style="margin-top: 15px;">
+                                    <button id="btn-start" class="md-button md-button--raised"
+                                        onclick="startBot()">Start Bot</button>
+                                    <button id="btn-stop" class="md-button md-button--outlined" onclick="stopBot()"
+                                        style="color: #d32f2f; border-color: #d32f2f; display: none;">Stop Bot</button>
+                                </div>
+                            </div>
 
-                </div>
-                <div class="md-card__actions">
-                    <button id="btn-start" class="md-button md-button--raised" onclick="startBot()">Start Bot</button>
-                    <button id="btn-stop" class="md-button md-button--outlined" onclick="stopBot()"
-                        style="color: #d32f2f; border-color: #d32f2f; display: none;">Stop Bot</button>
-                    <!-- <button class="md-button md-button--text">Settings</button> -->
+                            <!-- Terminal / Logs -->
+                            <div style="margin-top: 20px;">
+                                <h4>Recent Logs</h4>
+                                <div id="bot-logs"
+                                    style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 4px; font-family: monospace; height: 350px; overflow-y: auto; font-size: 0.85rem;">
+                                    <div style="color: #666;">Waiting for logs...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- RIGHT COLUMN: Watchlists -->
+                        <div style="flex: 65; min-width: 320px; display: flex; flex-direction: column; gap: 20px;">
+
+                            <!-- Credit Spreads -->
+                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+                                <h3 class="md-title"
+                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
+                                    Credit Spreads</h3>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
+                                    id="chips-credit_spreads">
+                                    <!-- Chips go here -->
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="input-credit_spreads" placeholder="Add Symbol"
+                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
+                                    <button class="md-button md-button--raised"
+                                        onclick="addSymbol('credit_spreads')">Add</button>
+                                </div>
+                            </div>
+
+                            <!-- Wheel -->
+                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+                                <h3 class="md-title"
+                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
+                                    Wheel Strategy</h3>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
+                                    id="chips-wheel">
+                                    <!-- Chips go here -->
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="input-wheel" placeholder="Add Symbol"
+                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
+                                    <button class="md-button md-button--raised"
+                                        onclick="addSymbol('wheel')">Add</button>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
                 </div>
             </div>
         </div>
@@ -55,6 +104,12 @@
     const btnStart = document.getElementById('btn-start');
     const btnStop = document.getElementById('btn-stop');
     const logsContainer = document.getElementById('bot-logs');
+
+    // Store both watchlists
+    let currentWatchlists = {
+        credit_spreads: [],
+        wheel: []
+    };
 
     function updateUI(status) {
         if (status.status === 'RUNNING') {
@@ -75,6 +130,20 @@
             lastHeartbeat.textContent = new Date(status.last_heartbeat).toLocaleString();
         }
 
+        // Update Watchlists
+        if (status.settings) {
+            currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
+            currentWatchlists.wheel = status.settings.watchlist_wheel || [];
+
+            // Backwards compatibility or migration display (optional)
+            if (status.settings.watchlist && currentWatchlists.credit_spreads.length === 0) {
+                // Maybe show old watchlist in spreads?
+            }
+
+            renderWatchlist('credit_spreads');
+            renderWatchlist('wheel');
+        }
+
         // Update Logs
         if (status.logs && status.logs.length > 0) {
             logsContainer.innerHTML = status.logs.map(log => {
@@ -83,6 +152,57 @@
             }).join('');
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
+    }
+
+    function renderWatchlist(type) {
+        const container = document.getElementById(`chips-${type}`);
+        if (!container) return;
+        const list = currentWatchlists[type] || [];
+
+        container.innerHTML = list.map(sym => `
+            <div style="background: #e0e0e0; color: #333; padding: 5px 12px; border-radius: 16px; font-size: 0.9em; display: flex; align-items: center; gap: 5px;">
+                <span style="font-weight: 500;">${sym}</span>
+                <span onclick="removeSymbol('${type}', '${sym}')" style="cursor: pointer; font-weight: bold; color: #555; margin-left: 4px;">&times;</span>
+            </div>
+        `).join('');
+    }
+
+    async function saveWatchlist(type, newList) {
+        try {
+            const res = await fetch('/api/bot/watchlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watchlist: newList, type: type })
+            });
+            if (res.ok) {
+                fetchStatus(); // Refresh UI
+            } else {
+                alert("Failed to save watchlist");
+            }
+        } catch (e) { console.error(e); }
+    }
+
+    function addSymbol(type) {
+        const input = document.getElementById(`input-${type}`);
+        const sym = input.value.toUpperCase().trim();
+        if (!sym) return;
+
+        const list = currentWatchlists[type] || [];
+
+        if (list.includes(sym)) {
+            alert("Symbol already in watchlist");
+            return;
+        }
+        const newList = [...list, sym];
+        saveWatchlist(type, newList);
+        input.value = '';
+    }
+
+    function removeSymbol(type, sym) {
+        if (!confirm(`Remove ${sym} from ${type} watchlist?`)) return;
+        const list = currentWatchlists[type] || [];
+        const newList = list.filter(s => s !== sym);
+        saveWatchlist(type, newList);
     }
 
     async function fetchStatus() {
