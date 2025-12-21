@@ -141,18 +141,16 @@ class BacktestService:
                     # Per share -> * 100
                     realized_pnl = pnl * 100
                     
-                    current_cash += realized_pnl # Add PnL (Negative if loss) to cash ? 
-                    # Wait, logic before was:
-                    # current_cash -= loss  (= width - credit)
-                    # Here: PnL is net result.
-                    # e.g. Credit 1.00. Debit 3.00. PnL = -2.00.
-                    # current_cash += (-200). Correct.
-
+                    current_cash += realized_pnl
+                    
+                    # Action name
+                    action_name = "CLOSE_STOP_LOSS_DAY_3"
+                    
                     results['trades'].append({
                         "date": date.strftime('%Y-%m-%d'),
-                        "action": "CLOSE_STOP_LOSS_DAY_3",
+                        "action": action_name,
                         "pnl": realized_pnl,
-                        "details": f"BS_Est: Dr {debit_to_close:.2f} (S:{short_leg_price:.2f} - L:{long_leg_price:.2f})"
+                        "details": f"BS_Est: Dr {debit_to_close:.2f}"
                     })
                     active_position = None
                     continue
@@ -176,19 +174,53 @@ class BacktestService:
                     active_position['days_itm'] = 0
                     active_position['close_on_next_day'] = False # Reset if OTM
                 
-                # DEBUG: Print status
-                # print(f"DEBUG: Date {date.strftime('%Y-%m-%d')} | Price {price:.2f} | Strike {active_position['short_strike']} | ITM? {is_itm} | Days ITM: {active_position['days_itm']}")
-
                 # --- CREDIT SPREAD EXIT ---
                 if 'credit_spread' in active_position['type']:
                     # Check if ITM for 2 consecutive days -> Schedule Close for NEXT day
                     if active_position['days_itm'] >= 2:
                         active_position['close_on_next_day'] = True
                     
-                    # Expiration Logic (Profit)
-                    # If held for target_dte days (approx expiry), we assume it expires worthless (max profit)
-                    # or we close it.
-                    elif active_position['days_held'] >= active_position.get('target_dte', 30):
+                    # --- PROFIT TAKING (Unified Logic) ---
+                    # Calculate Stats
+                    dte_remaining = max(0, active_position.get('target_dte', 30) - active_position['days_held'])
+                    
+                    # We need Current Debit to Close to check profit
+                    # Use BS Estimate
+                    t_years = dte_remaining / 365.0
+                    short_is_call = 'call' in active_position['type']
+                    opt_type = 'call' if short_is_call else 'put'
+                    
+                    try:
+                         sl_price = calculate_option_price(price, active_position['short_strike'], t_years, volatility, option_type=opt_type)
+                         ll_price = calculate_option_price(price, active_position['long_strike'], t_years, volatility, option_type=opt_type)
+                         curr_debit = sl_price - ll_price
+                    except:
+                         curr_debit = active_position['credit'] # Assume no profit if error
+
+                    # Profit %
+                    entry_credit = active_position['credit']
+                    if entry_credit > 0:
+                        profit_val = entry_credit - curr_debit
+                        profit_pct = profit_val / entry_credit
+                        
+                        # Use Strategy Logic
+                        from bot.strategies.credit_spreads import CreditSpreadStrategy
+                        should_close, reason = CreditSpreadStrategy.should_close_early(dte_remaining, profit_pct)
+                        
+                        if should_close:
+                            realized_pnl = profit_val * 100
+                            current_cash += realized_pnl
+                            results['trades'].append({
+                                "date": date.strftime('%Y-%m-%d'),
+                                "action": f"CLOSE_PROFIT_ALGO",
+                                "pnl": realized_pnl,
+                                "details": reason
+                            })
+                            active_position = None
+                            continue
+
+                    # Expiration Logic (Max Profit if held to target)
+                    if active_position and active_position['days_held'] >= active_position.get('target_dte', 30):
                          profit = active_position['credit'] * 100 # Full profit
                          current_cash += profit
                          results['trades'].append({

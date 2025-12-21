@@ -280,18 +280,7 @@ class CreditSpreadStrategy:
                                  
                                  self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}% (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
 
-                                 should_close = False
-                                 reason = ""
-                                 
-                                 # Condition 1: >= 15 DTE and 50% Profit
-                                 if dte >= 15 and profit_pct >= 0.50:
-                                     should_close = True
-                                     reason = f"Early Profit Target (DTE {dte} >= 15, Profit {profit_pct*100:.1f}% >= 50%)"
-                                     
-                                 # Condition 2: 7 < DTE <= 14 AND 60% Profit
-                                 elif (7 < dte <= 14) and profit_pct >= 0.60:
-                                     should_close = True
-                                     reason = f"Mid-Term Profit Target (7 < DTE {dte} <= 14, Profit {profit_pct*100:.1f}% >= 60%)"
+                                 should_close, reason = CreditSpreadStrategy.should_close_early(dte, profit_pct)
                                      
                                  if should_close:
                                      self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol}.")
@@ -304,6 +293,21 @@ class CreditSpreadStrategy:
                 except ValueError:
                     self._log(f"Could not parse date from {short_leg}")
 
+    @staticmethod
+    def should_close_early(dte, profit_pct):
+        """
+        Determine if the trade should be closed early based on DTE and Profit %.
+        Returns (bool, reason_string)
+        """
+        # Condition 1: >= 15 DTE and 50% Profit
+        if dte >= 15 and profit_pct >= 0.50:
+            return True, f"Early Profit Target (DTE {dte} >= 15, Profit {profit_pct*100:.1f}% >= 50%)"
+            
+        # Condition 2: 7 < DTE <= 14 AND 60% Profit
+        elif (7 < dte <= 14) and profit_pct >= 0.60:
+            return True, f"Mid-Term Profit Target (7 < DTE {dte} <= 14, Profit {profit_pct*100:.1f}% >= 60%)"
+            
+        return False, ""
             
     def _execute_close(self, trade):
         """Close the spread position."""
