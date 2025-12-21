@@ -173,28 +173,68 @@ def run_dry_run():
         tradier_service = Container.get_tradier_service()
         db = Container.get_db()
         from bot.strategies.credit_spreads import CreditSpreadStrategy
+        from bot.strategies.wheel import WheelStrategy
         
-        # Determine watchlist
-        # Try to get from request or DB, else default
+        # Determine watchlists
         data = request.json or {}
-        watchlist = data.get('watchlist')
         
-        if not watchlist:
-             # Fetch from DB if available
+        # 1. Credit Spreads Watchlist
+        cs_watchlist = data.get('credit_spreads_watchlist')
+        if not cs_watchlist:
+             # Backward compatibility: 'watchlist' field
+             cs_watchlist = data.get('watchlist')
+             
+        if not cs_watchlist:
+             # Fetch from DB
              bot_config = db.bot_config.find_one({"_id": "main_bot"})
-             if bot_config and 'watchlist' in bot_config:
-                 # Check nested structure or flat
-                 # Current UI saves to settings.watchlist_credit_spreads
+             if bot_config:
                  settings = bot_config.get('settings', {})
-                 watchlist = settings.get('watchlist_credit_spreads', [])
-                 
-        if not watchlist:
-            watchlist = ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA']
+                 cs_watchlist = settings.get('watchlist_credit_spreads', [])
 
-        strategy = CreditSpreadStrategy(tradier_service, db, dry_run=True)
-        logs = strategy.execute(watchlist)
+        if not cs_watchlist:
+            cs_watchlist = ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
+
+        # 2. Wheel Watchlist
+        wheel_watchlist = data.get('wheel_watchlist')
+        if not wheel_watchlist:
+             bot_config = db.bot_config.find_one({"_id": "main_bot"})
+             if bot_config:
+                 settings = bot_config.get('settings', {})
+                 wheel_watchlist = settings.get('watchlist_wheel', [])
+                 
+        if not wheel_watchlist:
+            wheel_watchlist = ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
+            
+        print(f"DEBUG: CS Watchlist ({len(cs_watchlist)}): {cs_watchlist}")
+        print(f"DEBUG: Wheel Watchlist ({len(wheel_watchlist)}): {wheel_watchlist}")
+
+        all_logs = []
+
+        # Execute Credit Spreads
+        all_logs.append("--- Credit Spread Strategy ---")
+        try:
+            strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
+            cs_logs = strategy_cs.execute(cs_watchlist)
+            all_logs.extend(cs_logs)
+        except Exception as e:
+            error_msg = f"❌ Credit Spread Strategy Failed: {str(e)}"
+            all_logs.append(error_msg)
+            print(error_msg)
+            traceback.print_exc()
+
+        # Execute Wheel
+        all_logs.append("\n--- Wheel Strategy ---")
+        try:
+            strategy_wheel = WheelStrategy(tradier_service, db, dry_run=True)
+            w_logs = strategy_wheel.execute(wheel_watchlist)
+            all_logs.extend(w_logs)
+        except Exception as e:
+            error_msg = f"❌ Wheel Strategy Failed: {str(e)}"
+            all_logs.append(error_msg)
+            print(error_msg)
+            traceback.print_exc()
         
-        return jsonify({'status': 'success', 'logs': logs})
+        return jsonify({'status': 'success', 'logs': all_logs})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.container import Container
 from bot.strategies.credit_spreads import CreditSpreadStrategy
+from bot.strategies.wheel import WheelStrategy
 import logging
 from dotenv import load_dotenv
 
@@ -31,7 +32,14 @@ def run_dry_run():
     watchlist = ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
     
     print(f"Executing strategy on: {watchlist}")
+    print(f"Executing strategy on: {watchlist}")
+    
+    print("\n--- Running Credit Spreads ---")
     strategy.execute(watchlist)
+
+    print("\n--- Running Wheel Strategy ---")
+    wheel_strategy = WheelStrategy(tradier, db, dry_run=True)
+    wheel_strategy.execute(watchlist)
     
     print("Dry Run Complete.")
 

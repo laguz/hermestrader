@@ -283,7 +283,10 @@
                 const res = await fetch('/api/bot/dry_run', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ watchlist: currentWatchlists.credit_spreads })
+                    body: JSON.stringify({ 
+                        credit_spreads_watchlist: currentWatchlists.credit_spreads,
+                        wheel_watchlist: currentWatchlists.wheel
+                    })
                 });
                 const data = await res.json();
 
