@@ -7,7 +7,7 @@ class BacktestService:
     def __init__(self, tradier_service):
         self.tradier = tradier_service
 
-from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_support_resistance
+from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_support_resistance, find_key_levels
 import numpy as np
 
 from datetime import datetime, timedelta
@@ -61,10 +61,47 @@ class BacktestService:
         portfolio_history = []
         
         # Simulation Loop
+        import math
+        
         for index, row in df.iterrows():
+            if index < 90: continue # Need history for improved algos
+            
             date = row['date']
             price = row['close']
             rsi = row['rsi']
+            
+            # Rolling Window for Analysis (Last 90 days)
+            # Use iloc to slice (index is label based if not reset, but iterrows yields label)
+            # We need positional slicing.
+            # Let's trust df is sorted by date.
+            # Convert index label to integer location? df.index is usually RangeIndex if reset.
+            # Let's assume we are iterating linear.
+            
+            # Optimization: We already have indicators pre-calculated for simple things.
+            # But for Key Levels (KMeans), we need the slice.
+            
+            # Get integer location for slicing
+            i = df.index.get_loc(index)
+            start_i = max(0, i - 90)
+            window_df = df.iloc[start_i:i+1] # Include current day as "latest known"
+            
+            key_levels = []
+            volatility = 0.5
+            
+            if strategy_type == "credit_spread":
+                # efficient calculation on window
+                key_levels = find_key_levels(
+                    window_df['close'], 
+                    window_df['volume'], 
+                    high_series=window_df['high'], 
+                    low_series=window_df['low']
+                )
+                
+                # Calculate Volatility for Delta Proxy
+                # Daily Returns std dev * sqrt(252)
+                if len(window_df) > 30:
+                    returns = window_df['close'].pct_change().dropna()
+                    volatility = returns.std() * math.sqrt(252)
             
             # --- EXIT LOGIC ---
             if active_position:
@@ -139,54 +176,91 @@ class BacktestService:
             # --- ENTRY LOGIC ---
             # Only enter if no position
             if not active_position:
-                # DTE Target: 18-23 days. In daily loop, we just assume we find an expiration in that range.
-                dte = 21 # Target DTE
+                dte = 30 # Default 30 DTE for Algo
                 
                 entry_signal = None
-                if strategy_type == "credit_spread": # We determine Put/Call based on indicators
-                    # Bullish: Put Credit Spread
-                    # Price near Support/Lower BB AND RSI < 35 (Oversold)
-                    if (price <= row['lower_bb'] or price <= row['support']) and rsi < 35: 
-                        entry_signal = "put_credit_spread"
-                    
-                    # Bearish: Call Credit Spread
-                    # Price near Resistance/Upper BB AND RSI > 65 (Overbought)
-                    elif (price >= row['upper_bb'] or price >= row['resistance']) and rsi > 65:
-                         entry_signal = "call_credit_spread"
+                trade_params = {}
                 
-                elif strategy_type == "long_call":
-                    # Simple Bullish Entry: RSI < 30 (Oversold bounce)
-                    if rsi < 30:
-                        entry_signal = "long_call"
-
+                if strategy_type == "credit_spread": 
+                    # 1. Try S/R Algo
+                    put_signal = False
+                    call_signal = False
+                    
+                    # Check Put Entry (Bullish) - Price near Support
+                    # Closest support below price
+                    supports = [k for k in key_levels if k['type'] == 'support' and k['price'] < price]
+                    supports.sort(key=lambda x: x['price'])
+                    
+                    if supports:
+                         closest_support = supports[-1]
+                         dist = (price - closest_support['price']) / price
+                         if dist < 0.05 and rsi < 50: # Trigger condition similar to bot
+                             entry_signal = "put_credit_spread"
+                             trade_params['short_strike'] = closest_support['price']
+                             trade_params['method'] = 'Algo S/R'
+                    
+                    if not entry_signal:
+                        # Check Call Entry (Bearish)
+                        resistances = [k for k in key_levels if k['type'] == 'resistance' and k['price'] > price]
+                        resistances.sort(key=lambda x: x['price'])
+                        
+                        if resistances:
+                            closest_res = resistances[0]
+                            dist = (closest_res['price'] - price) / price
+                            if dist < 0.05 and rsi > 50:
+                                entry_signal = "call_credit_spread"
+                                trade_params['short_strike'] = closest_res['price']
+                                trade_params['method'] = 'Algo S/R'
+                                
+                    # 2. Fallback to Pseudo-Delta (Volatility) if no S/R triggered
+                    if not entry_signal:
+                         # Proxy for 30 Delta is approx 0.5 std dev move for 1 month?
+                         # Expected 1 SD move over 30 days = Price * Vol * sqrt(30/365)
+                         move_1sd = price * volatility * math.sqrt(30/365)
+                         
+                         # 30 Delta is roughly 0.52 SD OTM? (Norm inv(0.3) ~= -0.52)
+                         dist_30_delta = 0.52 * move_1sd
+                         
+                         # We can enter random-ish or trend following? 
+                         # Let's say we follow RSI: < 40 Bullish, > 60 Bearish
+                         if rsi < 40:
+                             entry_signal = "put_credit_spread"
+                             trade_params['short_strike'] = price - dist_30_delta
+                             trade_params['method'] = 'Algo Delta'
+                         elif rsi > 60:
+                             entry_signal = "call_credit_spread"
+                             trade_params['short_strike'] = price + dist_30_delta
+                             trade_params['method'] = 'Algo Delta'
+                
+                elif strategy_type == "long_call": # Legacy logic
+                    if rsi < 30: entry_signal = "long_call"
                 elif strategy_type == "long_put":
-                    # Simple Bearish Entry: RSI > 70 (Overbought dump)
-                    if rsi > 70:
-                        entry_signal = "long_put"
+                    if rsi > 70: entry_signal = "long_put"
                 
                 if entry_signal:
-                    # Mock Trade Execution
                     width = 0
                     credit = 0
                     debit = 0
-                    
                     short_strike = 0
                     long_strike = 0
                     
                     if "credit_spread" in entry_signal:
                         width = 5.0
-                        credit = 1.0 
+                        credit = 1.0 # Mock credit
+                        short_strike = trade_params.get('short_strike')
+                        # Round strike
+                        if short_strike > 100: short_strike = 5 * round(short_strike/5)
+                        else: short_strike = round(short_strike)
+                        
                         if entry_signal == 'put_credit_spread':
-                            short_strike = price * 0.98 
-                            long_strike = short_strike - width
+                             long_strike = short_strike - width
                         else:
-                            short_strike = price * 1.02 
-                            long_strike = short_strike + width
+                             long_strike = short_strike + width
+                             
                     elif entry_signal in ["long_call", "long_put"]:
-                        # Mock Debit paid
-                        debit = 2.0 # Assume $200 for ATM option
-                        short_strike = 0 # Not short
-                        long_strike = price # ATM
+                        debit = 2.0
+                        short_strike = 0
+                        long_strike = price
                     
                     active_position = {
                         'type': entry_signal,
@@ -204,7 +278,7 @@ class BacktestService:
                     
                     results['trades'].append({
                         "date": date.strftime('%Y-%m-%d'),
-                        "action": f"OPEN_{entry_signal.upper()}",
+                        "action": f"OPEN_{entry_signal.upper()} ({trade_params.get('method', 'Legacy')})",
                         "price": price,
                         "credit": credit if credit > 0 else None,
                         "debit": debit if debit > 0 else None
