@@ -240,7 +240,70 @@ class CreditSpreadStrategy:
             )
             
             # If we just flagged it, we DO NOT close today. "Close on the NEXT trading day".
-            # So we wait.
+            # So we wait. (Unless trigger below causes immediate close?)
+
+            # --- NEW PROFIT TAKING LOGIC ---
+            # Parse Expiry from Short Leg
+            # Symbol Format: ROOTyyMMdd[P|C]... e.g. TSLA230120P...
+            import re
+            match = re.search(r'[A-Z]+(\d{6})[PC]', short_leg)
+            if match:
+                date_str = match.group(1) # yyMMdd
+                try:
+                    expiry_date = datetime.strptime(date_str, '%y%m%d')
+                    # Calculate DTE
+                    dte = (expiry_date.date() - datetime.now().date()).days
+                    
+                    # Calculate Profit %
+                    # Entry Price (Credit)
+                    entry_credit = trade.get('price', 0)
+                    
+                    # Current Price (Debit to Close)
+                    # We need quotes for short and long leg to estimate debit
+                    
+                    # Only check if we haven't already marked for close
+                    if not trade.get('close_on_next_day', False) and entry_credit > 0:
+                        try:
+                             # Re-fetch quotes just for profit check
+                             legs_quotes = self.tradier.get_quotes([short_leg, long_leg])
+                             sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
+                             lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
+                             
+                             if sq and lq:
+                                 # Debit to Close = Short Ask - Long Bid
+                                 # (Buy back Short at Ask, Sell Long at Bid)
+                                 curr_debit = (sq.get('ask', 0) - lq.get('bid', 0))
+                                 
+                                 # Profit = Entry Credit - Current Debit
+                                 profit_val = entry_credit - curr_debit
+                                 profit_pct = (profit_val / entry_credit)
+                                 
+                                 self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}% (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
+
+                                 should_close = False
+                                 reason = ""
+                                 
+                                 # Condition 1: >= 15 DTE and 50% Profit
+                                 if dte >= 15 and profit_pct >= 0.50:
+                                     should_close = True
+                                     reason = f"Early Profit Target (DTE {dte} >= 15, Profit {profit_pct*100:.1f}% >= 50%)"
+                                     
+                                 # Condition 2: 7 < DTE <= 14 AND 60% Profit
+                                 elif (7 < dte <= 14) and profit_pct >= 0.60:
+                                     should_close = True
+                                     reason = f"Mid-Term Profit Target (7 < DTE {dte} <= 14, Profit {profit_pct*100:.1f}% >= 60%)"
+                                     
+                                 if should_close:
+                                     self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol}.")
+                                     self._execute_close(trade)
+                                     continue # Done with this trade
+
+                        except Exception as e:
+                            self._log(f"Error checking profit for {short_leg}: {e}")
+
+                except ValueError:
+                    self._log(f"Could not parse date from {short_leg}")
+
             
     def _execute_close(self, trade):
         """Close the spread position."""
