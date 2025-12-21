@@ -75,7 +75,15 @@ class AnalysisService:
         # Using new KMeans algo which expects Volume
         from utils.indicators import find_key_levels
         
-        key_levels = find_key_levels(period_df['close'], period_df['volume'])
+        # Pass high/low series to automatically get min/max levels
+        key_levels = find_key_levels(
+            period_df['close'], 
+            period_df['volume'], 
+            high_series=period_df['high'], 
+            low_series=period_df['low']
+        )
+        
+        # Note: Period Min/Max are now included in key_levels by find_key_levels
 
         # Calculate Volatility (Annualized from daily returns)
         # Using full available history for better accuracy or just period?

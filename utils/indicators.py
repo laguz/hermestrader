@@ -67,14 +67,17 @@ def calculate_atr(high, low, close, window=14):
 from sklearn.cluster import KMeans
 from scipy.signal import argrelextrema
 
-def find_key_levels(close_series, volume_series=None, window=5, n_clusters=6):
+def find_key_levels(close_series, volume_series=None, high_series=None, low_series=None, window=5, n_clusters=6):
     """
     Find key Support and Resistance levels using K-Means Clustering on Pivots.
     
     Args:
         close_series (pd.Series): Closing prices.
         volume_series (pd.Series): Volume data (optional).
+        high_series (pd.Series): High prices (optional, for period max).
+        low_series (pd.Series): Low prices (optional, for period min).
         window (int): Window for pivot detection.
+        n_clusters (int): Number of price clusters to identify.
         n_clusters (int): Number of price clusters to identify.
         
     Returns:
@@ -199,6 +202,30 @@ def find_key_levels(close_series, volume_series=None, window=5, n_clusters=6):
         })
         
     # Sort by price
+    key_levels.sort(key=lambda x: x['price'])
+    
+    # 4. Add Period Min/Max as specific Key Levels
+    # Use provided high/low or fallback to close
+    series_min = low_series.min() if low_series is not None else close_series.min()
+    series_max = high_series.max() if high_series is not None else close_series.max()
+    
+    # Add Min as Support
+    key_levels.append({
+        'price': float(series_min),
+        'type': 'support',
+        'strength': 3, # High strength for period extreme
+        'touches': 1
+    })
+    
+    # Add Max as Resistance
+    key_levels.append({
+        'price': float(series_max),
+        'type': 'resistance',
+        'strength': 3, # High strength for period extreme
+        'touches': 1
+    })
+    
+    # Re-sort to include new levels
     key_levels.sort(key=lambda x: x['price'])
     
     return key_levels
