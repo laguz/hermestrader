@@ -108,6 +108,40 @@ class CreditSpreadStrategy:
         
         return self.execution_logs
 
+    def _find_delta_strike(self, chain, option_type, min_delta=0.30, max_delta=0.37):
+        """Find strike with delta closest to min_delta within range."""
+        if not chain: return None
+        
+        # Filter by type
+        options = [o for o in chain if o['option_type'] == option_type]
+        if not options: return None
+        
+        candidates = []
+        for opt in options:
+            greeks = opt.get('greeks')
+            if not greeks: continue
+            
+            delta = greeks.get('delta')
+            if delta is None: continue
+            
+            # Use absolute delta for puts
+            abs_delta = abs(delta)
+            
+            if min_delta <= abs_delta <= max_delta:
+                candidates.append((opt, abs_delta))
+                
+        if not candidates:
+            return None
+            
+        # Sort by distance to ideal delta (let's say we prefer higher premium so strictly higher delta? 
+        # User said "delta .30 to .37". 
+        # Let's pick the one closest to 0.30 to be safer (further OTM) or 0.37 for more premium?
+        # Usually "sell 30 delta" means around 0.30.
+        # Let's pick closest to 0.30 (lower risk)
+        
+        best = min(candidates, key=lambda x: abs(x[1] - 0.30))
+        return best[0]['strike']
+
     def _find_expiry(self, symbol, target_dte=30):
         """Find expiry date closest to target DTE."""
         expirations = self.tradier.get_option_expirations(symbol)
@@ -144,21 +178,39 @@ class CreditSpreadStrategy:
         ]
         
         if not valid_points:
-            # self._log(f"🔹 No valid support levels found for {symbol} (Price < {current_price}, 55<=POP<=70). Scanned {all_points_count} points.")
-            return
+            # Fallback to Delta 0.30-0.37
+            self._log(f"🔹 No valid support levels found for {symbol}. Checking Delta 0.30-0.37...")
+            
+            expiry = self._find_expiry(symbol, target_dte=30) # Use 30 DTE for delta usage
+            if not expiry: return
 
-        # Target = The closest support below price (Last item in sorted list < price)
-        target_strike = valid_points[-1]['price']
-        pop = valid_points[-1].get('pop', 'N/A')
-             
+            chain = self.tradier.get_option_chains(symbol, expiry)
+            delta_strike = self._find_delta_strike(chain, 'put', min_delta=0.30, max_delta=0.37)
+            
+            if delta_strike:
+                 self._log(f"🔹 Found Delta Strike for Put: {delta_strike}")
+                 target_strike = delta_strike
+                 pop = "N/A (Delta)"
+                 # We need to ensure we don't re-fetch chain redundantly but flow is cleaner if we just set target here
+                 # and let the logic below re-fetch or pass chain? 
+                 # Logic below calls get_option_chains again. That's fine for now (cache/optimization later).
+            else:
+                 return
+
+        else:
+             # Target = The closest support below price (Last item in sorted list < price)
+             target_strike = valid_points[-1]['price']
+             pop = valid_points[-1].get('pop', 'N/A')
+             expiry = self._find_expiry(symbol, target_dte=21)
+
+        # Common Logic starts here
+        if not 'expiry' in locals() or not expiry: # expiry might be set in if/else
+             self._log(f"🔸 No expiry found for {symbol}")
+             return
+
         width = 1.0 if current_price < 100 else 5.0
         short_put_strike = target_strike
         long_put_strike = short_put_strike - width
-        
-        expiry = self._find_expiry(symbol, target_dte=21)
-        if not expiry:
-             self._log(f"🔸 No expiry found for {symbol}")
-             return
 
         self._log(f"✅ Placing Bull Put Spread on {symbol}")
         self._log(f"   • Exp: {expiry} | Short: {short_put_strike} | Long: {long_put_strike} | POP: {pop}%")
@@ -235,18 +287,35 @@ class CreditSpreadStrategy:
         ]
         
         if not valid_points:
-            # self._log(f"🔹 No valid resistance levels found for {symbol} (Price > {current_price}, 55<=POP<=70). Scanned {all_points_count} points.")
-            return
+             # Fallback to Delta 0.30-0.37
+            self._log(f"🔹 No valid resistance levels found for {symbol}. Checking Delta 0.30-0.37...")
+            
+            expiry = self._find_expiry(symbol, target_dte=30)
+            if not expiry: return
+
+            chain = self.tradier.get_option_chains(symbol, expiry)
+            delta_strike = self._find_delta_strike(chain, 'call', min_delta=0.30, max_delta=0.37)
+            
+            if delta_strike:
+                 self._log(f"🔹 Found Delta Strike for Call: {delta_strike}")
+                 target_strike = delta_strike
+                 pop = "N/A (Delta)"
+            else:
+                 return
+        else:
+            # Target = The closest resistance above price (First item in sorted list > price)
+            target_strike = valid_points[0]['price']
+            pop = valid_points[0].get('pop', 'N/A')
+            expiry = self._find_expiry(symbol, target_dte=21)
         
-        # Target = The closest resistance above price (First item in sorted list > price)
-        target_strike = valid_points[0]['price']
-        pop = valid_points[0].get('pop', 'N/A')
-        
+        # Common Logic
+        if not 'expiry' in locals() or not expiry:
+             self._log(f"🔸 No expiry found for {symbol}")
+             return
+
         width = 1.0 if current_price < 100 else 5.0
         short_call_strike = target_strike
         long_call_strike = short_call_strike + width
-        
-        expiry = self._find_expiry(symbol, target_dte=21)
         if not expiry:
              self._log(f"🔸 No expiry found for {symbol}")
              return
