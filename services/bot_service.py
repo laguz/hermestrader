@@ -219,6 +219,9 @@ class BotService:
                 
                 if wl_spreads:
                     self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
+                    # 1. Manage Existing
+                    self.credit_spread_strategy.manage_positions()
+                    # 2. Execute New
                     self.credit_spread_strategy.execute(wl_spreads)
                     
                 if wl_wheel:
