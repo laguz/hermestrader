@@ -2,6 +2,18 @@ import logging
 import traceback
 from datetime import datetime
 
+
+class Colors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
 class CreditSpreadStrategy:
     def __init__(self, tradier_service, db, dry_run=False):
         self.tradier = tradier_service
@@ -13,8 +25,24 @@ class CreditSpreadStrategy:
     def _log(self, message):
         """Log message to DB via BotService mechanism (manually for now)."""
         self.execution_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {message}")
-        # We can't access BotService directly if it's not passed, but we have DB.
-        print(f"[CREDIT_SPREADS] {message}")
+        
+        # Cleaner stdout for dry run
+        if self.dry_run:
+            if "Analyzing" in message:
+                print(f"{Colors.HEADER}   {message}{Colors.ENDC}")
+            elif "Placing" in message and "✅" in message:
+                print(f"{Colors.OKGREEN}   {message}{Colors.ENDC}")
+            elif "Skipping" in message:
+                print(f"{Colors.OKCYAN}   {message}{Colors.ENDC}")
+            elif "Error" in message or "failed" in message or "❌" in message:
+                print(f"{Colors.FAIL}   {message}{Colors.ENDC}")
+            elif "•" in message:
+                print(f"{Colors.OKGREEN}   {message}{Colors.ENDC}")
+            else:
+                print(f"   {message}")
+        else:
+            print(f"[CREDIT_SPREADS] {message}")
+            
         try:
             if self.db is not None:
                 self.db['bot_config'].update_one(
@@ -51,15 +79,18 @@ class CreditSpreadStrategy:
                 has_position = any(p.get('symbol') == symbol or p.get('underlying') == symbol for p in positions)
                 
                 if has_position:
-                    self._log(f"Skipping {symbol}: Existing position found.")
+                    self._log(f"⏭️  Skipping {symbol}: Existing position found.")
                     continue
 
                 # 2. Analyze
-                self._log(f"Analyzing {symbol}...")
+                if self.dry_run:
+                    print(f"\n{Colors.HEADER}📦 Analyzing {symbol}...{Colors.ENDC}")
+                else:
+                    self._log(f"Analyzing {symbol}...")
                 analysis = analysis_service.analyze_symbol(symbol)
                 
                 if not analysis or 'error' in analysis:
-                    self._log(f"Analysis failed for {symbol}: {analysis.get('error')}")
+                    self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
                     continue
                     
                 # 3. Execution Logic
@@ -72,7 +103,7 @@ class CreditSpreadStrategy:
                 self._place_credit_call_spread(symbol, current_price, analysis)
                     
             except Exception as e:
-                self._log(f"Error processing {symbol}: {e}")
+                self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
         
         return self.execution_logs
@@ -103,17 +134,22 @@ class CreditSpreadStrategy:
         # AnalysisService returns flattened keys now
         entry_points = analysis.get('put_entry_points', [])
         
-        # Find Support Levels LOWER than current price
+        # Find Support Levels LOWER than current price AND with 55 <= POP <= 70
         # entry_points are sorted by price ascending.
         # We want the HIGHEST support level that is strictly LOWER than current price.
-        valid_points = [ep for ep in entry_points if ep['price'] < current_price]
+        all_points_count = len(entry_points)
+        valid_points = [
+            ep for ep in entry_points 
+            if ep['price'] < current_price and 55 <= ep.get('pop', 0) <= 70
+        ]
         
         if not valid_points:
-            self._log(f"No support levels found below current price ({current_price}) for {symbol}")
+            # self._log(f"🔹 No valid support levels found for {symbol} (Price < {current_price}, 55<=POP<=70). Scanned {all_points_count} points.")
             return
 
         # Target = The closest support below price (Last item in sorted list < price)
         target_strike = valid_points[-1]['price']
+        pop = valid_points[-1].get('pop', 'N/A')
              
         width = 1.0 if current_price < 100 else 5.0
         short_put_strike = target_strike
@@ -121,10 +157,11 @@ class CreditSpreadStrategy:
         
         expiry = self._find_expiry(symbol, target_dte=21)
         if not expiry:
-             self._log(f"No expiry found for {symbol}")
+             self._log(f"🔸 No expiry found for {symbol}")
              return
 
-        self._log(f"Placing Bull Put Spread on {symbol} Exp: {expiry} Short: {short_put_strike} Long: {long_put_strike}")
+        self._log(f"✅ Placing Bull Put Spread on {symbol}")
+        self._log(f"   • Exp: {expiry} | Short: {short_put_strike} | Long: {long_put_strike} | POP: {pop}%")
         
         # Get Chain to find Option Symbols
         chain = self.tradier.get_option_chains(symbol, expiry)
@@ -188,23 +225,34 @@ class CreditSpreadStrategy:
 
         self._log(f"DEBUG: {symbol} Call Entry Points: {entry_points} | Current Price: {current_price}")
 
-        # Find Resistance Levels HIGHER than current price
+        # Find Resistance Levels HIGHER than current price AND with 55 <= POP <= 70
         # entry_points are sorted by price ascending.
         # We want the LOWEST resistance level that is strictly HIGHER than current price.
-        valid_points = [ep for ep in entry_points if ep['price'] > current_price]
+        all_points_count = len(entry_points)
+        valid_points = [
+            ep for ep in entry_points 
+            if ep['price'] > current_price and 55 <= ep.get('pop', 0) <= 70
+        ]
         
         if not valid_points:
-            self._log(f"No resistance levels found above current price ({current_price}) for {symbol}")
+            # self._log(f"🔹 No valid resistance levels found for {symbol} (Price > {current_price}, 55<=POP<=70). Scanned {all_points_count} points.")
             return
         
         # Target = The closest resistance above price (First item in sorted list > price)
         target_strike = valid_points[0]['price']
+        pop = valid_points[0].get('pop', 'N/A')
         
         width = 1.0 if current_price < 100 else 5.0
         short_call_strike = target_strike
         long_call_strike = short_call_strike + width
         
         expiry = self._find_expiry(symbol, target_dte=21)
+        if not expiry:
+             self._log(f"🔸 No expiry found for {symbol}")
+             return
+
+        self._log(f"✅ Placing Bear Call Spread on {symbol}")
+        self._log(f"   • Exp: {expiry} | Short: {short_call_strike} | Long: {long_call_strike} | POP: {pop}%")
         chain = self.tradier.get_option_chains(symbol, expiry)
         
         short_leg = next((o for o in chain if o['strike'] == short_call_strike and o['option_type'] == 'call'), None)
