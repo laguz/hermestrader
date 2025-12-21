@@ -233,7 +233,7 @@ class CreditSpreadStrategy:
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
         net_credit = round(short_price - long_price, 2)
         
-        if net_credit < 0.20:
+        if net_credit < 0.80:
             self._log(f"Credit too low ({net_credit}) for risk.")
             return
 
@@ -333,7 +333,7 @@ class CreditSpreadStrategy:
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
         net_credit = round(short_price - long_price, 2)
         
-        if net_credit < 0.20:
+        if net_credit < 0.80:
              self._log(f"Credit too low ({net_credit}).")
              return
 
