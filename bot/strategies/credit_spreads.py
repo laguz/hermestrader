@@ -114,12 +114,16 @@ class CreditSpreadStrategy:
         Condition: If ITM for 2 days straight, close on next day at 3:00 PM EST.
         """
         # 1. Check Time (Only run after 3:00 PM EST)
-        # Assuming server time is roughly aligned or we check UTC. 
-        # EST is UTC-5. 3 PM EST is 20:00 UTC.
-        # Let's assume system local time is used for simplicity as per existing logic.
-        now = datetime.now()
-        if now.hour < 15: 
-            return # Too early
+        # Explicitly check for EST time to ensure 3 PM is 3 PM ET.
+        import pytz
+        est = pytz.timezone('America/New_York')
+        now_est = datetime.now(est)
+        
+        # 3 PM EST = 15:00
+        if now_est.hour < 15: 
+            return # Too early, wait for 3 PM EST
+            
+        now = now_est # Use EST time for logging/checks
 
         # 2. Get Open Trades from DB
         open_trades = list(self.db['auto_trades'].find({"status": "OPEN"}))
@@ -162,9 +166,11 @@ class CreditSpreadStrategy:
                 
             # Start of New Daily Check
             
-            # 0. Check for Pending Close from Previous Day
+            # 0. Check for Pending Close from Previous Day (HARD CLOSE)
+            # Logic: If ITM for 2 consecutive days, we schedule a close for the NEXT trading day at 3 PM EST.
+            # This is a strict rule. Even if it goes OTM today, the decision was made yesterday.
             if trade.get('close_on_next_day', False):
-                 self._log(f"🚨 Executing scheduled close for {symbol} (ITM > 2 days).")
+                 self._log(f"🚨 HARD CLOSE: Executing scheduled close for {symbol} (ITM > 2 days).")
                  self._execute_close(trade)
                  continue
 

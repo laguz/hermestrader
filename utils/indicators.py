@@ -289,3 +289,24 @@ def calculate_prob_it_expires_otm(current_price, strike_price, volatility, days_
         prob_otm = norm.cdf(z_score)
         
     return prob_otm
+
+def calculate_option_price(current_price, strike_price, time_to_expiry_years, volatility, risk_free_rate=0.04, option_type='call'):
+    """
+    Calculate Option Price using Black-Scholes Formula.
+    """
+    if time_to_expiry_years <= 0:
+        # Intrinsic Value
+        if option_type == 'call':
+            return max(0, current_price - strike_price)
+        else:
+            return max(0, strike_price - current_price)
+            
+    d1 = (np.log(current_price / strike_price) + (risk_free_rate + 0.5 * volatility ** 2) * time_to_expiry_years) / (volatility * np.sqrt(time_to_expiry_years))
+    d2 = d1 - volatility * np.sqrt(time_to_expiry_years)
+    
+    if option_type == 'call':
+        price = (current_price * norm.cdf(d1)) - (strike_price * np.exp(-risk_free_rate * time_to_expiry_years) * norm.cdf(d2))
+    else:
+        price = (strike_price * np.exp(-risk_free_rate * time_to_expiry_years) * norm.cdf(-d2)) - (current_price * norm.cdf(-d1))
+        
+    return price

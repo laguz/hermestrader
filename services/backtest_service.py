@@ -7,7 +7,7 @@ class BacktestService:
     def __init__(self, tradier_service):
         self.tradier = tradier_service
 
-from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_support_resistance, find_key_levels
+from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_support_resistance, find_key_levels, calculate_prob_it_expires_otm, calculate_option_price
 import numpy as np
 
 from datetime import datetime, timedelta
@@ -105,6 +105,58 @@ class BacktestService:
             
             # --- EXIT LOGIC ---
             if active_position:
+                # --- CHECK SCHEDULED CLOSE (from previous day) ---
+                if active_position.get('close_on_next_day'):
+                    # Execute Close - Calculate Fair Market Value using Black-Scholes
+                    # We need time to expiry
+                    dte_remaining = max(0, active_position.get('target_dte', 30) - active_position['days_held'])
+                    t_years = dte_remaining / 365.0
+                    
+                    # Need volatility (calculated in loop, reuse or approximate?)
+                    # Volatility variable is available from loop scope 'volatility'.
+                    
+                    # Determine Option Types
+                    # Credit Spread = Short Option + Long Option
+                    short_is_call = 'call' in active_position['type']
+                    short_strike = active_position['short_strike']
+                    long_strike = active_position['long_strike']
+                    opt_type = 'call' if short_is_call else 'put'
+                    
+                    try:
+                        short_leg_price = calculate_option_price(price, short_strike, t_years, volatility, option_type=opt_type)
+                        long_leg_price = calculate_option_price(price, long_strike, t_years, volatility, option_type=opt_type)
+                    except Exception as e:
+                        print(f"Error calculating BS price: {e}. Defaulting to intrinsic/max.")
+                        # Fallback
+                        short_leg_price = max(0, price - short_strike) if short_is_call else max(0, short_strike - price)
+                        long_leg_price = max(0, price - long_strike) if short_is_call else max(0, long_strike - price)
+                    
+                    # Debit to Close = Buy Short - Sell Long
+                    # Short (we sold) -> Buy Back at Price
+                    # Long (we bought) -> Sell at Price
+                    debit_to_close = short_leg_price - long_leg_price
+                    
+                    # Net PnL = Entry Credit - Debit to Close
+                    pnl = active_position['credit'] - debit_to_close
+                    # Per share -> * 100
+                    realized_pnl = pnl * 100
+                    
+                    current_cash += realized_pnl # Add PnL (Negative if loss) to cash ? 
+                    # Wait, logic before was:
+                    # current_cash -= loss  (= width - credit)
+                    # Here: PnL is net result.
+                    # e.g. Credit 1.00. Debit 3.00. PnL = -2.00.
+                    # current_cash += (-200). Correct.
+
+                    results['trades'].append({
+                        "date": date.strftime('%Y-%m-%d'),
+                        "action": "CLOSE_STOP_LOSS_DAY_3",
+                        "pnl": realized_pnl,
+                        "details": f"BS_Est: Dr {debit_to_close:.2f} (S:{short_leg_price:.2f} - L:{long_leg_price:.2f})"
+                    })
+                    active_position = None
+                    continue
+
                 active_position['days_held'] += 1
                 
                 # Check ITM condition
@@ -122,27 +174,26 @@ class BacktestService:
                     active_position['days_itm'] += 1
                 else:
                     active_position['days_itm'] = 0
+                    active_position['close_on_next_day'] = False # Reset if OTM
                 
+                # DEBUG: Print status
+                # print(f"DEBUG: Date {date.strftime('%Y-%m-%d')} | Price {price:.2f} | Strike {active_position['short_strike']} | ITM? {is_itm} | Days ITM: {active_position['days_itm']}")
+
                 # --- CREDIT SPREAD EXIT ---
                 if 'credit_spread' in active_position['type']:
-                    # Close if 2 consecutive days ITM (Loss)
+                    # Check if ITM for 2 consecutive days -> Schedule Close for NEXT day
                     if active_position['days_itm'] >= 2:
-                        loss = (active_position['width'] - active_position['credit']) * 100
-                        current_cash -= loss
-                        results['trades'].append({
-                            "date": date.strftime('%Y-%m-%d'),
-                            "action": "CLOSE_LOSS_ITM",
-                            "pnl": -loss
-                        })
-                        active_position = None
+                        active_position['close_on_next_day'] = True
                     
-                    # Close if 50% Profit (Time decay)
-                    elif active_position['days_held'] > 5: 
-                         profit = active_position['credit'] * 0.5 * 100
+                    # Expiration Logic (Profit)
+                    # If held for target_dte days (approx expiry), we assume it expires worthless (max profit)
+                    # or we close it.
+                    elif active_position['days_held'] >= active_position.get('target_dte', 30):
+                         profit = active_position['credit'] * 100 # Full profit
                          current_cash += profit
                          results['trades'].append({
                              "date": date.strftime('%Y-%m-%d'),
-                             "action": "CLOSE_PROFIT_50",
+                             "action": "CLOSE_EXPIRED_PROFIT",
                              "pnl": profit
                          })
                          active_position = None
@@ -182,55 +233,84 @@ class BacktestService:
                 trade_params = {}
                 
                 if strategy_type == "credit_spread": 
-                    # 1. Try S/R Algo
-                    put_signal = False
-                    call_signal = False
+                    # --- NEW LOGIC: Match Bot (POP & S/R) ---
+                    # 1. Try S/R levels with 55 <= POP <= 70
+                    # Note: key_levels contains both support and resistance
                     
-                    # Check Put Entry (Bullish) - Price near Support
-                    # Closest support below price
+                    # Separate Support/Resistance
                     supports = [k for k in key_levels if k['type'] == 'support' and k['price'] < price]
-                    supports.sort(key=lambda x: x['price'])
+                    resistances = [k for k in key_levels if k['type'] == 'resistance' and k['price'] > price]
+                    supports.sort(key=lambda x: x['price']) # Ascending
+                    resistances.sort(key=lambda x: x['price']) # Ascending
                     
-                    if supports:
-                         closest_support = supports[-1]
-                         dist = (price - closest_support['price']) / price
-                         if dist < 0.05 and rsi < 50: # Trigger condition similar to bot
-                             entry_signal = "put_credit_spread"
-                             trade_params['short_strike'] = closest_support['price']
-                             trade_params['method'] = 'Algo S/R'
+                    found_sr_entry = False
                     
-                    if not entry_signal:
-                        # Check Call Entry (Bearish)
-                        resistances = [k for k in key_levels if k['type'] == 'resistance' and k['price'] > price]
-                        resistances.sort(key=lambda x: x['price'])
-                        
-                        if resistances:
-                            closest_res = resistances[0]
-                            dist = (closest_res['price'] - price) / price
-                            if dist < 0.05 and rsi > 50:
-                                entry_signal = "call_credit_spread"
-                                trade_params['short_strike'] = closest_res['price']
-                                trade_params['method'] = 'Algo S/R'
-                                
-                    # 2. Fallback to Pseudo-Delta (Volatility) if no S/R triggered
-                    if not entry_signal:
-                         # Proxy for 30 Delta is approx 0.5 std dev move for 1 month?
-                         # Expected 1 SD move over 30 days = Price * Vol * sqrt(30/365)
+                    # Check Put Entry (Bullish) at Support
+                    # We want Highest Support < Price that has Good POP
+                    valid_supports = []
+                    for s in supports:
+                         pop = calculate_prob_it_expires_otm(price, s['price'], volatility, 30) * 100
+                         if 55 <= pop <= 70:
+                             valid_supports.append(s)
+                    
+                    if valid_supports:
+                         # Pick highest (closest to price)
+                         target = valid_supports[-1]
+                         entry_signal = "put_credit_spread"
+                         trade_params['short_strike'] = target['price']
+                         trade_params['method'] = f"Algo S/R (POP {int(calculate_prob_it_expires_otm(price, target['price'], volatility, 30)*100)}%)"
+                         found_sr_entry = True
+                    
+                    # Check Call Entry (Bearish) at Resistance if no Put Entry
+                    if not found_sr_entry:
+                        valid_resistances = []
+                        for r in resistances:
+                             pop = calculate_prob_it_expires_otm(price, r['price'], volatility, 30) * 100
+                             if 55 <= pop <= 70:
+                                 valid_resistances.append(r)
+                                 
+                        if valid_resistances:
+                             # Pick lowest (closest to price)
+                             target = valid_resistances[0]
+                             entry_signal = "call_credit_spread"
+                             trade_params['short_strike'] = target['price']
+                             trade_params['method'] = f"Algo S/R (POP {int(calculate_prob_it_expires_otm(price, target['price'], volatility, 30)*100)}%)"
+                             found_sr_entry = True
+
+                    # 2. Fallback to Delta 0.30 (approx 70% POP) if no S/R triggered
+                    if not found_sr_entry:
+                         # Proxy for 30 Delta / 70% POP
+                         # Z for 30% ITM (70% OTM) is approx -0.52 for Puts, +0.52 for Calls
                          move_1sd = price * volatility * math.sqrt(30/365)
-                         
-                         # 30 Delta is roughly 0.52 SD OTM? (Norm inv(0.3) ~= -0.52)
                          dist_30_delta = 0.52 * move_1sd
                          
-                         # We can enter random-ish or trend following? 
-                         # Let's say we follow RSI: < 40 Bullish, > 60 Bearish
-                         if rsi < 40:
+                         # Since we don't have directional bias from RSI anymore (Bot doesn't use it for direction),
+                         # How does Bot decide Bull/Bear in fallback?
+                         # credit_spreads.py checks "Support" logic first (Bull Put), then "Resistance" logic (Bear Call).
+                         # But in fallback... 
+                         # Actually checking credit_spreads.py:
+                         # It attempts Bull Put fallback IF no support found.
+                         # THEN attempts Bear Call fallback IF no resistance found.
+                         # This means it might try TWO orders?
+                         # The Backtester loop structure usually handles one active position.
+                         # Let's prioritize: Try Put Fallback.
+                         
+                         # Check Delta 0.30 Put
+                         # Strike = Price - Dist
+                         strike_put = price - dist_30_delta
+                         # Simplify: Just enter Put Fallback (Bullish Bias default)?
+                         # Or check Trend? Bot doesn't seem to check trend in fallback explicitly, just iterates.
+                         # Let's stick to Bullish Fallback for now or alternate?
+                         # Let's use RSI just for DIRECTION BIAS for Fallback (safe assumption)
+                         
+                         if rsi < 50:
                              entry_signal = "put_credit_spread"
-                             trade_params['short_strike'] = price - dist_30_delta
-                             trade_params['method'] = 'Algo Delta'
-                         elif rsi > 60:
+                             trade_params['short_strike'] = strike_put
+                             trade_params['method'] = 'Algo Delta (Fallback)'
+                         else:
                              entry_signal = "call_credit_spread"
                              trade_params['short_strike'] = price + dist_30_delta
-                             trade_params['method'] = 'Algo Delta'
+                             trade_params['method'] = 'Algo Delta (Fallback)'
                 
                 elif strategy_type == "long_call": # Legacy logic
                     if rsi < 30: entry_signal = "long_call"
@@ -273,6 +353,7 @@ class BacktestService:
                         'opened_at': date,
                         'days_held': 0,
                         'days_itm': 0,
+                        'close_on_next_day': False,
                         'target_dte': dte
                     }
                     
