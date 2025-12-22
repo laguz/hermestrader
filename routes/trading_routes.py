@@ -260,3 +260,25 @@ def get_bot_trades():
         return jsonify({'trades': trades})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/sync_positions', methods=['POST'])
+def sync_positions():
+    try:
+        service = Container.get_bot_service()
+        count = service.sync_open_positions()
+        return jsonify({'status': 'success', 'count': count, 'message': f"Synced {count} positions."})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/pnl')
+def pnl_page():
+    return render_template('pnl.html')
+
+@trading_bp.route('/api/pnl', methods=['GET'])
+def get_pnl_data():
+    try:
+        service = Container.get_bot_service()
+        data = service.get_open_positions_pnl()
+        return jsonify({'pnl_data': data})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

@@ -136,6 +136,209 @@ class BotService:
 
     # ... (logs, status methods unchanged) ...
 
+    def sync_open_positions(self):
+        """
+        Sync Tradier positions to DB with Lifecycle Tracking.
+        - Updates existing OPEN positions.
+        - Inserts new OPEN positions.
+        - Detects CLOSED positions (in DB but not in Tradier).
+        - Fetches Gain/Loss for CLOSED positions.
+        """
+        if self.db is None: return 0
+        try:
+            # 1. Fetch Current Tradier Positions
+            t_positions = self.tradier.get_positions()
+            if t_positions is None: t_positions = []
+            
+            # Key Tradier positions by Symbol + ID (if available, else index?)
+            # Tradier ID is unique per position leg.
+            t_pos_map = {str(p['id']): p for p in t_positions if 'id' in p}
+            # Fallback if ID missing? (Unlikely for Tradier, but robust check)
+            
+            # 2. Fetch DB 'OPEN' Positions
+            db_open = list(self.db['open_positions'].find({"status": "OPEN"}))
+            
+            synced_count = 0
+            now = datetime.now()
+            
+            # 3. Process Tradier Positions (Upsert OPEN)
+            for p in t_positions:
+                pid = str(p.get('id'))
+                # Prepare document
+                doc = p.copy()
+                doc['status'] = "OPEN"
+                doc['last_updated'] = now
+                doc['_id'] = pid # Use Tradier ID as MongoDB _id for uniqueness
+                
+                # Upsert
+                self.db['open_positions'].update_one(
+                    {"_id": pid},
+                    {"$set": doc},
+                    upsert=True
+                )
+                synced_count += 1
+                
+            # 4. Detect Closures (In DB OPEN but not in Tradier)
+            # Keys in DB matching current Tradier set are kept OPEN (already updated above).
+            # Keys NOT in Tradier set are CLOSED.
+            
+            t_ids = set(str(p.get('id')) for p in t_positions if 'id' in p)
+            
+            for db_p in db_open:
+                db_id = str(db_p.get('_id'))
+                if db_id not in t_ids:
+                    # MARK AS CLOSED
+                    self._log(f"Position Closed: {db_p.get('symbol')} ({db_id})")
+                    
+                    # Fetch Gain/Loss to get Exit details
+                    # We look for a recent closed position for this symbol/qty
+                    # Since we don't have the exact close transaction ID easily mapping to position ID from GainLoss endpoint,
+                    # We heuristic match: Symbol + Qty + Date ~= Now?
+                    # GainLoss endpoint returns 'close_date'.
+                    
+                    symbol = db_p.get('symbol')
+                    qty = db_p.get('quantity') # This is the position qty (e.g. -1 for short).
+                    # Close Qty in GainLoss is positive? Or matching?
+                    # Tradier GainLoss 'quantity' usually matches order size (positive).
+                    
+                    # Try to fetch recent gainloss for this symbol
+                    gl_data = self.tradier.get_gainloss(limit=20, symbol=symbol)
+                    
+                    # Find match: 
+                    # For a closed position, we expect an entry in gainloss with 'close_date' very recent.
+                    # And 'open_date' matching our position 'date_acquired'.
+                    
+                    matched_gl = None
+                    pos_acquired = db_p.get('date_acquired')
+                    # Tradier date format: 2025-12-15T18:45:55.340Z
+                    # GainLoss open_date: 2025-12-15T18:45:55.000Z (might vary slightly on millis)
+                    
+                    for gl in gl_data:
+                        # Simple Heuristic: Match Open Date (as best as possible)
+                        # Or just take the most recent for this symbol if confident?
+                        # Let's try Open Date prefix match (YYYY-MM-DDTHH:MM)
+                        gl_open = gl.get('open_date', '')
+                        if pos_acquired and gl_open and pos_acquired[:16] == gl_open[:16]:
+                            matched_gl = gl
+                            break
+                    
+                    exit_price = 0
+                    realized_pnl = 0
+                    exit_date = now
+                    
+                    if matched_gl:
+                        exit_price = matched_gl.get('close_price')
+                        realized_pnl = matched_gl.get('gain_loss')
+                        exit_date = matched_gl.get('close_date')
+                        self._log(f"Found GL match for {symbol}: P&L {realized_pnl}")
+                    else:
+                         self._log(f"Warning: No GL match found for {symbol}. using defaults.")
+                    
+                    # Update DB
+                    self.db['open_positions'].update_one(
+                        {"_id": db_id},
+                        {"$set": {
+                            "status": "CLOSED",
+                            "last_updated": now,
+                            "exit_price": exit_price,
+                            "realized_pnl": realized_pnl,
+                            "exit_date": exit_date
+                        }}
+                    )
+
+            return synced_count
+        except Exception as e:
+            self._log(f"Error syncing positions: {e}")
+            traceback.print_exc()
+            return 0
+
+    def get_open_positions_pnl(self):
+        """
+        Calculate P&L for tracked positions.
+        Returns: { 'open': [...], 'closed': [...] }
+        """
+        if self.db is None: return {'open': [], 'closed': []}
+        
+        all_positions = list(self.db['open_positions'].find())
+        if not all_positions: return {'open': [], 'closed': []}
+        
+        open_pos = [p for p in all_positions if p.get('status', 'OPEN') == 'OPEN']
+        closed_pos = [p for p in all_positions if p.get('status') == 'CLOSED']
+        
+        # --- PROCESS OPEN POSITIONS (Real-time P&L) ---
+        open_results = []
+        if open_pos:
+            symbols_to_fetch = list(set([p['symbol'] for p in open_pos]))
+            symbols_str = ",".join(symbols_to_fetch)
+            
+            quotes_map = {}
+            if symbols_str:
+                try:
+                    q_data = self.tradier.get_quote(symbols_str)
+                    if isinstance(q_data, dict): q_list = [q_data]
+                    elif isinstance(q_data, list): q_list = q_data
+                    else: q_list = []
+                    for q in q_list:
+                        if 'symbol' in q: quotes_map[q['symbol']] = q
+                except Exception as e:
+                    self._log(f"Error fetching quotes for P&L: {e}")
+            
+            for p in open_pos:
+                sym = p['symbol']
+                qty = p['quantity']
+                cost_basis = p.get('cost_basis', 0.0)
+                quote = quotes_map.get(sym, {})
+                current_price = quote.get('last') or quote.get('close') or 0.0
+                close_price = quote.get('prevclose') or quote.get('close') or 0.0
+                
+                is_option = any(c.isdigit() for c in sym)
+                multiplier = 100 if is_option else 1
+                market_value = current_price * qty * multiplier
+                pnl = market_value - cost_basis
+                divider = abs(cost_basis) if cost_basis != 0 else 1.0
+                pnl_pct = (pnl / divider) * 100
+                
+                open_results.append({
+                    "symbol": sym,
+                    "quantity": qty,
+                    "type": "Option" if is_option else "Stock",
+                    "entry_price": cost_basis / (qty * multiplier) if qty != 0 else 0,
+                    "current_price": current_price,
+                    "close_price": close_price,
+                    "cost_basis": cost_basis,
+                    "market_value": market_value,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "last_updated": p.get('last_updated')
+                })
+
+        # --- PROCESS CLOSED POSITIONS (Historical P&L) ---
+        closed_results = []
+        for p in closed_pos:
+            sym = p['symbol']
+            qty = p['quantity']
+            is_option = any(c.isdigit() for c in sym)
+            cost_basis = p.get('cost_basis', 0.0)
+            realized_pnl = p.get('realized_pnl', 0.0)
+            
+            # P&L % for closed
+            divider = abs(cost_basis) if cost_basis != 0 else 1.0
+            pnl_pct = (realized_pnl / divider) * 100
+            
+            closed_results.append({
+                "symbol": sym,
+                "quantity": qty,
+                "type": "Option" if is_option else "Stock",
+                "entry_price": p.get('cost_basis', 0) / (qty * (100 if is_option else 1)) if qty != 0 else 0,
+                "exit_price": p.get('exit_price', 0.0),
+                "cost_basis": cost_basis,
+                "pnl": realized_pnl,
+                "pnl_pct": pnl_pct,
+                "exit_date": p.get('exit_date')
+            })
+
+        return {'open': open_results, 'closed': closed_results}
+
     def get_trades(self, limit=50):
         """Fetch recent bot trades."""
         if self.db is None: return []

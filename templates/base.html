@@ -22,6 +22,10 @@
                     <span class="material-symbols-outlined">dashboard</span>
                     <span class="md-tab__label">Dashboard</span>
                 </a>
+                <a href="/pnl" class="md-tab {{ 'active' if request.path == '/pnl' else '' }}">
+                    <span class="material-symbols-outlined">paid</span>
+                    <span class="md-tab__label">P&L</span>
+                </a>
                 <a href="/manual_orders" class="md-tab {{ 'active' if request.path == '/manual_orders' else '' }}">
                     <span class="material-symbols-outlined">api</span>
                     <span class="md-tab__label">Manual Orders</span>
@@ -62,6 +66,7 @@
         </main>
     </div>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block scripts %}{% endblock %}
 </body>
 
 </html>

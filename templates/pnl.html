@@ -1,0 +1,325 @@
+{% extends "base.html" %}
+
+{% block title %}P&L Tracker{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1 class="h3 mb-0 text-white-800">P&L Tracker</h1>
+            <button id="sync-btn" class="btn btn-primary shadow-sm">
+                <i class="fas fa-sync"></i> Sync
+            </button>
+        </div>
+
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    </div>
+</div>
+
+<!-- Summary Cards -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card bg-dark text-white text-center p-3">
+            <h5>Total P&L</h5>
+            <h2 id="total-pnl" class="fw-bold">$0.00</h2>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-dark text-white text-center p-3">
+            <h5>Day P&L</h5>
+            <h2 id="day-pnl" class="text-muted">N/A</h2> <!-- Optional: Needs day change data -->
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-dark text-white text-center p-3">
+            <h5>Net Liquidity</h5>
+            <h2 id="net-liq" class="fw-bold">$0.00</h2>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row mb-4">
+    <div class="col-md-6 mb-3 mb-md-0">
+        <div class="card h-100">
+            <div class="card-header bg-dark text-white">Portfolio Allocation</div>
+            <div class="card-body">
+                <canvas id="allocationChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header bg-dark text-white">Realized P&L History</div>
+            <div class="card-body">
+                <canvas id="pnlHistoryChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Open Positions Table -->
+<div class="card mb-4">
+
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-striped mb-0 text-center" id="open-table">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Type</th>
+                        <th>Qty</th>
+                        <th>Entry Price</th>
+                        <th>Close Price</th>
+                        <th>Current Price</th>
+                        <th>Cost Basis</th>
+                        <th>Market Value</th>
+                        <th>P&L</th>
+                        <th>P&L %</th>
+                        <th>Last Updated</th>
+                    </tr>
+                </thead>
+                <tbody id="open-body">
+                    <tr>
+                        <td colspan="10">Loading...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const syncBtn = document.getElementById('sync-btn');
+
+        // Load P&L Data
+        async function loadPnL() {
+            try {
+                const res = await fetch('/api/pnl');
+                const data = await res.json();
+
+                if (data.error) {
+                    console.error("API Error:", data.error);
+                    return;
+                }
+                // data.pnl_data has structure { open: [...], closed: [...] }
+                const allPositions = [...data.pnl_data.open, ...data.pnl_data.closed];
+
+                // Sort by last updated / exit date desc
+                allPositions.sort((a, b) => {
+                    const dateA = new Date(a.exit_date || a.last_updated || 0);
+                    const dateB = new Date(b.exit_date || b.last_updated || 0);
+                    return dateB - dateA;
+                });
+
+                renderTable(allPositions);
+                updateSummary(data.pnl_data.open, data.pnl_data.closed);
+                renderCharts(data.pnl_data.open, data.pnl_data.closed);
+
+            } catch (err) {
+                console.error("Load PnL Error:", err);
+                document.getElementById('open-body').innerHTML = `<tr><td colspan="10" class="text-danger">Error loading data: ${err.message}</td></tr>`;
+            }
+        }
+
+        // ... Sync Logic ...
+
+        function formatCurrency(num) {
+            if (num === undefined || num === null || num === '') return '-';
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+        }
+
+        function formatPct(num) {
+            if (num === undefined || num === null) return '-';
+            return num.toFixed(2) + '%';
+        }
+
+        function renderTable(positions) {
+            const tbody = document.getElementById('open-body');
+            tbody.innerHTML = '';
+
+            if (!positions || positions.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10">No positions found.</td></tr>';
+                return;
+            }
+
+            positions.forEach(p => {
+                const tr = document.createElement('tr');
+                const pnlClass = p.pnl >= 0 ? 'text-success' : 'text-danger';
+
+                // Determine layout based on Open vs Closed
+                // Closed has 'exit_price', Open doesn't (or has Close Price as prev close which we overwrite/ignore now)
+
+                const isClosed = p.hasOwnProperty('exit_price');
+                const closePriceVal = isClosed ? p.exit_price : null;
+                const currentPriceVal = isClosed ? null : p.current_price;
+                const dateVal = isClosed ? p.exit_date : p.last_updated;
+                const dateLabel = dateVal ? new Date(dateVal).toLocaleDateString() + ' ' + new Date(dateVal).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A';
+
+                tr.innerHTML = `
+                <td class="fw-bold">${p.symbol}</td>
+                <td><span class="badge ${p.type === 'Stock' ? 'bg-primary' : 'bg-info'}">${p.type}</span></td>
+                <td>${p.quantity}</td>
+                <td>${formatCurrency(p.entry_price)}</td>
+                <td>${closePriceVal !== null ? formatCurrency(closePriceVal) : '-'}</td>
+                <td>${currentPriceVal !== null ? formatCurrency(currentPriceVal) : '-'}</td>
+                <td>${formatCurrency(p.cost_basis)}</td>
+                <td>${isClosed ? '-' : formatCurrency(p.market_value)}</td>
+                <td class="${pnlClass} fw-bold">${formatCurrency(p.pnl)}</td>
+                <td class="${pnlClass} fw-bold">${formatPct(p.pnl_pct)}</td>
+                <td class="text-muted small">${dateLabel}</td>
+            `;
+                tbody.appendChild(tr);
+            });
+        }
+
+
+
+        function updateSummary(openPos, closedPos) {
+            const openPnL = (openPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+            const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+            const totalPnL = openPnL + closedPnL;
+
+            const marketVal = (openPos || []).reduce((acc, p) => acc + (p.market_value || 0), 0);
+
+            const pnlEl = document.getElementById('total-pnl');
+            pnlEl.innerText = formatCurrency(totalPnL);
+            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
+
+            // Maybe update label to show realized vs unrealized tooltip?
+            document.getElementById('net-liq').innerText = formatCurrency(marketVal);
+
+            // Day P&L could be approximated by Closed P&L today? (Not robust but better than N/A)
+            // Leaving N/A for now unless explicit logic requested.
+        }
+
+        // Initial Load
+        loadPnL();
+    });
+
+    // --- Chart Logic ---
+    let allocationChart = null;
+    let historyChart = null;
+
+    function renderCharts(openPos, closedPos) {
+        // 1. Allocation Pie Chart (Open Positions by Market Value)
+        const allocCtx = document.getElementById('allocationChart').getContext('2d');
+
+        // Group by Symbol (or Underlying)
+        const exposure = {};
+        (openPos || []).forEach(p => {
+            // Strip options to underlying for better grouping?
+            // E.g. RIOT and RIOT2301... -> RIOT
+            let sym = p.symbol;
+            // Simple heuristic: if digit present, take prefix
+            const match = sym.match(/^([A-Z]+)/);
+            if (match) sym = match[1];
+
+            const val = Math.abs(p.market_value || 0); // Allocation is usually absolute exposure
+            exposure[sym] = (exposure[sym] || 0) + val;
+        });
+
+        const labels = Object.keys(exposure);
+        const data = Object.values(exposure);
+
+        if (allocationChart) allocationChart.destroy();
+
+        allocationChart = new Chart(allocCtx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: data,
+                    backgroundColor: [
+                        '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b',
+                        '#858796', '#5a5c69', '#2e59d9', '#17a673', '#2c9faf'
+                    ],
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom' },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                let label = context.label || '';
+                                if (label) label += ': ';
+                                label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // 2. History Line Chart (Cumulative Realized P&L)
+        const histCtx = document.getElementById('pnlHistoryChart').getContext('2d');
+
+        // Sort closed by date ascending
+        const sortedClosed = (closedPos || []).sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
+
+        // Create cumulative dataset
+        const historyLabels = [];
+        const historyData = [];
+        let runningTotal = 0;
+
+        sortedClosed.forEach(p => {
+            runningTotal += (p.pnl || 0);
+            const date = new Date(p.exit_date).toLocaleDateString();
+            // Consolidate same day? Chart.js handles it ok usually, but cleaner if aggregated.
+            // For now, raw points.
+            historyLabels.push(date);
+            historyData.push(runningTotal);
+        });
+
+        if (historyChart) historyChart.destroy();
+
+        historyChart = new Chart(histCtx, {
+            type: 'line',
+            data: {
+                labels: historyLabels,
+                datasets: [{
+                    label: 'Cumulative P&L',
+                    data: historyData,
+                    fill: true,
+                    borderColor: '#4e73df',
+                    backgroundColor: 'rgba(78, 115, 223, 0.1)',
+                    tension: 0.3, // Smooth curve
+                    pointRadius: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { display: true, grid: { display: false } },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: '#f8f9fc' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function (context) {
+                                return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+</script>
+{% endblock %}

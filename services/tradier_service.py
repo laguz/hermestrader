@@ -216,3 +216,35 @@ class TradierService:
         except requests.RequestException as e:
             print(f"Error fetching market clock: {e}")
             return None
+
+    def get_gainloss(self, page=1, limit=100, start_date=None, end_date=None, symbol=None):
+        """
+        Fetch realized gain/loss data from Tradier.
+        useful for tracking closed positions.
+        """
+        url = f"{self.endpoint}/accounts/{self.account_id}/gainloss"
+        params = {
+            'page': page,
+            'limit': limit,
+            'sortBy': 'close_date',
+            'sort': 'desc'
+        }
+        if start_date: params['start'] = start_date
+        if end_date: params['end'] = end_date
+        if symbol: params['symbol'] = symbol
+        
+        try:
+            response = requests.get(url, params=params, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            # Structure: {'gainloss': {'closed_position': [...]}}
+            gl_data = data.get('gainloss', {})
+            if gl_data is None: return []
+            
+            positions = gl_data.get('closed_position', [])
+            if isinstance(positions, dict):
+                return [positions]
+            return positions
+        except requests.RequestException as e:
+            print(f"Error fetching gainloss: {e}")
+            return []
