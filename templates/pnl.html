@@ -81,7 +81,7 @@
                 </thead>
                 <tbody id="open-body">
                     <tr>
-                        <td colspan="10">Loading...</td>
+                        <td colspan="10">Loading P&L Data...</td>
                     </tr>
                 </tbody>
             </table>
@@ -101,7 +101,8 @@
         // Load P&L Data
         async function loadPnL() {
             try {
-                const res = await fetch('/api/pnl');
+                // alert("Fetching P&L data...");
+                const res = await fetch(`/api/pnl?t=${Date.now()}`);
                 const data = await res.json();
 
                 if (data.error) {
@@ -118,6 +119,8 @@
                     return dateB - dateA;
                 });
 
+                alert(`Loaded ${allPositions.length} positions (Open: ${data.pnl_data.open.length}, Closed: ${data.pnl_data.closed.length})`);
+
                 renderTable(allPositions);
                 updateSummary(data.pnl_data.open, data.pnl_data.closed);
                 renderCharts(data.pnl_data.open, data.pnl_data.closed);
@@ -128,7 +131,29 @@
             }
         }
 
-        // ... Sync Logic ...
+        // Sync Button Logic
+        if (syncBtn) {
+            syncBtn.addEventListener('click', async () => {
+                syncBtn.disabled = true;
+                syncBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+                try {
+                    const res = await fetch('/api/bot/sync_positions', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'success') {
+                        // alert("Sync Success! Reloading table...");
+                        loadPnL();
+                    } else {
+                        alert("Sync Failed: " + (data.error || 'Unknown error'));
+                    }
+                } catch (err) {
+                    console.error(err);
+                    alert("Network Error");
+                } finally {
+                    syncBtn.disabled = false;
+                    syncBtn.innerHTML = '<i class="fas fa-sync"></i> Sync';
+                }
+            });
+        }
 
         function formatCurrency(num) {
             if (num === undefined || num === null || num === '') return '-';
@@ -208,6 +233,10 @@
     let historyChart = null;
 
     function renderCharts(openPos, closedPos) {
+        if (typeof Chart === 'undefined') {
+            console.warn("Chart.js not loaded.");
+            return;
+        }
         // 1. Allocation Pie Chart (Open Positions by Market Value)
         const allocCtx = document.getElementById('allocationChart').getContext('2d');
 

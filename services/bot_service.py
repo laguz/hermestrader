@@ -246,11 +246,134 @@ class BotService:
                         }}
                     )
 
+            # 5. Backfill History (Gain/Loss)
+            # Fetch last 100 closed positions to ensure we catch anything missed or pre-existing
+            self._backfill_history()
+
             return synced_count
         except Exception as e:
             self._log(f"Error syncing positions: {e}")
             traceback.print_exc()
             return 0
+
+    def _backfill_history(self):
+        """
+        Fetch historical closed positions from Gain/Loss and populate DB if missing.
+        """
+        try:
+            # Fetch recent history
+            history = self.tradier.get_gainloss(limit=50) 
+            if isinstance(history, dict) and 'error' in history:
+                self._log(f"Error backfilling history: {history['error']}")
+                return
+
+            if not history: return
+
+            count = 0
+            for item in history:
+                # Create a composite ID for deduplication
+                # GainLoss doesn't have a stable ID, so we use: Symbol + OpenDate + CloseDate + Qty
+                sym = item.get('symbol')
+                o_date = item.get('open_date')
+                c_date = item.get('close_date')
+                qty = item.get('quantity')
+                
+                # Generate determinist ID
+                # Simple string hash for now
+                import hashlib
+                raw_id = f"{sym}_{o_date}_{c_date}_{qty}"
+                doc_id = hashlib.md5(raw_id.encode()).hexdigest()
+                
+                # Check if exists
+                if self.db['open_positions'].find_one({"_id": doc_id}):
+                    continue
+                
+                # Also check if we have a "CLOSED" position that looks like this but has a different ID (e.g. Tradier position ID)
+                # If we synced it as open and then closed it, it has a Tradier Position ID.
+                # We want to avoid duplicating it as a "Historical" entry.
+                # Heuristic: Check if any CLOSED position matches Symbol + Exit Date + Qty?
+                # Matching strictly on timestamp might be hard due to slight diffs.
+                # But `item['close_date']` from GainLoss is usually the exact timestamp used.
+                
+                # If we implemented step 4 (Detect Closures) correctly, it updates 'exit_date' from gainloss.
+                # So we can search for that.
+                
+                exists = self.db['open_positions'].find_one({
+                    "symbol": sym,
+                    "status": "CLOSED",
+                    "exit_date": c_date
+                })
+                if exists: continue
+
+                # Insert new historical record
+                cost = item.get('cost', 0)
+                proceeds = item.get('proceeds', 0)
+                
+                # Infer type
+                is_option = any(c.isdigit() for c in sym)
+                multiplier = 100 if is_option else 1
+                
+                # Calculate entry/exit prices approx
+                # If Qty < 0 (Short?): Cost is Buy (Exit), Proceeds is Sell (Entry)
+                # If Qty > 0 (Long): Cost is Buy (Entry), Proceeds is Sell (Exit)
+                
+                # Data from debug: quantity: -1.0, cost: 103.0, proceeds: 80.0
+                # implied Short.
+                
+                entry_p = 0
+                exit_p = 0
+                
+                abs_qty = abs(qty) if qty != 0 else 1
+                
+                if qty < 0:
+                    # Short Position
+                    # Entry was Sell (Proceeds)
+                    entry_p = proceeds / (abs_qty * multiplier)
+                    # Exit was Buy (Cost)
+                    exit_p = cost / (abs_qty * multiplier)
+                else:
+                    # Long Position
+                    # Entry was Buy (Cost)
+                    entry_p = cost / (abs_qty * multiplier)
+                    # Exit was Sell (Proceeds)
+                    exit_p = proceeds / (abs_qty * multiplier)
+
+                doc = {
+                    "_id": doc_id,
+                    "symbol": sym,
+                    "quantity": qty,
+                    "status": "CLOSED",
+                    "date_acquired": o_date,
+                    "exit_date": c_date,
+                    "cost_basis": cost if qty > 0 else proceeds, # For P&L calc, usually we want entry cost
+                    # Actually, our P&L table expects 'cost_basis' to mean 'Initial Value'.
+                    # For Short, initial value is Proceeds (Credit).
+                    # For Long, initial value is Cost (Debit).
+                    
+                    "entry_price": entry_p,
+                    "exit_price": exit_p,
+                    "realized_pnl": item.get('gain_loss'),
+                    "last_updated": datetime.now(),
+                    "type": "Option" if is_option else "Stock"
+                }
+                
+                # Adjust cost_basis field for Short consistency if needed
+                if qty < 0:
+                     doc['cost_basis'] = -proceeds # Negative for credit?
+                     # In existing logic: "divider = abs(cost_basis)"
+                     # If we use negative for credit, it works.
+                else:
+                     doc['cost_basis'] = cost
+
+                self.db['open_positions'].insert_one(doc)
+                count += 1
+                
+            if count > 0:
+                self._log(f"Backfilled {count} historical positions.")
+
+        except Exception as e:
+            self._log(f"Backfill error: {e}")
+            traceback.print_exc()
 
     def get_open_positions_pnl(self):
         """

@@ -226,7 +226,7 @@ class TradierService:
         params = {
             'page': page,
             'limit': limit,
-            'sortBy': 'close_date',
+            'sortBy': 'closeDate',
             'sort': 'desc'
         }
         if start_date: params['start'] = start_date
