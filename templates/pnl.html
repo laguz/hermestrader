@@ -101,7 +101,6 @@
         // Load P&L Data
         async function loadPnL() {
             try {
-                // alert("Fetching P&L data...");
                 const res = await fetch(`/api/pnl?t=${Date.now()}`);
                 const data = await res.json();
 
@@ -118,8 +117,6 @@
                     const dateB = new Date(b.exit_date || b.last_updated || 0);
                     return dateB - dateA;
                 });
-
-                alert(`Loaded ${allPositions.length} positions (Open: ${data.pnl_data.open.length}, Closed: ${data.pnl_data.closed.length})`);
 
                 renderTable(allPositions);
                 updateSummary(data.pnl_data.open, data.pnl_data.closed);
@@ -140,7 +137,6 @@
                     const res = await fetch('/api/bot/sync_positions', { method: 'POST' });
                     const data = await res.json();
                     if (data.status === 'success') {
-                        // alert("Sync Success! Reloading table...");
                         loadPnL();
                     } else {
                         alert("Sync Failed: " + (data.error || 'Unknown error'));
