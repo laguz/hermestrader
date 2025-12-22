@@ -18,30 +18,50 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('pymongo').setLevel(logging.WARNING)
 logging.getLogger('matplotlib').setLevel(logging.WARNING)
 
+class Colors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
 def run_dry_run():
-    print("Starting Dry Run Bot...")
+    print(f"{Colors.HEADER}=================================================={Colors.ENDC}")
+    print(f"{Colors.HEADER}           LAGUZ TRADING BOT - DRY RUN           {Colors.ENDC}")
+    print(f"{Colors.HEADER}=================================================={Colors.ENDC}")
     
     # Initialize Services
     tradier = Container.get_tradier_service()
     db = Container.get_db()
     
-    # Initialize Strategy with Dry Run = True
-    strategy = CreditSpreadStrategy(tradier, db, dry_run=True)
-    
     # Test watchlist
-    watchlist = ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
+    watchlist = ['RIOT']
     
     print(f"Executing strategy on: {watchlist}")
-    print(f"Executing strategy on: {watchlist}")
     
-    print("\n--- Running Credit Spreads ---")
-    strategy.execute(watchlist)
+    # --- CREDIT SPREADS ---
+    print(f"\n{Colors.OKBLUE}--------------------------------------------------{Colors.ENDC}")
+    print(f"{Colors.OKBLUE}   STRATEGY 1: Credit Spreads (Bull Put / Bear Call)   {Colors.ENDC}")
+    print(f"{Colors.OKBLUE}--------------------------------------------------{Colors.ENDC}")
+    
+    cs_strategy = CreditSpreadStrategy(tradier, db, dry_run=True)
+    cs_strategy.execute(watchlist)
 
-    print("\n--- Running Wheel Strategy ---")
+    # --- WHEEL STRATEGY ---
+    print(f"\n{Colors.OKCYAN}--------------------------------------------------{Colors.ENDC}")
+    print(f"{Colors.OKCYAN}   STRATEGY 2: The Wheel (Cash Secured Puts)         {Colors.ENDC}")
+    print(f"{Colors.OKCYAN}--------------------------------------------------{Colors.ENDC}")
+    
     wheel_strategy = WheelStrategy(tradier, db, dry_run=True)
     wheel_strategy.execute(watchlist)
     
-    print("Dry Run Complete.")
+    print(f"\n{Colors.HEADER}=================================================={Colors.ENDC}")
+    print(f"{Colors.HEADER}           DRY RUN COMPLETE                       {Colors.ENDC}")
+    print(f"{Colors.HEADER}=================================================={Colors.ENDC}")
 
 if __name__ == "__main__":
     run_dry_run()

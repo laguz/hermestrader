@@ -69,7 +69,7 @@ class WheelStrategy:
         - EXISTING OPTION -> Do nothing (Management handles it)
         """
         # Analyze Symbol first to get latest price/data
-        analysis = analysis_service.analyze_symbol(symbol)
+        analysis = analysis_service.analyze_symbol(symbol, period='6m')
         if not analysis or 'error' in analysis:
             self._log(f"Skipping {symbol}: Analysis failed.")
             return
@@ -86,17 +86,9 @@ class WheelStrategy:
         short_puts = [o for o in options_held if o['option_type'] == 'put' and o['quantity'] < 0]
         short_calls = [o for o in options_held if o['option_type'] == 'call' and o['quantity'] < 0]
 
-        # Logic Flow
-        # If we have a Short Put, we are "In Play" (Waiting for assignment or expiry).
-        # We generally don't stack multiple puts for the same wheel cycle unless scaling (not specified).
-        # Assuming 1 active cycle per symbol.
+        # Logic Flow - Modified for Concurrent Execution (Strangle/Double Dip)
         
-        if short_puts:
-            self._log(f"ℹ️ {symbol}: Active Short Put detected. Monitoring.")
-            return
-
-        # If we have Shares, we look to Sell Calls (Covered).
-        # We can sell calls up to the number of Unencumbered Shares.
+        # 1. Evaluate Covered Calls (if we have shares)
         if shares_held >= 100:
             # Check how many calls we are already short
             open_call_contracts = abs(sum(o['quantity'] for o in short_calls))
@@ -108,14 +100,14 @@ class WheelStrategy:
                 self._log(f"🟢 {symbol}: {shares_held} Shares held. {free_shares} Unencumbered. Evaluating Call Sale...")
                 self._entry_sell_call(symbol, current_price, analysis)
             else:
-                self._log(f"ℹ️ {symbol}: All shares covered. ({shares_held} shares, {open_call_contracts} calls).")
-            return
-
-        # If No Shares and No Short Puts -> Sell Put (Cash Secured)
-        if not short_puts and not short_calls:
-            self._log(f"🟢 {symbol}: Clean State. Evaluating Put Sale...")
+                self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
+        
+        # 2. Evaluate Cash Secured Puts (regardless of shares/calls state)
+        if short_puts:
+            self._log(f"ℹ️ {symbol}: Active Short Put detected. Monitoring.")
+        else:
+            self._log(f"🟢 {symbol}: Clean Put State. Evaluating Put Sale...")
             self._entry_sell_put(symbol, current_price, analysis)
-            return
 
     # ------------------------------------------------------------------
     # ENTRY LOGIC
@@ -310,7 +302,7 @@ class WheelStrategy:
         """
         # Get Support Levels
         analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol)
+        analysis = analysis_service.analyze_symbol(symbol, period='6m')
         supports = analysis.get('put_entry_points', [])
         
         if supports:
@@ -350,7 +342,7 @@ class WheelStrategy:
         Execution: Buy to Close current. Sell to Open new at Next Strike ABOVE.
         """
         analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol)
+        analysis = analysis_service.analyze_symbol(symbol, period='6m')
         resistances = analysis.get('call_entry_points', [])
         
         if resistances:
