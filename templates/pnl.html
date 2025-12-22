@@ -202,7 +202,9 @@
             const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
             const totalPnL = openPnL + closedPnL;
 
-
+            const pnlEl = document.getElementById('total-pnl');
+            pnlEl.innerText = formatCurrency(totalPnL);
+            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
 
             // Day P&L could be approximated by Closed P&L today? (Not robust but better than N/A)
             // Leaving N/A for now unless explicit logic requested.
