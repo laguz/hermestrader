@@ -30,12 +30,7 @@
             <h2 id="day-pnl" class="text-muted">N/A</h2> <!-- Optional: Needs day change data -->
         </div>
     </div>
-    <div class="col-md-4">
-        <div class="card bg-dark text-white text-center p-3">
-            <h5>Net Liquidity</h5>
-            <h2 id="net-liq" class="fw-bold">$0.00</h2>
-        </div>
-    </div>
+
 </div>
 
 <!-- Charts Row -->
@@ -207,14 +202,7 @@
             const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
             const totalPnL = openPnL + closedPnL;
 
-            const marketVal = (openPos || []).reduce((acc, p) => acc + (p.market_value || 0), 0);
 
-            const pnlEl = document.getElementById('total-pnl');
-            pnlEl.innerText = formatCurrency(totalPnL);
-            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
-
-            // Maybe update label to show realized vs unrealized tooltip?
-            document.getElementById('net-liq').innerText = formatCurrency(marketVal);
 
             // Day P&L could be approximated by Closed P&L today? (Not robust but better than N/A)
             // Leaving N/A for now unless explicit logic requested.
