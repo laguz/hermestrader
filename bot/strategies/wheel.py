@@ -42,7 +42,7 @@ class WheelStrategy:
         
         # 1. Fetch Current Positions (The Source of Truth)
         try:
-            positions = self.tradier.get_positions()
+            positions = self.tradier.get_positions() or []
         except Exception as e:
             self._log(f"Error fetching positions: {e}")
             return self.execution_logs
@@ -77,14 +77,41 @@ class WheelStrategy:
         current_price = analysis.get('current_price')
         
         # Current Inventory for this symbol
-        symbol_positions = [p for p in positions if p.get('symbol') == symbol or p.get('underlying') == symbol]
+        # Tradier positions might lack 'underlying' field.
+        # Check: 1. symbol == target (Equity) OR 2. underlying == target OR 3. symbol starts with target + digit (Option)
+        import re
+        def is_match(pos, target):
+            if pos.get('symbol') == target: return True
+            if pos.get('underlying') == target: return True
+            # Check for Option Symbol: ROOT + Digits
+            # e.g. RIOT260130...
+            if pos.get('symbol', '').startswith(target):
+                 # Ensure next char is digit to avoid matching RIOTA
+                 suffix = pos.get('symbol')[len(target):]
+                 if suffix and suffix[0].isdigit():
+                     return True
+            return False
+
+        symbol_positions = [p for p in positions if is_match(p, symbol)]
         
         shares_held = sum(int(p['quantity']) for p in symbol_positions if p['symbol'] == symbol) # Equity
         options_held = [p for p in symbol_positions if p['symbol'] != symbol] # Options
 
         # Identify Open Bot Positions (Short Puts or Short Calls)
-        short_puts = [o for o in options_held if o['option_type'] == 'put' and o['quantity'] < 0]
-        short_calls = [o for o in options_held if o['option_type'] == 'call' and o['quantity'] < 0]
+        # Fix: Parse option_type from symbol if missing (Tradier raw positions might omit it)
+        import re
+        def get_op_type(pos):
+             if 'option_type' in pos: return pos['option_type']
+             # Parse OCC: ROOT...[P|C]...
+             # Simple check: Look for C or P followed by digits at end? 
+             # Robust: ROOTyyMMdd[C|P]...
+             m = re.search(r'[0-9]{6}([CP])[0-9]+', pos['symbol'])
+             if m:
+                 return 'call' if m.group(1) == 'C' else 'put'
+             return 'unknown'
+
+        short_puts = [o for o in options_held if get_op_type(o) == 'put' and o['quantity'] < 0]
+        short_calls = [o for o in options_held if get_op_type(o) == 'call' and o['quantity'] < 0]
 
         # Logic Flow - Modified for Concurrent Execution (Strangle/Double Dip)
         
@@ -531,6 +558,7 @@ class WheelStrategy:
         """
         try:
             positions = self.tradier.get_positions()
+            if positions is None: positions = []
         except:
              return []
         

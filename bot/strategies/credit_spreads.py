@@ -75,7 +75,7 @@ class CreditSpreadStrategy:
         for symbol in watchlist:
             try:
                 # 1. Safety Check: Do we already have a position?
-                positions = self.tradier.get_positions()
+                positions = self.tradier.get_positions() or []
                 has_position = any(p.get('symbol') == symbol or p.get('underlying') == symbol for p in positions)
                 
                 if has_position:
@@ -105,6 +105,8 @@ class CreditSpreadStrategy:
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
+        
+        return self.execution_logs
         
     def execute_spread(self, symbol, spread_type, min_credit=None):
         """
@@ -451,6 +453,7 @@ class CreditSpreadStrategy:
         """
         try:
             positions = self.tradier.get_positions()
+            if positions is None: positions = []
         except:
              return []
         

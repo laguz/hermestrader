@@ -37,7 +37,20 @@ class MoneyManager:
             return None
 
         # Filter for symbol
-        symbol_positions = [p for p in positions if p.get('symbol') == symbol or p.get('underlying') == symbol]
+        # Tradier positions might lack 'underlying' field.
+        # Check: 1. symbol == target (Equity) OR 2. underlying == target OR 3. symbol starts with target + digit (Option)
+        def is_match(pos, target):
+            if pos.get('symbol') == target: return True
+            if pos.get('underlying') == target: return True
+            # Check for Option Symbol: ROOT + Digits
+            if pos.get('symbol', '').startswith(target):
+                 # Ensure next char is digit
+                 suffix = pos.get('symbol')[len(target):]
+                 if suffix and suffix[0].isdigit():
+                     return True
+            return False
+
+        symbol_positions = [p for p in positions if is_match(p, symbol)]
         
         # --- Wheel Inventory ---
         # Rule: Unit = 1 Open Put + 1 Open Covered Call
@@ -50,8 +63,17 @@ class MoneyManager:
         # BUT the user updated logic to "Sell Put and Call at the same time" (Strangle).
         # So "Unit" here allows measuring how many "Strangles" (Full Wheel Units) we have running.
         
-        short_puts = [p for p in symbol_positions if p.get('option_type') == 'put' and p.get('quantity', 0) < 0]
-        short_calls = [p for p in symbol_positions if p.get('option_type') == 'call' and p.get('quantity', 0) < 0]
+        # Helper to parse option type
+        import re
+        def get_op_type(pos):
+             if 'option_type' in pos: return pos['option_type']
+             m = re.search(r'[0-9]{6}([CP])[0-9]+', pos['symbol'])
+             if m:
+                 return 'call' if m.group(1) == 'C' else 'put'
+             return 'unknown'
+        
+        short_puts = [p for p in symbol_positions if get_op_type(p) == 'put' and p.get('quantity', 0) < 0]
+        short_calls = [p for p in symbol_positions if get_op_type(p) == 'call' and p.get('quantity', 0) < 0]
         
         count_puts = sum(abs(p['quantity']) for p in short_puts)
         count_calls = sum(abs(p['quantity']) for p in short_calls)
