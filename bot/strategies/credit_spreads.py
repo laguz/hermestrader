@@ -106,7 +106,26 @@ class CreditSpreadStrategy:
                 self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
         
-        return self.execution_logs
+    def execute_spread(self, symbol, spread_type, min_credit=None):
+        """
+        Direct execution entry point for Money Manager.
+        """
+        from services.container import Container
+        analysis_service = Container.get_analysis_service()
+        analysis = analysis_service.analyze_symbol(symbol)
+        
+        if not analysis or 'error' in analysis:
+            self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
+            return
+
+        current_price = analysis.get('current_price')
+
+        if spread_type == 'put':
+            self._place_credit_put_spread(symbol, current_price, analysis, min_credit)
+        elif spread_type == 'call':
+            self._place_credit_call_spread(symbol, current_price, analysis, min_credit)
+        else:
+            self._log(f"Unknown spread type: {spread_type}")
 
     def manage_positions(self):
         """
@@ -391,17 +410,32 @@ class CreditSpreadStrategy:
         best = min(candidates, key=lambda x: abs(x[1] - 0.30))
         return best[0]['strike']
 
-    def _find_expiry(self, symbol, target_dte=30):
-        """Find expiry date closest to target DTE."""
+    def _find_expiry(self, symbol, target_dte=30, exclude_dates=None):
+        """
+        Find expiry date closest to target DTE.
+        exclude_dates: List of 'YYYY-MM-DD' strings to skip.
+        """
         expirations = self.tradier.get_option_expirations(symbol)
         if not expirations: return None
         
         from datetime import date, timedelta
         if isinstance(expirations[0], str):
             # Convert strings to dates
-            exp_dates = [datetime.strptime(e, "%Y-%m-%d").date() for e in expirations]
+            exp_dates = []
+            for e in expirations:
+                if exclude_dates and e in exclude_dates: continue
+                exp_dates.append(datetime.strptime(e, "%Y-%m-%d").date())
         else:
-            exp_dates = list(expirations)
+             # handle date objects if already parsed
+            exp_dates = []
+            for e in expirations:
+                 d_str = e.strftime("%Y-%m-%d")
+                 if exclude_dates and d_str in exclude_dates: continue
+                 exp_dates.append(e)
+
+        if not exp_dates:
+             self._log(f"No valid expirations found (Excluded: {exclude_dates})")
+             return None
             
         target_date = date.today() + timedelta(days=target_dte)
         
@@ -409,7 +443,52 @@ class CreditSpreadStrategy:
         closest_date = min(exp_dates, key=lambda d: abs(d - target_date))
         return closest_date.strftime("%Y-%m-%d")
 
-    def _place_credit_put_spread(self, symbol, current_price, analysis):
+    def _check_expiry_constraints(self, symbol, is_put):
+        """
+        Check existing positions to find 'full' expiration weeks.
+        Limit: Max 5 Spreads per Side per Expiry.
+        is_put: True checking Put Spreads, False checking Call Spreads.
+        """
+        try:
+            positions = self.tradier.get_positions()
+        except:
+             return []
+        
+        relevant = [p for p in positions if p.get('underlying') == symbol and p.get('option_type') == ('put' if is_put else 'call')]
+        if not relevant: return []
+
+        # Logic: 
+        # A Spread ~ roughly same quantity of short and long? 
+        # Or just count Short Legs?
+        # User constraint: "Max 5 Put Credit Spreads". 
+        # Assuming 1 Spread = 1 Short Leg unit.
+        
+        import re
+        expiry_counts = {}
+        
+        for p in relevant:
+            # We only care about Short positions to count "Risk Units"
+            if p['quantity'] >= 0: continue
+            
+            m = re.search(r'[A-Z]+(\d{6})[PC]', p['symbol'])
+            if m:
+                d_str = m.group(1)
+                dt = datetime.strptime(d_str, "%y%m%d")
+                exp_str = dt.strftime("%Y-%m-%d")
+                
+                qty = abs(p['quantity'])
+                expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+        
+        # Limit is 5
+        full_expiries = [exp for exp, count in expiry_counts.items() if count >= 5]
+        
+        if full_expiries:
+            side = "Put" if is_put else "Call"
+            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} for {side} Spreads (Max 5/week met).")
+            
+        return full_expiries
+
+    def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None):
         """
         Sell Put at Support, Buy Put lower (defined risk).
         """
@@ -430,7 +509,9 @@ class CreditSpreadStrategy:
             # Fallback to Delta 0.30-0.37
             self._log(f"🔹 No valid support levels found for {symbol}. Checking Delta 0.30-0.37...")
             
-            expiry = self._find_expiry(symbol, target_dte=30) # Use 30 DTE for delta usage
+            # Check Constraints (Is Put = True)
+            exclusions = self._check_expiry_constraints(symbol, is_put=True)
+            expiry = self._find_expiry(symbol, target_dte=30, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
@@ -450,7 +531,10 @@ class CreditSpreadStrategy:
              # Target = The closest support below price (Last item in sorted list < price)
              target_strike = valid_points[-1]['price']
              pop = valid_points[-1].get('pop', 'N/A')
-             expiry = self._find_expiry(symbol, target_dte=21)
+             
+             # Check Constraints
+             exclusions = self._check_expiry_constraints(symbol, is_put=True)
+             expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
 
         # Common Logic starts here
         if not 'expiry' in locals() or not expiry: # expiry might be set in if/else
@@ -482,9 +566,16 @@ class CreditSpreadStrategy:
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
         net_credit = round(short_price - long_price, 2)
         
-        if net_credit < 0.80:
-            self._log(f"Credit too low ({net_credit}) for risk.")
-            return
+        # Credit Threshold Check
+        threshold = min_credit if min_credit else 0.80
+        
+        if net_credit < threshold:
+            if min_credit:
+                self._log(f"⚠️ Market Credit ({net_credit}) < Target ({min_credit}). Placing Limit Order at Target.")
+                net_credit = min_credit
+            else:
+                self._log(f"Credit too low ({net_credit}) for risk (Min 0.80).")
+                return
 
         # Place Order
         legs = [
@@ -492,12 +583,8 @@ class CreditSpreadStrategy:
             {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': 1}
         ]
         
-        # Note: 'price' for credit spread is a Credit. Tradier handles this as positive price for 'credit' strategies usually? 
-        # Actually for multileg/combo, user specifies net price.
-        # Limit price is required.
-        
         if self.dry_run:
-            self._log(f"[DRY RUN] Simulating Bull Put Spread Order for {symbol}")
+            self._log(f"[DRY RUN] Simulating Bull Put Spread Order for {symbol} @ {net_credit}")
             response = {'id': 'mock_order_id', 'status': 'ok', 'partner_id': 'mock'}
         else:
             response = self.tradier.place_order(
@@ -522,7 +609,7 @@ class CreditSpreadStrategy:
             }
             self._record_trade(symbol, "Bull Put Spread", net_credit, response, legs_info)
 
-    def _place_credit_call_spread(self, symbol, current_price, analysis):
+    def _place_credit_call_spread(self, symbol, current_price, analysis, min_credit=None):
         # Similar logic for Bear Call Spread
         # Get Resistance Levels
         entry_points = analysis.get('call_entry_points', [])
@@ -543,7 +630,9 @@ class CreditSpreadStrategy:
              # Fallback to Delta 0.30-0.37
             self._log(f"🔹 No valid resistance levels found for {symbol}. Checking Delta 0.30-0.37...")
             
-            expiry = self._find_expiry(symbol, target_dte=30)
+            # Check Constraints (Is Put = False)
+            exclusions = self._check_expiry_constraints(symbol, is_put=False)
+            expiry = self._find_expiry(symbol, target_dte=30, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
@@ -559,7 +648,10 @@ class CreditSpreadStrategy:
             # Target = The closest resistance above price (First item in sorted list > price)
             target_strike = valid_points[0]['price']
             pop = valid_points[0].get('pop', 'N/A')
-            expiry = self._find_expiry(symbol, target_dte=21)
+            
+            # Check Constraints
+            exclusions = self._check_expiry_constraints(symbol, is_put=False)
+            expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
         
         # Common Logic
         if not 'expiry' in locals() or not expiry:
@@ -586,9 +678,16 @@ class CreditSpreadStrategy:
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
         net_credit = round(short_price - long_price, 2)
         
-        if net_credit < 0.80:
-             self._log(f"Credit too low ({net_credit}).")
-             return
+        # Credit Threshold Check
+        threshold = min_credit if min_credit else 0.80
+        
+        if net_credit < threshold:
+            if min_credit:
+                self._log(f"⚠️ Market Credit ({net_credit}) < Target ({min_credit}). Placing Limit Order at Target.")
+                net_credit = min_credit
+            else:
+                self._log(f"Credit too low ({net_credit}).")
+                return
 
         self._log(f"Placing Bear Call Spread on {symbol} Exp: {expiry} Short: {short_call_strike} Long: {long_call_strike}")
 
@@ -598,7 +697,7 @@ class CreditSpreadStrategy:
         ]
         
         if self.dry_run:
-            self._log(f"[DRY RUN] Simulating Bear Call Spread Order for {symbol}")
+            self._log(f"[DRY RUN] Simulating Bear Call Spread Order for {symbol} @ {net_credit}")
             response = {'id': 'mock_order_id', 'status': 'ok', 'partner_id': 'mock'}
         else:
             response = self.tradier.place_order(

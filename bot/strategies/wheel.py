@@ -109,18 +109,40 @@ class WheelStrategy:
             self._log(f"🟢 {symbol}: Clean Put State. Evaluating Put Sale...")
             self._entry_sell_put(symbol, current_price, analysis)
 
+    def execute_single_leg(self, symbol, leg_type, min_credit=None):
+        """
+        Direct execution entry point for Money Manager.
+        """
+        analysis_service = Container.get_analysis_service()
+        analysis = analysis_service.analyze_symbol(symbol, period='6m')
+        if not analysis or 'error' in analysis:
+            self._log(f"Skipping {symbol}: Analysis failed.")
+            return
+
+        current_price = analysis.get('current_price')
+        
+        if leg_type == 'put':
+            self._entry_sell_put(symbol, current_price, analysis, min_credit)
+        elif leg_type == 'call':
+            self._entry_sell_call(symbol, current_price, analysis, min_credit)
+        else:
+            self._log(f"Unknown leg type: {leg_type}")
+
     # ------------------------------------------------------------------
     # ENTRY LOGIC
     # ------------------------------------------------------------------
 
-    def _entry_sell_put(self, symbol, current_price, analysis):
+    def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None):
         """
         Priority A: Technical Entry (S/R Based)
         Priority B: Greeks Fallback (Delta Based)
         """
-        target_expiry = self._find_expiry(symbol, weeks=6)
+        # Check Constraints
+        exclusions = self._check_expiry_constraints(symbol)
+        
+        target_expiry = self._find_expiry(symbol, weeks=6, exclude_dates=exclusions)
         if not target_expiry:
-            self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks).")
+            self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
 
         target_strike = None
@@ -177,17 +199,20 @@ class WheelStrategy:
                 self._log(f"🎯 Found Delta Entry: Strike {target_strike} (Delta {delta})")
         
         if target_strike:
-            self._execute_order(symbol, target_expiry, target_strike, 'put', 'sell_to_open', target_reason)
+            self._execute_order(symbol, target_expiry, target_strike, 'put', 'sell_to_open', target_reason, min_credit)
         else:
             self._log(f"🚫 No valid Put Entry found for {symbol} (checked S/R & Delta).")
 
-    def _entry_sell_call(self, symbol, current_price, analysis):
+    def _entry_sell_call(self, symbol, current_price, analysis, min_credit=None):
         """
         Priority A: Technical (Resistance)
         Priority B: Greeks Fallback
         Pre-Condition: Free Shares check done in caller.
         """
-        target_expiry = self._find_expiry(symbol, weeks=6)
+        # Check Constraints
+        exclusions = self._check_expiry_constraints(symbol)
+        
+        target_expiry = self._find_expiry(symbol, weeks=6, exclude_dates=exclusions)
         if not target_expiry: return
 
         target_strike = None
@@ -426,7 +451,7 @@ class WheelStrategy:
     # HELPERS
     # ------------------------------------------------------------------
 
-    def _execute_order(self, symbol, expiry, strike, option_type, side, reason):
+    def _execute_order(self, symbol, expiry, strike, option_type, side, reason, min_credit=None):
         """Find the specific option symbol and execute single leg order."""
         chain = self.tradier.get_option_chains(symbol, expiry)
         option = next((o for o in chain if o['strike'] == strike and o['option_type'] == option_type), None)
@@ -438,7 +463,17 @@ class WheelStrategy:
         # Price Logic: Midpoint
         price = round((option['bid'] + option['ask']) / 2, 2)
         
-        self._log(f"🚀 Executing {side} {symbol} {strike} {option_type}. Exp: {expiry}. Reason: {reason}")
+        # Min Credit Check for Money Manager
+        if min_credit and price < min_credit:
+             # Option A: Place Limit Order AT min_credit (Aggressive for fill, but passive for market)
+             # Option B: Skip.
+             # Request implies "Trigger orders... Calculate Price = 0.30".
+             # This means we should set Limit Price = min_credit.
+             # BUT if market price is lower, it won't fill immediately. That's a valid ladder strategy.
+             self._log(f"⚠️ Market Price ({price}) < Target ({min_credit}). Placing Limit Order at Target.")
+             price = min_credit
+        
+        self._log(f"🚀 Executing {side} {symbol} {strike} {option_type}. Exp: {expiry}. Reason: {reason}. Price: {price}")
         
         if self.dry_run:
             self._log(f"[DRY RUN] Order: {side} {option['symbol']} @ {price}")
@@ -463,19 +498,69 @@ class WheelStrategy:
                 self._log(f"Order Success: {res.get('id', 'unknown')}")
                 self._record_trade(symbol, f"Wheel {side}", price, res)
 
-    def _find_expiry(self, symbol, weeks=6):
-        """Find available expiry closest to current date + weeks."""
+    def _find_expiry(self, symbol, weeks=6, exclude_dates=None):
+        """
+        Find available expiry closest to current date + weeks.
+        exclude_dates: List of string dates 'YYYY-MM-DD' to skip.
+        """
         from datetime import timedelta
         target_date = date.today() + timedelta(weeks=weeks)
         
         expirations = self.tradier.get_option_expirations(symbol)
         if not expirations: return None
         
-        exp_dates = [datetime.strptime(e, "%Y-%m-%d").date() for e in expirations]
+        exp_dates = []
+        for e in expirations:
+            if exclude_dates and e in exclude_dates:
+                 continue
+            exp_dates.append(datetime.strptime(e, "%Y-%m-%d").date())
+        
+        if not exp_dates:
+            self._log(f"No valid expirations found (Excluded: {exclude_dates})")
+            return None
         
         # Find closest
         best_date = min(exp_dates, key=lambda d: abs(d - target_date))
         return best_date.strftime("%Y-%m-%d")
+
+    def _check_expiry_constraints(self, symbol):
+        """
+        Check existing positions to find 'full' expiration weeks.
+        Limit: Max 1 Wheel Contract per Expiry.
+        Returns: List of 'YYYY-MM-DD' strings to exclude.
+        """
+        try:
+            positions = self.tradier.get_positions()
+        except:
+             return []
+        
+        # Filter for this symbol and options
+        relevant = [p for p in positions if p.get('underlying') == symbol and p.get('option_type') in ['put', 'call']]
+        
+        import re
+        expiry_counts = {}
+        
+        for p in relevant:
+            # Parse Expiry from Symbol: ROOTyyMMdd...
+            # This is robust for standard OCC symbols.
+            m = re.search(r'[A-Z]+(\d{6})[PC]', p['symbol'])
+            if m:
+                d_str = m.group(1) # yyMMdd
+                # Convert to YYYY-MM-DD
+                dt = datetime.strptime(d_str, "%y%m%d")
+                exp_str = dt.strftime("%Y-%m-%d")
+                
+                # Count contracts (abs quantity)
+                qty = abs(p['quantity'])
+                expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+        
+        # Find Expiries where count >= 1
+        full_expiries = [exp for exp, count in expiry_counts.items() if count >= 1]
+        
+        if full_expiries:
+            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max 1 contract/week met).")
+            
+        return full_expiries
 
     def _find_delta_strike(self, chain, option_type, min_d, max_d):
         """Find strike with delta in range."""
