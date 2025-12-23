@@ -54,7 +54,9 @@ class BotService:
                      "watchlist_credit_spreads": [], # Start empty, user adds via UI
                      "watchlist_wheel": [],         # Start empty, user adds via UI
                      "max_drawdown": 500,
-                     "max_position_size": 1000
+                     "max_position_size": 1000,
+                     "max_credit_spreads_per_symbol": 5,
+                     "max_total_credit_spreads": 10
                  }
              }
 

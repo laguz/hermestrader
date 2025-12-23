@@ -141,6 +141,26 @@ class TradierService:
             print(f"Error fetching positions: {e}")
             return []
 
+    def get_orders(self, page=1, limit=100):
+        """Fetch orders for the account."""
+        url = f"{self.endpoint}/accounts/{self.account_id}/orders"
+        params = {'page': page, 'limit': limit}
+        try:
+            response = requests.get(url, params=params, headers=self._get_headers())
+            response.raise_for_status()
+            data = response.json()
+            orders_data = data.get('orders', {})
+            if orders_data == 'null' or orders_data is None:
+                return []
+            
+            order_entry = orders_data.get('order', [])
+            if isinstance(order_entry, dict):
+                return [order_entry]
+            return order_entry
+        except requests.RequestException as e:
+            print(f"Error fetching orders: {e}")
+            return []
+
     def check_connection(self):
         """Simple check to verify connectivity/auth by fetching a quote for SPY."""
         quote = self.get_quote('SPY')

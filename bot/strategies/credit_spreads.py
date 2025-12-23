@@ -55,6 +55,35 @@ class CreditSpreadStrategy:
         except Exception as e:
             print(f"Log Error: {e}")
 
+    @staticmethod
+    def _get_underlying_from_pos(pos):
+        if pos.get('underlying'): return pos.get('underlying')
+        sym = pos.get('symbol', '')
+        # Option Symbol: ROOT...digits...
+        import re
+        if re.search(r'\d', sym):
+            m = re.match(r'^([A-Z]+)\d', sym)
+            if m: return m.group(1)
+        return sym # Fallback
+
+    @staticmethod
+    def _is_short_option(pos):
+        # Check Quantity
+        qty = pos.get('quantity', 0)
+        # Check Type
+        # Trust explicit type if valid
+        otype = pos.get('option_type')
+        if otype in ['put', 'call'] and qty < 0: return True
+        # If type missing (None), check quantity is neg and parse symbol
+        if qty >= 0: return False
+        
+        # Fallback: Parse Symbol for OCC format
+        import re
+        sym = pos.get('symbol', '')
+        if re.search(r'^[A-Z]+\d{6}[CP]\d+', sym):
+            return True
+        return False
+
     def execute(self, watchlist):
         """
         Execute the Credit Spread strategy on the watchlist.
@@ -74,13 +103,16 @@ class CreditSpreadStrategy:
 
         for symbol in watchlist:
             try:
-                # 1. Safety Check: Do we already have a position?
+                # 1. Check Global & Per-Symbol Limits
                 positions = self.tradier.get_positions() or []
-                has_position = any(p.get('symbol') == symbol or p.get('underlying') == symbol for p in positions)
+                orders = []
+                try:
+                    orders = self.tradier.get_orders() or []
+                except Exception as e:
+                    self._log(f"Error fetching orders for limit check: {e}")
                 
-                if has_position:
-                    self._log(f"⏭️  Skipping {symbol}: Existing position found.")
-                    continue
+                # Global Limits removed as per user request.
+                # Relying entirely on per-expiry constraints in _check_expiry_constraints logic later.
 
                 # 2. Analyze
                 if self.dry_run:
@@ -412,11 +444,14 @@ class CreditSpreadStrategy:
         best = min(candidates, key=lambda x: abs(x[1] - 0.30))
         return best[0]['strike']
 
-    def _find_expiry(self, symbol, target_dte=30, exclude_dates=None):
+    def _find_expiry(self, symbol, target_dte=21, min_dte=16, max_dte=22, exclude_dates=None):
         """
-        Find expiry date closest to target DTE.
-        exclude_dates: List of 'YYYY-MM-DD' strings to skip.
+        Find available expiry strictly within min_dte and max_dte.
+        Range: [min_dte, max_dte] inclusive.
+        User Constraint: Strict 3 Weeks (16-22 Days).
         """
+        if exclude_dates is None: exclude_dates = []
+        
         expirations = self.tradier.get_option_expirations(symbol)
         if not expirations: return None
         
@@ -439,55 +474,139 @@ class CreditSpreadStrategy:
              self._log(f"No valid expirations found (Excluded: {exclude_dates})")
              return None
             
-        target_date = date.today() + timedelta(days=target_dte)
+        today = date.today()
+        candidates = []
         
-        # Find closest
-        closest_date = min(exp_dates, key=lambda d: abs(d - target_date))
+        for d in exp_dates:
+            dte = (d - today).days
+            if min_dte <= dte <= max_dte:
+                candidates.append(d)
+                
+        if not candidates:
+            self._log(f"No expirations found in DTE range [{min_dte}, {max_dte}] for {symbol}.")
+            return None
+
+        # Sort by proximity to target_dte
+        # Target 21 days (3 weeks)
+        target_date = today + timedelta(days=target_dte)
+        closest_date = min(candidates, key=lambda d: abs((d - today).days - target_dte))
+        
         return closest_date.strftime("%Y-%m-%d")
 
     def _check_expiry_constraints(self, symbol, is_put):
         """
-        Check existing positions to find 'full' expiration weeks.
-        Limit: Max 5 Spreads per Side per Expiry.
-        is_put: True checking Put Spreads, False checking Call Spreads.
+        Check existing positions + orders to find 'full' expiration weeks.
+        Limit: Max 5 Spreads per Side per Expiry (Lots).
         """
         try:
-            positions = self.tradier.get_positions()
-            if positions is None: positions = []
+            positions = self.tradier.get_positions() or []
+            orders = self.tradier.get_orders() or []
         except:
              return []
         
-        relevant = [p for p in positions if p.get('underlying') == symbol and p.get('option_type') == ('put' if is_put else 'call')]
-        if not relevant: return []
-
-        # Logic: 
-        # A Spread ~ roughly same quantity of short and long? 
-        # Or just count Short Legs?
-        # User constraint: "Max 5 Put Credit Spreads". 
-        # Assuming 1 Spread = 1 Short Leg unit.
-        
-        import re
+        # 1. Tally Positions (Lots) by Expiry
         expiry_counts = {}
+        target_type_check = 'put' if is_put else 'call'
+
+        import re
         
-        for p in relevant:
-            # We only care about Short positions to count "Risk Units"
-            if p['quantity'] >= 0: continue
-            
-            m = re.search(r'[A-Z]+(\d{6})[PC]', p['symbol'])
+        # Helper to parse Date from Symbol: ROOTyyMMdd...
+        def get_expiry_str(sym):
+            m = re.search(r'[A-Z]+(\d{6})[PC]', sym)
             if m:
                 d_str = m.group(1)
-                dt = datetime.strptime(d_str, "%y%m%d")
-                exp_str = dt.strftime("%Y-%m-%d")
-                
-                qty = abs(p['quantity'])
+                try:
+                    dt = datetime.strptime(d_str, "%y%m%d")
+                    return dt.strftime("%Y-%m-%d")
+                except: pass
+            return None
+
+        for p in positions:
+            if not self._is_short_option(p): continue
+            
+            p_underlying = self._get_underlying_from_pos(p)
+            if p_underlying != symbol: continue
+            
+            # Check Side (Put vs Call)
+            # Use regex if option_type missing
+            p_type = p.get('option_type')
+            if not p_type:
+                 if 'P' in p['symbol'] and not 'C' in p['symbol']: p_type = 'put' # simplistic
+                 elif 'C' in p['symbol']: 
+                     # regex better
+                     if re.search(r'\d{6}P\d+', p['symbol']): p_type = 'put'
+                     elif re.search(r'\d{6}C\d+', p['symbol']): p_type = 'call'
+            
+            if p_type != target_type_check: continue
+
+            # Count Lots
+            qty = abs(p.get('quantity', 1))
+            
+            exp_str = get_expiry_str(p['symbol'])
+            if exp_str:
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
-        
-        # Limit is 5
+
+        # 2. Tally Orders (Pending)
+        pending_statuses = ['open', 'partially_filled', 'pending']
+        for o in orders:
+             if o.get('status') not in pending_statuses: continue
+             if o.get('symbol') != symbol: continue # Multileg symbol is underlying
+             
+             # Check class/legs to see if it matches our side (Put vs Call Spread)
+             # Simplistic: If multileg, look at legs?
+             legs = o.get('legs', [])
+             if not legs and o.get('class') == 'multileg':
+                 # If legs details missing (Tradier order summary might not have legs inline?)
+                 # Assume it adds to the count if we can't tell? 
+                 # Or skip to be safe?
+                 # Actually Tradier orders endpoint usually returns 'leg' list.
+                 # Let's assume we can see it.
+                 pass
+
+             # If we can parse legs:
+             # Look for Short Leg
+             is_target_spread = False
+             short_leg_sym = None
+             
+             # Check legs (list of dicts)
+             if isinstance(legs, list):
+                 for leg in legs:
+                     if leg.get('side') == 'sell_to_open':
+                         lsym = leg.get('option_symbol', '')
+                         # Check type
+                         if is_put:
+                             if re.search(r'\d{6}P\d+', lsym): 
+                                 is_target_spread = True
+                                 short_leg_sym = lsym
+                         else:
+                             if re.search(r'\d{6}C\d+', lsym): 
+                                 is_target_spread = True
+                                 short_leg_sym = lsym
+                                 
+             # Also check Option class orders
+             if o.get('class') == 'option' and o.get('side') == 'sell_to_open':
+                  lsym = o.get('option_symbol', '')
+                  # same check
+                  if is_put and re.search(r'\d{6}P\d+', lsym): 
+                         is_target_spread = True
+                         short_leg_sym = lsym
+                  elif not is_put and re.search(r'\d{6}C\d+', lsym):
+                         is_target_spread = True
+                         short_leg_sym = lsym
+             
+             if is_target_spread and short_leg_sym:
+                 qty = o.get('quantity', 0)
+                 exp_str = get_expiry_str(short_leg_sym)
+                 if exp_str:
+                     expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+
+        # Limit is 5 Lots per Expiry
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= 5]
         
         if full_expiries:
             side = "Put" if is_put else "Call"
-            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} for {side} Spreads (Max 5/week met).")
+            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} for {side} Spreads (Max 5 lots met).")
+            self._log(f"DEBUG: Expiry Counts ({side}): {expiry_counts}")
             
         return full_expiries
 
@@ -495,6 +614,14 @@ class CreditSpreadStrategy:
         """
         Sell Put at Support, Buy Put lower (defined risk).
         """
+        # 1. Early Constraint Check
+        exclusions = self._check_expiry_constraints(symbol, is_put=True)
+        # Note: target_dte here is just for sorting preference within the strict min/max range (16-22)
+        expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+        if not expiry: 
+             self._log(f"🔸 No expiry found for {symbol}")
+             return
+
         # Get Support Levels
         # AnalysisService returns flattened keys now
         entry_points = analysis.get('put_entry_points', [])
@@ -535,9 +662,11 @@ class CreditSpreadStrategy:
              target_strike = valid_points[-1]['price']
              pop = valid_points[-1].get('pop', 'N/A')
              
-             # Check Constraints
-             exclusions = self._check_expiry_constraints(symbol, is_put=True)
-             expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+             # Target = The closest support below price (Last item in sorted list < price)
+             target_strike = valid_points[-1]['price']
+             pop = valid_points[-1].get('pop', 'N/A')
+             
+             # Expiry already found above
 
         # Common Logic starts here
         if not 'expiry' in locals() or not expiry: # expiry might be set in if/else
@@ -595,7 +724,7 @@ class CreditSpreadStrategy:
                 symbol=symbol,
                 side='sell', # Not used for multileg but required arg
                 quantity=1,
-                order_type='limit',
+                order_type='credit',
                 duration='day',
                 price=net_credit,
                 order_class='multileg',
@@ -614,6 +743,13 @@ class CreditSpreadStrategy:
 
     def _place_credit_call_spread(self, symbol, current_price, analysis, min_credit=None):
         # Similar logic for Bear Call Spread
+        # 1. Early Constraint Check
+        exclusions = self._check_expiry_constraints(symbol, is_put=False)
+        expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+        if not expiry:
+             self._log(f"🔸 No expiry found for {symbol}")
+             return
+
         # Get Resistance Levels
         entry_points = analysis.get('call_entry_points', [])
         if not entry_points: return
@@ -652,9 +788,11 @@ class CreditSpreadStrategy:
             target_strike = valid_points[0]['price']
             pop = valid_points[0].get('pop', 'N/A')
             
-            # Check Constraints
-            exclusions = self._check_expiry_constraints(symbol, is_put=False)
-            expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+            # Target = The closest resistance above price (First item in sorted list > price)
+            target_strike = valid_points[0]['price']
+            pop = valid_points[0].get('pop', 'N/A')
+            
+            # Expiry already found above
         
         # Common Logic
         if not 'expiry' in locals() or not expiry:
@@ -708,7 +846,7 @@ class CreditSpreadStrategy:
                 symbol=symbol,
                 side='sell',
                 quantity=1,
-                order_type='limit',
+                order_type='credit',
                 duration='day',
                 price=net_credit,
                 order_class='multileg',

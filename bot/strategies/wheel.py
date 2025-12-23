@@ -167,7 +167,7 @@ class WheelStrategy:
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol)
         
-        target_expiry = self._find_expiry(symbol, weeks=6, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=41, max_dte=48, exclude_dates=exclusions)
         if not target_expiry:
             self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
@@ -239,7 +239,7 @@ class WheelStrategy:
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol)
         
-        target_expiry = self._find_expiry(symbol, weeks=6, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=41, max_dte=48, exclude_dates=exclusions)
         if not target_expiry: return
 
         target_strike = None
@@ -365,7 +365,7 @@ class WheelStrategy:
                 return
 
         # OK to Roll
-        new_expiry = self._find_expiry(symbol, weeks=6)
+        new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
         if not new_expiry: return
         
         # New Strike: Next Available Below Current
@@ -405,7 +405,7 @@ class WheelStrategy:
                  return
 
         # OK to Roll
-        new_expiry = self._find_expiry(symbol, weeks=6)
+        new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
         if not new_expiry: return
         
         chain = self.tradier.get_option_chains(symbol, new_expiry)
@@ -462,7 +462,7 @@ class WheelStrategy:
                 symbol=symbol,
                 side='buy', # 'buy' the spread (paying debit) - check Tradier specific nuance for rolls
                 quantity=1,
-                order_type='limit',
+                order_type='debit',
                 duration='day',
                 price=self.ROLL_MAX_DEBIT, 
                 order_class='multileg',
@@ -525,13 +525,15 @@ class WheelStrategy:
                 self._log(f"Order Success: {res.get('id', 'unknown')}")
                 self._record_trade(symbol, f"Wheel {side}", price, res)
 
-    def _find_expiry(self, symbol, weeks=6, exclude_dates=None):
+    def _find_expiry(self, symbol, target_dte=42, min_dte=None, max_dte=None, exclude_dates=None, method='closest'):
         """
-        Find available expiry closest to current date + weeks.
-        exclude_dates: List of string dates 'YYYY-MM-DD' to skip.
+        Find available expiry.
+        target_dte: Target days from today (default 42).
+        min_dte, max_dte: Optional range filter (inclusive).
+        exclude_dates: List of 'YYYY-MM-DD' strings to skip.
+        method: 'closest' (default) or 'min' (pick lowest DTE in range).
         """
         from datetime import timedelta
-        target_date = date.today() + timedelta(weeks=weeks)
         
         expirations = self.tradier.get_option_expirations(symbol)
         if not expirations: return None
@@ -546,8 +548,31 @@ class WheelStrategy:
             self._log(f"No valid expirations found (Excluded: {exclude_dates})")
             return None
         
-        # Find closest
-        best_date = min(exp_dates, key=lambda d: abs(d - target_date))
+        today = date.today()
+        candidates = []
+        
+        # 1. Filter by Range if specified
+        for d in exp_dates:
+            if min_dte is not None and max_dte is not None:
+                dte = (d - today).days
+                if not (min_dte <= dte <= max_dte):
+                    continue
+            candidates.append(d)
+            
+        if not candidates:
+            rng = f"[{min_dte}, {max_dte}]" if min_dte else "Any"
+            self._log(f"No expirations found in DTE range {rng} for {symbol}.")
+            return None
+
+        # 2. Select
+        if method == 'min':
+            # Pick the lowest DTE available
+            best_date = min(candidates)
+        else:
+            # Pick closest to Target
+            target_date = today + timedelta(days=target_dte)
+            best_date = min(candidates, key=lambda d: abs((d - today).days - target_dte))
+            
         return best_date.strftime("%Y-%m-%d")
 
     def _check_expiry_constraints(self, symbol):
