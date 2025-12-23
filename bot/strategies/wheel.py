@@ -293,83 +293,102 @@ class WheelStrategy:
     def _manage_positions(self, positions):
         """
         Scan open options.
-        Trigger: ITM AND DTE < 7 Days.
+        Trigger: ITM AND DTE <= 7 Days.
         """
-        # Filter for Short Puts and Short Calls
-        short_options = [p for p in positions if p.get('option_type') in ['put', 'call'] and p.get('quantity', 0) < 0]
+        import re
 
-        for position in short_options:
-            symbol = position['underlying']
-            option_symbol = position['symbol']
-            strike = position['strike'] # Tradier positions should have strike/expiry parsed or available
+        for position in positions:
+            # 1. Enrich Data if missing (Tradier raw data might lack keys)
+            symbol = position.get('symbol', '')
+            underlying = position.get('underlying')
+            option_type = position.get('option_type')
+            strike = position.get('strike')
             
-            # Need to parse Expiry to check DTE
-            # Tradier 'date' field in position? Or parse symbol if not available.
-            # Assuming 'expiry' field is not directly in position object, parsing symbol is safer.
-            # Format: ROOTyyMMdd[P|C]...
-            import re
-            match = re.search(r'[A-Z]+(\d{6})[PC]', option_symbol)
-            if not match: continue
+            # Parsing OCC Symbol: e.g., RIOT251226P00015000
+            # Group 1: Underlying (letters)
+            # Group 2: Date (6 digits)
+            # Group 3: Type (C/P)
+            # Group 4: Strike (8 digits, implied decimal at 3 from right)
+            match = re.match(r'^([A-Z]+)(\d{6})([CP])(\d{8})$', symbol)
             
-            d_str = match.group(1)
-            expiry_date = datetime.strptime(d_str, "%y%m%d").date()
+            if match:
+                if not underlying: underlying = match.group(1)
+                if not option_type: option_type = 'call' if match.group(3) == 'C' else 'put'
+                if not strike: 
+                    # Strike is last 8 digits, divide by 1000
+                    strike = float(match.group(4)) / 1000.0
+                
+                # We can also get expiry date from group 2
+                d_str = match.group(2)
+                expiry_date = datetime.strptime(d_str, "%y%m%d").date()
+            else:
+                # Not a standard option symbol or cannot parse
+                if not (underlying and option_type and strike):
+                    continue
+                # Try to get expiry logic from existing symbol parsing if possible
+                # Retain old parsing for partial matches if needed? 
+                # Better to rely on the robust regex above.
+                pass
+
+            # Filter for Short Options (Short Puts or Short Calls)
+            if position.get('quantity', 0) >= 0:
+                continue
+            if option_type not in ['put', 'call']:
+                continue
+
+            # Calculate DTE if we parsed expiry
+            if 'expiry_date' not in locals():
+                 # Handle case where we didn't parse it above (rare if match fails)
+                 # Try parsing again just for date if regex missed?
+                 m2 = re.search(r'[A-Z]+(\d{6})[PC]', symbol)
+                 if m2:
+                     expiry_date = datetime.strptime(m2.group(1), "%y%m%d").date()
+                 else:
+                     continue
+            
             today = date.today()
             dte = (expiry_date - today).days
 
             # 1. Check DTE Trigger
-            if dte >= self.ROLL_TRIGGER_DTE:
-                continue # No roll yet
+            if dte > self.ROLL_TRIGGER_DTE: # STRICTLY > 7 means 8+. So 7 matches trigger.
+                continue 
 
             # 2. Check ITM Status
-            # Need current underlying price
             try:
-                quote = self.tradier.get_quote(symbol)
+                quote = self.tradier.get_quote(underlying)
                 current_price = quote['last']
             except:
                 continue
 
             is_itm = False
-            if position['option_type'] == 'put':
+            if option_type == 'put':
                 if current_price < strike: is_itm = True
             else:
                 if current_price > strike: is_itm = True
 
             if not is_itm:
-                continue # Expire worthless logic (or let it ride)
+                continue 
 
             # --- ROLL TRIGGERED ---
-            self._log(f"⚠️ Rolling Triggered for {option_symbol}. ITM & DTE {dte} < 7.")
+            self._log(f"⚠️ Rolling Triggered for {symbol}. ITM & DTE {dte} <= 7.")
             
             # 3. Execution - Roll Logic
-            if position['option_type'] == 'put':
-                self._roll_put(symbol, position, current_price, strike)
+            if option_type == 'put':
+                self._roll_put(underlying, position, current_price, strike)
             else:
-                self._roll_call(symbol, position, current_price, strike)
+                self._roll_call(underlying, position, current_price, strike)
 
 
     def _roll_put(self, symbol, position, current_price, current_strike):
         """
-        Safety: Only roll if Current Strike > Lowest Support Level.
-        Execution: Buy to Close current. Sell to Open new at Next Strike BELOW.
+        Roll Put: Roll Out in time and Down in strike (Defensive).
+        Logic: Find next available strike LOWER than current strike.
         """
-        # Get Support Levels
-        analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol, period='6m')
-        supports = analysis.get('put_entry_points', [])
-        
-        if supports:
-            lowest_support = min(s['price'] for s in supports)
-            # Safety Check
-            if current_strike <= lowest_support:
-                self._log(f"🛑 Roll Aborted: Floor Broken ({current_strike} <= Lowest Support {lowest_support}). Taking Assignment.")
-                return
-
-        # OK to Roll
+        # New Expiry: 6-9 Weeks out (standard wheel roll)
         new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
         if not new_expiry: return
         
         # New Strike: Next Available Below Current
-        # Get chain for new expiry to find strikes
         chain = self.tradier.get_option_chains(symbol, new_expiry)
         if not chain: return
         
@@ -379,51 +398,59 @@ class WheelStrategy:
         
         # Find strikes lower than current
         candidates = [p for p in puts if p['strike'] < current_strike]
-        if not candidates:
-             self._log("❌ No lower strikes available for roll.")
-             return
-             
-        # Pick the one immediately below (Next Available)
-        new_leg = candidates[-1] # Largest strike that is still < current
         
-        self._execute_roll(symbol, position, new_leg, "Roll Down & Out (Floor Safe)")
+        if not candidates:
+             # Fallback: If no lower strike (e.g. we are at lowest), 
+             # maybe roll to SAME strike? Or abort?
+             # For now, let's try same strike as last resort if no lower, 
+             # but "Roll Down" usually implies strictly lower.
+             # If we can't roll down, we might just roll out at same strike (more credit).
+             # Let's check if Same strike exists.
+             same_strike = next((p for p in puts if p['strike'] == current_strike), None)
+             if same_strike:
+                 new_leg = same_strike
+                 self._log(f"⚠️ No lower strike found. Rolling Out to SAME strike {current_strike}.")
+             else:
+                 self._log("❌ No valid strikes available for roll.")
+                 return
+        else:
+            # Pick the largest strike that is < current (The one immediately below)
+            new_leg = candidates[-1] 
+        
+        self._execute_roll(symbol, position, new_leg, "Roll Down & Out (Mechanistic)")
 
     def _roll_call(self, symbol, position, current_price, current_strike):
         """
-        Safety: Only roll if Current Strike < Highest Resistance Level.
-        Execution: Buy to Close current. Sell to Open new at Next Strike ABOVE.
+        Roll Call: Roll Out in time and Up in strike (Defensive).
+        Logic: Find next available strike HIGHER than current strike.
         """
-        analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol, period='6m')
-        resistances = analysis.get('call_entry_points', [])
-        
-        if resistances:
-            highest_res = max(r['price'] for r in resistances)
-            # Safety Check
-            if current_strike >= highest_res:
-                 self._log(f"🛑 Roll Aborted: Ceiling Broken ({current_strike} >= Highest Res {highest_res}). Shares called away.")
-                 return
-
-        # OK to Roll
+        # New Expiry
         new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
         if not new_expiry: return
         
         chain = self.tradier.get_option_chains(symbol, new_expiry)
-        if not chain: return # Should log error
+        if not chain: return 
         
         calls = [o for o in chain if o['option_type'] == 'call']
         calls.sort(key=lambda x: x['strike'])
         
         # Find strikes higher than current
         candidates = [c for c in calls if c['strike'] > current_strike]
+        
         if not candidates:
-             self._log("❌ No higher strikes available for roll.")
-             return
+             # Fallback to same strike if no higher?
+             same_strike = next((c for c in calls if c['strike'] == current_strike), None)
+             if same_strike:
+                 new_leg = same_strike
+                 self._log(f"⚠️ No higher strike found. Rolling Out to SAME strike {current_strike}.")
+             else:
+                 self._log("❌ No higher strikes available for roll.")
+                 return
+        else:
+            # Pick the lowest strike that is > current (The one immediately above)
+            new_leg = candidates[0]
         
-        # Pick the one immediately above
-        new_leg = candidates[0]
-        
-        self._execute_roll(symbol, position, new_leg, "Roll Up & Out (Ceiling Safe)")
+        self._execute_roll(symbol, position, new_leg, "Roll Up & Out (Mechanistic)")
 
     def _execute_roll(self, symbol, old_position, new_leg_option, reason):
         """
