@@ -46,14 +46,14 @@ def test_strict_dte():
     
     set_mock_chains([d35, d42, d49, d63])
     
-    # Case 3: Wheel Opening (41-48 Days)
+    # Case 3: Wheel Opening (37-43 Days)
     # Available: 35, 42, 49, 63
-    # 35 < 41 -> Reject
-    # 42 in [41, 48] -> Accept
-    # 49 > 48 -> Reject
+    # 35 < 37 -> Reject
+    # 42 in [37, 43] -> Accept
+    # 49 > 43 -> Reject
     
-    res_open = ws._find_expiry("TEST", target_dte=42, min_dte=41, max_dte=48, method='closest')
-    print(f"Wheel Open [41-48]. Available: [35, 42, 49] -> Selected: {res_open}")
+    res_open = ws._find_expiry("TEST", target_dte=42, min_dte=37, max_dte=43, method='closest')
+    print(f"Wheel Open [37-43]. Available: [35, 42, 49] -> Selected: {res_open}")
     assert res_open == d42, f"Should select 42d. Got {res_open}"
     
     # Case 4: Wheel Roll (42-63 Days, Min)

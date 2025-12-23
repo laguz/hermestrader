@@ -167,7 +167,7 @@ class WheelStrategy:
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol)
         
-        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=41, max_dte=48, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
         if not target_expiry:
             self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
@@ -239,7 +239,7 @@ class WheelStrategy:
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol)
         
-        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=41, max_dte=48, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
         if not target_expiry: return
 
         target_strike = None
