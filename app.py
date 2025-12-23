@@ -36,9 +36,16 @@ def handle_app_error(error):
     response.status_code = error.status_code
     return response
 
+from werkzeug.exceptions import HTTPException
+from flask import request
+
 @app.errorhandler(Exception)
 def handle_generic_error(error):
-    app.logger.error(f"Unhandled Exception: {error}", exc_info=True)
+    # Pass through HTTP errors (like 404) to let Flask handle them normally
+    if isinstance(error, HTTPException):
+        return error
+
+    app.logger.error(f"Unhandled Exception at {request.url}: {error}", exc_info=True)
     return jsonify({"error": "An internal error occurred"}), 500
 
 if __name__ == '__main__':

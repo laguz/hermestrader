@@ -238,7 +238,7 @@ def run_dry_run():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-@trading_bp.route('/bot_performance')
+@trading_bp.route('/bot_performance', strict_slashes=False)
 def bot_performance():
     """Render the bot performance page."""
     return render_template('bot_performance.html')
