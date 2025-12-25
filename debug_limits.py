@@ -9,10 +9,21 @@ def debug_limits():
     tradier = Container.get_tradier_service()
     
     # We need to simulate the strategy context
-    # Passing None for DB as we just want to test the checker logic (mostly)
-    # But wait, does it rely on DB? Only for logging.
-    strategy = CreditSpreadStrategy(tradier, None, dry_run=False)
+    db = Container.get_db()
+    strategy = CreditSpreadStrategy(tradier, db, dry_run=False)
     
+    # Fetch Config
+    config = {}
+    if db is not None:
+        bot_config = db.bot_config.find_one({"_id": "main_bot"}) or {}
+        config = bot_config.get('settings', {})
+    
+    max_c_spreads = int(config.get('max_credit_spreads_per_symbol', 5))
+    max_wheel = int(config.get('max_wheel_contracts_per_symbol', 1))
+    
+    print(f"DEBUG: Max Credit Spreads = {max_c_spreads}")
+    print(f"DEBUG: Max Wheel Contracts = {max_wheel}")
+
     # Get positions and orders to print summary first
     print("Fetching LIVE Data...")
     positions = tradier.get_positions() or []
@@ -27,34 +38,35 @@ def debug_limits():
         u = strategy._get_underlying_from_pos(p)
         if u: underlyings.add(u)
     for o in orders:
-        # Order symbol is underlying for multileg
-        underlyings.add(o.get('symbol'))
+        underlyings.add(o.get('symbol'))  # Symbol is underlying for multileg
         
     print(f"Underlyings found: {underlyings}")
     
+    # Instantiate Wheel Strategy too
+    from bot.strategies.wheel import WheelStrategy
+    wheel_strategy = WheelStrategy(tradier, db, dry_run=False)
+
     # Run check for each
     for symbol in underlyings:
         print(f"\n🔎 Checking Limits for {symbol}...")
         
-        # Check Puts
-        print(f"  [PUTS]")
-        # We invoke the internal method. 
-        # Note: _check_expiry_constraints is what calculates the counts.
-        # It calls get_positions/orders internally. 
-        # That's inefficient if we call it in loop here, but mirrors the bot.
+        # --- CREDIT SPREADS ---
+        print(f"  [CREDIT SPREADS]")
+        full_puts = strategy._check_expiry_constraints(symbol, is_put=True, max_lots=max_c_spreads)
+        full_calls = strategy._check_expiry_constraints(symbol, is_put=False, max_lots=max_c_spreads)
         
-        # We'll temporarily override strategy.tradier.get_positions/orders to use cached 
-        # or just let it fetch (Sandbox is fast). Let's let it fetch.
-        
-        # We need to hook into the logic that produces the LOGS about counts.
-        # Since _check_expiry_constraints returns 'full_expiries', we can see if it returns anything.
-        
-        full_puts = strategy._check_expiry_constraints(symbol, is_put=True)
-        print(f"    Full Put Expiries (>= 5 lots): {full_puts}")
-        
-        print(f"  [CALLS]")
-        full_calls = strategy._check_expiry_constraints(symbol, is_put=False)
-        print(f"    Full Call Expiries (>= 5 lots): {full_calls}")
+        if full_puts: print(f"    ⚠️ Put Spread Expiries Full (>= {max_c_spreads}): {full_puts}")
+        else: print(f"    ✅ Put Spreads OK (< {max_c_spreads})")
+            
+        if full_calls: print(f"    ⚠️ Call Spread Expiries Full (>= {max_c_spreads}): {full_calls}")
+        else: print(f"    ✅ Call Spreads OK (< {max_c_spreads})")
+
+        # --- WHEEL STRATEGY ---
+        print(f"  [WHEEL STRATEGY]")
+        # Wheel check_expiry_constraints returns list of full expiries
+        full_wheel = wheel_strategy._check_expiry_constraints(symbol, max_lots=max_wheel)
+        if full_wheel: print(f"    ⚠️ Wheel Expiries Full (>= {max_wheel}): {full_wheel}")
+        else: print(f"    ✅ Wheel Contracts OK (< {max_wheel})")
 
 if __name__ == "__main__":
     debug_limits()

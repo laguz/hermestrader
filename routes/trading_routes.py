@@ -167,6 +167,22 @@ def update_watchlist():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@trading_bp.route('/api/bot/settings', methods=['POST'])
+def update_bot_settings():
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'settings data required'}), 400
+            
+        service = Container.get_bot_service()
+        success = service.update_settings(data)
+        if success:
+            return jsonify({"message": "Settings updated"})
+        else:
+            return jsonify({'error': 'Failed to update settings (invalid keys or db error)'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @trading_bp.route('/api/bot/dry_run', methods=['POST'])
 def run_dry_run():
     try:
@@ -210,11 +226,16 @@ def run_dry_run():
 
         all_logs = []
 
+        # Fetch Config for Limits
+        bot_config = db.bot_config.find_one({"_id": "main_bot"}) or {}
+        config = bot_config.get('settings', {})
+        print(f"DEBUG: Dry Run Config Fetched: {config}")
+        
         # Execute Credit Spreads
-        all_logs.append("--- Credit Spread Strategy ---")
+        all_logs.append(f"--- Credit Spread Strategy (Limit: {config.get('max_credit_spreads_per_symbol', 5)}) ---")
         try:
             strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
-            cs_logs = strategy_cs.execute(cs_watchlist)
+            cs_logs = strategy_cs.execute(cs_watchlist, config)
             all_logs.extend(cs_logs)
         except Exception as e:
             error_msg = f"❌ Credit Spread Strategy Failed: {str(e)}"
@@ -226,7 +247,7 @@ def run_dry_run():
         all_logs.append("\n--- Wheel Strategy ---")
         try:
             strategy_wheel = WheelStrategy(tradier_service, db, dry_run=True)
-            w_logs = strategy_wheel.execute(wheel_watchlist)
+            w_logs = strategy_wheel.execute(wheel_watchlist, config)
             all_logs.extend(w_logs)
         except Exception as e:
             error_msg = f"❌ Wheel Strategy Failed: {str(e)}"

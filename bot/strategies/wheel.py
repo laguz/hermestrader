@@ -34,7 +34,7 @@ class WheelStrategy:
         except Exception as e:
             print(f"Log Error: {e}")
 
-    def execute(self, watchlist):
+    def execute(self, watchlist, config=None):
         """
         Execute the Wheel Strategy Cycle for the watchlist.
         """
@@ -50,7 +50,9 @@ class WheelStrategy:
         for symbol in watchlist:
             try:
                 # 2. Determine State & Route
-                self._process_symbol(symbol, positions, analysis_service)
+                max_lots = int(config.get('max_wheel_contracts_per_symbol', 1)) if config else 1
+                self._log(f"DEBUG: Processing {symbol} with Max Lots: {max_lots}")
+                self._process_symbol(symbol, positions, analysis_service, max_lots=max_lots)
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
@@ -60,7 +62,7 @@ class WheelStrategy:
 
         return self.execution_logs
 
-    def _process_symbol(self, symbol, positions, analysis_service):
+    def _process_symbol(self, symbol, positions, analysis_service, max_lots=1):
         """
         Determine the state of the symbol and execute the appropriate entry leg.
         State Machine:
@@ -125,7 +127,7 @@ class WheelStrategy:
             
             if free_shares >= 100:
                 self._log(f"🟢 {symbol}: {shares_held} Shares held. {free_shares} Unencumbered. Evaluating Call Sale...")
-                self._entry_sell_call(symbol, current_price, analysis)
+                self._entry_sell_call(symbol, current_price, analysis, max_lots=max_lots)
             else:
                 self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
         
@@ -134,7 +136,7 @@ class WheelStrategy:
             self._log(f"ℹ️ {symbol}: Active Short Put detected. Monitoring.")
         else:
             self._log(f"🟢 {symbol}: Clean Put State. Evaluating Put Sale...")
-            self._entry_sell_put(symbol, current_price, analysis)
+            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
 
     def execute_single_leg(self, symbol, leg_type, min_credit=None):
         """
@@ -159,13 +161,13 @@ class WheelStrategy:
     # ENTRY LOGIC
     # ------------------------------------------------------------------
 
-    def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None):
+    def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None, max_lots=1):
         """
         Priority A: Technical Entry (S/R Based)
         Priority B: Greeks Fallback (Delta Based)
         """
         # Check Constraints
-        exclusions = self._check_expiry_constraints(symbol)
+        exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
         target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
         if not target_expiry:
@@ -230,14 +232,14 @@ class WheelStrategy:
         else:
             self._log(f"🚫 No valid Put Entry found for {symbol} (checked S/R & Delta).")
 
-    def _entry_sell_call(self, symbol, current_price, analysis, min_credit=None):
+    def _entry_sell_call(self, symbol, current_price, analysis, min_credit=None, max_lots=1):
         """
         Priority A: Technical (Resistance)
         Priority B: Greeks Fallback
         Pre-Condition: Free Shares check done in caller.
         """
         # Check Constraints
-        exclusions = self._check_expiry_constraints(symbol)
+        exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
         target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
         if not target_expiry: return
@@ -602,7 +604,7 @@ class WheelStrategy:
             
         return best_date.strftime("%Y-%m-%d")
 
-    def _check_expiry_constraints(self, symbol):
+    def _check_expiry_constraints(self, symbol, max_lots=1):
         """
         Check existing positions to find 'full' expiration weeks.
         Limit: Max 1 Wheel Contract per Expiry.
@@ -634,11 +636,11 @@ class WheelStrategy:
                 qty = abs(p['quantity'])
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
         
-        # Find Expiries where count >= 1
-        full_expiries = [exp for exp, count in expiry_counts.items() if count >= 1]
+        # Limit: Max Variable Wheel Contracts per Expiry.
+        full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
         
         if full_expiries:
-            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max 1 contract/week met).")
+            self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max {max_lots} contract/week met).")
             
         return full_expiries
 

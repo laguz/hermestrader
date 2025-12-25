@@ -53,268 +53,338 @@
                                         <div style="color: #666;">Waiting for logs...</div>
                                     </div>
                                 </div>
-                            </div>
+                            </div> <!-- End Low Logs -->
+                        </div> <!-- End Status Panel -->
 
-                            <!-- RIGHT COLUMN: Watchlists -->
-                            <div style="flex: 65; min-width: 320px; display: flex; flex-direction: column; gap: 20px;">
+                        <!-- Configuration Panel -->
+                        <div class="bot-config-panel"
+                            style="padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px; margin-top: 20px;">
+                            <h3 class="md-title"
+                                style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
+                                Settings</h3>
 
-                                <!-- Credit Spreads -->
-                                <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                                    <h3 class="md-title"
-                                        style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
-                                        Credit Spreads</h3>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
-                                        id="chips-credit_spreads">
-                                        <!-- Chips go here -->
-                                    </div>
-                                    <div style="display: flex; gap: 10px;">
-                                        <input type="text" id="input-credit_spreads" placeholder="Add Symbol"
-                                            style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
-                                        <button class="md-button md-button--raised"
-                                            onclick="addSymbol('credit_spreads')">Add</button>
-                                    </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div>
+                                    <label style="font-size: 0.8em; color: #666; display: block;">Max CS Lots /
+                                        Symbol</label>
+                                    <input type="number" id="cfg-cs-lots" class="md-input"
+                                        style="width: 100%; padding: 5px;" min="1" max="20" placeholder="5">
                                 </div>
-
-                                <!-- Wheel -->
-                                <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                                    <h3 class="md-title"
-                                        style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
-                                        Wheel Strategy</h3>
-                                    <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
-                                        id="chips-wheel">
-                                        <!-- Chips go here -->
-                                    </div>
-                                    <div style="display: flex; gap: 10px;">
-                                        <input type="text" id="input-wheel" placeholder="Add Symbol"
-                                            style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
-                                        <button class="md-button md-button--raised"
-                                            onclick="addSymbol('wheel')">Add</button>
-                                    </div>
+                                <div>
+                                    <label style="font-size: 0.8em; color: #666; display: block;">Max Wheel contracts /
+                                        Symbol</label>
+                                    <input type="number" id="cfg-wheel-lots" class="md-input"
+                                        style="width: 100%; padding: 5px;" min="1" max="20" placeholder="1">
                                 </div>
+                                <!-- 
+                                    <div>
+                                        <label style="font-size: 0.8em; color: #666; display: block;">Max Drawdown ($)</label>
+                                        <input type="number" id="cfg-drawdown" class="md-input" style="width: 100%; padding: 5px;" placeholder="500">
+                                    </div> 
+                                    -->
                             </div>
-
+                            <div style="margin-top: 15px; text-align: right;">
+                                <button class="md-button md-button--raised md-button--dense"
+                                    onclick="saveSettings()">Update Settings</button>
+                            </div>
                         </div>
+
+
+                        <!-- RIGHT COLUMN: Watchlists -->
+                        <div style="flex: 65; min-width: 320px; display: flex; flex-direction: column; gap: 20px;">
+
+                            <!-- Credit Spreads -->
+                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+                                <h3 class="md-title"
+                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
+                                    Credit Spreads</h3>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
+                                    id="chips-credit_spreads">
+                                    <!-- Chips go here -->
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="input-credit_spreads" placeholder="Add Symbol"
+                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
+                                    <button class="md-button md-button--raised"
+                                        onclick="addSymbol('credit_spreads')">Add</button>
+                                </div>
+                            </div>
+
+                            <!-- Wheel -->
+                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+                                <h3 class="md-title"
+                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
+                                    Wheel Strategy</h3>
+                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
+                                    id="chips-wheel">
+                                    <!-- Chips go here -->
+                                </div>
+                                <div style="display: flex; gap: 10px;">
+                                    <input type="text" id="input-wheel" placeholder="Add Symbol"
+                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
+                                    <button class="md-button md-button--raised"
+                                        onclick="addSymbol('wheel')">Add</button>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
             </div>
         </div>
     </div>
+</div>
 
-    <!-- Dry Run Results Modal -->
-    <div id="dry-run-modal"
-        style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+<!-- Dry Run Results Modal -->
+<div id="dry-run-modal"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div
+        style="background: white; width: 80%; max-width: 800px; max-height: 80vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;">
         <div
-            style="background: white; width: 80%; max-width: 800px; max-height: 80vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;">
-            <div
-                style="padding: 15px 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-                <h3 style="margin: 0;">Dry Run Execution Log</h3>
-                <button onclick="closeDryRunModal()"
-                    style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
-            </div>
-            <div id="dry-run-logs"
-                style="padding: 20px; overflow-y: auto; background: #f5f5f5; color: #333333; font-family: monospace; white-space: pre-wrap;">
-                Running...
-            </div>
-            <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right;">
-                <button class="md-button" onclick="closeDryRunModal()">Close</button>
-            </div>
+            style="padding: 15px 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0;">Dry Run Execution Log</h3>
+            <button onclick="closeDryRunModal()"
+                style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
+        </div>
+        <div id="dry-run-logs"
+            style="padding: 20px; overflow-y: auto; background: #f5f5f5; color: #333333; font-family: monospace; white-space: pre-wrap;">
+            Running...
+        </div>
+        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right;">
+            <button class="md-button" onclick="closeDryRunModal()">Close</button>
         </div>
     </div>
+</div>
 
-    <script>
-        const statusIcon = document.getElementById('status-icon');
-        const statusText = document.getElementById('status-text');
-        const lastHeartbeat = document.getElementById('last-heartbeat');
-        const btnStart = document.getElementById('btn-start');
-        const btnStop = document.getElementById('btn-stop');
-        const logsContainer = document.getElementById('bot-logs');
+<script>
+    const statusIcon = document.getElementById('status-icon');
+    const statusText = document.getElementById('status-text');
+    const lastHeartbeat = document.getElementById('last-heartbeat');
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const logsContainer = document.getElementById('bot-logs');
 
-        // Store both watchlists
-        let currentWatchlists = {
-            credit_spreads: [],
-            wheel: []
-        };
+    // Store both watchlists
+    let currentWatchlists = {
+        credit_spreads: [],
+        wheel: []
+    };
 
-        function updateUI(status) {
-            if (status.status === 'RUNNING') {
-                statusIcon.textContent = 'radio_button_checked';
-                statusIcon.style.color = '#4caf50'; // Green
-                statusText.textContent = 'RUNNING';
-                btnStart.style.display = 'none';
-                btnStop.style.display = 'inline-block';
-            } else {
-                statusIcon.textContent = 'radio_button_unchecked';
-                statusIcon.style.color = 'grey';
-                statusText.textContent = 'STOPPED';
-                btnStart.style.display = 'inline-block';
-                btnStop.style.display = 'none';
-            }
-
-            if (status.last_heartbeat) {
-                lastHeartbeat.textContent = new Date(status.last_heartbeat).toLocaleString();
-            }
-
-            // Update Watchlists
-            if (status.settings) {
-                currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
-                currentWatchlists.wheel = status.settings.watchlist_wheel || [];
-
-                // Backwards compatibility or migration display (optional)
-                if (status.settings.watchlist && currentWatchlists.credit_spreads.length === 0) {
-                    // Maybe show old watchlist in spreads?
-                }
-
-                renderWatchlist('credit_spreads');
-                renderWatchlist('wheel');
-            }
-
-            // Update Logs
-            if (status.logs && status.logs.length > 0) {
-                logsContainer.innerHTML = status.logs.map(log => {
-                    const time = new Date(log.timestamp).toLocaleTimeString();
-                    return `<div><span style="color: #888;">[${time}]</span> ${log.message}</div>`;
-                }).join('');
-                logsContainer.scrollTop = logsContainer.scrollHeight;
-            }
+    function updateUI(status) {
+        if (status.status === 'RUNNING') {
+            statusIcon.textContent = 'radio_button_checked';
+            statusIcon.style.color = '#4caf50'; // Green
+            statusText.textContent = 'RUNNING';
+            btnStart.style.display = 'none';
+            btnStop.style.display = 'inline-block';
+        } else {
+            statusIcon.textContent = 'radio_button_unchecked';
+            statusIcon.style.color = 'grey';
+            statusText.textContent = 'STOPPED';
+            btnStart.style.display = 'inline-block';
+            btnStop.style.display = 'none';
         }
 
-        function renderWatchlist(type) {
-            const container = document.getElementById(`chips-${type}`);
-            if (!container) return;
-            const list = currentWatchlists[type] || [];
+        if (status.last_heartbeat) {
+            lastHeartbeat.textContent = new Date(status.last_heartbeat).toLocaleString();
+        }
 
-            container.innerHTML = list.map(sym => `
+        // Update Watchlists
+        if (status.settings) {
+            currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
+            currentWatchlists.wheel = status.settings.watchlist_wheel || [];
+
+            // Backwards compatibility or migration display (optional)
+            if (status.settings.watchlist && currentWatchlists.credit_spreads.length === 0) {
+                // Maybe show old watchlist in spreads?
+            }
+
+            renderWatchlist('credit_spreads');
+            renderWatchlist('wheel');
+        }
+
+        // Update Logs
+        if (status.logs && status.logs.length > 0) {
+            logsContainer.innerHTML = status.logs.map(log => {
+                const time = new Date(log.timestamp).toLocaleTimeString();
+                return `<div><span style="color: #888;">[${time}]</span> ${log.message}</div>`;
+            }).join('');
+            logsContainer.scrollTop = logsContainer.scrollHeight;
+        }
+
+        // Update Configuration Inputs
+        if (status.settings) {
+            const s = status.settings;
+            if (document.activeElement.id !== 'cfg-cs-lots') {
+                document.getElementById('cfg-cs-lots').value = s.max_credit_spreads_per_symbol || 5;
+            }
+            if (document.activeElement.id !== 'cfg-wheel-lots') {
+                document.getElementById('cfg-wheel-lots').value = s.max_wheel_contracts_per_symbol || 1;
+            }
+        }
+    }
+
+    async function saveSettings() {
+        const csLots = parseInt(document.getElementById('cfg-cs-lots').value) || 5;
+        const wheelLots = parseInt(document.getElementById('cfg-wheel-lots').value) || 1;
+
+        try {
+            const res = await fetch('/api/bot/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    max_credit_spreads_per_symbol: csLots,
+                    max_wheel_contracts_per_symbol: wheelLots
+                })
+            });
+
+            if (res.ok) {
+                alert("Settings updated!");
+                fetchStatus();
+            } else {
+                const d = await res.json();
+                alert("Error updating settings: " + (d.error || "Unknown"));
+            }
+        } catch (e) { console.error(e); alert("Failed to update settings"); }
+    }
+
+    function renderWatchlist(type) {
+        const container = document.getElementById(`chips-${type}`);
+        if (!container) return;
+        const list = currentWatchlists[type] || [];
+
+        container.innerHTML = list.map(sym => `
             <div style="background: #e0e0e0; color: #333; padding: 5px 12px; border-radius: 16px; font-size: 0.9em; display: flex; align-items: center; gap: 5px;">
                 <span style="font-weight: 500;">${sym}</span>
                 <span onclick="removeSymbol('${type}', '${sym}')" style="cursor: pointer; font-weight: bold; color: #555; margin-left: 4px;">&times;</span>
             </div>
         `).join('');
-        }
+    }
 
-        async function saveWatchlist(type, newList) {
-            try {
-                const res = await fetch('/api/bot/watchlist', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ watchlist: newList, type: type })
-                });
-                if (res.ok) {
-                    fetchStatus(); // Refresh UI
-                } else {
-                    alert("Failed to save watchlist");
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        function addSymbol(type) {
-            const input = document.getElementById(`input-${type}`);
-            const sym = input.value.toUpperCase().trim();
-            if (!sym) return;
-
-            const list = currentWatchlists[type] || [];
-
-            if (list.includes(sym)) {
-                alert("Symbol already in watchlist");
-                return;
+    async function saveWatchlist(type, newList) {
+        try {
+            const res = await fetch('/api/bot/watchlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ watchlist: newList, type: type })
+            });
+            if (res.ok) {
+                fetchStatus(); // Refresh UI
+            } else {
+                alert("Failed to save watchlist");
             }
-            const newList = [...list, sym];
-            saveWatchlist(type, newList);
-            input.value = '';
-        }
+        } catch (e) { console.error(e); }
+    }
 
-        function removeSymbol(type, sym) {
-            if (!confirm(`Remove ${sym} from ${type} watchlist?`)) return;
-            const list = currentWatchlists[type] || [];
-            const newList = list.filter(s => s !== sym);
-            saveWatchlist(type, newList);
-        }
+    function addSymbol(type) {
+        const input = document.getElementById(`input-${type}`);
+        const sym = input.value.toUpperCase().trim();
+        if (!sym) return;
 
-        async function fetchStatus() {
-            try {
-                const res = await fetch('/api/bot/status');
-                const data = await res.json();
-                updateUI(data);
-            } catch (e) {
-                console.error(e);
-                statusText.textContent = "Error fetching status";
+        const list = currentWatchlists[type] || [];
+
+        if (list.includes(sym)) {
+            alert("Symbol already in watchlist");
+            return;
+        }
+        const newList = [...list, sym];
+        saveWatchlist(type, newList);
+        input.value = '';
+    }
+
+    function removeSymbol(type, sym) {
+        if (!confirm(`Remove ${sym} from ${type} watchlist?`)) return;
+        const list = currentWatchlists[type] || [];
+        const newList = list.filter(s => s !== sym);
+        saveWatchlist(type, newList);
+    }
+
+    async function fetchStatus() {
+        try {
+            const res = await fetch('/api/bot/status');
+            const data = await res.json();
+            updateUI(data);
+        } catch (e) {
+            console.error(e);
+            statusText.textContent = "Error fetching status";
+        }
+    }
+
+    async function startBot() {
+        btnStart.disabled = true;
+        try {
+            const res = await fetch('/api/bot/start', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                fetchStatus();
+            } else {
+                alert('Error: ' + data.message);
             }
-        }
+        } catch (e) { alert(e); }
+        btnStart.disabled = false;
+    }
 
-        async function startBot() {
-            btnStart.disabled = true;
-            try {
-                const res = await fetch('/api/bot/start', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    fetchStatus();
-                } else {
-                    alert('Error: ' + data.message);
-                }
-            } catch (e) { alert(e); }
-            btnStart.disabled = false;
-        }
-
-        async function stopBot() {
-            btnStop.disabled = true;
-            try {
-                const res = await fetch('/api/bot/stop', { method: 'POST' });
-                const data = await res.json();
-                if (res.ok) {
-                    fetchStatus();
-                } else {
-                    alert('Error: ' + data.message);
-                }
-            } catch (e) { alert(e); }
-            btnStop.disabled = false;
-        }
-
-        async function runDryRun() {
-            const btn = document.getElementById('btn-dry-run');
-            const modal = document.getElementById('dry-run-modal');
-            const logsDiv = document.getElementById('dry-run-logs');
-
-            btn.disabled = true;
-            btn.textContent = "Running...";
-
-            modal.style.display = 'flex';
-            logsDiv.textContent = "Initializing Dry Run...\nCalling Strategy for Watchlist: " + currentWatchlists.credit_spreads.join(', ');
-
-            try {
-                const res = await fetch('/api/bot/dry_run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        credit_spreads_watchlist: currentWatchlists.credit_spreads,
-                        wheel_watchlist: currentWatchlists.wheel
-                    })
-                });
-                const data = await res.json();
-
-                if (data.status === 'success') {
-                    if (data.logs && data.logs.length > 0) {
-                        logsDiv.textContent = data.logs.join('\n');
-                    } else {
-                        logsDiv.textContent = "Dry Run Complete. No logs returned (Strategy executed silently?).";
-                    }
-                } else {
-                    logsDiv.textContent = "Error: " + (data.error || "Unknown error");
-                }
-            } catch (e) {
-                logsDiv.textContent = "Criticial Error: " + e;
+    async function stopBot() {
+        btnStop.disabled = true;
+        try {
+            const res = await fetch('/api/bot/stop', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+                fetchStatus();
+            } else {
+                alert('Error: ' + data.message);
             }
+        } catch (e) { alert(e); }
+        btnStop.disabled = false;
+    }
 
-            btn.disabled = false;
-            btn.textContent = "Test Dry Run";
+    async function runDryRun() {
+        const btn = document.getElementById('btn-dry-run');
+        const modal = document.getElementById('dry-run-modal');
+        const logsDiv = document.getElementById('dry-run-logs');
+
+        btn.disabled = true;
+        btn.textContent = "Running...";
+
+        modal.style.display = 'flex';
+        logsDiv.textContent = "Initializing Dry Run...\nCalling Strategy for Watchlist: " + currentWatchlists.credit_spreads.join(', ');
+
+        try {
+            const res = await fetch('/api/bot/dry_run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    credit_spreads_watchlist: currentWatchlists.credit_spreads,
+                    wheel_watchlist: currentWatchlists.wheel
+                })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                if (data.logs && data.logs.length > 0) {
+                    logsDiv.textContent = data.logs.join('\n');
+                } else {
+                    logsDiv.textContent = "Dry Run Complete. No logs returned (Strategy executed silently?).";
+                }
+            } else {
+                logsDiv.textContent = "Error: " + (data.error || "Unknown error");
+            }
+        } catch (e) {
+            logsDiv.textContent = "Criticial Error: " + e;
         }
 
-        function closeDryRunModal() {
-            document.getElementById('dry-run-modal').style.display = 'none';
-        }
+        btn.disabled = false;
+        btn.textContent = "Test Dry Run";
+    }
 
-        // Poll every 3 seconds
-        fetchStatus();
-        setInterval(fetchStatus, 3000);
+    function closeDryRunModal() {
+        document.getElementById('dry-run-modal').style.display = 'none';
+    }
 
-    </script>
-    {% endblock %}
-    ```
+    // Poll every 3 seconds
+    fetchStatus();
+    setInterval(fetchStatus, 3000);
+
+</script>
+{% endblock %}
+```

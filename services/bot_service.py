@@ -56,7 +56,8 @@ class BotService:
                      "max_drawdown": 500,
                      "max_position_size": 1000,
                      "max_credit_spreads_per_symbol": 5,
-                     "max_total_credit_spreads": 10
+                     "max_total_credit_spreads": 10,
+                     "max_wheel_contracts_per_symbol": 1
                  }
              }
 
@@ -70,6 +71,8 @@ class BotService:
                      updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_wheel' not in settings:
                      updates['settings.watchlist_wheel'] = []
+                 if 'max_wheel_contracts_per_symbol' not in settings:
+                     updates['settings.max_wheel_contracts_per_symbol'] = 1
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -134,6 +137,41 @@ class BotService:
             {"$set": {db_key: clean_list}}
         )
         self._log(f"Watchlist ({list_type}) updated: {clean_list}")
+        return True
+
+    def update_settings(self, settings_update):
+        """Generic method to update settings fields."""
+        if self.db is None: return False
+        if not isinstance(settings_update, dict): return False
+        
+        # Whitelist allowed keys to prevent overwriting critical internal state
+        allowed_keys = [
+            'max_drawdown', 
+            'max_position_size', 
+            'max_credit_spreads_per_symbol', 
+            'max_total_credit_spreads',
+            'max_wheel_contracts_per_symbol'
+        ]
+        
+        safe_updates = {}
+        for k, v in settings_update.items():
+            if k in allowed_keys:
+                # Ensure we cast to appropriate types if needed (e.g. int/float)
+                # For now assume input is clean or cast safe
+                try:
+                    if 'max' in k: safe_updates[f"settings.{k}"] = int(v)
+                    else: safe_updates[f"settings.{k}"] = v
+                except:
+                   self._log(f"Invalid value for {k}: {v}")
+
+        if not safe_updates:
+            return False
+
+        self.db['bot_config'].update_one(
+            {"_id": "main_bot"},
+            {"$set": safe_updates}
+        )
+        self._log(f"Settings updated: {safe_updates}")
         return True
 
     # ... (logs, status methods unchanged) ...
@@ -550,11 +588,11 @@ class BotService:
                     # 1. Manage Existing
                     self.credit_spread_strategy.manage_positions()
                     # 2. Execute New
-                    self.credit_spread_strategy.execute(wl_spreads)
+                    self.credit_spread_strategy.execute(wl_spreads, config)
                     
                 if wl_wheel:
                     self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
-                    self.wheel_strategy.execute(wl_wheel)
+                    self.wheel_strategy.execute(wl_wheel, config)
                     
                 # Sleep cycle - responsive wait
                 # Wait for 60 seconds (strategies shouldn't run too hot) or until stop event
