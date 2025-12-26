@@ -132,11 +132,10 @@ class WheelStrategy:
                 self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
         
         # 2. Evaluate Cash Secured Puts (regardless of shares/calls state)
-        if short_puts:
-            self._log(f"ℹ️ {symbol}: Active Short Put detected. Monitoring.")
-        else:
-            self._log(f"🟢 {symbol}: Clean Put State. Evaluating Put Sale...")
-            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
+        # Note: Global limit check removed per user request. Limit is enforced per-expiry in _entry_sell_put.
+        open_put_contracts = sum(abs(p['quantity']) for p in short_puts)
+        self._log(f"🟢 {symbol}: Clean or Partial Put State ({open_put_contracts} active). Evaluating Put Sale...")
+        self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
 
     def execute_single_leg(self, symbol, leg_type, min_credit=None):
         """
@@ -516,16 +515,16 @@ class WheelStrategy:
             self._log(f"Could not find option in chain: {strike} {option_type}")
             return
 
-        # Price Logic: Midpoint
-        price = round((option['bid'] + option['ask']) / 2, 2)
+        # Price Logic: Bid - 0.01 (Aggressive)
+        price = round(option['bid'] - 0.01, 2)
         
-        # Min Credit Check for Money Manager
+        # Min Value Check (0.30)
+        if price < 0.30:
+            self._log(f"🚫 Aggressive Entry Aborted: Price {price} < 0.30 Minimum.")
+            return
+
+        # Explicit Min Credit Check (if provided by caller, though usually lower priority than the 0.30 hard floor)
         if min_credit and price < min_credit:
-             # Option A: Place Limit Order AT min_credit (Aggressive for fill, but passive for market)
-             # Option B: Skip.
-             # Request implies "Trigger orders... Calculate Price = 0.30".
-             # This means we should set Limit Price = min_credit.
-             # BUT if market price is lower, it won't fill immediately. That's a valid ladder strategy.
              self._log(f"⚠️ Market Price ({price}) < Target ({min_credit}). Placing Limit Order at Target.")
              price = min_credit
         
@@ -616,25 +615,75 @@ class WheelStrategy:
         except:
              return []
         
-        # Filter for this symbol and options
-        relevant = [p for p in positions if p.get('underlying') == symbol and p.get('option_type') in ['put', 'call']]
         
         import re
         expiry_counts = {}
         
-        for p in relevant:
-            # Parse Expiry from Symbol: ROOTyyMMdd...
-            # This is robust for standard OCC symbols.
-            m = re.search(r'[A-Z]+(\d{6})[PC]', p['symbol'])
+        # Iterate ALL positions and robustly check if they belong to this symbol
+        for p in positions:
+            sym_raw = p.get('symbol', '')
+            
+            # Robust Match: START with underlying characters
+            # e.g. RIOT250117... or TSLA25...
+            # We want to match if it STARTS with "SYMBOL" + "Digit" (Option)
+            # OR invalid case where underlying is missing but symbol is correct
+            
+            # Option 1: Quick strict check
+            if not sym_raw.startswith(symbol):
+                continue
+            
+            # Option 2: Ensure the char AFTER symbol is a digit (invulnerable to RIOTA vs RIOT)
+            remaining = sym_raw[len(symbol):]
+            if not remaining or not remaining[0].isdigit():
+                continue
+            
+            # Now we know it's a derivative of 'symbol' (e.g. RIOT...)
+            
+            # Parse Expiry: ROOTyyMMdd...
+            m = re.search(r'[A-Z]+(\d{6})[PC]', sym_raw)
             if m:
                 d_str = m.group(1) # yyMMdd
-                # Convert to YYYY-MM-DD
+                try:
+                    dt = datetime.strptime(d_str, "%y%m%d")
+                    exp_str = dt.strftime("%Y-%m-%d")
+                    
+                    # Count contracts (abs quantity)
+                    qty = abs(p['quantity'])
+                    expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+                except Exception as e:
+                    self._log(f"Error parsing date from {sym_raw}: {e}")
+
+        # ------------------------------------------------------------------
+        # NEW: Count Pending Orders too (Avoids multi-ordering)
+        # ------------------------------------------------------------------
+        try:
+            orders = self.tradier.get_orders() or []
+        except:
+            orders = []
+
+        relevant_orders = [
+            o for o in orders 
+            if o.get('symbol') == symbol 
+            and o.get('status') in ['open', 'partially_filled', 'pending']
+            and o.get('side') == 'sell_to_open'
+            and o.get('class') == 'option'
+        ]
+
+        for o in relevant_orders:
+            # Parse expiry from option_symbol e.g. ROOTyyMMdd...
+            osym = o.get('option_symbol')
+            if not osym: continue
+            
+            m_ord = re.search(r'[A-Z]+(\d{6})[PC]', osym)
+            if m_ord:
+                d_str = m_ord.group(1)
                 dt = datetime.strptime(d_str, "%y%m%d")
                 exp_str = dt.strftime("%Y-%m-%d")
                 
-                # Count contracts (abs quantity)
-                qty = abs(p['quantity'])
+                qty = int(o.get('quantity', 0))
+                # Add to existing count
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+                self._log(f"📝 Pending Order Counted: {qty} for {exp_str}")
         
         # Limit: Max Variable Wheel Contracts per Expiry.
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
