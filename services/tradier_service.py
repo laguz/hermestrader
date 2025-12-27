@@ -259,7 +259,8 @@ class TradierService:
             data = response.json()
             # Structure: {'gainloss': {'closed_position': [...]}}
             gl_data = data.get('gainloss', {})
-            if gl_data is None: return []
+            if gl_data is None or not isinstance(gl_data, dict):
+                 return []
             
             positions = gl_data.get('closed_position', [])
             if isinstance(positions, dict):
