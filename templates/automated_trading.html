@@ -3,135 +3,111 @@
 {% block main_class %}full-width-layout{% endblock %}
 
 {% block content %}
-<div class="md-layout-grid">
-    <div class="md-layout-grid__inner">
-        <div class="md-layout-grid__cell--span-12">
-            <div class="md-card">
-                <div class="md-card__primary-action">
-                    <div class="md-card__media">
-                        <h2 class="md-headline-4">Automated Trading</h2>
-                        <h3 class="md-subtitle-1">Bot Status & Control</h3>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+
+    <!-- LEFT COLUMN: Status & Config -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+
+        <!-- Status Card -->
+        <div class="md-card">
+            <h2 class="md-card__headline">Bot Status</h2>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span id="status-icon" class="material-symbols-outlined"
+                        style="font-size: 32px; color: var(--md-sys-color-secondary);">radio_button_unchecked</span>
+                    <div>
+                        <div style="font-size: 14px; color: var(--md-sys-color-secondary);">Current State</div>
+                        <strong id="status-text" style="font-size: 18px;">Checking...</strong>
                     </div>
                 </div>
-                <div class="md-card__supporting-text">
-                    <p>Manage the background trading bot. The bot scans the market every few minutes and executes trades
-                        based on the configured strategy.</p>
-
-                    <div style="display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap;">
-
-                        <!-- LEFT COLUMN: Status & Logs -->
-                        <div style="flex: 35; min-width: 300px;">
-                            <!-- Status Panel -->
-                            <div class="bot-status-panel"
-                                style="padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px;">
-                                <div style="display: flex; align-items: center; justify-content: space-between;">
-                                    <div style="display: flex; align-items: center; gap: 10px;">
-                                        <span id="status-icon" class="material-symbols-outlined"
-                                            style="color: grey;">radio_button_unchecked</span>
-                                        <span>Status: <strong id="status-text">Checking...</strong></span>
-                                    </div>
-                                    <div style="font-size: 0.85em; color: #666;">
-                                        Last Heartbeat: <span id="last-heartbeat">Never</span>
-                                    </div>
-                                </div>
-                                <div style="margin-top: 15px;">
-                                    <button id="btn-start" class="md-button md-button--raised"
-                                        onclick="startBot()">Start Bot</button>
-                                    <button id="btn-stop" class="md-button md-button--outlined" onclick="stopBot()"
-                                        style="color: #d32f2f; border-color: #d32f2f; display: none;">Stop Bot</button>
-                                    <button id="btn-dry-run" class="md-button md-button--outlined" onclick="runDryRun()"
-                                        style="margin-left: 10px; color: #1976d2; border-color: #1976d2;">
-                                        Test Dry Run
-                                    </button>
-                                </div>
-
-                                <!-- Terminal / Logs -->
-                                <div style="margin-top: 20px;">
-                                    <h4>Recent Logs</h4>
-                                    <div id="bot-logs"
-                                        style="background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 4px; font-family: monospace; height: 350px; overflow-y: auto; font-size: 0.85rem;">
-                                        <div style="color: #666;">Waiting for logs...</div>
-                                    </div>
-                                </div>
-                            </div> <!-- End Low Logs -->
-                        </div> <!-- End Status Panel -->
-
-                        <!-- Configuration Panel -->
-                        <div class="bot-config-panel"
-                            style="padding: 20px; background: rgba(0,0,0,0.05); border-radius: 8px; margin-top: 20px;">
-                            <h3 class="md-title"
-                                style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
-                                Settings</h3>
-
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                                <div>
-                                    <label style="font-size: 0.8em; color: #666; display: block;">Max CS Lots /
-                                        Symbol</label>
-                                    <input type="number" id="cfg-cs-lots" class="md-input"
-                                        style="width: 100%; padding: 5px;" min="1" max="20" placeholder="5">
-                                </div>
-                                <div>
-                                    <label style="font-size: 0.8em; color: #666; display: block;">Max Wheel contracts /
-                                        Symbol</label>
-                                    <input type="number" id="cfg-wheel-lots" class="md-input"
-                                        style="width: 100%; padding: 5px;" min="1" max="20" placeholder="1">
-                                </div>
-                                <!-- 
-                                    <div>
-                                        <label style="font-size: 0.8em; color: #666; display: block;">Max Drawdown ($)</label>
-                                        <input type="number" id="cfg-drawdown" class="md-input" style="width: 100%; padding: 5px;" placeholder="500">
-                                    </div> 
-                                    -->
-                            </div>
-                            <div style="margin-top: 15px; text-align: right;">
-                                <button class="md-button md-button--raised md-button--dense"
-                                    onclick="saveSettings()">Update Settings</button>
-                            </div>
-                        </div>
-
-
-                        <!-- RIGHT COLUMN: Watchlists -->
-                        <div style="flex: 65; min-width: 320px; display: flex; flex-direction: column; gap: 20px;">
-
-                            <!-- Credit Spreads -->
-                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                                <h3 class="md-title"
-                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
-                                    Credit Spreads</h3>
-                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
-                                    id="chips-credit_spreads">
-                                    <!-- Chips go here -->
-                                </div>
-                                <div style="display: flex; gap: 10px;">
-                                    <input type="text" id="input-credit_spreads" placeholder="Add Symbol"
-                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
-                                    <button class="md-button md-button--raised"
-                                        onclick="addSymbol('credit_spreads')">Add</button>
-                                </div>
-                            </div>
-
-                            <!-- Wheel -->
-                            <div style="padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-                                <h3 class="md-title"
-                                    style="margin-top: 0; font-size: 1.1rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px;">
-                                    Wheel Strategy</h3>
-                                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; min-height: 40px;"
-                                    id="chips-wheel">
-                                    <!-- Chips go here -->
-                                </div>
-                                <div style="display: flex; gap: 10px;">
-                                    <input type="text" id="input-wheel" placeholder="Add Symbol"
-                                        style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; text-transform: uppercase; width: 100%;">
-                                    <button class="md-button md-button--raised"
-                                        onclick="addSymbol('wheel')">Add</button>
-                                </div>
-                            </div>
-                        </div>
-
-                    </div>
+                <div style="text-align: right;">
+                    <div style="font-size: 12px; color: var(--md-sys-color-secondary);">Last Heartbeat</div>
+                    <span id="last-heartbeat" style="font-family: monospace;">Never</span>
                 </div>
             </div>
+
+            <div style="display: flex; gap: 12px;">
+                <button id="btn-start" class="md-button md-button--filled" onclick="startBot()">
+                    <span class="material-symbols-outlined" style="font-size:18px;">play_arrow</span> Start Bot
+                </button>
+                <button id="btn-stop" class="md-button md-button--tonal" onclick="stopBot()"
+                    style="display: none; border: 1px solid var(--md-sys-color-error); color: var(--md-sys-color-error);">
+                    <span class="material-symbols-outlined" style="font-size:18px;">stop</span> Stop Bot
+                </button>
+                <button id="btn-dry-run" class="md-button md-button--tonal" onclick="runDryRun()">
+                    <span class="material-symbols-outlined" style="font-size:18px;">science</span> Test Dry Run
+                </button>
+            </div>
         </div>
+
+        <!-- Logs Card -->
+        <div class="md-card">
+            <h3 class="md-card__headline">Live Logs</h3>
+            <div id="bot-logs"
+                style="background: rgba(0,0,0,0.3); color: #4af; padding: 16px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; height: 300px; overflow-y: auto; font-size: 13px; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="color: var(--md-sys-color-secondary);">Waiting for logs...</div>
+            </div>
+        </div>
+
+        <!-- Configuration Card -->
+        <div class="md-card">
+            <h3 class="md-card__headline">Settings</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+                <div class="md-text-field-container">
+                    <input type="number" id="cfg-cs-lots" class="md-text-field" placeholder=" " min="1" max="20"
+                        required>
+                    <label class="md-text-field-label">Max Credit Spread Lots</label>
+                </div>
+                <div class="md-text-field-container">
+                    <input type="number" id="cfg-wheel-lots" class="md-text-field" placeholder=" " min="1" max="20"
+                        required>
+                    <label class="md-text-field-label">Max Wheel Contracts</label>
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <button class="md-button md-button--tonal" onclick="saveSettings()">Save Configuration</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- RIGHT COLUMN: Watchlists -->
+    <div style="display: flex; flex-direction: column; gap: 24px;">
+
+        <!-- Credit Spreads Watchlist -->
+        <div class="md-card">
+            <h3 class="md-card__headline">Credit Spreads Watchlist</h3>
+            <div id="chips-credit_spreads"
+                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+                <!-- Chips -->
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
+                    <input type="text" id="input-credit_spreads" class="md-text-field" placeholder=" "
+                        style="text-transform: uppercase;">
+                    <label class="md-text-field-label">Add Symbol</label>
+                </div>
+                <button class="md-button md-button--filled" onclick="addSymbol('credit_spreads')">Add</button>
+            </div>
+        </div>
+
+        <!-- Wheel Watchlist -->
+        <div class="md-card">
+            <h3 class="md-card__headline">Wheel Watchlist</h3>
+            <div id="chips-wheel"
+                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+                <!-- Chips -->
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
+                    <input type="text" id="input-wheel" class="md-text-field" placeholder=" "
+                        style="text-transform: uppercase;">
+                    <label class="md-text-field-label">Add Symbol</label>
+                </div>
+                <button class="md-button md-button--filled" onclick="addSymbol('wheel')">Add</button>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -254,9 +230,11 @@
         const list = currentWatchlists[type] || [];
 
         container.innerHTML = list.map(sym => `
-            <div style="background: #e0e0e0; color: #333; padding: 5px 12px; border-radius: 16px; font-size: 0.9em; display: flex; align-items: center; gap: 5px;">
+            <div style="background: rgba(255,255,255,0.1); color: var(--md-sys-color-on-surface); padding: 6px 16px; border-radius: 16px; font-size: 0.9em; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,0.1);">
                 <span style="font-weight: 500;">${sym}</span>
-                <span onclick="removeSymbol('${type}', '${sym}')" style="cursor: pointer; font-weight: bold; color: #555; margin-left: 4px;">&times;</span>
+                <span onclick="removeSymbol('${type}', '${sym}')" style="cursor: pointer; opacity: 0.7; font-weight: bold; margin-left: 4px; display:flex; align-items:center;">
+                    <span class="material-symbols-outlined" style="font-size: 16px;">close</span>
+                </span>
             </div>
         `).join('');
     }

@@ -3,84 +3,73 @@
 {% block title %}P&L Tracker{% endblock %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="d-flex justify-content-between align-items-center">
-            <h1 class="h3 mb-0 text-white-800">P&L Tracker</h1>
-            <button id="sync-btn" class="btn btn-primary shadow-sm">
-                <i class="fas fa-sync"></i> Sync
-            </button>
-        </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    </div>
-</div>
+<!-- Top Row: P&L Tracker (20%), Total P&L (20%), Pie Graph (60%) -->
+<div style="display: grid; grid-template-columns: 20fr 20fr 60fr; gap: 24px; margin-bottom: 24px;">
 
-<!-- Summary Cards -->
-<div class="row mb-4">
-    <div class="col-md-3">
-        <div class="card bg-dark text-white text-center p-3">
-            <h5>Total P&L</h5>
-            <h2 id="total-pnl" class="fw-bold">$0.00</h2>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card bg-dark text-white text-center p-3">
-            <h5>Day P&L</h5>
-            <h2 id="day-pnl" class="text-muted">N/A</h2> <!-- Optional: Needs day change data -->
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header bg-dark text-white">Portfolio Allocation</div>
-            <div class="card-body">
-                <canvas id="allocationChart"></canvas>
-            </div>
-        </div>
+    <!-- 1. P&L Tracker Control Panel -->
+    <div class="md-card"
+        style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+        <h1 class="md-card__headline" style="margin-bottom: 16px; font-size: 24px;">P&L Tracker</h1>
+        <button id="sync-btn" class="md-button md-button--filled">
+            <span class="material-symbols-outlined" style="font-size: 18px;">sync</span>
+            Sync
+        </button>
     </div>
 
+    <!-- 2. Total P&L -->
+    <div class="md-card"
+        style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
+        <h2
+            style="font-size: 14px; color: var(--md-sys-color-secondary); margin: 0; text-transform: uppercase; letter-spacing: 1px;">
+            Total P&L</h2>
+        <div id="total-pnl" style="font-size: 32px; font-weight: 700; margin-top: 8px;">$0.00</div>
+    </div>
+
+    <!-- 3. Portfolio Allocation (Pie Graph) -->
+    <div class="md-card" style="position: relative; height: 300px; padding: 16px;">
+        <h2 class="md-card__headline" style="margin-bottom: 8px; font-size: 16px;">Portfolio Allocation</h2>
+        <div style="height: 240px; width: 100%;">
+            <canvas id="allocationChart"></canvas>
+        </div>
+    </div>
 </div>
 
 <!-- Charts Row (History) -->
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card h-100">
-            <div class="card-header bg-dark text-white">Realized P&L History</div>
-            <div class="card-body">
-                <canvas id="pnlHistoryChart"></canvas>
-            </div>
-        </div>
+<div class="md-card col-span-full" style="margin-bottom: 24px;">
+    <h2 class="md-card__headline">Realized P&L History</h2>
+    <div style="height: 300px;">
+        <canvas id="pnlHistoryChart"></canvas>
     </div>
 </div>
 
 <!-- Open Positions Table -->
-<div class="card mb-4">
-
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover table-striped mb-0 text-center" id="open-table">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Symbol</th>
-                        <th>Type</th>
-                        <th>Qty</th>
-                        <th>Entry Price</th>
-                        <th>Close Price</th>
-                        <th>Current Price</th>
-                        <th>Cost Basis</th>
-                        <th>Market Value</th>
-                        <th>P&L</th>
-                        <th>P&L %</th>
-                        <th>Last Updated</th>
-                    </tr>
-                </thead>
-                <tbody id="open-body">
-                    <tr>
-                        <td colspan="10">Loading P&L Data...</td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
+<div class="md-card col-span-full">
+    <h2 class="md-card__headline">Open Positions</h2>
+    <div class="md-table-container">
+        <table id="open-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Type</th>
+                    <th>Qty</th>
+                    <th>Entry Price</th>
+                    <th>Close Price</th>
+                    <th>Current Price</th>
+                    <th>Cost Basis</th>
+                    <th>Market Value</th>
+                    <th>P&L</th>
+                    <th>P&L %</th>
+                    <th>Last Updated</th>
+                </tr>
+            </thead>
+            <tbody id="open-body">
+                <tr>
+                    <td colspan="11" style="text-align: center;">Loading P&L Data...</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </div>
 
