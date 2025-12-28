@@ -190,7 +190,7 @@ class MockAnalysisService:
             'volatility': volatility
         }
 
-    def analyze_symbol(self, symbol):
+    def analyze_symbol(self, symbol, period=None):
         # Return structure expected by CreditSpreadStrategy
         price = self.current_context['current_price']
         vol = self.current_context['volatility']
@@ -340,7 +340,8 @@ class BacktestService:
             strategy = WheelStrategy(
                 tradier_service=mock_tradier,
                 db=mock_db,
-                dry_run=False
+                dry_run=False,
+                analysis_service=mock_analysis
             )
         else:
              return {"error": f"Strategy {strategy_type} not supported in refactored backtester yet."}

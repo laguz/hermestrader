@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, date
 from services.container import Container
 
 class WheelStrategy:
-    def __init__(self, tradier_service, db, dry_run=False):
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
         self.tradier = tradier_service
         self.db = db
         self.dry_run = dry_run
+        self.analysis_service = analysis_service
         # Constants
         self.TARGET_DTE = 42 # 6 Weeks
         self.MIN_POP = 55
@@ -38,7 +39,7 @@ class WheelStrategy:
         """
         Execute the Wheel Strategy Cycle for the watchlist.
         """
-        analysis_service = Container.get_analysis_service()
+        analysis_service = self.analysis_service or Container.get_analysis_service()
         
         # 1. Fetch Current Positions (The Source of Truth)
         try:
@@ -370,8 +371,17 @@ class WheelStrategy:
         option = next((o for o in chain if o['strike'] == strike and o['option_type'] == option_type), None)
         
         if not option:
-            self._log(f"Could not find option in chain: {strike} {option_type}")
-            return
+            # Fallback: Find closest strike
+            candidates = [o for o in chain if o['option_type'] == option_type]
+            if candidates:
+                # Sort by distance to target strike
+                best_match = min(candidates, key=lambda x: abs(x['strike'] - strike))
+                # Check if reasonable distance (e.g. within 5% or 5 points?) - Optional
+                self._log(f"⚠️ Exact strike {strike} not found. Snapping to {best_match['strike']}.")
+                option = best_match
+            else:
+                self._log(f"Could not find option in chain: {strike} {option_type}")
+                return
 
         # Price Logic: Bid - 0.01 (Aggressive)
         price = round(option['bid'] - 0.01, 2)
