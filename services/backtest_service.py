@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
-import traceback
+
 from datetime import datetime, timedelta
-import math
+
 
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from utils.indicators import (
@@ -284,7 +284,7 @@ class BacktestService:
         cash = 10000.0
         
         # Simulation Loop
-        import math
+
         
         for index, row in df.iterrows():
             if row['date'] < start_dt: continue # skip warmup days for execution, but use them for indicators
