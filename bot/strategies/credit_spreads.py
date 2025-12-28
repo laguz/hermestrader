@@ -15,12 +15,19 @@ class Colors:
     UNDERLINE = '\033[4m'
 
 class CreditSpreadStrategy:
-    def __init__(self, tradier_service, db, dry_run=False):
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
         self.tradier = tradier_service
         self.db = db
         self.dry_run = dry_run
-        self.min_confidence_score = 7  # Out of 10
+        self.min_confidence_score = 7
         self.execution_logs = []
+        
+        # Dependency Injection (Analysis Service)
+        if analysis_service:
+            self.analysis_service = analysis_service
+        else:
+            from services.container import Container
+            self.analysis_service = Container.get_analysis_service()
         
     def _log(self, message):
         """Log message to DB via BotService mechanism (manually for now)."""
@@ -54,6 +61,18 @@ class CreditSpreadStrategy:
                 )
         except Exception as e:
             print(f"Log Error: {e}")
+    def _get_current_date(self):
+        """Get effective current date (handling simulation)."""
+        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+            return self.tradier.current_date.date()
+        from datetime import date
+        return date.today()
+
+    def _get_current_datetime(self):
+        """Get effective current datetime."""
+        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+             return self.tradier.current_date
+        return datetime.now()
 
     @staticmethod
     def _get_underlying_from_pos(pos):
@@ -91,11 +110,8 @@ class CreditSpreadStrategy:
         2. Check for entry signals.
         3. Place order if high confidence.
         """
-        from services.analysis_service import AnalysisService
-        from services.container import Container
-
-        analysis_service = Container.get_analysis_service() # We need to get it here to avoid circular dependencies
-        current_hour = datetime.now().hour
+        # analysis_service is now self.analysis_service
+        current_hour = self._get_current_datetime().hour
 
         # Only trade during market hours (roughly)
         # Assuming UTC-5 (EST)
@@ -119,7 +135,7 @@ class CreditSpreadStrategy:
                     print(f"\n{Colors.HEADER}📦 Analyzing {symbol}...{Colors.ENDC}")
                 else:
                     self._log(f"Analyzing {symbol}...")
-                analysis = analysis_service.analyze_symbol(symbol)
+                analysis = self.analysis_service.analyze_symbol(symbol)
                 
                 if not analysis or 'error' in analysis:
                     self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
@@ -146,9 +162,8 @@ class CreditSpreadStrategy:
         """
         Direct execution entry point for Money Manager.
         """
-        from services.container import Container
-        analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol)
+        # analysis_service is now self.analysis_service
+        analysis = self.analysis_service.analyze_symbol(symbol)
         
         if not analysis or 'error' in analysis:
             self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
@@ -170,9 +185,12 @@ class CreditSpreadStrategy:
         """
         # 1. Check Time (Only run after 3:00 PM EST)
         # Explicitly check for EST time to ensure 3 PM is 3 PM ET.
-        import pytz
-        est = pytz.timezone('America/New_York')
-        now_est = datetime.now(est)
+        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+             now_est = self.tradier.current_date
+        else:
+             import pytz
+             est = pytz.timezone('America/New_York')
+             now_est = datetime.now(est)
         
         # 3 PM EST = 15:00
         if now_est.hour < 15: 
@@ -476,7 +494,8 @@ class CreditSpreadStrategy:
              self._log(f"No valid expirations found (Excluded: {exclude_dates})")
              return None
             
-        today = date.today()
+        today = self._get_current_date()
+        if isinstance(today, datetime): today = today.date()
         candidates = []
         
         for d in exp_dates:

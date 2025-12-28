@@ -44,43 +44,49 @@
     </div>
 </div>
 
-<!-- Open Positions Table -->
+<!-- Positions Section -->
 <div class="md-card col-span-full">
-    <h2 class="md-card__headline">Open Positions</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h2 class="md-card__headline" id="table-title" style="margin: 0;">Open Positions</h2>
+
+        <!-- Toggle -->
+        <div class="md-segmented-button">
+            <button id="btn-view-open" class="md-button md-button--filled" onclick="switchView('open')">
+                Open
+            </button>
+            <button id="btn-view-closed" class="md-button md-button--tonal" onclick="switchView('closed')">
+                Closed
+            </button>
+        </div>
+    </div>
+
     <div class="md-table-container">
-        <table id="open-table">
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Type</th>
-                    <th>Qty</th>
-                    <th>Entry Price</th>
-                    <th>Close Price</th>
-                    <th>Current Price</th>
-                    <th>Cost Basis</th>
-                    <th>Market Value</th>
-                    <th>P&L</th>
-                    <th>P&L %</th>
-                    <th>Last Updated</th>
-                </tr>
+        <table id="positions-table">
+            <thead id="table-head">
+                <!-- Headers injected via JS -->
             </thead>
-            <tbody id="open-body">
+            <tbody id="table-body">
                 <tr>
-                    <td colspan="11" style="text-align: center;">Loading P&L Data...</td>
+                    <td colspan="10" style="text-align: center;">Loading...</td>
                 </tr>
             </tbody>
         </table>
     </div>
 </div>
 
-
-
 {% endblock %}
 
 {% block scripts %}
 <script>
+    let allocationChart = null;
+    let historyChart = null;
+
     document.addEventListener('DOMContentLoaded', () => {
         const syncBtn = document.getElementById('sync-btn');
+
+        // State
+        let rawData = { open: [], closed: [] };
+        let currentView = 'open'; // 'open', 'closed'
 
         // Load P&L Data
         async function loadPnL() {
@@ -92,31 +98,161 @@
                     console.error("API Error:", data.error);
                     return;
                 }
-                // data.pnl_data has structure { open: [...], closed: [...] }
-                const allPositions = [...data.pnl_data.open, ...data.pnl_data.closed];
 
-                // Sort by last updated / exit date desc
-                allPositions.sort((a, b) => {
+                rawData = data.pnl_data;
+                renderApp();
+
+            } catch (err) {
+                console.error("Load PnL Error:", err);
+                const tbody = document.getElementById('table-body');
+                if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="text-danger">Error loading data: ${err.message}</td></tr>`;
+            }
+        }
+
+        // View Switching
+        window.switchView = (view) => {
+            currentView = view;
+
+            // Update Buttons
+            const btnOpen = document.getElementById('btn-view-open');
+            const btnClosed = document.getElementById('btn-view-closed');
+
+            if (btnOpen && btnClosed) {
+                if (view === 'open') {
+                    btnOpen.className = 'md-button md-button--filled';
+                    btnClosed.className = 'md-button md-button--tonal';
+                    document.getElementById('table-title').textContent = 'Open Positions';
+                } else {
+                    btnOpen.className = 'md-button md-button--tonal';
+                    btnClosed.className = 'md-button md-button--filled';
+                    document.getElementById('table-title').textContent = 'Closed Positions';
+                }
+            }
+
+            renderTable();
+        };
+
+        function renderApp() {
+            renderTable();
+            updateSummary(rawData.open, rawData.closed);
+            renderCharts(rawData.open, rawData.closed);
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('table-body');
+            const thead = document.getElementById('table-head');
+            if (!tbody || !thead) return;
+
+            tbody.innerHTML = '';
+            thead.innerHTML = '';
+
+            const list = currentView === 'open' ? rawData.open : rawData.closed;
+
+            // Sort
+            if (list) {
+                list.sort((a, b) => {
+                    // Sort by update/exit date
                     const dateA = new Date(a.exit_date || a.last_updated || 0);
                     const dateB = new Date(b.exit_date || b.last_updated || 0);
                     return dateB - dateA;
                 });
-
-                renderTable(allPositions);
-                updateSummary(data.pnl_data.open, data.pnl_data.closed);
-                renderCharts(data.pnl_data.open, data.pnl_data.closed);
-
-            } catch (err) {
-                console.error("Load PnL Error:", err);
-                document.getElementById('open-body').innerHTML = `<tr><td colspan="10" class="text-danger">Error loading data: ${err.message}</td></tr>`;
             }
+
+            if (!list || list.length === 0) {
+                thead.innerHTML = `<tr><th>Status</th></tr>`;
+                tbody.innerHTML = `<tr><td style="text-align: center; padding: 20px;">No ${currentView} positions found.</td></tr>`;
+                return;
+            }
+
+            // Define Columns based on View
+            let columns = [];
+            if (currentView === 'open') {
+                columns = [
+                    { header: 'Symbol', key: 'symbol' },
+                    { header: 'Type', key: 'type' },
+                    { header: 'Qty', key: 'quantity' },
+                    { header: 'Entry', key: 'entry_price', format: 'currency' },
+                    { header: 'Current', key: 'current_price', format: 'currency' },
+                    { header: 'Cost Basis', key: 'cost_basis', format: 'currency' },
+                    { header: 'Market Val', key: 'market_value', format: 'currency' },
+                    { header: 'Unrealized P&L', key: 'pnl', format: 'currency', color: true },
+                    { header: 'Return %', key: 'pnl_pct', format: 'pct', color: true },
+                    { header: 'Updated', key: 'last_updated', format: 'date' }
+                ];
+            } else {
+                columns = [
+                    { header: 'Symbol', key: 'symbol' },
+                    { header: 'Type', key: 'type' },
+                    { header: 'Qty', key: 'quantity' },
+                    { header: 'Entry', key: 'entry_price', format: 'currency' },
+                    { header: 'Exit Price', key: 'exit_price', format: 'currency' },
+                    { header: 'Cost Basis', key: 'cost_basis', format: 'currency' },
+                    { header: 'Realized P&L', key: 'pnl', format: 'currency', color: true },
+                    { header: 'Return %', key: 'pnl_pct', format: 'pct', color: true },
+                    { header: 'Exit Date', key: 'exit_date', format: 'date' }
+                ];
+            }
+
+            // Render Header
+            const headerRow = document.createElement('tr');
+            columns.forEach(col => {
+                const th = document.createElement('th');
+                th.textContent = col.header;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            // Render Body
+            list.forEach(p => {
+                const tr = document.createElement('tr');
+
+                columns.forEach(col => {
+                    const td = document.createElement('td');
+                    let val = p[col.key];
+
+                    // Formatting
+                    if (col.format === 'currency') val = formatCurrency(val);
+                    if (col.format === 'pct') val = formatPct(val);
+                    if (col.format === 'date') val = formatDate(val);
+
+                    // Styling
+                    if (col.key === 'symbol') td.style.fontWeight = '600';
+                    if (col.key === 'type') {
+                        td.innerHTML = `<span class="badge ${val === 'Stock' ? 'bg-primary' : 'bg-info'}">${val}</span>`;
+                    } else if (col.color) {
+                        const num = parseFloat(p[col.key]);
+                        td.className = num >= 0 ? 'text-success fw-bold' : 'text-danger fw-bold';
+                        td.textContent = val;
+                    } else {
+                        td.textContent = val;
+                    }
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Utilities
+        function formatCurrency(num) {
+            if (num === undefined || num === null || num === '') return '-';
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+        }
+
+        function formatPct(num) {
+            if (num === undefined || num === null) return '-';
+            return num.toFixed(2) + '%';
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            return new Date(dateStr).toLocaleDateString() + ' ' + new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
 
         // Sync Button Logic
         if (syncBtn) {
             syncBtn.addEventListener('click', async () => {
                 syncBtn.disabled = true;
-                syncBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Syncing...';
+                syncBtn.innerHTML = '<span class="material-symbols-outlined fa-spin" style="font-size:16px;">refresh</span> Syncing...';
                 try {
                     const res = await fetch('/api/bot/sync_positions', { method: 'POST' });
                     const data = await res.json();
@@ -130,200 +266,137 @@
                     alert("Network Error");
                 } finally {
                     syncBtn.disabled = false;
-                    syncBtn.innerHTML = '<i class="fas fa-sync"></i> Sync';
+                    syncBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:18px;">sync</span> Sync';
                 }
             });
-        }
-
-        function formatCurrency(num) {
-            if (num === undefined || num === null || num === '') return '-';
-            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
-        }
-
-        function formatPct(num) {
-            if (num === undefined || num === null) return '-';
-            return num.toFixed(2) + '%';
-        }
-
-        function renderTable(positions) {
-            const tbody = document.getElementById('open-body');
-            tbody.innerHTML = '';
-
-            if (!positions || positions.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10">No positions found.</td></tr>';
-                return;
-            }
-
-            positions.forEach(p => {
-                const tr = document.createElement('tr');
-                const pnlClass = p.pnl >= 0 ? 'text-success' : 'text-danger';
-
-                // Determine layout based on Open vs Closed
-                // Closed has 'exit_price', Open doesn't (or has Close Price as prev close which we overwrite/ignore now)
-
-                const isClosed = p.hasOwnProperty('exit_price');
-                const closePriceVal = isClosed ? p.exit_price : null;
-                const currentPriceVal = isClosed ? null : p.current_price;
-                const dateVal = isClosed ? p.exit_date : p.last_updated;
-                const dateLabel = dateVal ? new Date(dateVal).toLocaleDateString() + ' ' + new Date(dateVal).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A';
-
-                tr.innerHTML = `
-                <td class="fw-bold">${p.symbol}</td>
-                <td><span class="badge ${p.type === 'Stock' ? 'bg-primary' : 'bg-info'}">${p.type}</span></td>
-                <td>${p.quantity}</td>
-                <td>${formatCurrency(p.entry_price)}</td>
-                <td>${closePriceVal !== null ? formatCurrency(closePriceVal) : '-'}</td>
-                <td>${currentPriceVal !== null ? formatCurrency(currentPriceVal) : '-'}</td>
-                <td>${formatCurrency(p.cost_basis)}</td>
-                <td>${isClosed ? '-' : formatCurrency(p.market_value)}</td>
-                <td class="${pnlClass} fw-bold">${formatCurrency(p.pnl)}</td>
-                <td class="${pnlClass} fw-bold">${formatPct(p.pnl_pct)}</td>
-                <td class="text-muted small">${dateLabel}</td>
-            `;
-                tbody.appendChild(tr);
-            });
-        }
-
-
-
-        function updateSummary(openPos, closedPos) {
-            const openPnL = (openPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
-            const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
-            const totalPnL = openPnL + closedPnL;
-
-            const pnlEl = document.getElementById('total-pnl');
-            pnlEl.innerText = formatCurrency(totalPnL);
-            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
-
-            // Day P&L could be approximated by Closed P&L today? (Not robust but better than N/A)
-            // Leaving N/A for now unless explicit logic requested.
         }
 
         // Initial Load
         loadPnL();
+
+
+        // --- Chart Logic ---
+
+        function renderCharts(openPos, closedPos) {
+            if (typeof Chart === 'undefined') {
+                console.warn("Chart.js not loaded.");
+                return;
+            }
+
+            // 1. Allocation Pie Chart (Open Positions)
+            const allocCanvas = document.getElementById('allocationChart');
+            if (allocCanvas) {
+                const allocCtx = allocCanvas.getContext('2d');
+                const exposure = {};
+                (openPos || []).forEach(p => {
+                    let sym = p.symbol;
+                    const match = sym.match(/^([A-Z]+)/);
+                    if (match) sym = match[1];
+                    const val = Math.abs(p.market_value || 0);
+                    exposure[sym] = (exposure[sym] || 0) + val;
+                });
+                const labels = Object.keys(exposure);
+                const data = Object.values(exposure);
+
+                if (allocationChart) allocationChart.destroy();
+                allocationChart = new Chart(allocCtx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: data,
+                            backgroundColor: [
+                                '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b',
+                                '#858796', '#5a5c69', '#2e59d9', '#17a673', '#2c9faf'
+                            ],
+                            hoverOffset: 4,
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { position: 'bottom', labels: { color: '#c2c7cf' } },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (context) {
+                                        let label = context.label || '';
+                                        if (label) label += ': ';
+                                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
+                                        return label;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // 2. History Chart (Closed Positions)
+            const histCanvas = document.getElementById('pnlHistoryChart');
+            if (histCanvas) {
+                const histCtx = histCanvas.getContext('2d');
+                const sortedClosed = (closedPos || []).sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
+                const historyLabels = [];
+                const historyData = [];
+                let runningTotal = 0;
+
+                sortedClosed.forEach(p => {
+                    runningTotal += (p.pnl || 0);
+                    historyLabels.push(new Date(p.exit_date).toLocaleDateString());
+                    historyData.push(runningTotal);
+                });
+
+                if (historyChart) historyChart.destroy();
+                historyChart = new Chart(histCtx, {
+                    type: 'line',
+                    data: {
+                        labels: historyLabels,
+                        datasets: [{
+                            label: 'Cumulative P&L',
+                            data: historyData,
+                            fill: true,
+                            borderColor: '#a8c7fa',
+                            backgroundColor: 'rgba(168, 199, 250, 0.1)',
+                            tension: 0.3,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#a8c7fa'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { display: true, grid: { display: false, color: '#444' }, ticks: { color: '#888' } },
+                            y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function (context) {
+                                        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        }
     });
 
-    // --- Chart Logic ---
-    let allocationChart = null;
-    let historyChart = null;
+    function updateSummary(openPos, closedPos) {
+        const openPnL = (openPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+        const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+        const totalPnL = openPnL + closedPnL;
 
-    function renderCharts(openPos, closedPos) {
-        if (typeof Chart === 'undefined') {
-            console.warn("Chart.js not loaded.");
-            return;
+        const pnlEl = document.getElementById('total-pnl');
+        if (pnlEl) {
+            pnlEl.innerText = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalPnL);
+            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
         }
-        // 1. Allocation Pie Chart (Open Positions by Market Value)
-        const allocCtx = document.getElementById('allocationChart').getContext('2d');
-
-        // Group by Symbol (or Underlying)
-        const exposure = {};
-        (openPos || []).forEach(p => {
-            // Strip options to underlying for better grouping?
-            // E.g. RIOT and RIOT2301... -> RIOT
-            let sym = p.symbol;
-            // Simple heuristic: if digit present, take prefix
-            const match = sym.match(/^([A-Z]+)/);
-            if (match) sym = match[1];
-
-            const val = Math.abs(p.market_value || 0); // Allocation is usually absolute exposure
-            exposure[sym] = (exposure[sym] || 0) + val;
-        });
-
-        const labels = Object.keys(exposure);
-        const data = Object.values(exposure);
-
-        if (allocationChart) allocationChart.destroy();
-
-        allocationChart = new Chart(allocCtx, {
-            type: 'doughnut',
-            data: {
-                labels: labels,
-                datasets: [{
-                    data: data,
-                    backgroundColor: [
-                        '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b',
-                        '#858796', '#5a5c69', '#2e59d9', '#17a673', '#2c9faf'
-                    ],
-                    hoverOffset: 4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'bottom' },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                let label = context.label || '';
-                                if (label) label += ': ';
-                                label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
-                                return label;
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        // 2. History Line Chart (Cumulative Realized P&L)
-        const histCtx = document.getElementById('pnlHistoryChart').getContext('2d');
-
-        // Sort closed by date ascending
-        const sortedClosed = (closedPos || []).sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
-
-        // Create cumulative dataset
-        const historyLabels = [];
-        const historyData = [];
-        let runningTotal = 0;
-
-        sortedClosed.forEach(p => {
-            runningTotal += (p.pnl || 0);
-            const date = new Date(p.exit_date).toLocaleDateString();
-            // Consolidate same day? Chart.js handles it ok usually, but cleaner if aggregated.
-            // For now, raw points.
-            historyLabels.push(date);
-            historyData.push(runningTotal);
-        });
-
-        if (historyChart) historyChart.destroy();
-
-        historyChart = new Chart(histCtx, {
-            type: 'line',
-            data: {
-                labels: historyLabels,
-                datasets: [{
-                    label: 'Cumulative P&L',
-                    data: historyData,
-                    fill: true,
-                    borderColor: '#4e73df',
-                    backgroundColor: 'rgba(78, 115, 223, 0.1)',
-                    tension: 0.3, // Smooth curve
-                    pointRadius: 3
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    x: { display: true, grid: { display: false } },
-                    y: {
-                        beginAtZero: true,
-                        grid: { color: '#f8f9fc' }
-                    }
-                },
-                plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                        callbacks: {
-                            label: function (context) {
-                                return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
-                            }
-                        }
-                    }
-                }
-            }
-        });
     }
 </script>
 {% endblock %}
