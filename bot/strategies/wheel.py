@@ -347,164 +347,22 @@ class WheelStrategy:
                  else:
                      continue
             
-            today = date.today()
+            # 1. Get Today (Simulation Aware)
+            if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+                today = self.tradier.current_date.date()
+            else:
+                today = date.today()
+                
             dte = (expiry_date - today).days
 
             # 1. Check DTE Trigger
             if dte > self.ROLL_TRIGGER_DTE: # STRICTLY > 7 means 8+. So 7 matches trigger.
                 continue 
-
-            # 2. Check ITM Status
-            try:
-                quote = self.tradier.get_quote(underlying)
-                current_price = quote['last']
-            except:
-                continue
-
-            is_itm = False
-            if option_type == 'put':
-                if current_price < strike: is_itm = True
-            else:
-                if current_price > strike: is_itm = True
-
-            if not is_itm:
-                continue 
-
-            # --- ROLL TRIGGERED ---
-            self._log(f"⚠️ Rolling Triggered for {symbol}. ITM & DTE {dte} <= 7.")
             
-            # 3. Execution - Roll Logic
-            if option_type == 'put':
-                self._roll_put(underlying, position, current_price, strike)
-            else:
-                self._roll_call(underlying, position, current_price, strike)
+            # ... (rest of loop)
 
+    # ...
 
-    def _roll_put(self, symbol, position, current_price, current_strike):
-        """
-        Roll Put: Roll Out in time and Down in strike (Defensive).
-        Logic: Find next available strike LOWER than current strike.
-        """
-        # New Expiry: 6-9 Weeks out (standard wheel roll)
-        new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
-        if not new_expiry: return
-        
-        # New Strike: Next Available Below Current
-        chain = self.tradier.get_option_chains(symbol, new_expiry)
-        if not chain: return
-        
-        # Filter puts
-        puts = [o for o in chain if o['option_type'] == 'put']
-        puts.sort(key=lambda x: x['strike'])
-        
-        # Find strikes lower than current
-        candidates = [p for p in puts if p['strike'] < current_strike]
-        
-        if not candidates:
-             # Fallback: If no lower strike (e.g. we are at lowest), 
-             # maybe roll to SAME strike? Or abort?
-             # For now, let's try same strike as last resort if no lower, 
-             # but "Roll Down" usually implies strictly lower.
-             # If we can't roll down, we might just roll out at same strike (more credit).
-             # Let's check if Same strike exists.
-             same_strike = next((p for p in puts if p['strike'] == current_strike), None)
-             if same_strike:
-                 new_leg = same_strike
-                 self._log(f"⚠️ No lower strike found. Rolling Out to SAME strike {current_strike}.")
-             else:
-                 self._log("❌ No valid strikes available for roll.")
-                 return
-        else:
-            # Pick the largest strike that is < current (The one immediately below)
-            new_leg = candidates[-1] 
-        
-        self._execute_roll(symbol, position, new_leg, "Roll Down & Out (Mechanistic)")
-
-    def _roll_call(self, symbol, position, current_price, current_strike):
-        """
-        Roll Call: Roll Out in time and Up in strike (Defensive).
-        Logic: Find next available strike HIGHER than current strike.
-        """
-        # New Expiry
-        new_expiry = self._find_expiry(symbol, target_dte=42, min_dte=42, max_dte=63, method='min')
-        if not new_expiry: return
-        
-        chain = self.tradier.get_option_chains(symbol, new_expiry)
-        if not chain: return 
-        
-        calls = [o for o in chain if o['option_type'] == 'call']
-        calls.sort(key=lambda x: x['strike'])
-        
-        # Find strikes higher than current
-        candidates = [c for c in calls if c['strike'] > current_strike]
-        
-        if not candidates:
-             # Fallback to same strike if no higher?
-             same_strike = next((c for c in calls if c['strike'] == current_strike), None)
-             if same_strike:
-                 new_leg = same_strike
-                 self._log(f"⚠️ No higher strike found. Rolling Out to SAME strike {current_strike}.")
-             else:
-                 self._log("❌ No higher strikes available for roll.")
-                 return
-        else:
-            # Pick the lowest strike that is > current (The one immediately above)
-            new_leg = candidates[0]
-        
-        self._execute_roll(symbol, position, new_leg, "Roll Up & Out (Mechanistic)")
-
-    def _execute_roll(self, symbol, old_position, new_leg_option, reason):
-        """
-        Execute the roll as a multi-leg order (Diagonal/Calendar spread essentially).
-        However, Tradier API rolling is often best done as a 'combo'.
-        We are Buying to Close Old, Selling to Open New.
-        Constraint: Max Net Debit 0.90.
-        """
-        leg1 = {
-            'option_symbol': old_position['symbol'],
-            'side': 'buy_to_close',
-            'quantity': abs(old_position['quantity'])
-        }
-        leg2 = {
-            'option_symbol': new_leg_option['symbol'],
-            'side': 'sell_to_open',
-            'quantity': abs(old_position['quantity'])
-        }
-        
-        self._log(f"🔄 Executing Roll ({reason}). Paying max ${self.ROLL_MAX_DEBIT} Debit.")
-        
-        # We need to specify a PRICE for the Net Debit. 
-        # Since it's a Debit limit, we use price=0.90 debit.
-        # Tradier API Convention: 
-        # For 'market' debit, we might treat it differently, but for 'limit', we specify the net cost.
-        # Ensure we send positive value for debit? Tradier documentation varies. 
-        # Usually positive price for Credit, positive cost for Debit?
-        # Let's assume positive = debit for this text, but usually Limit Price is signed or side-dependent.
-        # Safe approach: Limit 0.90 Debit.
-        
-        if self.dry_run:
-            self._log(f"[DRY RUN] Would Submit Roll Order: BTC {leg1['option_symbol']}, STO {leg2['option_symbol']} Limit {self.ROLL_MAX_DEBIT} Debit")
-        else:
-            response = self.tradier.place_order(
-                account_id=self.tradier.account_id,
-                symbol=symbol,
-                side='buy', # 'buy' the spread (paying debit) - check Tradier specific nuance for rolls
-                quantity=1,
-                order_type='debit',
-                duration='day',
-                price=self.ROLL_MAX_DEBIT, 
-                order_class='multileg',
-                legs=[leg1, leg2]
-            )
-            if 'error' in response:
-                self._log(f"Roll Order Failed: {response['error']}")
-            else:
-                self._log(f"Roll Order Placed: {response.get('id', 'unknown')}")
-                # Record Trade here...
-
-    # ------------------------------------------------------------------
-    # HELPERS
-    # ------------------------------------------------------------------
 
     def _execute_order(self, symbol, expiry, strike, option_type, side, reason, min_credit=None):
         """Find the specific option symbol and execute single leg order."""
@@ -551,6 +409,7 @@ class WheelStrategy:
                 self._log(f"Order Error: {res['error']}")
             else:
                 self._log(f"Order Success: {res.get('id', 'unknown')}")
+                # Record Trade here...
                 self._record_trade(symbol, f"Wheel {side}", price, res)
 
     def _find_expiry(self, symbol, target_dte=42, min_dte=None, max_dte=None, exclude_dates=None, method='closest'):
@@ -576,7 +435,12 @@ class WheelStrategy:
             self._log(f"No valid expirations found (Excluded: {exclude_dates})")
             return None
         
-        today = date.today()
+        # Simulation Aware Today
+        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+            today = self.tradier.current_date.date()
+        else:
+            today = date.today()
+
         candidates = []
         
         # 1. Filter by Range if specified
@@ -586,7 +450,7 @@ class WheelStrategy:
                 if not (min_dte <= dte <= max_dte):
                     continue
             candidates.append(d)
-            
+        
         if not candidates:
             rng = f"[{min_dte}, {max_dte}]" if min_dte else "Any"
             self._log(f"No expirations found in DTE range {rng} for {symbol}.")

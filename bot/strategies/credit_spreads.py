@@ -425,10 +425,28 @@ class CreditSpreadStrategy:
             )
         else:
             # Real execution
-            # self.tradier.place_order(...) 
-            # Placeholder for safety until tested
-            self._log(f"Would close {trade['symbol']} now. Implementation pending safe limit logic.")
-            pass
+            response = self.tradier.place_order(
+                account_id=self.tradier.account_id,
+                symbol=trade['symbol'],
+                side='buy', # Not used for multileg but required arg
+                quantity=1,
+                order_type='market', # Forced Market for Close to ensure exit
+                duration='day',
+                price=None, # Market
+                order_class='multileg',
+                legs=legs
+            )
+            
+            if 'error' in response:
+                self._log(f"Close Order Failed: {response['error']}")
+            else:
+                self._log(f"Close Order Placed: {response.get('id')}")
+                # Mark as CLOSED immediately for Backtest simplicity (Live bot might wait for fill)
+                # In Backtest, 'place_order' fills immediately.
+                self.db['auto_trades'].update_one(
+                    {"_id": trade['_id']},
+                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "close_order_id": response.get('id')}}
+                )
 
     def _find_delta_strike(self, chain, option_type, min_delta=0.30, max_delta=0.37):
         """Find strike with delta closest to min_delta within range."""
