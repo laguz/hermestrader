@@ -353,11 +353,18 @@ class CreditSpreadStrategy:
                                  
                                  self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}% (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
 
-                                 should_close, reason = CreditSpreadStrategy.should_close_early(dte, profit_pct)
+                                 should_close, reason, target_pct = CreditSpreadStrategy.should_close_early(dte, profit_pct)
                                      
                                  if should_close:
-                                     self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol}.")
-                                     self._execute_close(trade)
+                                     # Calculate Strict Limit Price based on user formula
+                                     # Limit = Entry Credit * Target Pct (e.g. 1.00 * 0.50 = 0.50)
+                                     # Round DOWN to 2 decimals
+                                     import math
+                                     target_debit = entry_credit * target_pct
+                                     limit_price = math.floor(target_debit * 100) / 100.0
+                                     
+                                     self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol} at Limit {limit_price}.")
+                                     self._execute_close(trade, limit_price=limit_price)
                                      continue # Done with this trade
 
                         except Exception as e:
@@ -370,21 +377,34 @@ class CreditSpreadStrategy:
     def should_close_early(dte, profit_pct):
         """
         Determine if the trade should be closed early based on DTE and Profit %.
-        Returns (bool, reason_string)
+        Returns (bool, reason_string, target_pct)
+        User Targets:
+        - DTE > 13: 50% Profit (Target Debit = Entry * 0.50)
+        - 6 < DTE <= 13: 60% Profit (Target Debit = Entry * 0.40)
+        - DTE <= 6: 70% Profit (Target Debit = Entry * 0.30)
         """
-        # Condition 1: >= 15 DTE and 50% Profit
-        if dte >= 15 and profit_pct >= 0.50:
-            return True, f"Early Profit Target (DTE {dte} >= 15, Profit {profit_pct*100:.1f}% >= 50%)"
+        target_pct = None
+        
+        if dte > 13:
+            # Target: Pay 50% of credit
+            if profit_pct >= 0.50:
+                return True, f"Target Met: DTE {dte} > 13, Profit {profit_pct*100:.1f}% >= 50%", 0.50
+                
+        elif 6 < dte <= 13:
+             # Target: Pay 40% of credit
+             if profit_pct >= 0.60:
+                return True, f"Target Met: 6 < DTE {dte} <= 13, Profit {profit_pct*100:.1f}% >= 60%", 0.40
+        
+        elif dte <= 6:
+             # Target: Pay 30% of credit
+             if profit_pct >= 0.70:
+                return True, f"Target Met: DTE {dte} <= 6, Profit {profit_pct*100:.1f}% >= 70%", 0.30
             
-        # Condition 2: 7 < DTE <= 14 AND 60% Profit
-        elif (7 < dte <= 14) and profit_pct >= 0.60:
-            return True, f"Mid-Term Profit Target (7 < DTE {dte} <= 14, Profit {profit_pct*100:.1f}% >= 60%)"
+        return False, "", None
             
-        return False, ""
-            
-    def _execute_close(self, trade):
-        """Close the spread position."""
-        self._log(f"Refuting Close Logic for {trade['symbol']} (ITM Limit Reached)...")
+    def _execute_close(self, trade, limit_price=None):
+        """Close the spread position using a LIMIT order."""
+        self._log(f"Executing Close for {trade['symbol']}...")
         
         # Build closing order (Buy to Close Short, Sell to Close Long)
         short_leg = trade['short_leg']
@@ -395,44 +415,51 @@ class CreditSpreadStrategy:
             {'option_symbol': long_leg, 'side': 'sell_to_close', 'quantity': 1}
         ]
         
-        # We need to pay debit. Get market price?
-        # For automation, we might use 'market' order or limit at mid?
-        # Tradier 'market' for multileg might be risky or blocked.
-        # Let's try to get quotes.
-        try:
-            quotes = self.tradier.get_quotes([short_leg, long_leg])
-            # Calculate Debit: (Short Ask - Long Bid) ? To buy back short and sell long.
-            # Short (Buy) -> Ask. Long (Sell) -> Bid.
-            # safe assumption?
-            short_q = next((q for q in quotes if q['symbol'] == short_leg), {})
-            long_q = next((q for q in quotes if q['symbol'] == long_leg), {})
-            
-            debit = (short_q.get('ask', 0) - long_q.get('bid', 0))
-            # Pad it slightly to ensure fill?
-            limit_price = round(debit * 1.05, 2) # paying 5% more?
-            # Or just use Mid?
-            # Let's just log and skip actual execution if risk is high, or use 'market' if permitted.
-            # User didn't specify order type. Let's assume Market for "Close immediately at 3 PM".
-        except:
-             limit_price = 0 # trigger manual review or fail
-        
+        if limit_price is None:
+             # Fallback if limit_price not passed (e.g. ITM close)
+             # Use Natural Debit + 5% logic as default safe close
+             try:
+                quotes = self.tradier.get_quotes([short_leg, long_leg])
+                short_q = next((q for q in quotes if q['symbol'] == short_leg), {})
+                long_q = next((q for q in quotes if q['symbol'] == long_leg), {})
+                
+                short_ask = short_q.get('ask', 0)
+                long_bid = long_q.get('bid', 0)
+                natural_debit = short_ask - long_bid
+                if natural_debit < 0: natural_debit = 0
+                
+                limit_price = round(natural_debit * 1.05, 2)
+                self._log(f"📉 Calculated Safe Limit for Close: {limit_price} (Natural: {natural_debit:.2f})")
+             except Exception as e:
+                self._log(f"Error calculating default limit: {e}. Using 0 (Market Risk).")
+                limit_price = 0.0 # Will fail if 'debit' order requires price > 0, or be treated as market?
+                # Actually for 'debit' type, 0 might be rejected.
+                # Let's hope ITM close passes a price or we have quotes.
+
         if self.dry_run:
-            self._log(f"[DRY RUN] Closing {trade['symbol']} spread. Debit: ~{limit_price}")
+            self._log(f"[DRY RUN] Closing {trade['symbol']} spread. Limit: {limit_price}")
             # Mark Closed
             self.db['auto_trades'].update_one(
                 {"_id": trade['_id']},
-                {"$set": {"status": "CLOSED_STOP_LOSS", "close_date": datetime.now()}}
+                {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
             )
         else:
             # Real execution
+            # Order Type: 'debit' usually works for Credit Spreads closing (which is a Debit Spread)
+            # Price: Limit Price
+            
+            # If limit_price is 0, we might need to fallback to 'market' order type?
+            # But we want to avoid market.
+            # Let's try 'debit' with the calculated limit.
+            
             response = self.tradier.place_order(
                 account_id=self.tradier.account_id,
                 symbol=trade['symbol'],
-                side='buy', # Not used for multileg but required arg
+                side='buy', # Not used for multileg but required arg (Buy to close)
                 quantity=1,
-                order_type='market', # Forced Market for Close to ensure exit
+                order_type='debit', # Limit Debit
                 duration='day',
-                price=None, # Market
+                price=limit_price, # STRICT LIMIT
                 order_class='multileg',
                 legs=legs
             )
@@ -445,7 +472,12 @@ class CreditSpreadStrategy:
                 # In Backtest, 'place_order' fills immediately.
                 self.db['auto_trades'].update_one(
                     {"_id": trade['_id']},
-                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "close_order_id": response.get('id')}}
+                    {"$set": {
+                        "status": "CLOSED", 
+                        "close_date": datetime.now(), 
+                        "close_order_id": response.get('id'),
+                        "exit_price": limit_price
+                    }}
                 )
 
     def _find_delta_strike(self, chain, option_type, min_delta=0.30, max_delta=0.37):
