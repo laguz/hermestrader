@@ -178,11 +178,15 @@ class CreditSpreadStrategy:
         else:
             self._log(f"Unknown spread type: {spread_type}")
 
-    def manage_positions(self):
+    def manage_positions(self, simulation_mode=False):
         """
         Check open positions for exit conditions.
         Condition: If ITM for 2 days straight, close on next day at 3:00 PM EST.
         """
+        # Clear logs for this run if simulation
+        if simulation_mode:
+            self.execution_logs = []
+            
         # 1. Check Time (Only run after 3:00 PM EST)
         # Explicitly check for EST time to ensure 3 PM is 3 PM ET.
         if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
@@ -193,21 +197,22 @@ class CreditSpreadStrategy:
              now_est = datetime.now(est)
         
         # 3 PM EST = 15:00
-        if now_est.hour < 15: 
+        # If simulation_mode is True, ignore time check
+        if not simulation_mode and now_est.hour < 15: 
             return # Too early, wait for 3 PM EST
             
         now = now_est # Use EST time for logging/checks
 
         # 2. Get Open Trades from DB
         open_trades = list(self.db['auto_trades'].find({"status": "OPEN"}))
-        if not open_trades: return
+        if not open_trades: return self.execution_logs if simulation_mode else None
 
         # 3. Verify with Tradier (Source of Truth)
         try:
             positions = self.tradier.get_positions()
         except Exception as e:
             self._log(f"Error fetching positions for management: {e}")
-            return
+            return self.execution_logs if simulation_mode else None
             
         # Map of Option Symbol -> Position
         active_option_symbols = {p['symbol']: p for p in positions}
@@ -231,10 +236,10 @@ class CreditSpreadStrategy:
             today_str = now.strftime('%Y-%m-%d')
             
             # If we already checked today, check if we need to Execute Close
-            if last_check == today_str:
+            if last_check == today_str and not simulation_mode:
                 if trade.get('close_on_next_day', False):
                     # It's D-Day (Day 3 or later) and we are past 3 PM.
-                    self._execute_close(trade)
+                    self._execute_close(trade, simulation_mode=simulation_mode)
                 continue
                 
             # Start of New Daily Check
@@ -244,7 +249,7 @@ class CreditSpreadStrategy:
             # This is a strict rule. Even if it goes OTM today, the decision was made yesterday.
             if trade.get('close_on_next_day', False):
                  self._log(f"🚨 HARD CLOSE: Executing scheduled close for {symbol} (ITM > 2 days).")
-                 self._execute_close(trade)
+                 self._execute_close(trade, simulation_mode=simulation_mode)
                  continue
 
             # Check ITM Status
@@ -307,10 +312,13 @@ class CreditSpreadStrategy:
                 updates['close_on_next_day'] = False
             
             # Save state
-            self.db['auto_trades'].update_one(
-                {"_id": trade['_id']},
-                {"$set": updates}
-            )
+            if not simulation_mode:
+                self.db['auto_trades'].update_one(
+                    {"_id": trade['_id']},
+                    {"$set": updates}
+                )
+            else:
+                self._log(f"[SIMULATION] Would update trade state: {updates}")
             
             # If we just flagged it, we DO NOT close today. "Close on the NEXT trading day".
             # So we wait. (Unless trigger below causes immediate close?)
@@ -338,7 +346,18 @@ class CreditSpreadStrategy:
                     if not trade.get('close_on_next_day', False) and entry_credit > 0:
                         try:
                              # Re-fetch quotes just for profit check
-                             legs_quotes = self.tradier.get_quotes([short_leg, long_leg])
+                             # Use get_quote(symbol) which handles single or comma-list
+                             legs_list = [short_leg, long_leg]
+                             legs_str = ",".join(legs_list)
+                             try:
+                                 q_data = self.tradier.get_quote(legs_str)
+                                 # Standardize to list
+                                 if isinstance(q_data, dict): legs_quotes = [q_data]
+                                 elif isinstance(q_data, list): legs_quotes = q_data
+                                 else: legs_quotes = []
+                             except:
+                                 legs_quotes = []
+
                              sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
                              lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
                              
@@ -364,7 +383,7 @@ class CreditSpreadStrategy:
                                      limit_price = math.floor(target_debit * 100) / 100.0
                                      
                                      self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol} at Limit {limit_price}.")
-                                     self._execute_close(trade, limit_price=limit_price)
+                                     self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
                                      continue # Done with this trade
 
                         except Exception as e:
@@ -402,7 +421,9 @@ class CreditSpreadStrategy:
             
         return False, "", None
             
-    def _execute_close(self, trade, limit_price=None):
+        return False, "", None
+            
+    def _execute_close(self, trade, limit_price=None, simulation_mode=False):
         """Close the spread position using a LIMIT order."""
         self._log(f"Executing Close for {trade['symbol']}...")
         
@@ -419,7 +440,17 @@ class CreditSpreadStrategy:
              # Fallback if limit_price not passed (e.g. ITM close)
              # Use Natural Debit + 5% logic as default safe close
              try:
-                quotes = self.tradier.get_quotes([short_leg, long_leg])
+                # Use get_quote(symbol) which handles single or comma-list
+                legs_list = [short_leg, long_leg]
+                legs_str = ",".join(legs_list)
+                try:
+                    q_data = self.tradier.get_quote(legs_str)
+                    if isinstance(q_data, dict): quotes = [q_data]
+                    elif isinstance(q_data, list): quotes = q_data
+                    else: quotes = []
+                except:
+                    quotes = []
+                
                 short_q = next((q for q in quotes if q['symbol'] == short_leg), {})
                 long_q = next((q for q in quotes if q['symbol'] == long_leg), {})
                 
@@ -436,13 +467,16 @@ class CreditSpreadStrategy:
                 # Actually for 'debit' type, 0 might be rejected.
                 # Let's hope ITM close passes a price or we have quotes.
 
-        if self.dry_run:
-            self._log(f"[DRY RUN] Closing {trade['symbol']} spread. Limit: {limit_price}")
+        if self.dry_run or simulation_mode:
+            self._log(f"[DRY RUN/SIM] Closing {trade['symbol']} spread. Limit: {limit_price}")
             # Mark Closed
-            self.db['auto_trades'].update_one(
-                {"_id": trade['_id']},
-                {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
-            )
+            if not simulation_mode:
+                self.db['auto_trades'].update_one(
+                    {"_id": trade['_id']},
+                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
+                )
+            else:
+                self._log(f"[SIMULATION] Would Mark CLOSED in DB.")
         else:
             # Real execution
             # Order Type: 'debit' usually works for Credit Spreads closing (which is a Debit Spread)

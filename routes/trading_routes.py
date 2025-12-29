@@ -243,6 +243,21 @@ def run_dry_run():
             print(error_msg)
             traceback.print_exc()
 
+        # Check Open Positions (Simulation)
+        all_logs.append("\n--- Checking Open Credit Spreads (Closing Logic) ---")
+        try:
+            # We reuse strategy_cs instance which has dry_run=True
+            closing_logs = strategy_cs.manage_positions(simulation_mode=True)
+            if closing_logs:
+                all_logs.extend(closing_logs)
+            else:
+                all_logs.append("No open positions to manage or no actions needed.")
+        except Exception as e:
+            msg = f"❌ Closing Logic Check Failed: {str(e)}"
+            all_logs.append(msg)
+            print(msg)
+            traceback.print_exc()
+
         # Execute Wheel
         all_logs.append("\n--- Wheel Strategy ---")
         try:
