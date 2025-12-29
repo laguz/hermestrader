@@ -146,6 +146,9 @@
         wheel: []
     };
 
+    // Store last known settings to prevent overwriting user edits
+    let lastSettings = null;
+
     function updateUI(status) {
         if (status.status === 'RUNNING') {
             statusIcon.textContent = 'radio_button_checked';
@@ -191,12 +194,37 @@
         // Update Configuration Inputs
         if (status.settings) {
             const s = status.settings;
-            if (document.activeElement.id !== 'cfg-cs-lots') {
-                document.getElementById('cfg-cs-lots').value = s.max_credit_spreads_per_symbol || 5;
-            }
-            if (document.activeElement.id !== 'cfg-wheel-lots') {
-                document.getElementById('cfg-wheel-lots').value = s.max_wheel_contracts_per_symbol || 1;
-            }
+            updateInputIfSafe('cfg-cs-lots', s.max_credit_spreads_per_symbol || 5);
+            updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
+
+            lastSettings = s;
+        }
+    }
+
+    function updateInputIfSafe(id, newValue) {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        // 1. If element is focused, do not touch
+        if (document.activeElement === el) return;
+
+        // 2. If we have no history (first load), update
+        if (!lastSettings) {
+            el.value = newValue;
+            return;
+        }
+
+        // 3. Compare current input value with LAST KNOWN DB value.
+        // If current input value != last known DB value, user edited it. Do not overwrite.
+        // We map ID to the settings key for comparison
+        let oldDbValue = null;
+        if (id === 'cfg-cs-lots') oldDbValue = lastSettings.max_credit_spreads_per_symbol || 5;
+        if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
+
+        // Loose comparison (string vs number)
+        if (el.value == oldDbValue) {
+            // User hasn't changed it from what it was. Safe to update to new value.
+            el.value = newValue;
         }
     }
 

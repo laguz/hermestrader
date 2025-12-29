@@ -27,13 +27,8 @@
         <div id="total-pnl" style="font-size: 32px; font-weight: 700; margin-top: 8px;">$0.00</div>
     </div>
 
-    <!-- 3. Portfolio Allocation (Pie Graph) -->
-    <div class="md-card" style="position: relative; height: 300px; padding: 16px;">
-        <h2 class="md-card__headline" style="margin-bottom: 8px; font-size: 16px;">Portfolio Allocation</h2>
-        <div style="height: 240px; width: 100%;">
-            <canvas id="allocationChart"></canvas>
-        </div>
-    </div>
+    <!-- 3. Closed Positions Count (Optional Placeholder or Removal) -->
+    <!-- Removed Pie Chart as per request -->
 </div>
 
 <!-- Charts Row (History) -->
@@ -47,17 +42,7 @@
 <!-- Positions Section -->
 <div class="md-card col-span-full">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 class="md-card__headline" id="table-title" style="margin: 0;">Open Positions</h2>
-
-        <!-- Toggle -->
-        <div class="md-segmented-button">
-            <button id="btn-view-open" class="md-button md-button--filled" onclick="switchView('open')">
-                Open
-            </button>
-            <button id="btn-view-closed" class="md-button md-button--tonal" onclick="switchView('closed')">
-                Closed
-            </button>
-        </div>
+        <h2 class="md-card__headline" id="table-title" style="margin: 0;">Closed Positions</h2>
     </div>
 
     <div class="md-table-container">
@@ -109,33 +94,19 @@
             }
         }
 
-        // View Switching
-        window.switchView = (view) => {
-            currentView = view;
-
-            // Update Buttons
-            const btnOpen = document.getElementById('btn-view-open');
-            const btnClosed = document.getElementById('btn-view-closed');
-
-            if (btnOpen && btnClosed) {
-                if (view === 'open') {
-                    btnOpen.className = 'md-button md-button--filled';
-                    btnClosed.className = 'md-button md-button--tonal';
-                    document.getElementById('table-title').textContent = 'Open Positions';
-                } else {
-                    btnOpen.className = 'md-button md-button--tonal';
-                    btnClosed.className = 'md-button md-button--filled';
-                    document.getElementById('table-title').textContent = 'Closed Positions';
-                }
-            }
-
-            renderTable();
-        };
+        // View Switching REMOVED
 
         function renderApp() {
             renderTable();
-            updateSummary(rawData.open, rawData.closed);
-            renderCharts(rawData.open, rawData.closed);
+            // Update Summary just for Total PnL (Closed) or Combined? 
+            // The card says "Total PnL". Usually implies Realized + Unrealized?
+            // If user wants Open Positions gone from UI, maybe they only care about Realized here?
+            // "Remove Open Positions from Pnl" implies showing Realized PnL.
+            // Let's summing ONLY closed positions for consistency with the table.
+
+            const closedPnL = (rawData.closed || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+            updateSummary(0, rawData.closed); // 0 open pnl
+            renderCharts(null, rawData.closed);
         }
 
         function renderTable() {
@@ -146,7 +117,7 @@
             tbody.innerHTML = '';
             thead.innerHTML = '';
 
-            const list = currentView === 'open' ? rawData.open : rawData.closed;
+            const list = rawData.closed;
 
             // Sort
             if (list) {
@@ -160,38 +131,22 @@
 
             if (!list || list.length === 0) {
                 thead.innerHTML = `<tr><th>Status</th></tr>`;
-                tbody.innerHTML = `<tr><td style="text-align: center; padding: 20px;">No ${currentView} positions found.</td></tr>`;
+                tbody.innerHTML = `<tr><td style="text-align: center; padding: 20px;">No closed positions found.</td></tr>`;
                 return;
             }
 
-            // Define Columns based on View
-            let columns = [];
-            if (currentView === 'open') {
-                columns = [
-                    { header: 'Symbol', key: 'symbol' },
-                    { header: 'Type', key: 'type' },
-                    { header: 'Qty', key: 'quantity' },
-                    { header: 'Entry', key: 'entry_price', format: 'currency' },
-                    { header: 'Current', key: 'current_price', format: 'currency' },
-                    { header: 'Cost Basis', key: 'cost_basis', format: 'currency' },
-                    { header: 'Market Val', key: 'market_value', format: 'currency' },
-                    { header: 'Unrealized P&L', key: 'pnl', format: 'currency', color: true },
-                    { header: 'Return %', key: 'pnl_pct', format: 'pct', color: true },
-                    { header: 'Updated', key: 'last_updated', format: 'date' }
-                ];
-            } else {
-                columns = [
-                    { header: 'Symbol', key: 'symbol' },
-                    { header: 'Type', key: 'type' },
-                    { header: 'Qty', key: 'quantity' },
-                    { header: 'Entry', key: 'entry_price', format: 'currency' },
-                    { header: 'Exit Price', key: 'exit_price', format: 'currency' },
-                    { header: 'Cost Basis', key: 'cost_basis', format: 'currency' },
-                    { header: 'Realized P&L', key: 'pnl', format: 'currency', color: true },
-                    { header: 'Return %', key: 'pnl_pct', format: 'pct', color: true },
-                    { header: 'Exit Date', key: 'exit_date', format: 'date' }
-                ];
-            }
+            // Define Columns (Closed Only)
+            let columns = [
+                { header: 'Symbol', key: 'symbol' },
+                { header: 'Type', key: 'type' },
+                { header: 'Qty', key: 'quantity' },
+                { header: 'Entry', key: 'entry_price', format: 'currency' },
+                { header: 'Exit Price', key: 'exit_price', format: 'currency' },
+                { header: 'Cost Basis', key: 'cost_basis', format: 'currency' },
+                { header: 'Realized P&L', key: 'pnl', format: 'currency', color: true },
+                { header: 'Return %', key: 'pnl_pct', format: 'pct', color: true },
+                { header: 'Exit Date', key: 'exit_date', format: 'date' }
+            ];
 
             // Render Header
             const headerRow = document.createElement('tr');
@@ -283,55 +238,7 @@
                 return;
             }
 
-            // 1. Allocation Pie Chart (Open Positions)
-            const allocCanvas = document.getElementById('allocationChart');
-            if (allocCanvas) {
-                const allocCtx = allocCanvas.getContext('2d');
-                const exposure = {};
-                (openPos || []).forEach(p => {
-                    let sym = p.symbol;
-                    const match = sym.match(/^([A-Z]+)/);
-                    if (match) sym = match[1];
-                    const val = Math.abs(p.market_value || 0);
-                    exposure[sym] = (exposure[sym] || 0) + val;
-                });
-                const labels = Object.keys(exposure);
-                const data = Object.values(exposure);
-
-                if (allocationChart) allocationChart.destroy();
-                allocationChart = new Chart(allocCtx, {
-                    type: 'doughnut',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            data: data,
-                            backgroundColor: [
-                                '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e', '#e74a3b',
-                                '#858796', '#5a5c69', '#2e59d9', '#17a673', '#2c9faf'
-                            ],
-                            hoverOffset: 4,
-                            borderWidth: 0
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { position: 'bottom', labels: { color: '#c2c7cf' } },
-                            tooltip: {
-                                callbacks: {
-                                    label: function (context) {
-                                        let label = context.label || '';
-                                        if (label) label += ': ';
-                                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
-                                        return label;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // 1. Allocation Pie Chart REMOVED
 
             // 2. History Chart (Closed Positions)
             const histCanvas = document.getElementById('pnlHistoryChart');
