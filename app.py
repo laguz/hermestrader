@@ -1,5 +1,8 @@
 from flask import Flask
+import os
 from dotenv import load_dotenv
+from flask_login import LoginManager
+from services.container import Container
 
 # Import Blueprints
 from routes.main_routes import main_bp
@@ -8,12 +11,23 @@ from routes.backtest_routes import backtest_bp
 from routes.ml_routes import ml_bp
 from routes.account_routes import account_bp
 from routes.trading_routes import trading_bp
+from routes.auth_routes import auth_bp
 
-load_dotenv()
 
 app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_key_change_me') # Required for session
+
+# Init Login Manager
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'auth.login'
+
+@login_manager.user_loader
+def load_user(user_id):
+    return Container.get_auth_service().load_user(user_id)
 
 # Register Blueprints
+app.register_blueprint(auth_bp)
 app.register_blueprint(main_bp)
 app.register_blueprint(positions_bp)
 app.register_blueprint(backtest_bp)

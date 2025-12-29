@@ -9,3 +9,5 @@ scikit-learn
 tensorflow
 pymongo
 
+Flask-Login
+cryptography

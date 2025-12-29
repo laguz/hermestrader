@@ -42,6 +42,15 @@ class Container:
         from services.bot_service import BotService
         return BotService()
 
+    _auth_service = None
+
+    @classmethod
+    def get_auth_service(cls):
+        if not cls._auth_service:
+            from services.auth_service import AuthService
+            cls._auth_service = AuthService()
+        return cls._auth_service
+
     @classmethod
     def get_analysis_service(cls):
         from services.analysis_service import AnalysisService

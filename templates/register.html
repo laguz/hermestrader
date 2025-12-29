@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-5">
+        <div class="card bg-dark text-white border-secondary shadow-lg custom-blur">
+            <div class="card-header border-secondary text-center">
+                <h3>System Initialization</h3>
+                <small class="text-muted">Create Admin User & Encrypt Vault</small>
+            </div>
+            <div class="card-body">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                {% for category, message in messages %}
+                <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
+                    {{ message }}
+                </div>
+                {% endfor %}
+                {% endif %}
+                {% endwith %}
+
+                <form method="POST" action="{{ url_for('auth.register') }}">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control bg-secondary text-white border-0" id="username"
+                            name="username" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control bg-secondary text-white border-0" id="password"
+                            name="password" required>
+                        <div class="form-text text-light">This password will be your key to unlock the vault. Don't lose
+                            it.</div>
+                    </div>
+
+                    <hr class="border-secondary">
+
+                    <div class="mb-3">
+                        <label for="tradier_key" class="form-label text-warning">Tradier API Key</label>
+                        <input type="password" class="form-control bg-secondary text-white border-warning"
+                            id="tradier_key" name="tradier_key" required>
+                        <div class="form-text text-light">This key will be encrypted and stored in your secure vault.
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="account_id" class="form-label text-warning">Tradier Account ID</label>
+                        <input type="text" class="form-control bg-secondary text-white border-warning" id="account_id"
+                            name="account_id" required>
+                        <div class="form-text text-light">Your Account ID (e.g., VA........) also encrypted.</div>
+                    </div>
+
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-warning btn-lg">Initialize System</button>
+                    </div>
+                </form>
+            </div>
+            <div class="card-footer border-secondary text-center text-muted">
+                <small>Already registered? <a href="{{ url_for('auth.login') }}" class="text-info">Login</a></small>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

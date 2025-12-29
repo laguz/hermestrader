@@ -8,10 +8,13 @@ class TradierService:
         self.account_id = account_id or os.getenv('TRADIER_ACCOUNT_ID')
         self.endpoint = endpoint or os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
         
-        if not self.access_token:
-            print("Warning: TRADIER_API_KEY not found in environment variables.")
-        if not self.account_id:
-             print("Warning: TRADIER_ACCOUNT_ID not found in environment variables.")
+        # Note: API Key might be missing on init if using Vault.
+        
+    def update_access_token(self, token):
+        self.access_token = token
+
+    def update_account_id(self, account_id):
+        self.account_id = account_id
 
     def _get_headers(self):
         return {
