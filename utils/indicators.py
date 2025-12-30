@@ -310,3 +310,79 @@ def calculate_option_price(current_price, strike_price, time_to_expiry_years, vo
         price = (strike_price * np.exp(-risk_free_rate * time_to_expiry_years) * norm.cdf(-d2)) - (current_price * norm.cdf(-d1))
         
     return price
+
+def calculate_adx(high, low, close, period=14):
+    """
+    Calculate Average Directional Index (ADX).
+    """
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
+    
+    tr1 = pd.DataFrame(high - low)
+    tr2 = pd.DataFrame(abs(high - close.shift(1)))
+    tr3 = pd.DataFrame(abs(low - close.shift(1)))
+    frames = [tr1, tr2, tr3]
+    tr = pd.concat(frames, axis=1, join='outer').max(axis=1)
+    
+    atr = tr.rolling(period).mean()
+    
+    plus_di = 100 * (plus_dm.ewm(alpha=1/period).mean() / atr)
+    minus_di = 100 * (abs(minus_dm).ewm(alpha=1/period).mean() / atr)
+    dx = (abs(plus_di - minus_di) / abs(plus_di + minus_di)) * 100
+    adx = ((dx.shift(1) * (period - 1)) + dx) / period
+    adx_smooth = adx.ewm(alpha=1/period).mean()
+    return adx_smooth
+
+def calculate_hv_rank(close_series, window=30, lookback=252):
+    """
+    Calculate the Percentile Rank of current Historical Volatility 
+    compared to the last 'lookback' days.
+    """
+    log_returns = np.log(close_series / close_series.shift(1))
+    # Rolling annualized volatility
+    rolling_vol = log_returns.rolling(window=window).std() * np.sqrt(252)
+    
+    # Get the last 'lookback' days of volatility
+    history = rolling_vol.tail(lookback).dropna()
+    
+    if history.empty:
+        return 50 # Default middle
+        
+    current_vol = rolling_vol.iloc[-1]
+    
+    # Calculate percentile rank (0-100)
+    from scipy import stats
+    return stats.percentileofscore(history, current_vol)
+
+def calculate_obv(close, volume):
+    """
+    Calculate On-Balance Volume (OBV).
+    """
+    # OBV = Previous OBV + Volume if Close > Previous Close
+    # OBV = Previous OBV - Volume if Close < Previous Close
+    # OBV = Previous OBV if Close = Previous Close
+    
+    close_diff = close.diff()
+    direction = pd.Series(0, index=close.index)
+    direction[close_diff > 0] = 1
+    direction[close_diff < 0] = -1
+    
+    obv = (volume * direction).cumsum()
+    return obv
+
+def calculate_vwap(high, low, close, volume, window=14):
+    """
+    Calculate Rolling Volume Weighted Average Price (VWAP).
+    """
+    typical_price = (high + low + close) / 3
+    
+    # Cumulative sum of Typical Price * Volume
+    tp_v = typical_price * volume
+    
+    # Rolling sum
+    rolling_tp_v = tp_v.rolling(window=window).sum()
+    rolling_vol = volume.rolling(window=window).sum()
+    
+    return rolling_tp_v / rolling_vol
