@@ -11,7 +11,7 @@ if not mongo_uri:
     print("MONGODB_URI not found")
 else:
     client = MongoClient(mongo_uri)
-    db = client.get_default_database()
+    db = client['investment_db']
     users = list(db.users.find({}, {'username': 1, 'vault': 1}))
     print(f"Found {len(users)} users.")
     for u in users:

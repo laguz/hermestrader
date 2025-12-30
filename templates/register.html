@@ -1,64 +1,201 @@
 {% extends "base.html" %}
 
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
-    <div class="col-md-5">
-        <div class="card bg-dark text-white border-secondary shadow-lg custom-blur">
-            <div class="card-header border-secondary text-center">
-                <h3>System Initialization</h3>
-                <small class="text-muted">Create Admin User & Encrypt Vault</small>
+<div class="login-container">
+    <div class="md-card login-card" style="max-width: 500px;">
+        <div class="card-header text-center">
+            <span class="material-symbols-outlined login-icon">verified_user</span>
+            <div class="md-card__headline justify-content-center">Initialize System</div>
+        </div>
+
+        <div class="card-body">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert {{ 'alert-error' if category == 'error' else 'alert-info' }}">
+                {{ message }}
             </div>
-            <div class="card-body">
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                {% for category, message in messages %}
-                <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
-                    {{ message }}
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            <!-- Standard Registration -->
+            <form method="POST" action="{{ url_for('auth.register') }}">
+
+                <h6 class="text-secondary mb-3 mt-0 text-uppercase small" style="letter-spacing:1px;font-weight:600;">
+                    Credentials</h6>
+
+                <div class="md-text-field-container">
+                    <input type="text" class="md-text-field" id="username" name="username" placeholder=" " required>
+                    <label for="username" class="md-text-field-label">Username</label>
                 </div>
-                {% endfor %}
-                {% endif %}
-                {% endwith %}
 
-                <form method="POST" action="{{ url_for('auth.register') }}">
-                    <div class="mb-3">
-                        <label for="username" class="form-label">Username</label>
-                        <input type="text" class="form-control bg-secondary text-white border-0" id="username"
-                            name="username" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="password" class="form-label">Password</label>
-                        <input type="password" class="form-control bg-secondary text-white border-0" id="password"
-                            name="password" required>
-                        <div class="form-text text-light">This password will be your key to unlock the vault. Don't lose
-                            it.</div>
-                    </div>
+                <div class="md-text-field-container">
+                    <input type="password" class="md-text-field" id="password" name="password" placeholder=" " required>
+                    <label for="password" class="md-text-field-label">Password (Vault Key)</label>
+                </div>
 
-                    <hr class="border-secondary">
+                <div class="divider mt-4 mb-4"><span>API Secrets (Encrypted)</span></div>
 
-                    <div class="mb-3">
-                        <label for="tradier_key" class="form-label text-warning">Tradier API Key</label>
-                        <input type="password" class="form-control bg-secondary text-white border-warning"
-                            id="tradier_key" name="tradier_key" required>
-                        <div class="form-text text-light">This key will be encrypted and stored in your secure vault.
-                        </div>
-                    </div>
+                <div class="md-text-field-container">
+                    <input type="password" class="md-text-field" id="tradier_key" name="tradier_key" placeholder=" "
+                        required>
+                    <label for="tradier_key" class="md-text-field-label"
+                        style="color:var(--md-sys-color-warning);">Tradier API Key</label>
+                </div>
 
-                    <div class="mb-3">
-                        <label for="account_id" class="form-label text-warning">Tradier Account ID</label>
-                        <input type="text" class="form-control bg-secondary text-white border-warning" id="account_id"
-                            name="account_id" required>
-                        <div class="form-text text-light">Your Account ID (e.g., VA........) also encrypted.</div>
-                    </div>
+                <div class="md-text-field-container">
+                    <input type="text" class="md-text-field" id="account_id" name="account_id" placeholder=" " required>
+                    <label for="account_id" class="md-text-field-label"
+                        style="color:var(--md-sys-color-warning);">Tradier Account ID</label>
+                </div>
 
-                    <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-warning btn-lg">Initialize System</button>
-                    </div>
-                </form>
-            </div>
-            <div class="card-footer border-secondary text-center text-muted">
-                <small>Already registered? <a href="{{ url_for('auth.login') }}" class="text-info">Login</a></small>
-            </div>
+                <button type="submit" class="md-button md-button--filled w-100 mt-2"
+                    style="background:var(--md-sys-color-warning); color:#000;">
+                    <span class="material-symbols-outlined">rocket_launch</span>
+                    Initialize System
+                </button>
+            </form>
+
+            <div class="divider mt-4"><span>OR</span></div>
+
+            <button class="md-button md-button--tonal w-100 mt-3" type="button" onclick="registerWithNostr()">
+                <img src="https://nostr.com/favicon.ico" alt="Nostr"
+                    style="width:20px; height:20px; border-radius: 50%;">
+                Register with Nostr (Beta)
+            </button>
+
+        </div>
+
+        <div class="card-footer text-center mt-4">
+            <small class="text-secondary">Already registered? <a href="{{ url_for('auth.login') }}"
+                    class="link-primary">Login</a></small>
         </div>
     </div>
 </div>
+
+<style>
+    /* Reuse Login Styles */
+    main {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        min-height: 80vh;
+        grid-template-columns: 1fr !important;
+    }
+
+    .login-container {
+        width: 100%;
+        max-width: 500px;
+        /* Wider for register */
+        perspective: 1000px;
+    }
+
+    .login-card {
+        padding: 40px;
+        border-radius: 24px;
+        background: rgba(18, 20, 24, 0.7);
+    }
+
+    .login-icon {
+        font-size: 48px;
+        color: var(--md-sys-color-warning);
+        margin-bottom: 16px;
+        display: block;
+    }
+
+    .w-100 {
+        width: 100%;
+    }
+
+    .mt-4 {
+        margin-top: 24px;
+    }
+
+    .mb-4 {
+        margin-bottom: 24px;
+    }
+
+    .mt-2 {
+        margin-top: 12px;
+    }
+
+    .mt-3 {
+        margin-top: 16px;
+    }
+
+    .text-center {
+        text-align: center;
+    }
+
+    .justify-content-center {
+        justify-content: center;
+    }
+
+    .text-uppercase {
+        text-transform: uppercase;
+    }
+
+    .text-secondary {
+        color: var(--md-sys-color-secondary);
+    }
+
+    .link-primary {
+        color: var(--md-sys-color-primary);
+        text-decoration: none;
+        font-weight: 500;
+        transition: opacity 0.2s;
+    }
+
+    .link-primary:hover {
+        opacity: 0.8;
+    }
+
+    .alert {
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        border: 1px solid transparent;
+    }
+
+    .alert-error {
+        background: rgba(255, 180, 171, 0.1);
+        color: var(--md-sys-color-error);
+        border-color: rgba(255, 180, 171, 0.2);
+    }
+
+    .alert-info {
+        background: rgba(168, 199, 250, 0.1);
+        color: var(--md-sys-color-primary);
+        border-color: rgba(168, 199, 250, 0.2);
+    }
+
+    .divider {
+        display: flex;
+        align-items: center;
+        text-align: center;
+        color: var(--md-sys-color-secondary);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .divider::before,
+    .divider::after {
+        content: '';
+        flex: 1;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .divider span {
+        padding: 0 12px;
+    }
+</style>
 {% endblock %}

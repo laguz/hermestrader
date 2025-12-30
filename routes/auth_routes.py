@@ -26,18 +26,37 @@ def login():
             
     return render_template('login.html')
 
+@auth_bp.route('/login/nostr', methods=['POST'])
+def login_nostr():
+    data = request.json
+    event = data.get('event')
+    
+    if not event:
+        return {'success': False, 'message': 'Missing event data'}, 400
+        
+    auth_service = Container.get_auth_service()
+    user = auth_service.login_with_nostr(event)
+    
+    if user:
+        login_user(user)
+        # Check if vault needs unlocking (likely yes)
+        # If user.vault is locked, frontend should detect and prompt.
+        return {'success': True}
+    else:
+        return {'success': False, 'message': 'Nostr login failed or user not found'}, 401
+
+@auth_bp.route('/login/sqrl', methods=['POST'])
+def login_sqrl():
+    # Placeholder for SQRL flow
+    return {'success': False, 'message': 'Not implemented yet'}, 501
+
 @auth_bp.route('/register', methods=['GET', 'POST'])
 def register():
     # Only allow registration if no users exist (Personal App Mode)
     # OR if authenticated admin allows it (not implemented).
     # For now: Check DB count.
     
-    db = Container.get_db()
-    if db is not None:
-        if db['users'].count_documents({}) > 0:
-            if not current_user.is_authenticated:
-                flash("Registration disabled. Please Login.", "warning")
-                return redirect(url_for('auth.login'))
+
     
     if request.method == 'POST':
         username = request.form.get('username')
@@ -59,6 +78,33 @@ def register():
             flash('Username already exists.', 'error')
             
     return render_template('register.html')
+
+@auth_bp.route('/register/nostr', methods=['POST'])
+def register_nostr():
+    data = request.json
+    event = data.get('event')
+    username = data.get('username')
+    tradier_key = data.get('tradier_key')
+    account_id = data.get('account_id')
+    
+    if not event or not tradier_key or not account_id:
+        return {'success': False, 'message': 'Missing data'}, 400
+        
+    pubkey = event.get('pubkey')
+    if not pubkey:
+        return {'success': False, 'message': 'Invalid event'}, 400
+        
+    auth_service = Container.get_auth_service()
+    
+    # We should verify sig here ideally.
+    
+    user = auth_service.create_user_with_nostr(username, pubkey, tradier_key, account_id)
+    
+    if user:
+        login_user(user)
+        return {'success': True}
+    else:
+        return {'success': False, 'message': 'Registration failed (User might exist)'}, 400
 
 @auth_bp.route('/logout')
 @login_required

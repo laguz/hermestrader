@@ -1,48 +1,182 @@
 {% extends "base.html" %}
 
-{% block content %}
-<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
-    <div class="col-md-4">
-        <div class="card bg-dark text-white border-secondary shadow-lg custom-blur">
-            <div class="card-header border-secondary text-center">
-                <h3>Login</h3>
-            </div>
-            <div class="card-body">
-                {% with messages = get_flashed_messages(with_categories=true) %}
-                  {% if messages %}
-                    {% for category, message in messages %}
-                      <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
-                        {{ message }}
-                      </div>
-                    {% endfor %}
-                  {% endif %}
-                {% endwith %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+{% endblock %}
 
-                <form method="POST" action="{{ url_for('auth.login') }}">
-                    <div class="mb-3">
-                        <label for="username" class="form-label">Username</label>
-                        <input type="text" class="form-control bg-secondary text-white border-0" id="username" name="username" required autofocus>
-                    </div>
-                    <div class="mb-3">
-                        <label for="password" class="form-label">Password</label>
-                        <input type="password" class="form-control bg-secondary text-white border-0" id="password" name="password" required>
-                    </div>
-                    <div class="d-grid gap-2">
-                        <button type="submit" class="btn btn-primary btn-lg">Unlock Vault</button>
-                    </div>
-                </form>
+
+
+{% block content %}
+<div class="login-container">
+    <div class="md-card login-card">
+        <div class="card-header text-center">
+            <span class="material-symbols-outlined login-icon">lock_open</span>
+            <div class="md-card__headline justify-content-center">Unlock Vault</div>
+        </div>
+
+        <div class="card-body">
+            {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            {% for category, message in messages %}
+            <div class="alert {{ 'alert-error' if category == 'error' else 'alert-info' }}">
+                {{ message }}
             </div>
-            <div class="card-footer border-secondary text-center text-muted">
-                <small>Or <a href="{{ url_for('auth.register') }}" class="text-info">Register</a> if this is your first time.</small>
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            <form method="POST" action="{{ url_for('auth.login') }}">
+                <div class="md-text-field-container">
+                    <input type="text" class="md-text-field" id="username" name="username" placeholder=" " required
+                        autofocus>
+                    <label for="username" class="md-text-field-label">Username</label>
+                </div>
+
+                <div class="md-text-field-container">
+                    <input type="password" class="md-text-field" id="password" name="password" placeholder=" " required>
+                    <label for="password" class="md-text-field-label">Password</label>
+                </div>
+
+                <button type="submit" class="md-button md-button--filled w-100 mt-4">
+                    <span class="material-symbols-outlined">key</span>
+                    Unlock with Password
+                </button>
+            </form>
+
+            <div class="divider mt-4"><span>OR</span></div>
+
+            <button id="btn-nostr" class="md-button md-button--tonal w-100 mt-3" onclick="loginWithNostr()">
+                <img src="https://nostr.com/favicon.ico" alt="Nostr"
+                    style="width:20px; height:20px; border-radius: 50%;">
+                Login with Nostr (NIP-07)
+            </button>
+
+            <button id="btn-sqrl" class="md-button md-button--tonal w-100 mt-3" onclick="loginWithSQRL()">
+                <span class="material-symbols-outlined">qr_code_scanner</span>
+                Login with SQRL
+            </button>
+
+            <div id="sqrl-qr-container" class="hidden text-center mt-3">
+                <p class="text-secondary small">Scan with SQRL App</p>
+                <div id="sqrl-qr-code"></div>
             </div>
+        </div>
+
+        <div class="card-footer text-center mt-4">
+            <small class="text-secondary">First time? <a href="{{ url_for('auth.register') }}"
+                    class="link-primary">Setup Vault</a></small>
         </div>
     </div>
 </div>
 
 <style>
-    .custom-blur {
-        background: rgba(33, 37, 41, 0.85) !important;
-        backdrop-filter: blur(10px);
+    /* Override Main Grid for Login Page to Center */
+    main {
+        display: flex !important;
+        align-items: center;
+        justify-content: center;
+        min-height: 80vh;
+        grid-template-columns: 1fr !important;
+        /* Reset grid */
+    }
+
+    .login-container {
+        width: 100%;
+        max-width: 400px;
+        perspective: 1000px;
+    }
+
+    .login-card {
+        padding: 40px;
+        border-radius: 24px;
+        background: rgba(18, 20, 24, 0.7);
+        /* Slightly darker/more opaque for focus */
+    }
+
+    .login-icon {
+        font-size: 48px;
+        color: var(--md-sys-color-primary);
+        margin-bottom: 16px;
+        display: block;
+    }
+
+    .w-100 {
+        width: 100%;
+    }
+
+    .mt-4 {
+        margin-top: 24px;
+    }
+
+    .text-center {
+        text-align: center;
+    }
+
+    .justify-content-center {
+        justify-content: center;
+    }
+
+    .text-secondary {
+        color: var(--md-sys-color-secondary);
+    }
+
+    .link-primary {
+        color: var(--md-sys-color-primary);
+        text-decoration: none;
+        font-weight: 500;
+        transition: opacity 0.2s;
+    }
+
+    .link-primary:hover {
+        opacity: 0.8;
+    }
+
+    /* Alert Styles matched to design */
+    .alert {
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-size: 14px;
+        margin-bottom: 24px;
+        display: flex;
+        align-items: center;
+        border: 1px solid transparent;
+    }
+
+    .alert-error {
+        background: rgba(255, 180, 171, 0.1);
+        color: var(--md-sys-color-error);
+        border-color: rgba(255, 180, 171, 0.2);
+    }
+
+    .alert-info {
+        background: rgba(168, 199, 250, 0.1);
+        color: var(--md-sys-color-primary);
+        border-color: rgba(168, 199, 250, 0.2);
+    }
+
+    .divider {
+        display: flex;
+        align-items: center;
+        text-align: center;
+        color: var(--md-sys-color-secondary);
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+
+    .divider::before,
+    .divider::after {
+        content: '';
+        flex: 1;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .divider span {
+        padding: 0 12px;
+    }
+
+    .mt-3 {
+        margin-top: 16px;
     }
 </style>
 {% endblock %}
