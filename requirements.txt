@@ -11,3 +11,4 @@ pymongo
 
 Flask-Login
 cryptography
+nostr-sdk

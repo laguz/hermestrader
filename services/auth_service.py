@@ -113,7 +113,7 @@ class AuthService:
         server_priv = server_keys.secret_key()
         server_pub = server_keys.public_key()
         
-        user_pub_obj = PublicKey.from_hex(nostr_pubkey)
+        user_pub_obj = PublicKey.parse(nostr_pubkey)
         
         # Encrypt the DEK (bytes -> string -> encrypt)
         # Note: Fernet key 'dek' is bytes. Convert to base64 string first to ensure safe transmission/decryption
