@@ -64,6 +64,11 @@
                     <span class="material-symbols-outlined">logout</span>
                     <span class="md-tab__label">Logout</span>
                 </a>
+                {% else %}
+                <a href="{{ url_for('auth.login') }}" class="md-tab {% if request.endpoint == 'auth.login' %}active{% endif %}">
+                    <span class="material-symbols-outlined">login</span>
+                    <span class="md-tab__label">Login</span>
+                </a>
                 {% endif %}
             </nav>
         </header>
