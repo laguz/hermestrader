@@ -27,7 +27,7 @@ class Container:
                 print("WARNING: MONGODB_URI not set. MongoDB features will fail.")
                 return None
             kwargs = {'serverSelectionTimeoutMS': 2000}
-            if 'localhost' not in mongo_uri and '127.0.0.1' not in mongo_uri:
+            if 'localhost' not in mongo_uri and '127.0.0.1' not in mongo_uri and 'mongodb' not in mongo_uri:
                 kwargs['tlsCAFile'] = certifi.where()
             
             cls._mongo_client = MongoClient(mongo_uri, **kwargs)

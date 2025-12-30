@@ -1,1 +1,1 @@
-["close", "low", "high", "close_lag_1", "open", "obv", "atr", "volume", "macd", "macd_signal"]
+["close", "low", "high", "obv", "open", "volume", "atr", "sma_50", "macd_signal", "macd"]

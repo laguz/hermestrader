@@ -14,8 +14,9 @@ from routes.trading_routes import trading_bp
 from routes.auth_routes import auth_bp
 
 
+load_dotenv()
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'super_secret_key_change_me') # Required for session
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY') or 'super_secret_key_change_me'
 
 # Init Login Manager
 login_manager = LoginManager()
@@ -63,4 +64,4 @@ def handle_generic_error(error):
     return jsonify({"error": "An internal error occurred"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8080)
+    app.run(debug=True, host='0.0.0.0', port=8080)
