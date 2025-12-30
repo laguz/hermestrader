@@ -10,9 +10,9 @@ from services.container import Container
 
 class User(UserMixin):
     def __init__(self, user_doc):
-        self.id = str(user_doc['_id'])
-        self.username = user_doc['username']
-        self.password_hash = user_doc['password_hash']
+        self.id = str(user_doc.get('_id', ''))
+        self.username = user_doc.get('username', '')
+        self.password_hash = user_doc.get('password_hash', '')
         self.vault = user_doc.get('vault', {})
 
     def get_id(self):
@@ -92,7 +92,7 @@ class AuthService:
         user_doc = self.db['users'].find_one({"username": username})
         if not user_doc: return None
         
-        if not check_password_hash(user_doc['password_hash'], password):
+        if not check_password_hash(user_doc.get('password_hash', ''), password):
             return None
             
         # Attempt to unlock vault
@@ -125,7 +125,7 @@ class AuthService:
                     ts.update_account_id(decrypted_acc_id)
                 
         except Exception as e:
-            print(f"Vault Unlock Failed: {e}")
+            print(f"Vault Unlock Failed or Login Error: {e}")
             # We might still allow login, but Bot won't work?
             # Or fail login? strict: fail login.
             return None
