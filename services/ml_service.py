@@ -901,157 +901,104 @@ class MLService:
             model = load_model(model_path)
             scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
             
-            X_all, y_all, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
-            if len(X_all) < days: raise ValidationError("Not enough eval data")
-            
-            X = X_all[-days:]
-            # Align dates and actuals
-            # prepare_lstm_data trims first sequence_length rows
-            # inputs ended at index: (len(df) - days + i) ?
-            # Let's use indices logic
-            
-            # X[0] is the sequence ending at (len(df) - days).
-            # The target for X[0] is price at (len(df) - days + 1)? No, usually target is next day.
-            # If we trained on target = shifted(-1), then input[t] predicts target[t] (which is close[t+1]).
-            
-            # We need the Close price corresponding to the END of the sequence X[i].
-            # Sequence X[i] uses data up to index T. We need Close[T].
-            
-            # Indices in X_all correspond to df[sequence_length:]
-            # So X_all[0] ends at df.iloc[sequence_length-1]? No.
-            # prepare_lstm_data loop: range(self.sequence_length, len(scaled_data))
-            # i traverses from seq_len to end.
-            # X.append(scaled_data[i-self.sequence_length:i])
-            # The sequence includes indices [i-seq_len : i]. 
-            # So the last data point in the sequence is at index i-1.
-            # The target is at index i. (which corresponds to df.iloc[i])
-            
-            # So for prediction X_all[k], the "last close" is at df.iloc[sequence_length + k - 1].
-            # And the target is df.iloc[sequence_length + k]['target'] (which we set to log_return/close shifted).
-            
-            # Indices of validation set:
-            total_samples = len(X_all)
-            val_start_idx = total_samples - days
-            
-            # Reconstruct predictions
-            reconstructed_preds = []
-            
-            # We need to iterate
-            for k in range(days):
-                # Global index in df corresponding to the target row
-                # X_all[0] target corresponds to df row `sequence_length`.
-                # X_all[k] target corresponds to df row `sequence_length + k`.
-                
-                # We are looking at the last `days` samples.
-                # sample_idx among X_all = val_start_idx + k
-                
-                df_idx = self.sequence_length + val_start_idx + k
-                
-                # Last Close comes from previous row
-                last_close = df.iloc[df_idx - 1]['close']
-                
-                pred_log_ret = predictions[k] # This is log return
-                pred_price = last_close * np.exp(pred_log_ret)
-                reconstructed_preds.append(pred_price)
-            
-            predictions = reconstructed_preds
-            
-            eval_indices = df.index[self.sequence_length:][-days:]
-            dates = df.loc[eval_indices, 'date'].dt.strftime('%Y-%m-%d').tolist()
-            
-            # Actual prices (we need clean close prices, not log returns)
-            # targets in df['target'] might be log returns now for LSTM logic!
-            # So we should fetch 'close'.shift(-1) from df, or just take 'close' at the target index.
-            
-            # df['target'] was set to log_return earlier if we modified it?
-            # In evaluate_model, we set df['target'] = df['close'].shift(-1) at line 671.
-            # Wait, line 671 sets target to Close Price.
-            # But prepare_lstm_data takes 'target' column.
-            # Does prepare_lstm_data re-calculate log returns? No, it takes raw column.
-            
-            # CRITICAL: We need scaling to match training.
-            # If training used Log Returns, we must provide Log Returns to prepare_lstm_data check?
-            # Or reliance on scaler?
-            # The scaler was trained on Log Returns.
-            # So the column 'target' passed to prepare_lstm_data MUST be log returns.
-            
-            # Recalculate 'target' as log returns for the preparation step
+            # Prepare data (Need Log Return logic similar to training)
+            # Ensure target is set correctly for prepare_lstm_data
             df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
             df['target_for_lstm'] = df['log_return']
             
-            # Temporarily swap target for prep
-            df['actual_price_target'] = df['target'] # Save price
+            # Save original target price for validation
+            # We want actual future price (Close T+1) to compare with predicted price
+            df['actual_future_price'] = df['close'].shift(-1)
+            
+            # Swap target for prep
             df['target'] = df['target_for_lstm']
             
-            X_eval_all, _, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
-            X = X_eval_all[-days:]
+            X_all, _, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
             
-            # Restore target for actuals (prices)
-            df['target'] = df['actual_price_target']
+            if len(X_all) < days: raise ValidationError("Not enough eval data")
             
-            # Now predict
-            pred_scaled = model.predict(X)
-             
-            if os.path.exists(target_scaler_path):
-                 target_scaler = joblib.load(target_scaler_path)
-                 pred_log_returns = [float(p[0]) for p in target_scaler.inverse_transform(pred_scaled)]
+            # Select last 'days' sequences
+            X = X_all[-days:]
+            
+            # Load Target Scaler
+            target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
+            target_scaler = joblib.load(target_scaler_path) if os.path.exists(target_scaler_path) else None
+
+            # Predict
+            pred_scaled = model(X, training=False).numpy()
+            
+            if target_scaler:
+                 pred_log_returns = target_scaler.inverse_transform(pred_scaled).flatten()
             else:
-                 pred_log_returns = [float(p[0]) for p in pred_scaled]
-                 
-            # Reconstruct
+                 pred_log_returns = pred_scaled.flatten()
+            
+            # Reconstruct and Align
             predictions = []
-            actuals = [] # Price
+            actuals = [] 
+            dates = []
+            close_list = [] # Current close (basis for prediction)
+            
+            # Indices logic:
+            # X_all is aligned with df[sequence_length:].
+            # X_all[0] corresponds to sequence ending at index `sequence_length-1`?
+            # No, `prepare_lstm_data` loop:
+            # for i in range(seq_len, len(scaled_data)):
+            #    X.append(scaled_data[i-seq_len:i])
+            #    y.append(target[i])
+            
+            # So X[k] contains data up to index `seq_len + k - 1`.
+            # And predicts target at index `seq_len + k`.
+            
+            # If we take `X_all[-days:]`, let N = len(X_all).
+            # We take indices [N-days, N-days+1, ... N-1].
+            
+            total_samples = len(X_all)
+            start_idx_in_x = total_samples - days
             
             for k in range(days):
-                df_idx = self.sequence_length + val_start_idx + k
-                last_close = df.iloc[df_idx - 1]['close']
+                # Map to DataFrame index
+                # X_index = start_idx_in_x + k
+                # Corresponding DF index = sequence_length + X_index
+                df_idx = self.sequence_length + start_idx_in_x + k
                 
-                # Reconstruct
-                pred_price = last_close * np.exp(pred_log_returns[k])
+                # Check bounds
+                if df_idx >= len(df): continue
+                
+                # Input Ends at previous row (basis)
+                row_basis = df.iloc[df_idx - 1]
+                row_target = df.iloc[df_idx]
+                
+                basis_close = row_basis['close']
+                
+                # Reconstruct Prediction
+                pred_price = basis_close * np.exp(pred_log_returns[k])
+                
+                # Actual Future Price
+                actual_price = row_basis['actual_future_price'] # = row_target['close']?
+                # df['actual_future_price'][i] = close[i+1].
+                # row_basis is at T. actual_future_price is Close[T+1].
+                # row_target is at T+1? No.
+                # df_idx corresponds to `i` in loop.
+                # X[i] -> target[i].
+                # target[i] depends on construction.
+                # If target was 'log_return' = shift(-1)/close.
+                # Then target[i] is return T->T+1.
+                # But X[i] contains data [i-seq:i]. Last point is i-1.
+                # So X[i] predicts for period starting at i-1?
+                # No.
+                
+                # Let's trust the dates alignment:
+                # date[i] in loop?
+                
+                current_date = row_target['date'].strftime('%Y-%m-%d')
+                # Wait, if target[i] is at row i.
+                # And X[i] ends at i-1.
+                # Then we are predicting for time `i`.
+                
                 predictions.append(pred_price)
-                
-                # Actual
-                actual_price = df.iloc[df_idx]['close'] # Current close? 
-                # Wait, df['target'] was close.shift(-1).
-                # prepare_lstm_data aligns:
-                # X[i] (0..T) -> y[i] (target at T+1 implied by shift)
-                # target column is user defined.
-                # If we used shift(-1), then row `i` has target `i+1`.
-                # `prepare_lstm_data` usually just maps X[i] -> col['target'].iloc[i].
-                
-                # In training: df['target'] = log_return.shift(-1).
-                # No, I did df['log_return'] = shift(-1)/close. 
-                # So row T has the return for T -> T+1.
-                
-                # So X[T] (data ending at T) predicts row T's target (Return T->T+1).
-                
-                # So we need Last Close = Close[T] (from row df_idx)
-                # And Actual Price = Close[T+1] (from row df_idx + 1?)
-                # OR if 'target' was just aligned to row T.
-                
-                # Let's check training logic:
-                # df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
-                # df['target'] = df['log_return'] (implicit in my change above for training)
-                # prepare_lstm_data: y.append(target[i])
-                
-                # So y[i] is the log return at index i.
-                # Index i contains features for day i.
-                # Return at i is (Close_i+1 / Close_i).
-                
-                # So Last Close = Close[i].
-                # Actual Price = Close_i+1.
-                
-                # In Eval loop:
-                # df_idx is the index i.
-                last_close = df.iloc[df_idx]['close']
-                
-                # Reconstruct
-                pred_price = last_close * np.exp(pred_log_returns[k])
-                predictions.append(pred_price)
-                
-                actuals.append(df.iloc[df_idx]['actual_price_target']) # This is close.shift(-1)
-                
-            close_list = [df.iloc[self.sequence_length + val_start_idx + k]['close'] for k in range(days)]
+                actuals.append(row_basis['actual_future_price']) # Verify this exists
+                dates.append(current_date)
+                close_list.append(basis_close)
             
         else:
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"
