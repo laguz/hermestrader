@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-4">
+        <div class="card bg-dark text-white border-secondary shadow-lg custom-blur">
+            <div class="card-header border-secondary text-center">
+                <h3>Login</h3>
+            </div>
+            <div class="card-body">
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                  {% if messages %}
+                    {% for category, message in messages %}
+                      <div class="alert alert-{{ category if category != 'error' else 'danger' }}">
+                        {{ message }}
+                      </div>
+                    {% endfor %}
+                  {% endif %}
+                {% endwith %}
+
+                <form method="POST" action="{{ url_for('auth.login') }}">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">Username</label>
+                        <input type="text" class="form-control bg-secondary text-white border-0" id="username" name="username" required autofocus>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">Password</label>
+                        <input type="password" class="form-control bg-secondary text-white border-0" id="password" name="password" required>
+                    </div>
+                    <div class="d-grid gap-2">
+                        <button type="submit" class="btn btn-primary btn-lg">Unlock Vault</button>
+                    </div>
+                </form>
+            </div>
+            <div class="card-footer border-secondary text-center text-muted">
+                <small>Or <a href="{{ url_for('auth.register') }}" class="text-info">Register</a> if this is your first time.</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .custom-blur {
+        background: rgba(33, 37, 41, 0.85) !important;
+        backdrop-filter: blur(10px);
+    }
+</style>
+{% endblock %}

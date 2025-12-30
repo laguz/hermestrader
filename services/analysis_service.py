@@ -10,7 +10,7 @@ class AnalysisService:
 
     def analyze_symbol(self, symbol, period='6m'):
         from datetime import datetime, timedelta
-        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels, calculate_historical_volatility, calculate_prob_it_expires_otm
+        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels, calculate_historical_volatility, calculate_prob_it_expires_otm, calculate_bollinger_bands, calculate_adx, calculate_hv_rank
         
         end_date = datetime.now()
         
@@ -22,7 +22,9 @@ class AnalysisService:
         days = days_map.get(period, 365)
         
         # Fetch extra data for rolling calculations (e.g. 50 days buffer)
-        start_date = end_date - timedelta(days=days + 60)
+        # Ensure at least 300 days for SMA 200
+        days_needed = max(days + 60, 300)
+        start_date = end_date - timedelta(days=days_needed)
         
         quotes = self.tradier_service.get_historical_pricing(
             symbol,
@@ -57,6 +59,18 @@ class AnalysisService:
         
         # Volume SMA
         df['vol_sma'] = calculate_sma(df['volume'], window=20)
+
+        # ADX (14)
+        df['adx'] = calculate_adx(df['high'], df['low'], df['close'], period=14)
+
+        # HV Rank (Percentile of 30-day Vol over last year)
+        hv_rank = calculate_hv_rank(df['close'], window=30, lookback=252)
+
+        # Bollinger Bands (20, 2)
+        df['bb_upper'], df['bb_mid'], df['bb_lower'] = calculate_bollinger_bands(df['close'], window=20, num_std=2)
+
+        # SMA 200
+        df['sma_200'] = calculate_sma(df['close'], window=200)
         
         # Slice for the specific period analysis (visualization and key levels)
         # However, ML prediction might rely on latest? 
@@ -197,6 +211,40 @@ class AnalysisService:
              sp_score += 1
              sp_reasons.append("MACD Momentum Improving")
 
+        # Bollinger Bands (Oversold - Price near or below lower band)
+        # 1% buffer
+        if latest['close'] <= latest['bb_lower'] * 1.01:
+            sp_score += 2
+            sp_reasons.append("Price near/below Lower Bollinger Band")
+            
+        # SMA 200 (Long Term Trend)
+        if latest['sma_200'] > 0 and latest['close'] > latest['sma_200']:
+            sp_score += 1
+            sp_reasons.append("Price > SMA 200 (Bullish Trend)")
+
+        # ADX Logic
+        if latest['adx'] > 25:
+             # Strong Trend
+             if latest['close'] > latest['sma_200']:
+                 sp_score += 1
+                 sp_reasons.append("Strong Trend (ADX > 25) supporting Bullish bias")
+        elif latest['adx'] < 20: 
+             # Weak Trend (Range Bound) - Good for selling puts at support
+             if abs(dist_to_support) < 0.05:
+                 sp_score += 1
+                 sp_reasons.append("Low ADX (Range Bound) at Support")
+
+        # HV Rank Logic (Selling Premium)
+        if hv_rank > 80:
+            sp_score += 2
+            sp_reasons.append(f"High IV Percentile ({hv_rank:.0f}%) - Premium Rich")
+        elif hv_rank > 50:
+            sp_score += 1
+            sp_reasons.append("Good IV Percentile")
+        elif hv_rank < 20:
+            sp_score -= 1
+            sp_reasons.append("Low IV Percentile - Premium Cheap")
+
         # Prediction
         if pred_change_pct > 0.005:
             sp_score += 3
@@ -239,6 +287,40 @@ class AnalysisService:
             sc_score += 1
             sc_reasons.append("MACD Momentum Weakening")
 
+        # Bollinger Bands (Overbought - Price near or above upper band)
+        # 1% buffer
+        if latest['close'] >= latest['bb_upper'] * 0.99:
+            sc_score += 2
+            sc_reasons.append("Price near/above Upper Bollinger Band")
+
+        # SMA 200 (Long Term Trend)
+        if latest['sma_200'] > 0 and latest['close'] < latest['sma_200']:
+             sc_score += 1
+             sc_reasons.append("Price < SMA 200 (Bearish Trend)")
+
+        # ADX Logic
+        if latest['adx'] > 25:
+             # Strong Trend
+             if latest['close'] < latest['sma_200']:
+                 sc_score += 1
+                 sc_reasons.append("Strong Trend (ADX > 25) supporting Bearish bias")
+        elif latest['adx'] < 20: 
+             # Weak Trend (Range Bound) - Good for selling calls at resistance
+             if abs(dist_to_resistance) < 0.05:
+                 sc_score += 1
+                 sc_reasons.append("Low ADX (Range Bound) at Resistance")
+
+        # HV Rank Logic (Selling Premium)
+        if hv_rank > 80:
+            sc_score += 2
+            sc_reasons.append(f"High IV Percentile ({hv_rank:.0f}%) - Premium Rich")
+        elif hv_rank > 50:
+            sc_score += 1
+            sc_reasons.append("Good IV Percentile")
+        elif hv_rank < 20:
+            sc_score -= 1
+            sc_reasons.append("Low IV Percentile - Premium Cheap")
+
         # Prediction
         if pred_change_pct < -0.005:
             sc_score += 3
@@ -263,7 +345,12 @@ class AnalysisService:
             "resistance": chart_df['resistance'].fillna(0).tolist(),
             "rsi": chart_df['rsi'].fillna(50).tolist(),
             "macd": chart_df['macd'].fillna(0).tolist(),
-            "signal": chart_df['signal'].fillna(0).tolist()
+            "signal": chart_df['signal'].fillna(0).tolist(),
+            "bb_upper": chart_df['bb_upper'].fillna(0).tolist(),
+            "bb_middle": chart_df['bb_mid'].fillna(0).tolist(),
+            "bb_lower": chart_df['bb_lower'].fillna(0).tolist(),
+            "sma_200": chart_df['sma_200'].fillna(0).tolist(),
+            "adx": chart_df['adx'].fillna(0).tolist()
         }
 
         result = {
@@ -292,6 +379,11 @@ class AnalysisService:
                 "support": round(latest['support'], 2),
                 "resistance": round(latest['resistance'], 2),
                 "resistance": round(latest['resistance'], 2),
+                "bb_upper": round(latest['bb_upper'], 2),
+                "bb_lower": round(latest['bb_lower'], 2),
+                "sma_200": round(latest['sma_200'], 2) if not np.isnan(latest['sma_200']) else None,
+                "adx": round(latest['adx'], 2),
+                "hv_rank": round(hv_rank, 1),
                 "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
                 "volatility": round(volatility * 100, 1)
             },

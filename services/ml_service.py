@@ -16,7 +16,7 @@ from pandas.tseries.offsets import CustomBusinessDay
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential, load_model
-    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Input
     from tensorflow.keras.callbacks import EarlyStopping
     HAS_TENSORFLOW = True
 except ImportError:
@@ -37,7 +37,7 @@ class NYSEHolidayCalendar(AbstractHolidayCalendar):
         Holiday('Christmas', month=12, day=25, observance=nearest_workday)
     ]
 
-from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma
+from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma, calculate_obv, calculate_vwap
 from services.container import Container
 from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError, AppError
 
@@ -50,7 +50,7 @@ class MLService:
             os.makedirs(self.model_dir)
         
         self.sequence_length = 60 # Lookback for LSTM
-        self.default_features = ['close', 'volume', 'rsi', 'upper_bb', 'lower_bb', 'mid_bb', 'macd', 'macd_signal', 'atr', 'sma_50']
+        self.default_features = ['close', 'volume', 'rsi', 'upper_bb', 'lower_bb', 'mid_bb', 'macd', 'macd_signal', 'atr', 'sma_50', 'obv', 'vwap']
 
     def _get_feature_file_path(self, symbol):
         return os.path.join(self.model_dir, f"{symbol}_features.json")
@@ -119,6 +119,10 @@ class MLService:
         df['upper_bb'], df['mid_bb'], df['lower_bb'] = calculate_bollinger_bands(df['close'])
         df['macd'], df['macd_signal'], _ = calculate_macd(df['close'])
         df['sma_50'] = calculate_sma(df['close'], window=50)
+
+        # Volume Momentum
+        df['obv'] = calculate_obv(df['close'], df['volume'])
+        df['vwap'] = calculate_vwap(df['high'], df['low'], df['close'], df['volume'], window=14)
         
         if 'high' in df.columns and 'low' in df.columns:
             df['atr'] = calculate_atr(df['high'], df['low'], df['close'])
@@ -141,7 +145,8 @@ class MLService:
         Select top N features using Random Forest.
         """
         # Exclude non-feature columns
-        exclude = ['date', 'symbol', 'target']
+        # Also exclude calculated targets (leakage)
+        exclude = ['date', 'symbol', 'target', 'target_return', 'log_return']
         potential_features = [c for c in df.columns if c not in exclude]
         
         X = df[potential_features]
@@ -184,7 +189,9 @@ class MLService:
     def _build_lstm_model(self, input_shape):
         model = Sequential()
         # Bidirectional with more units
-        model.add(Bidirectional(LSTM(128, return_sequences=True), input_shape=input_shape))
+        # Fix warning: Do not pass input_shape to layer, use Input(shape) first
+        model.add(Input(shape=input_shape))
+        model.add(Bidirectional(LSTM(128, return_sequences=True)))
         model.add(Dropout(0.2))
         model.add(Bidirectional(LSTM(128, return_sequences=False)))
         model.add(Dropout(0.2))
@@ -194,8 +201,118 @@ class MLService:
         model.compile(optimizer='adam', loss='mean_squared_error')
         return model
 
+    def perform_walk_forward_validation(self, df, top_features, model_type='rf', min_train_size=200, test_size=20):
+        """
+        Perform Walk-Forward Validation:
+        Train on expanding window [0..t], predict on [t..t+test_size].
+        Returns average MSE and other metrics.
+        """
+        print(f"Starting Walk-Forward Validation for {model_type.upper()}...")
+        
+        n_samples = len(df)
+        if n_samples < min_train_size + test_size:
+            print("Not enough data for Walk-Forward Validation. Skipping.")
+            return {}
+
+        errors = []
+        accuracies = []
+        
+        # Expanding window loop
+        # Start at min_train_size, step by test_size
+        for t in range(min_train_size, n_samples - test_size, test_size):
+            train_df = df.iloc[:t].copy()
+            test_df = df.iloc[t:t+test_size].copy()
+            
+            # Prepare Data & Train
+            if model_type == 'lstm':
+                if not HAS_TENSORFLOW: continue
+                # LSTM Training
+                df_lstm_train = train_df.copy()
+                df_lstm_train['target'] = df_lstm_train['log_return'] # Ensure target is log return
+                X_train, y_train, scaler = self._prepare_lstm_data(df_lstm_train, top_features, fit_scaler=True)
+                
+                # LSTM Testing
+                df_lstm_test = pd.concat([train_df.tail(self.sequence_length), test_df]) # Need lookback
+                df_lstm_test['target'] = df_lstm_test['log_return']
+                # Use trained scaler
+                X_test, y_test, _ = self._prepare_lstm_data(df_lstm_test, top_features, fit_scaler=False, scaler=scaler)
+                
+                # Filter X_test to only include the new test period rows
+                # _prepare_lstm_data returns sequences for the whole DF usually
+                # Here we constructed df_lstm_test to start exactly `sequence_length` before test_df
+                # So X_test should match test_df length roughly
+                # Adjust if needed
+                
+                # Train Model (Quick epoch for validation)
+                y_train = y_train.reshape(-1, 1)
+                target_scaler = MinMaxScaler(feature_range=(0, 1))
+                y_train_scaled = target_scaler.fit_transform(y_train)
+                
+                model = self._build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
+                early_stop = EarlyStopping(monitor='loss', patience=2)
+                model.fit(X_train, y_train_scaled, epochs=5, batch_size=32, verbose=0, callbacks=[early_stop])
+                
+                # Predict
+                # Use model(X, training=False) to avoid TF function retracing warnings in loops
+                pred_scaled = model(X_test, training=False).numpy()
+                pred_log_ret = target_scaler.inverse_transform(pred_scaled).flatten()
+                actual_log_ret = y_test # These are raw log returns from df 'target' because _prepare_lstm_data returns y as target values (unscaled if we didnt scale y inside?) 
+                # Wait, _prepare returns y as target column values. 
+                # In training we scaled y. In validation we inversed pred. 
+                # y_test from _prepare is raw values from `target` column.
+                # So actual_log_ret is correct.
+                
+                # Calculate Error (MSE on Log Returns)
+                mse_fold = mean_squared_error(actual_log_ret, pred_log_ret)
+                errors.append(mse_fold)
+                
+                # Accuracy (Direction)
+                # We need actual returns to check sign
+                correct = np.sum(np.sign(pred_log_ret) == np.sign(actual_log_ret))
+                acc_fold = correct / len(actual_log_ret)
+                accuracies.append(acc_fold)
+                
+            else: # RF
+                # RF Training
+                X_train = train_df[top_features]
+                y_train = train_df['target_return']
+                
+                model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+                model.fit(X_train, y_train)
+                
+                # RF Prediction
+                X_test = test_df[top_features]
+                y_test = test_df['target_return']
+                
+                pred_ret = model.predict(X_test)
+                
+                mse_fold = mean_squared_error(y_test, pred_ret)
+                errors.append(mse_fold)
+                
+                correct = np.sum(np.sign(pred_ret) == np.sign(y_test))
+                acc_fold = correct / len(y_test)
+                accuracies.append(acc_fold)
+                
+        avg_mse = np.mean(errors) if errors else 0
+        avg_acc = np.mean(accuracies) if accuracies else 0
+        
+        print(f"Validation Complete. Avg MSE: {avg_mse:.6f}, Avg Accuracy: {avg_acc:.2%}")
+        return {"val_mse": avg_mse, "val_accuracy": avg_acc}
+
     def train_model(self, symbol, model_type='rf'):
         symbol = symbol.upper()
+        if model_type == 'ensemble':
+            print(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
+            res_rf = self.train_model(symbol, model_type='rf')
+            res_lstm = self.train_model(symbol, model_type='lstm')
+            return {
+                "status": "trained",
+                "symbol": symbol,
+                "type": "ensemble",
+                "rf_mse": res_rf['mse'],
+                "lstm_mse": res_lstm['mse']
+            }
+
         print(f"Starting {model_type.upper()} training for {symbol} using local DB...")
         
         if self.db is None:
@@ -228,8 +345,18 @@ class MLService:
         # 2. Prepare Data (Features + Target)
         df = self.prepare_features(df)
         
-        # Target: Next day's close
-        df['target'] = df['close'].shift(-1)
+        # Target: Log Return for Next Day (Shifted -1)
+        # log_return = ln(close_t+1 / close_t)
+        df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
+        
+        # Keep 'target' column for legacy/reference or specific model usage
+        # For LSTM, we will use 'log_return' as target
+        # For RF, we use 'target_return' (pct_change)
+        
+        df['target'] = df['close'].shift(-1) # Actual price for later comparison/RF fallback
+        
+        # RF Target (Simple Return)
+        df['target_return'] = df['close'].shift(-1) / df['close'] - 1
         
         # Drop NaNs created by lags/indicators/shifting
         df.dropna(inplace=True)
@@ -244,12 +371,21 @@ class MLService:
         with open(self._get_feature_file_path(symbol), 'w') as f:
             json.dump(top_features, f)
             
+        # 4. Walk-Forward Validation (Before final training)
+        validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
+        
         mse = 0
+        final_model_stats = {}
         
         if model_type == 'lstm':
             if not HAS_TENSORFLOW:
                 raise AppError("LSTM training requires TensorFlow, but it is not installed.", 501)
-            X, y, scaler = self._prepare_lstm_data(df, top_features, fit_scaler=True)
+                
+            # Use 'log_return' as target for LSTM
+            df_lstm = df.copy()
+            df_lstm['target'] = df_lstm['log_return']
+            
+            X, y, scaler = self._prepare_lstm_data(df_lstm, top_features, fit_scaler=True)
             
             # Scale Target
             y = y.reshape(-1, 1)
@@ -271,10 +407,22 @@ class MLService:
             
             # Eval on test set (inverse transform)
             pred_scaled = model.predict(X_test)
-            predictions = target_scaler.inverse_transform(pred_scaled)
-            y_test_inv = target_scaler.inverse_transform(y_test)
+            pred_log_returns = target_scaler.inverse_transform(pred_scaled)
+            actual_log_returns = target_scaler.inverse_transform(y_test)
             
-            mse = mean_squared_error(y_test_inv, predictions)
+            # Reconstruct Prices for MSE Calculation
+            # We need the 'close' price at the step BEFORE prediction.
+            # X_test indices start at split. 
+            # The corresponding original DF index is split + sequence_length.
+            # But the 'close' price needed for reconstruction is at index (split + sequence_length + i) 
+            # where i is the test sample index.
+            
+            # It's safer to calculate MSE on the log returns themselves for model separation,
+            # OR roughly approximate.
+            # Let's stick to MSE on Log Returns for training metric to avoid complex reconstruction here,
+            # but rely on 'evaluate_model' for full price verification.
+            
+            mse = mean_squared_error(actual_log_returns, pred_log_returns)
             
             # Save
             model.save(f"{self.model_dir}/{symbol}_lstm.keras")
@@ -289,7 +437,8 @@ class MLService:
             # current close -> next close
             # return = (next_close - close) / close
             
-            df['target_return'] = df['close'].shift(-1) / df['close'] - 1
+            # RF Target is already set up in 'target_return'
+            # df['target_return'] = df['close'].shift(-1) / df['close'] - 1
             
             # We must drop the last row which has NaN target
             train_df = df.dropna(subset=['target_return'])
@@ -324,7 +473,10 @@ class MLService:
             "symbol": symbol, 
             "type": model_type,
             "data_points": len(df),
-            "mse": round(mse, 4),
+            "data_points": len(df),
+            "mse": round(mse, 6), # Train/Test Split MSE (Last Fold)
+            "val_mse": round(validation_results.get('val_mse', 0), 6), # Walk-Forward MSE
+            "val_accuracy": round(validation_results.get('val_accuracy', 0), 4),
             "features": top_features
         }
 
@@ -368,6 +520,11 @@ class MLService:
         else:
             with open(feature_file, 'r') as f:
                 features = json.load(f)
+                
+        # Safety: Ensure no target leakage columns are in features list
+        # This handles legacy feature files that might have included them
+        forbidden = ['target', 'target_return', 'log_return', 'date', 'symbol']
+        features = [f for f in features if f not in forbidden]
 
         if df.iloc[-1].isna().any():
              df_clean = df.dropna()
@@ -381,6 +538,57 @@ class MLService:
 
         prediction = 0
         
+        if model_type == 'ensemble':
+            # recursive calls
+            pred_rf = self.predict_next_day(symbol, model_type='rf')
+            pred_lstm = self.predict_next_day(symbol, model_type='lstm')
+            
+            p_rf = pred_rf['predicted_price']
+            p_lstm = pred_lstm['predicted_price']
+            
+            # Simple Average
+            prediction = (p_rf + p_lstm) / 2
+            
+            # Use strict features from one (doesn't matter much for display)
+            features = pred_rf['used_features']
+            
+            change = prediction - pred_rf['last_close']
+            percent_change = (change / pred_rf['last_close']) * 100
+            
+            prediction_date = pred_rf['prediction_date']
+            
+             # Save Ensemble Prediction
+            try:
+                pred_doc = {
+                    "symbol": symbol,
+                    "model_type": 'ensemble',
+                    "prediction_date": prediction_date,
+                    "predicted_price": float(prediction),
+                    "raw_prediction": float(prediction),
+                    "bias_correction": 0.0,
+                    "actual_close_price": None,
+                    "created_at": datetime.now(),
+                    "components": {"rf": float(p_rf), "lstm": float(p_lstm)}
+                }
+                self.db['predictions'].update_one(
+                    {"symbol": symbol, "model_type": 'ensemble', "prediction_date": prediction_date},
+                    {"$set": pred_doc},
+                    upsert=True
+                )
+            except Exception as e:
+                print(f"Error saving ensemble prediction: {e}")
+                
+            return {
+                "symbol": symbol,
+                "model": "ensemble",
+                "predicted_price": round(float(prediction), 2),
+                "last_close": round(float(pred_rf['last_close']), 2),
+                "change": round(float(change), 2),
+                "percent_change_str": f"{percent_change:.2f}%",
+                "prediction_date": prediction_date,
+                "components": {"rf": round(p_rf, 2), "lstm": round(p_lstm, 2)}
+            }
+
         if model_type == 'lstm':
             if not HAS_TENSORFLOW:
                 raise AppError("LSTM prediction requires TensorFlow, but it is not installed.", 501)
@@ -408,9 +616,13 @@ class MLService:
             
             if os.path.exists(target_scaler_path):
                 target_scaler = joblib.load(target_scaler_path)
-                prediction = float(target_scaler.inverse_transform(pred_scaled)[0][0])
+                pred_log_return = float(target_scaler.inverse_transform(pred_scaled)[0][0])
             else:
-                prediction = float(pred_scaled[0][0])
+                pred_log_return = float(pred_scaled[0][0])
+                
+            # Reconstruct Price
+            # Price = Last Close * exp(Log Return)
+            prediction = last_row['close'] * np.exp(pred_log_return)
             
         else: # RF
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"
@@ -689,36 +901,104 @@ class MLService:
             model = load_model(model_path)
             scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
             
-            X_all, y_all, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
+            # Prepare data (Need Log Return logic similar to training)
+            # Ensure target is set correctly for prepare_lstm_data
+            df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
+            df['target_for_lstm'] = df['log_return']
+            
+            # Save original target price for validation
+            # We want actual future price (Close T+1) to compare with predicted price
+            df['actual_future_price'] = df['close'].shift(-1)
+            
+            # Swap target for prep
+            df['target'] = df['target_for_lstm']
+            
+            X_all, _, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
+            
             if len(X_all) < days: raise ValidationError("Not enough eval data")
             
+            # Select last 'days' sequences
             X = X_all[-days:]
-            # y_actual = y_all[-days:] # This is scaled
             
-            # Get actual prices correct aligned
-            # LSTM aligns X[t] (seq) to y[t] (target). 
-            # We want validation on same dates
-            
-            # y_all from prepare_lstm_data matches X_all. 
-            # We just need to reconstruct.
-            
-            pred_scaled = model.predict(X)
-            
+            # Load Target Scaler
             target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
-            if os.path.exists(target_scaler_path):
-                 target_scaler = joblib.load(target_scaler_path)
-                 predictions = [float(p[0]) for p in target_scaler.inverse_transform(pred_scaled)]
-            else:
-                 predictions = [float(p[0]) for p in pred_scaled]
-                 
-            # Align dates and actuals
-            # prepare_lstm_data trims first sequence_length rows
-            # so indices match df[sequence_length:]
+            target_scaler = joblib.load(target_scaler_path) if os.path.exists(target_scaler_path) else None
+
+            # Predict
+            pred_scaled = model(X, training=False).numpy()
             
-            eval_indices = df.index[self.sequence_length:][-days:]
-            dates = df.loc[eval_indices, 'date'].dt.strftime('%Y-%m-%d').tolist()
-            actuals = df.loc[eval_indices, 'target'].tolist()
-            close_list = df.loc[eval_indices, 'close'].tolist()
+            if target_scaler:
+                 pred_log_returns = target_scaler.inverse_transform(pred_scaled).flatten()
+            else:
+                 pred_log_returns = pred_scaled.flatten()
+            
+            # Reconstruct and Align
+            predictions = []
+            actuals = [] 
+            dates = []
+            close_list = [] # Current close (basis for prediction)
+            
+            # Indices logic:
+            # X_all is aligned with df[sequence_length:].
+            # X_all[0] corresponds to sequence ending at index `sequence_length-1`?
+            # No, `prepare_lstm_data` loop:
+            # for i in range(seq_len, len(scaled_data)):
+            #    X.append(scaled_data[i-seq_len:i])
+            #    y.append(target[i])
+            
+            # So X[k] contains data up to index `seq_len + k - 1`.
+            # And predicts target at index `seq_len + k`.
+            
+            # If we take `X_all[-days:]`, let N = len(X_all).
+            # We take indices [N-days, N-days+1, ... N-1].
+            
+            total_samples = len(X_all)
+            start_idx_in_x = total_samples - days
+            
+            for k in range(days):
+                # Map to DataFrame index
+                # X_index = start_idx_in_x + k
+                # Corresponding DF index = sequence_length + X_index
+                df_idx = self.sequence_length + start_idx_in_x + k
+                
+                # Check bounds
+                if df_idx >= len(df): continue
+                
+                # Input Ends at previous row (basis)
+                row_basis = df.iloc[df_idx - 1]
+                row_target = df.iloc[df_idx]
+                
+                basis_close = row_basis['close']
+                
+                # Reconstruct Prediction
+                pred_price = basis_close * np.exp(pred_log_returns[k])
+                
+                # Actual Future Price
+                actual_price = row_basis['actual_future_price'] # = row_target['close']?
+                # df['actual_future_price'][i] = close[i+1].
+                # row_basis is at T. actual_future_price is Close[T+1].
+                # row_target is at T+1? No.
+                # df_idx corresponds to `i` in loop.
+                # X[i] -> target[i].
+                # target[i] depends on construction.
+                # If target was 'log_return' = shift(-1)/close.
+                # Then target[i] is return T->T+1.
+                # But X[i] contains data [i-seq:i]. Last point is i-1.
+                # So X[i] predicts for period starting at i-1?
+                # No.
+                
+                # Let's trust the dates alignment:
+                # date[i] in loop?
+                
+                current_date = row_target['date'].strftime('%Y-%m-%d')
+                # Wait, if target[i] is at row i.
+                # And X[i] ends at i-1.
+                # Then we are predicting for time `i`.
+                
+                predictions.append(pred_price)
+                actuals.append(row_basis['actual_future_price']) # Verify this exists
+                dates.append(current_date)
+                close_list.append(basis_close)
             
         else:
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"

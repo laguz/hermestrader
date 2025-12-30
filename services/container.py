@@ -1,6 +1,7 @@
 from services.tradier_service import TradierService
 from pymongo import MongoClient
 import os
+import certifi
 
 class Container:
     _tradier_service = None
@@ -16,12 +17,16 @@ class Container:
     @classmethod
     def get_mongo_client(cls):
         if not cls._mongo_client:
-            mongo_uri = os.getenv('MONGODB_URI_LOCAL')
+            mongo_uri = os.getenv('MONGODB_URI')
+            if not mongo_uri:
+                # Try local fallback
+                mongo_uri = os.getenv('MONGODB_URI_LOCAL')
+            
             if not mongo_uri:
                 # Fallback or Error? Ideally log warning.
-                print("WARNING: MONGODB_URI_LOCAL not set. MongoDB features will fail.")
+                print("WARNING: MONGODB_URI not set. MongoDB features will fail.")
                 return None
-            cls._mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000)
+            cls._mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=2000, tlsCAFile=certifi.where())
         return cls._mongo_client
 
     @classmethod
@@ -41,6 +46,15 @@ class Container:
     def get_bot_service(cls):
         from services.bot_service import BotService
         return BotService()
+
+    _auth_service = None
+
+    @classmethod
+    def get_auth_service(cls):
+        if not cls._auth_service:
+            from services.auth_service import AuthService
+            cls._auth_service = AuthService()
+        return cls._auth_service
 
     @classmethod
     def get_analysis_service(cls):
