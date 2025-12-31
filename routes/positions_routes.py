@@ -1,9 +1,11 @@
 from flask import Blueprint, jsonify
+from flask_login import login_required
 from services.container import Container
 
 positions_bp = Blueprint('positions', __name__)
 
 @positions_bp.route('/api/positions')
+@login_required
 def get_positions():
     tradier = Container.get_tradier_service()
     positions = tradier.get_positions()

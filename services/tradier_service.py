@@ -17,8 +17,10 @@ class TradierService:
         self.account_id = account_id
 
     def _get_headers(self):
+        if not self.access_token:
+            print("WARNING: Tradier access_token is missing. Unauthorized error likely.")
         return {
-            'Authorization': f'Bearer {self.access_token}',
+            'Authorization': f'Bearer {self.access_token or ""}',
             'Accept': 'application/json'
         }
 
@@ -91,6 +93,9 @@ class TradierService:
 
     def get_account_balances(self):
         """Fetch account balances including total equity and option buying power."""
+        if not self.account_id:
+             print("Error fetching account balances: account_id is missing.")
+             return None
         url = f"{self.endpoint}/accounts/{self.account_id}/balances"
         try:
             response = requests.get(url, headers=self._get_headers())
@@ -126,6 +131,9 @@ class TradierService:
 
     def get_positions(self):
         """Fetch open positions for the account."""
+        if not self.account_id:
+            print("Error fetching positions: account_id is missing.")
+            return []
         url = f"{self.endpoint}/accounts/{self.account_id}/positions"
         try:
             response = requests.get(url, headers=self._get_headers())
@@ -146,6 +154,9 @@ class TradierService:
 
     def get_orders(self, page=1, limit=100):
         """Fetch orders for the account."""
+        if not self.account_id:
+            print("Error fetching orders: account_id is missing.")
+            return []
         url = f"{self.endpoint}/accounts/{self.account_id}/orders"
         params = {'page': page, 'limit': limit}
         try:

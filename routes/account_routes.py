@@ -1,9 +1,11 @@
 from flask import Blueprint, jsonify
+from flask_login import login_required
 from services.container import Container
 
 account_bp = Blueprint('account', __name__)
 
 @account_bp.route('/api/account', methods=['GET'])
+@login_required
 def get_account_overview():
     try:
         tradier = Container.get_tradier_service()

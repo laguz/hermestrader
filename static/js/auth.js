@@ -37,7 +37,40 @@ async function loginWithNostr() {
 
         const result = await response.json();
         if (result.success) {
-            window.location.href = '/';
+            if (result.vault_locked && result.vault_metadata) {
+                console.log("Vault is locked. Attempting decryption...");
+                const metadata = result.vault_metadata;
+
+                // NIP-04 Decryption
+                // encrypted_dek is a blob from nip04_encrypt(server_priv, user_pub, dek_str)
+                try {
+                    const decryptedDek = await window.nostr.nip04.decrypt(
+                        metadata.sender_pubkey,
+                        metadata.encrypted_dek
+                    );
+
+                    console.log("DEK decrypted successfully. Sending to server...");
+
+                    // Send Decrypted DEK to server to unlock session
+                    const unlockResponse = await fetch('/api/auth/unlock', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dek: decryptedDek })
+                    });
+
+                    const unlockResult = await unlockResponse.json();
+                    if (unlockResult.success) {
+                        window.location.href = '/';
+                    } else {
+                        alert("Vault Unlock Failed: " + (unlockResult.message || "Unknown error"));
+                    }
+                } catch (decryptionError) {
+                    console.error("Decryption Error:", decryptionError);
+                    alert("Failed to decrypt vault. Please ensure you are using the correct Nostr key and approved the request.");
+                }
+            } else {
+                window.location.href = '/';
+            }
         } else {
             alert("Nostr Login Failed: " + (result.message || "Unknown error"));
         }

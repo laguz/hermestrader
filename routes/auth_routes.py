@@ -35,15 +35,34 @@ def login_nostr():
         return {'success': False, 'message': 'Missing event data'}, 400
         
     auth_service = Container.get_auth_service()
-    user = auth_service.login_with_nostr(event)
+    user, nostr_manager = auth_service.login_with_nostr(event)
     
     if user:
         login_user(user)
-        # Check if vault needs unlocking (likely yes)
-        # If user.vault is locked, frontend should detect and prompt.
-        return {'success': True}
+        return {
+            'success': True, 
+            'vault_locked': True if nostr_manager else False,
+            'vault_metadata': nostr_manager
+        }
     else:
         return {'success': False, 'message': 'Nostr login failed or user not found'}, 401
+
+@auth_bp.route('/api/auth/unlock', methods=['POST'])
+@login_required
+def unlock_vault():
+    data = request.json
+    decrypted_dek = data.get('dek')
+    
+    if not decrypted_dek:
+        return {'success': False, 'message': 'Missing decrypted DEK'}, 400
+        
+    auth_service = Container.get_auth_service()
+    success = auth_service.unlock_vault_with_dek(current_user, decrypted_dek)
+    
+    if success:
+        return {'success': True}
+    else:
+        return {'success': False, 'message': 'Vault unlock failed (Invalid DEK)'}, 400
 
 @auth_bp.route('/login/sqrl', methods=['POST'])
 def login_sqrl():

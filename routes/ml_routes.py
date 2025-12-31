@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+from flask_login import login_required
 from services.container import Container
 from services.ml_service import MLService
 from exceptions import ValidationError
@@ -6,6 +7,7 @@ from exceptions import ValidationError
 ml_bp = Blueprint('ml', __name__)
 
 @ml_bp.route('/api/train', methods=['POST'])
+@login_required
 def train_model():
     data = request.get_json()
     if not data:
@@ -21,6 +23,7 @@ def train_model():
     return jsonify(result)
 
 @ml_bp.route('/api/predict', methods=['POST'])
+@login_required
 def predict_price():
     data = request.get_json()
     if not data:
@@ -36,6 +39,7 @@ def predict_price():
     return jsonify(result)
 
 @ml_bp.route('/api/evaluate', methods=['POST'])
+@login_required
 def evaluate_model():
     data = request.get_json()
     if not data:
@@ -52,6 +56,7 @@ def evaluate_model():
 
 @ml_bp.route('/api/history', defaults={'symbol': None}, methods=['GET'])
 @ml_bp.route('/api/history/<symbol>', methods=['GET'])
+@login_required
 def get_prediction_history(symbol):
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
@@ -61,6 +66,7 @@ def get_prediction_history(symbol):
     return jsonify(history)
 
 @ml_bp.route('/api/history/refresh', methods=['POST'])
+@login_required
 def refresh_history():
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)

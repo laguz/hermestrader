@@ -158,28 +158,31 @@ class AuthService:
 
     def login_with_nostr(self, event):
         """
-        Verify NIP-98/Auth event.
+        Verify NIP-98/Auth event and return vault metadata if available.
         """
-        # TODO: Verify Signature using nostr sdk
-        # Keys.from_pk_str(event['pubkey']).verify(event['id'], event['sig']) (pseudo code)
-        
+        # TODO: Verify Signature using nostr sdk (Verified in routes for now)
         pubkey = event.get('pubkey')
         
         user_doc = self.db['users'].find_one({"nostr_pubkey": pubkey})
         if not user_doc:
-            return None 
+            return None, None 
 
-        # We return User (authenticated) but Vault is LOCKED unless client sends decrypted DEK?
-        # Actually, if we just Authenticated, we don't have the DEK yet.
-        # The Client needs to perform:
-        # 1. Login (Get Encrypted DEK from Server Response)
-        # 2. Decrypt DEK (Client Side)
-        # 3. Send DEK to Server to Unlock?
+        vault = user_doc.get('vault', {})
+        nostr_manager = vault.get('dek_managers', {}).get('nostr', {})
         
-        # For now, we allow Login (Auth only).
-        # We need a secondary step/endpoint "unlock_vault_with_dek" or "submit_decrypted_dek"
+        return User(user_doc), nostr_manager
+
+    def unlock_vault_with_dek(self, user, decrypted_dek):
+        """Unlock vault and initialize session with provided DEK."""
+        if self.db is None: return False
         
-        return User(user_doc)
+        from bson.objectid import ObjectId
+        user_doc = self.db['users'].find_one({"_id": ObjectId(user.id)})
+        if not user_doc: return False
+        
+        # Attempt to unlock session
+        success_user = self._attempt_vault_unlock(user_doc, decrypted_dek=decrypted_dek)
+        return success_user is not None
 
     def _attempt_vault_unlock(self, user_doc, password=None, decrypted_dek=None):
         try:

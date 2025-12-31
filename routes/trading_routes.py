@@ -1,19 +1,23 @@
 from flask import Blueprint, render_template, request, jsonify
+from flask_login import login_required
 from services.container import Container
 
 trading_bp = Blueprint('trading', __name__)
 
 @trading_bp.route('/manual_orders')
+@login_required
 def manual_orders():
     """Render the manual orders page."""
     return render_template('manual_orders.html')
 
 @trading_bp.route('/automated_trading')
+@login_required
 def automated_trading():
     """Render the automated trading page."""
     return render_template('automated_trading.html')
 
 @trading_bp.route('/api/orders', methods=['POST'])
+@login_required
 def place_order():
     """Place a manual order using Tradier Service."""
     try:
@@ -131,6 +135,7 @@ def bot_status():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/start', methods=['POST'])
+@login_required
 def start_bot():
     try:
         service = Container.get_bot_service()
@@ -140,6 +145,7 @@ def start_bot():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/stop', methods=['POST'])
+@login_required
 def stop_bot():
     try:
         service = Container.get_bot_service()
@@ -149,6 +155,7 @@ def stop_bot():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/watchlist', methods=['POST'])
+@login_required
 def update_watchlist():
     try:
         data = request.json
@@ -168,6 +175,7 @@ def update_watchlist():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/settings', methods=['POST'])
+@login_required
 def update_bot_settings():
     try:
         data = request.json
@@ -184,6 +192,7 @@ def update_bot_settings():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/dry_run', methods=['POST'])
+@login_required
 def run_dry_run():
     try:
         tradier_service = Container.get_tradier_service()
@@ -275,6 +284,7 @@ def run_dry_run():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 @trading_bp.route('/bot_performance', strict_slashes=False)
+@login_required
 def bot_performance():
     """Render the bot performance page."""
     return render_template('bot_performance.html')
@@ -298,6 +308,7 @@ def get_bot_trades():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/sync_positions', methods=['POST'])
+@login_required
 def sync_positions():
     try:
         service = Container.get_bot_service()
@@ -307,10 +318,12 @@ def sync_positions():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/pnl')
+@login_required
 def pnl_page():
     return render_template('pnl.html')
 
 @trading_bp.route('/api/pnl', methods=['GET'])
+@login_required
 def get_pnl_data():
     try:
         service = Container.get_bot_service()
