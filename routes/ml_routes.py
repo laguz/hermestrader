@@ -15,11 +15,24 @@ def train_model():
         
     symbol = data.get('symbol', 'TSLA')
     model_type = data.get('model_type', 'rf')
+    express = data.get('express', False)
     
     tradier = Container.get_tradier_service()
+    if not tradier.access_token:
+        # Final attempt to pull from auth service if memory was lost
+        auth = Container.get_auth_service()
+        tradier.update_access_token(auth.get_api_key())
+        
+    if not tradier.access_token:
+        return jsonify({
+            'success': False, 
+            'message': 'Tradier Vault is locked. Please unlock your vault or re-login.',
+            'vault_locked': True
+        }), 401
+        
     ml_service = MLService(tradier)
 
-    result = ml_service.train_model(symbol, model_type=model_type)
+    result = ml_service.train_model(symbol, model_type=model_type, express=express)
     return jsonify(result)
 
 @ml_bp.route('/api/predict', methods=['POST'])

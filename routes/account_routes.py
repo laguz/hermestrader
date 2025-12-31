@@ -9,6 +9,13 @@ account_bp = Blueprint('account', __name__)
 def get_account_overview():
     try:
         tradier = Container.get_tradier_service()
+        if not tradier.access_token:
+            return jsonify({
+                'success': False, 
+                'message': 'Tradier Vault is locked.',
+                'vault_locked': True
+            }), 401
+            
         balances = tradier.get_account_balances()
         if not balances:
             return jsonify({"error": "Failed to fetch account balances"}), 500

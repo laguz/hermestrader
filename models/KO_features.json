@@ -1,1 +1,1 @@
-["close", "low", "high", "open", "close_lag_1", "upper_bb", "atr", "volume", "daily_return", "mid_bb"]
+["close", "low", "high", "open", "atr", "obv", "daily_return", "volume", "close_lag_1", "daily_return_lag_1"]

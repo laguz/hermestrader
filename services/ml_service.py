@@ -22,6 +22,20 @@ try:
 except ImportError:
     print("Warning: TensorFlow not found. LSTM model will be disabled.")
     HAS_TENSORFLOW = False
+    
+# Global setting for Mixed Precision to speed up training
+if HAS_TENSORFLOW:
+    try:
+        from tensorflow.keras import mixed_precision
+        # Enable mixed precision if a GPU is detected to speed up training
+        # Note: In sandbox/CPU environments this might just be a no-op or slightly faster
+        policy = mixed_precision.Policy('mixed_float16')
+        # Only set if GPU available to avoid issues on some CPU-only setups
+        if tf.config.list_physical_devices('GPU'):
+            mixed_precision.set_global_policy(policy)
+            print("ML: Mixed precision enabled (float16)")
+    except Exception as e:
+        print(f"ML: Could not enable mixed precision: {e}")
 
 class NYSEHolidayCalendar(AbstractHolidayCalendar):
     rules = [
@@ -40,6 +54,7 @@ class NYSEHolidayCalendar(AbstractHolidayCalendar):
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma, calculate_obv, calculate_vwap
 from services.container import Container
 from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError, AppError
+from concurrent.futures import ThreadPoolExecutor
 
 class MLService:
     def __init__(self, tradier_service):
@@ -188,15 +203,14 @@ class MLService:
 
     def _build_lstm_model(self, input_shape):
         model = Sequential()
-        # Bidirectional with more units
-        # Fix warning: Do not pass input_shape to layer, use Input(shape) first
+        # Reduced units from 128 to 64 for speed and to prevent overfitting
         model.add(Input(shape=input_shape))
-        model.add(Bidirectional(LSTM(128, return_sequences=True)))
+        model.add(LSTM(64, return_sequences=True)) # Unidirectional is faster than Bidirectional
         model.add(Dropout(0.2))
-        model.add(Bidirectional(LSTM(128, return_sequences=False)))
+        model.add(LSTM(64, return_sequences=False))
         model.add(Dropout(0.2))
-        model.add(Dense(25))
-        model.add(Dense(1)) # Predict price directly
+        model.add(Dense(32, activation='relu'))
+        model.add(Dense(1)) # Predict price/return directly
         
         model.compile(optimizer='adam', loss='mean_squared_error')
         return model
@@ -219,7 +233,10 @@ class MLService:
         
         # Expanding window loop
         # Start at min_train_size, step by test_size
-        for t in range(min_train_size, n_samples - test_size, test_size):
+        # For LSTM, we use a larger step size to avoid too many retraining cycles
+        actual_step = test_size if model_type != 'lstm' else test_size * 5
+        
+        for t in range(min_train_size, n_samples - test_size, actual_step):
             train_df = df.iloc[:t].copy()
             test_df = df.iloc[t:t+test_size].copy()
             
@@ -250,7 +267,8 @@ class MLService:
                 
                 model = self._build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
                 early_stop = EarlyStopping(monitor='loss', patience=2)
-                model.fit(X_train, y_train_scaled, epochs=5, batch_size=32, verbose=0, callbacks=[early_stop])
+                # Increased batch_size to 64 for faster training
+                model.fit(X_train, y_train_scaled, epochs=5, batch_size=64, verbose=0, callbacks=[early_stop])
                 
                 # Predict
                 # Use model(X, training=False) to avoid TF function retracing warnings in loops
@@ -299,22 +317,8 @@ class MLService:
         print(f"Validation Complete. Avg MSE: {avg_mse:.6f}, Avg Accuracy: {avg_acc:.2%}")
         return {"val_mse": avg_mse, "val_accuracy": avg_acc}
 
-    def train_model(self, symbol, model_type='rf'):
-        symbol = symbol.upper()
-        if model_type == 'ensemble':
-            print(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
-            res_rf = self.train_model(symbol, model_type='rf')
-            res_lstm = self.train_model(symbol, model_type='lstm')
-            return {
-                "status": "trained",
-                "symbol": symbol,
-                "type": "ensemble",
-                "rf_mse": res_rf['mse'],
-                "lstm_mse": res_lstm['mse']
-            }
-
-        print(f"Starting {model_type.upper()} training for {symbol} using local DB...")
-        
+    def _fetch_and_prepare_training_data(self, symbol):
+        """Helper to fetch and prepare data from DB."""
         if self.db is None:
             raise ExternalServiceError("Database not available")
 
@@ -350,9 +354,6 @@ class MLService:
         df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
         
         # Keep 'target' column for legacy/reference or specific model usage
-        # For LSTM, we will use 'log_return' as target
-        # For RF, we use 'target_return' (pct_change)
-        
         df['target'] = df['close'].shift(-1) # Actual price for later comparison/RF fallback
         
         # RF Target (Simple Return)
@@ -360,6 +361,45 @@ class MLService:
         
         # Drop NaNs created by lags/indicators/shifting
         df.dropna(inplace=True)
+        return df
+
+    def train_model(self, symbol, model_type='rf', express=False, pre_prepared_df=None):
+        symbol = symbol.upper()
+        if model_type == 'ensemble':
+            print(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
+            
+            # Step 1: Prepare data once for BOTH models
+            # This is the "Data Reuse" optimization
+            if pre_prepared_df is not None:
+                df = pre_prepared_df
+            else:
+                df = self._fetch_and_prepare_training_data(symbol)
+            
+            from concurrent.futures import ThreadPoolExecutor
+            
+            # Parallel Training Optimization
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_rf = executor.submit(self.train_model, symbol, model_type='rf', express=express, pre_prepared_df=df)
+                future_lstm = executor.submit(self.train_model, symbol, model_type='lstm', express=express, pre_prepared_df=df)
+                
+                res_rf = future_rf.result()
+                res_lstm = future_lstm.result()
+                
+            return {
+                "status": "trained",
+                "symbol": symbol,
+                "type": "ensemble",
+                "rf_mse": res_rf['mse'],
+                "lstm_mse": res_lstm['mse']
+            }
+
+        print(f"Starting {model_type.upper()} training for {symbol}...")
+        
+        # Use pre-prepared data if available
+        if pre_prepared_df is not None:
+            df = pre_prepared_df
+        else:
+            df = self._fetch_and_prepare_training_data(symbol)
         
         if len(df) < 100:
             raise ValidationError("Not enough data for training after processing")
@@ -372,7 +412,11 @@ class MLService:
             json.dump(top_features, f)
             
         # 4. Walk-Forward Validation (Before final training)
-        validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
+        if not express:
+            validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
+        else:
+            print("Express mode enabled: Skipping Walk-Forward Validation.")
+            validation_results = {}
         
         mse = 0
         final_model_stats = {}
@@ -400,9 +444,10 @@ class MLService:
             model = self._build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
             
             # Early Stopping
-            early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+            early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
             
-            model.fit(X_train, y_train, batch_size=32, epochs=15, validation_data=(X_test, y_test), 
+            # Increased batch_size to 64 and reduced epochs to 10 for speed
+            model.fit(X_train, y_train, batch_size=64, epochs=10, validation_data=(X_test, y_test), 
                       callbacks=[early_stopping], verbose=1)
             
             # Eval on test set (inverse transform)

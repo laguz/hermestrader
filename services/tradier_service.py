@@ -4,7 +4,7 @@ from flask import current_app
 
 class TradierService:
     def __init__(self, access_token=None, account_id=None, endpoint=None):
-        self.access_token = access_token or os.getenv('TRADIER_API_KEY')
+        self.access_token = access_token or os.getenv('TRADIER_ACCESS_TOKEN')
         self.account_id = account_id or os.getenv('TRADIER_ACCOUNT_ID')
         self.endpoint = endpoint or os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
         
@@ -18,7 +18,17 @@ class TradierService:
 
     def _get_headers(self):
         if not self.access_token:
+            # Check if we can get it from AuthService (Singleton proxy)
+            try:
+                from services.container import Container
+                auth = Container.get_auth_service()
+                self.access_token = auth.get_api_key()
+            except:
+                pass
+                
+        if not self.access_token:
             print("WARNING: Tradier access_token is missing. Unauthorized error likely.")
+            
         return {
             'Authorization': f'Bearer {self.access_token or ""}',
             'Accept': 'application/json'
