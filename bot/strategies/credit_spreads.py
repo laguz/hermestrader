@@ -654,66 +654,73 @@ class CreditSpreadStrategy:
         # 2. Tally Orders (Pending)
         pending_statuses = ['open', 'partially_filled', 'pending']
         for o in orders:
-             if o.get('status') not in pending_statuses: continue
-             if o.get('symbol') != symbol: continue # Multileg symbol is underlying
-             
-             # Check class/legs to see if it matches our side (Put vs Call Spread)
-             # Simplistic: If multileg, look at legs?
-             legs = o.get('legs', [])
-             if not legs and o.get('class') == 'multileg':
-                 # If legs details missing (Tradier order summary might not have legs inline?)
-                 # Assume it adds to the count if we can't tell? 
-                 # Or skip to be safe?
-                 # Actually Tradier orders endpoint usually returns 'leg' list.
-                 # Let's assume we can see it.
-                 pass
+            if o.get('status') not in pending_statuses: continue
+            
+            # For multileg orders, the top-level 'symbol' is usually the underlying (e.g., 'IWM').
+            # For single option orders, it might be the option symbol. 
+            # We check both the top-level symbol and the legs/leg for a match.
+            o_sym = o.get('symbol')
+            o_class = o.get('class')
+            
+            # Check legs (Tradier uses 'leg' key for multileg orders, but sometimes 'legs' in descriptions)
+            # We check both to be safe.
+            legs = o.get('leg') or o.get('legs', [])
+            if isinstance(legs, dict): legs = [legs] # Handle single leg as dict if applicable
 
-             # If we can parse legs:
-             # Look for Short Leg
-             is_target_spread = False
-             short_leg_sym = None
-             
-             # Check legs (list of dicts)
-             if isinstance(legs, list):
-                 for leg in legs:
-                     if leg.get('side') == 'sell_to_open':
-                         lsym = leg.get('option_symbol', '')
-                         # Check type
-                         if is_put:
-                             if re.search(r'\d{6}P\d+', lsym): 
-                                 is_target_spread = True
-                                 short_leg_sym = lsym
-                         else:
-                             if re.search(r'\d{6}C\d+', lsym): 
-                                 is_target_spread = True
-                                 short_leg_sym = lsym
-                                 
-             # Also check Option class orders
-             if o.get('class') == 'option' and o.get('side') == 'sell_to_open':
-                  lsym = o.get('option_symbol', '')
-                  # same check
-                  if is_put and re.search(r'\d{6}P\d+', lsym): 
-                         is_target_spread = True
-                         short_leg_sym = lsym
-                  elif not is_put and re.search(r'\d{6}C\d+', lsym):
-                         is_target_spread = True
-                         short_leg_sym = lsym
-             
-             if is_target_spread and short_leg_sym:
-                 qty = o.get('quantity', 0)
-                 exp_str = get_expiry_str(short_leg_sym)
-                 if exp_str:
-                     expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+            is_target_spread = False
+            short_leg_sym = None
+            
+            if o_class == 'multileg' and legs:
+                # In multileg, we must check if it's our underlying and our side.
+                if o_sym != symbol: continue
+                
+                for leg in legs:
+                    if leg.get('side') == 'sell_to_open':
+                        lsym = leg.get('option_symbol', '')
+                        # Check type (Put vs Call)
+                        if is_put and re.search(r'\d{6}P\d+', lsym): 
+                            is_target_spread = True
+                            short_leg_sym = lsym
+                        elif not is_put and re.search(r'\d{6}C\d+', lsym): 
+                            is_target_spread = True
+                            short_leg_sym = lsym
+            
+            elif o_class == 'option':
+                # Single leg option order
+                lsym = o.get('option_symbol', '')
+                if not lsym: continue # Should not happen for option class
+                
+                # Check underlying from option symbol
+                if not lsym.startswith(symbol): continue
+                
+                if o.get('side') == 'sell_to_open':
+                    if is_put and re.search(r'\d{6}P\d+', lsym):
+                        is_target_spread = True
+                        short_leg_sym = lsym
+                    elif not is_put and re.search(r'\d{6}C\d+', lsym):
+                        is_target_spread = True
+                        short_leg_sym = lsym
+            
+            if is_target_spread and short_leg_sym:
+                qty = abs(o.get('quantity', 0))
+                exp_str = get_expiry_str(short_leg_sym)
+                if exp_str:
+                    expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+                    self._log(f"📝 Pending Order detected: {qty} lot(s) for {exp_str} ({short_leg_sym})")
 
         # Limit is variable Lots per Expiry
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
         
+        if expiry_counts:
+             side = "Put" if is_put else "Call"
+             self._log(f"📊 Current Tally for {symbol} {side} by Expiry: {expiry_counts} (Limit: {max_lots})")
+
         if full_expiries:
             side = "Put" if is_put else "Call"
             self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} for {side} Spreads (Max {max_lots} lots met).")
-            self._log(f"DEBUG: Expiry Counts ({side}): {expiry_counts}")
             
         return full_expiries
+
 
     def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5):
         """
