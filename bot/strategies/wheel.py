@@ -357,10 +357,120 @@ class WheelStrategy:
             dte = (expiry_date - today).days
 
             # 1. Check DTE Trigger
-            if dte > self.ROLL_TRIGGER_DTE: # STRICTLY > 7 means 8+. So 7 matches trigger.
+            if dte > self.ROLL_TRIGGER_DTE: 
                 continue 
             
-            # ... (rest of loop)
+            self._log(f"🔍 {symbol} management: DTE {dte} <= {self.ROLL_TRIGGER_DTE}. Checking ITM status...")
+
+            # 2. Check ITM Status
+            try:
+                quote = self.tradier.get_quote(underlying)
+                if not quote:
+                    self._log(f"⚠️ Could not fetch quote for {underlying}. Skipping management.")
+                    continue
+                
+                current_price = float(quote.get('last'))
+                is_itm = False
+                if option_type == 'put' and current_price < strike:
+                    is_itm = True
+                elif option_type == 'call' and current_price > strike:
+                    is_itm = True
+                
+                if not is_itm:
+                    self._log(f"ℹ️ {symbol} is OTM (Price {current_price}, Strike {strike}). Allowing to expire.")
+                    continue
+
+                self._log(f"🚨 {symbol} is ITM (Price {current_price}, Strike {strike}). Triggering ROLL.")
+
+                # 3. Execute Roll
+                # Step A: Buy To Close current position
+                # Using execute_order with side='buy_to_close'
+                # Note: self._execute_order currently only supports sell_to_open easily due to price logic.
+                # Let's create a more flexible closure or handle it here.
+                
+                # Fetch chain for current expiry to get closure price
+                current_expiry_str = expiry_date.strftime("%Y-%m-%d")
+                chain = self.tradier.get_option_chains(underlying, current_expiry_str)
+                current_option = next((o for o in chain if o['strike'] == strike and o['option_type'] == option_type), None)
+                
+                if not current_option:
+                    self._log(f"❌ Could not find current option {symbol} in chain to close.")
+                    continue
+
+                # Close Price: Mid or Ask? Standard is Ask for BTC.
+                close_price = current_option['ask']
+                
+                # Step B: Find New Expiry (42-63 DTE)
+                new_expiry = self._find_expiry(underlying, target_dte=42, min_dte=42, max_dte=63)
+                if not new_expiry:
+                    self._log(f"❌ Could not find a suitable new expiry for roll.")
+                    continue
+
+                # Step C: Find Strike for New Expiry (Same Strike)
+                new_chain = self.tradier.get_option_chains(underlying, new_expiry)
+                new_option = next((o for o in new_chain if o['strike'] == strike and o['option_type'] == option_type), None)
+                
+                if not new_option:
+                    self._log(f"❌ Strike {strike} not available in new expiry {new_expiry}. Skipping roll.")
+                    continue
+
+                # Open Price: Bid - 0.01
+                open_price = round(new_option['bid'] - 0.01, 2)
+                
+                net_credit = open_price - close_price
+                if net_credit < -self.ROLL_MAX_DEBIT:
+                    self._log(f"🚫 Roll Aborted: Net Credit {net_credit:.2f} would exceed max debit {self.ROLL_MAX_DEBIT}.")
+                    continue
+
+                self._log(f"🔄 Rolling {symbol} to {new_expiry} Strike {strike}. Net: {net_credit:.2f}")
+
+                if self.dry_run:
+                    self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
+                    self._record_trade(underlying, f"Wheel Roll BTC", close_price, {'id': 'dry_run_btc', 'status': 'ok'})
+                    self._record_trade(underlying, f"Wheel Roll STO", open_price, {'id': 'dry_run_sto', 'status': 'ok'})
+                else:
+                    # BTC
+                    btc_res = self.tradier.place_order(
+                        account_id=self.tradier.account_id,
+                        symbol=underlying,
+                        side='buy_to_close',
+                        quantity=abs(int(position['quantity'])),
+                        order_type='limit',
+                        duration='day',
+                        price=close_price,
+                        option_symbol=symbol,
+                        order_class='option'
+                    )
+                    
+                    if 'error' in btc_res:
+                        self._log(f"❌ BTC Error: {btc_res['error']}")
+                        continue
+                    
+                    self._log(f"✅ BTC Success: {btc_res.get('id')}")
+                    self._record_trade(underlying, f"Wheel Roll BTC", close_price, btc_res)
+
+                    # STO
+                    sto_res = self.tradier.place_order(
+                        account_id=self.tradier.account_id,
+                        symbol=underlying,
+                        side='sell_to_open',
+                        quantity=abs(int(position['quantity'])),
+                        order_type='limit',
+                        duration='day',
+                        price=open_price,
+                        option_symbol=new_option['symbol'],
+                        order_class='option'
+                    )
+                    
+                    if 'error' in sto_res:
+                        self._log(f"❌ STO Error: {sto_res['error']}")
+                    else:
+                        self._log(f"✅ STO Success: {sto_res.get('id')}")
+                        self._record_trade(underlying, f"Wheel Roll STO", open_price, sto_res)
+
+            except Exception as e:
+                self._log(f"❌ Error managing {symbol}: {e}")
+                traceback.print_exc()
 
     # ...
 

@@ -1,0 +1,121 @@
+
+import pytest
+from unittest.mock import MagicMock, patch
+from datetime import datetime, date, timedelta
+from bot.strategies.wheel import WheelStrategy
+
+class MockTradier:
+    def __init__(self, current_date):
+        self.current_date = current_date
+        self.account_id = "mock_account"
+        self.get_quote = MagicMock()
+        self.get_option_chains = MagicMock()
+        self.get_option_expirations = MagicMock()
+        self.place_order = MagicMock()
+
+def test_wheel_roll_conditions():
+    # Setup
+    today = datetime(2026, 1, 1, 12, 0)
+    mock_tradier = MockTradier(today)
+    mock_db = MagicMock()
+    strategy = WheelStrategy(mock_tradier, mock_db, dry_run=False)
+    
+    # 1. RIOT 13 Put, ITM, DTE 1 (Expires Jan 2, 2026)
+    # Today is Jan 1. Jan 2 is DTE 1.
+    expiry_date = date(2026, 1, 2)
+    position = {
+        'symbol': 'RIOT260102P00013000',
+        'underlying': 'RIOT',
+        'quantity': -1,
+        'strike': 13.0,
+        'option_type': 'put'
+    }
+    
+    # Mock data for roll
+    mock_tradier.get_quote.return_value = {'last': 12.50} # ITM
+    mock_tradier.get_option_chains.side_effect = [
+        # Chain for current expiry closure
+        [{'strike': 13.0, 'option_type': 'put', 'ask': 0.60, 'symbol': 'RIOT260102P00013000'}],
+        # Chain for new expiry opening
+        [{'strike': 13.0, 'option_type': 'put', 'bid': 1.50, 'symbol': 'RIOT260213P00013000'}]
+    ]
+    mock_tradier.get_option_expirations.return_value = ['2026-02-13']
+    mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
+
+    # Execute
+    strategy._manage_positions([position])
+
+    # Check triggers
+    # BTC should be called
+    mock_tradier.place_order.assert_any_call(
+        account_id='mock_account',
+        symbol='RIOT',
+        side='buy_to_close',
+        quantity=1,
+        order_type='limit',
+        duration='day',
+        price=0.60,
+        option_symbol='RIOT260102P00013000',
+        order_class='option'
+    )
+    # STO should be called
+    mock_tradier.place_order.assert_any_call(
+        account_id='mock_account',
+        symbol='RIOT',
+        side='sell_to_open',
+        quantity=1,
+        order_type='limit',
+        duration='day',
+        price=1.49, # 1.50 - 0.01
+        option_symbol='RIOT260213P00013000',
+        order_class='option'
+    )
+
+def test_wheel_no_roll_if_otm():
+    # Setup
+    today = datetime(2026, 1, 1, 12, 0)
+    mock_tradier = MockTradier(today)
+    mock_db = MagicMock()
+    strategy = WheelStrategy(mock_tradier, mock_db, dry_run=False)
+    
+    expiry_date = date(2026, 1, 2)
+    position = {
+        'symbol': 'RIOT260102P00013000',
+        'underlying': 'RIOT',
+        'quantity': -1,
+        'strike': 13.0,
+        'option_type': 'put'
+    }
+    
+    mock_tradier.get_quote.return_value = {'last': 14.00} # OTM
+    
+    # Execute
+    strategy._manage_positions([position])
+
+    # BTC should NOT be called
+    mock_tradier.place_order.assert_not_called()
+
+def test_wheel_no_roll_if_dte_high():
+    # Setup
+    today = datetime(2026, 1, 1, 12, 0)
+    mock_tradier = MockTradier(today)
+    mock_db = MagicMock()
+    strategy = WheelStrategy(mock_tradier, mock_db, dry_run=False)
+    
+    # DTE 10 (Expires Jan 11)
+    expiry_date = date(2026, 1, 11)
+    # Symbol format: RIOT260111P00013000 (yyMMdd)
+    position = {
+        'symbol': 'RIOT260111P00013000',
+        'underlying': 'RIOT',
+        'quantity': -1,
+        'strike': 13.0,
+        'option_type': 'put'
+    }
+    
+    # Execute
+    strategy._manage_positions([position])
+
+    # Quote should not even be fetched if DTE > 7
+    mock_tradier.get_quote.assert_not_called()
+    mock_tradier.place_order.assert_not_called()
