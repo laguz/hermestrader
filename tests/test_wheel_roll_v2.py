@@ -36,8 +36,8 @@ def test_wheel_roll_conditions():
     mock_tradier.get_option_chains.side_effect = [
         # Chain for current expiry closure
         [{'strike': 13.0, 'option_type': 'put', 'ask': 0.60, 'symbol': 'RIOT260102P00013000'}],
-        # Chain for new expiry opening
-        [{'strike': 13.0, 'option_type': 'put', 'bid': 1.50, 'symbol': 'RIOT260213P00013000'}]
+        # Chain for new expiry opening (at strike 12)
+        [{'strike': 12.0, 'option_type': 'put', 'bid': 1.50, 'symbol': 'RIOT260213P00012000'}]
     ]
     mock_tradier.get_option_expirations.return_value = ['2026-02-13']
     mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
@@ -58,7 +58,7 @@ def test_wheel_roll_conditions():
         option_symbol='RIOT260102P00013000',
         order_class='option'
     )
-    # STO should be called
+    # STO should be called (at strike 12)
     mock_tradier.place_order.assert_any_call(
         account_id='mock_account',
         symbol='RIOT',
@@ -67,7 +67,7 @@ def test_wheel_roll_conditions():
         order_type='limit',
         duration='day',
         price=1.49, # 1.50 - 0.01
-        option_symbol='RIOT260213P00013000',
+        option_symbol='RIOT260213P00012000',
         order_class='option'
     )
 

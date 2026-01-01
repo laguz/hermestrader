@@ -406,13 +406,20 @@ class WheelStrategy:
                     self._log(f"❌ Could not find a suitable new expiry for roll.")
                     continue
 
-                # Step C: Find Strike for New Expiry (Same Strike)
+                # Step C: Find Strike for New Expiry (-1 lower than current)
+                target_strike = strike - 1.0
                 new_chain = self.tradier.get_option_chains(underlying, new_expiry)
-                new_option = next((o for o in new_chain if o['strike'] == strike and o['option_type'] == option_type), None)
+                new_option = next((o for o in new_chain if o['strike'] == target_strike and o['option_type'] == option_type), None)
                 
                 if not new_option:
-                    self._log(f"❌ Strike {strike} not available in new expiry {new_expiry}. Skipping roll.")
-                    continue
+                    # Fallback: Find closest strike to target_strike
+                    candidates = [o for o in new_chain if o['option_type'] == option_type]
+                    if candidates:
+                        new_option = min(candidates, key=lambda x: abs(x['strike'] - target_strike))
+                        self._log(f"⚠️ Target strike {target_strike} not available. Snapping to {new_option['strike']}.")
+                    else:
+                        self._log(f"❌ No options available in new expiry {new_expiry}. Skipping roll.")
+                        continue
 
                 # Open Price: Bid - 0.01
                 open_price = round(new_option['bid'] - 0.01, 2)
@@ -422,7 +429,7 @@ class WheelStrategy:
                     self._log(f"🚫 Roll Aborted: Net Credit {net_credit:.2f} would exceed max debit {self.ROLL_MAX_DEBIT}.")
                     continue
 
-                self._log(f"🔄 Rolling {symbol} to {new_expiry} Strike {strike}. Net: {net_credit:.2f}")
+                self._log(f"🔄 Rolling {symbol} to {new_expiry} Strike {new_option['strike']}. Net: {net_credit:.2f}")
 
                 if self.dry_run:
                     self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
