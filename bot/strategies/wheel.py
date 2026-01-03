@@ -601,84 +601,85 @@ class WheelStrategy:
         Returns: List of 'YYYY-MM-DD' strings to exclude.
         """
         try:
-            positions = self.tradier.get_positions()
-            if positions is None: positions = []
+            positions = self.tradier.get_positions() or []
         except:
              return []
         
-        
         import re
         expiry_counts = {}
-        
-        # Iterate ALL positions and robustly check if they belong to this symbol
-        for p in positions:
-            sym_raw = p.get('symbol', '')
-            
-            # Robust Match: START with underlying characters
-            # e.g. RIOT250117... or TSLA25...
-            # We want to match if it STARTS with "SYMBOL" + "Digit" (Option)
-            # OR invalid case where underlying is missing but symbol is correct
-            
-            # Option 1: Quick strict check
-            if not sym_raw.startswith(symbol):
-                continue
-            
-            # Option 2: Ensure the char AFTER symbol is a digit (invulnerable to RIOTA vs RIOT)
-            remaining = sym_raw[len(symbol):]
-            if not remaining or not remaining[0].isdigit():
-                continue
-            
-            # Now we know it's a derivative of 'symbol' (e.g. RIOT...)
-            
-            # Parse Expiry: ROOTyyMMdd...
-            m = re.search(r'[A-Z]+(\d{6})[PC]', sym_raw)
+
+        # Helper to parse Date from Symbol: ROOTyyMMdd...
+        def get_expiry_str(sym):
+            m = re.search(r'[A-Z]+(\d{6})[PC]', sym)
             if m:
-                d_str = m.group(1) # yyMMdd
+                d_str = m.group(1)
                 try:
                     dt = datetime.strptime(d_str, "%y%m%d")
-                    exp_str = dt.strftime("%Y-%m-%d")
-                    
-                    # Count contracts (abs quantity)
-                    qty = abs(p['quantity'])
-                    expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
-                except Exception as e:
-                    self._log(f"Error parsing date from {sym_raw}: {e}")
+                    return dt.strftime("%Y-%m-%d")
+                except: pass
+            return None
 
-        # ------------------------------------------------------------------
-        # NEW: Count Pending Orders too (Avoids multi-ordering)
-        # ------------------------------------------------------------------
+        # Robust underlying extraction (same as Credit Spread)
+        def get_underlying(pos):
+            if pos.get('underlying'): return pos.get('underlying')
+            sym = pos.get('symbol', '')
+            if re.search(r'\d', sym):
+                m = re.match(r'^([A-Z]+)\d', sym)
+                if m: return m.group(1)
+            return sym
+
+        # 1. Tally Positions (Lots) by Expiry
+        for p in positions:
+            p_underlying = get_underlying(p)
+            if p_underlying != symbol: continue
+            
+            # We only count options here, not shares
+            if p.get('symbol') == symbol: continue
+
+            exp_str = get_expiry_str(p['symbol'])
+            if exp_str:
+                qty = abs(p.get('quantity', 1))
+                expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
+
+        # 2. Count Pending Orders (Avoids multi-ordering)
         try:
             orders = self.tradier.get_orders() or []
         except:
             orders = []
 
-        relevant_orders = [
-            o for o in orders 
-            if o.get('symbol') == symbol 
-            and o.get('status') in ['open', 'partially_filled', 'pending']
-            and o.get('side') == 'sell_to_open'
-            and o.get('class') == 'option'
-        ]
+        pending_statuses = ['open', 'partially_filled', 'pending']
+        for o in orders:
+            status = o.get('status')
+            if status not in pending_statuses: continue
+            
+            # Use robust extraction for underlying
+            o_underlying = get_underlying(o)
+            if o_underlying != symbol: continue
 
-        for o in relevant_orders:
+            if o.get('side') != 'sell_to_open': continue
+            if o.get('class') != 'option': continue
+
             # Parse expiry from option_symbol e.g. ROOTyyMMdd...
             osym = o.get('option_symbol')
             if not osym: continue
             
-            m_ord = re.search(r'[A-Z]+(\d{6})[PC]', osym)
-            if m_ord:
-                d_str = m_ord.group(1)
-                dt = datetime.strptime(d_str, "%y%m%d")
-                exp_str = dt.strftime("%Y-%m-%d")
+            exp_str = get_expiry_str(osym)
+            if exp_str:
+                # Use remaining_quantity for partially_filled to avoid double counting
+                if status == 'partially_filled':
+                    qty = abs(o.get('remaining_quantity', 0))
+                else:
+                    qty = abs(o.get('quantity', 0))
                 
-                qty = int(o.get('quantity', 0))
-                # Add to existing count
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
-                self._log(f"📝 Pending Order Counted: {qty} for {exp_str}")
+                self._log(f"📝 Pending Order detected: {qty} lot(s) for {exp_str} ({osym}, status: {status})")
         
         # Limit: Max Variable Wheel Contracts per Expiry.
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
         
+        if expiry_counts:
+             self._log(f"📊 Current Tally for {symbol} by Expiry: {expiry_counts} (Limit: {max_lots})")
+
         if full_expiries:
             self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max {max_lots} contract/week met).")
             
