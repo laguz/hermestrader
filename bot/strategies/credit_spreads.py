@@ -636,11 +636,8 @@ class CreditSpreadStrategy:
             # Use regex if option_type missing
             p_type = p.get('option_type')
             if not p_type:
-                 if 'P' in p['symbol'] and not 'C' in p['symbol']: p_type = 'put' # simplistic
-                 elif 'C' in p['symbol']: 
-                     # regex better
-                     if re.search(r'\d{6}P\d+', p['symbol']): p_type = 'put'
-                     elif re.search(r'\d{6}C\d+', p['symbol']): p_type = 'call'
+                 if re.search(r'\d{6}P\d+', p['symbol']): p_type = 'put'
+                 elif re.search(r'\d{6}C\d+', p['symbol']): p_type = 'call'
             
             if p_type != target_type_check: continue
 
@@ -652,28 +649,27 @@ class CreditSpreadStrategy:
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
 
         # 2. Tally Orders (Pending)
+        # Avoid double counting: For partially filled orders, we only count 'remaining_quantity'
+        # since 'exec_quantity' already shows up in 'positions'.
         pending_statuses = ['open', 'partially_filled', 'pending']
         for o in orders:
-            if o.get('status') not in pending_statuses: continue
+            status = o.get('status')
+            if status not in pending_statuses: continue
             
-            # For multileg orders, the top-level 'symbol' is usually the underlying (e.g., 'IWM').
-            # For single option orders, it might be the option symbol. 
-            # We check both the top-level symbol and the legs/leg for a match.
             o_sym = o.get('symbol')
             o_class = o.get('class')
             
-            # Check legs (Tradier uses 'leg' key for multileg orders, but sometimes 'legs' in descriptions)
-            # We check both to be safe.
+            # Use robust extraction for underlying
+            o_underlying = self._get_underlying_from_pos(o)
+            if o_underlying != symbol: continue
+
             legs = o.get('leg') or o.get('legs', [])
-            if isinstance(legs, dict): legs = [legs] # Handle single leg as dict if applicable
+            if isinstance(legs, dict): legs = [legs]
 
             is_target_spread = False
             short_leg_sym = None
             
             if o_class == 'multileg' and legs:
-                # In multileg, we must check if it's our underlying and our side.
-                if o_sym != symbol: continue
-                
                 for leg in legs:
                     if leg.get('side') == 'sell_to_open':
                         lsym = leg.get('option_symbol', '')
@@ -686,12 +682,8 @@ class CreditSpreadStrategy:
                             short_leg_sym = lsym
             
             elif o_class == 'option':
-                # Single leg option order
                 lsym = o.get('option_symbol', '')
-                if not lsym: continue # Should not happen for option class
-                
-                # Check underlying from option symbol
-                if not lsym.startswith(symbol): continue
+                if not lsym: continue
                 
                 if o.get('side') == 'sell_to_open':
                     if is_put and re.search(r'\d{6}P\d+', lsym):
@@ -702,11 +694,16 @@ class CreditSpreadStrategy:
                         short_leg_sym = lsym
             
             if is_target_spread and short_leg_sym:
-                qty = abs(o.get('quantity', 0))
+                # Use remaining_quantity for partially_filled to avoid double counting
+                if status == 'partially_filled':
+                    qty = abs(o.get('remaining_quantity', 0))
+                else:
+                    qty = abs(o.get('quantity', 0))
+                
                 exp_str = get_expiry_str(short_leg_sym)
                 if exp_str:
                     expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
-                    self._log(f"📝 Pending Order detected: {qty} lot(s) for {exp_str} ({short_leg_sym})")
+                    self._log(f"📝 Pending Order detected: {qty} lot(s) for {exp_str} ({short_leg_sym}, status: {status})")
 
         # Limit is variable Lots per Expiry
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
@@ -770,10 +767,6 @@ class CreditSpreadStrategy:
                  return
 
         else:
-             # Target = The closest support below price (Last item in sorted list < price)
-             target_strike = valid_points[-1]['price']
-             pop = valid_points[-1].get('pop', 'N/A')
-             
              # Target = The closest support below price (Last item in sorted list < price)
              target_strike = valid_points[-1]['price']
              pop = valid_points[-1].get('pop', 'N/A')
@@ -896,10 +889,6 @@ class CreditSpreadStrategy:
             else:
                  return
         else:
-            # Target = The closest resistance above price (First item in sorted list > price)
-            target_strike = valid_points[0]['price']
-            pop = valid_points[0].get('pop', 'N/A')
-            
             # Target = The closest resistance above price (First item in sorted list > price)
             target_strike = valid_points[0]['price']
             pop = valid_points[0].get('pop', 'N/A')
