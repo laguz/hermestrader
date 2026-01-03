@@ -39,6 +39,7 @@ class WheelStrategy:
         """
         Execute the Wheel Strategy Cycle for the watchlist.
         """
+        self.config = config or {}
         analysis_service = self.analysis_service or Container.get_analysis_service()
         
         # 1. Fetch Current Positions (The Source of Truth)
@@ -431,6 +432,12 @@ class WheelStrategy:
 
                 self._log(f"🔄 Rolling {symbol} to {new_expiry} Strike {new_option['strike']}. Net: {net_credit:.2f}")
 
+                # BP Check for Debit Rolls
+                if net_credit < 0:
+                     if not self._is_bp_sufficient(abs(net_credit) * 100):
+                         self._log(f"🚫 Roll Aborted due to insufficient Buying Power for debit {abs(net_credit):.2f}")
+                         continue
+
                 if self.dry_run:
                     self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
                     self._record_trade(underlying, f"Wheel Roll BTC", close_price, {'id': 'dry_run_btc', 'status': 'ok'})
@@ -515,6 +522,14 @@ class WheelStrategy:
         
         self._log(f"🚀 Executing {side} {symbol} {strike} {option_type}. Exp: {expiry}. Reason: {reason}. Price: {price}")
         
+        # BP Check for Entry
+        # For Puts: Requirement = Strike * 100
+        # For Calls: Requirement = 0 (Covered)
+        requirement = (strike * 100) if option_type == 'put' and 'sell' in side else 0
+        if requirement > 0:
+            if not self._is_bp_sufficient(requirement):
+                return
+
         if self.dry_run:
             self._log(f"[DRY RUN] Order: {side} {option['symbol']} @ {price}")
             # Record simulated trade
@@ -706,6 +721,22 @@ class WheelStrategy:
         # Usually preferring 0.30 is standard safe wheel.
         best = min(candidates, key=lambda x: abs(x[1] - min_d))
         return best[0], best[1]
+
+    def _is_bp_sufficient(self, requirement):
+        """Check if Option Buying Power is sufficient after reserve."""
+        config = getattr(self, 'config', {})
+        min_reserve = config.get('min_obp_reserve', 1000) if config else 1000
+        balances = self.tradier.get_account_balances()
+        if not balances:
+            self._log("⚠️ Could not fetch balances for BP check. Skipping trade for safety.")
+            return False
+        
+        obp = balances.get('option_buying_power', 0)
+        if obp - requirement < min_reserve:
+            self._log(f"🚫 Insufficient Buying Power: OBP ${obp:,.2f} - Req ${requirement:,.2f} < Reserve ${min_reserve:,.2f}")
+            return False
+            
+        return True
 
     def _record_trade(self, symbol, strategy, price, response):
         if self.db is not None:

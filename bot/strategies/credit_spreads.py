@@ -147,10 +147,10 @@ class CreditSpreadStrategy:
                 max_lots = config.get('max_credit_spreads_per_symbol', 5) if config else 5
 
                 # Attempt Bull Put Spread (if support exists below price)
-                self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots)
+                self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
                 
                 # Attempt Bear Call Spread (if resistance exists above price)
-                self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots)
+                self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
                     
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
@@ -719,7 +719,7 @@ class CreditSpreadStrategy:
         return full_expiries
 
 
-    def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5):
+    def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5, config=None):
         """
         Sell Put at Support, Buy Put lower (defined risk).
         """
@@ -814,6 +814,11 @@ class CreditSpreadStrategy:
                 self._log(f"Credit too low ({net_credit}) for risk (Min 0.80).")
                 return
 
+        # BP Check
+        requirement = abs(short_put_strike - long_put_strike) * 100
+        if not self._is_bp_sufficient(requirement, config):
+            return
+
         # Place Order
         legs = [
             {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': 1},
@@ -846,7 +851,7 @@ class CreditSpreadStrategy:
             }
             self._record_trade(symbol, "Bull Put Spread", net_credit, response, legs_info)
 
-    def _place_credit_call_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5):
+    def _place_credit_call_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5, config=None):
         # Similar logic for Bear Call Spread
         # 1. Early Constraint Check
         exclusions = self._check_expiry_constraints(symbol, is_put=False, max_lots=max_lots)
@@ -931,6 +936,11 @@ class CreditSpreadStrategy:
                 self._log(f"Credit too low ({net_credit}).")
                 return
 
+        # BP Check
+        requirement = abs(short_call_strike - long_call_strike) * 100
+        if not self._is_bp_sufficient(requirement, config):
+            return
+
         self._log(f"Placing Bear Call Spread on {symbol} Exp: {expiry} Short: {short_call_strike} Long: {long_call_strike}")
 
         legs = [
@@ -963,6 +973,21 @@ class CreditSpreadStrategy:
                  'long_leg': next((l for l in legs if l['side'] == 'buy_to_open'), {}).get('option_symbol')
              }
              self._record_trade(symbol, "Bear Call Spread", net_credit, response, legs_info)
+
+    def _is_bp_sufficient(self, requirement, config):
+        """Check if Option Buying Power is sufficient after reserve."""
+        min_reserve = config.get('min_obp_reserve', 1000) if config else 1000
+        balances = self.tradier.get_account_balances()
+        if not balances:
+            self._log("⚠️ Could not fetch balances for BP check. Skipping trade for safety.")
+            return False
+        
+        obp = balances.get('option_buying_power', 0)
+        if obp - requirement < min_reserve:
+            self._log(f"🚫 Insufficient Buying Power: OBP ${obp:,.2f} - Req ${requirement:,.2f} < Reserve ${min_reserve:,.2f}")
+            return False
+            
+        return True
 
     def _record_trade(self, symbol, strategy, price, response, legs_info=None):
         if self.db is not None:
