@@ -358,10 +358,10 @@ class WheelStrategy:
             dte = (expiry_date - today).days
 
             # 1. Check DTE Trigger
-            if dte > self.ROLL_TRIGGER_DTE: 
+            if dte >= self.ROLL_TRIGGER_DTE: 
                 continue 
             
-            self._log(f"🔍 {symbol} management: DTE {dte} <= {self.ROLL_TRIGGER_DTE}. Checking ITM status...")
+            self._log(f"🔍 {symbol} management: DTE {dte} < {self.ROLL_TRIGGER_DTE}. Checking ITM status...")
 
             # 2. Check ITM Status
             try:
