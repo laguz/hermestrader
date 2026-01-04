@@ -26,6 +26,7 @@ class MockTradierService:
         self.orders = []    # List of order dicts
         
         self.new_orders = [] # Orders placed in current step
+        self.cash = 10000.0   # Default starting cash
 
     def set_context(self, date_str, price, volatility):
         # Set time to 15:30 to ensure manage_positions runs
@@ -39,6 +40,11 @@ class MockTradierService:
 
     def get_orders(self):
         return self.orders
+
+    def get_account_balances(self):
+        return {
+            'option_buying_power': self.cash
+        }
         
     def get_quote(self, symbol):
         return {'last': self.current_price, 'symbol': symbol}
@@ -382,6 +388,7 @@ class BacktestService:
             rsi = calculate_rsi(window_df['close']).iloc[-1]
             
             # 2. Update Mock Context
+            mock_tradier.cash = cash # Sync cash
             mock_tradier.set_context(current_date_str, price, volatility)
             mock_analysis.set_context(price, key_levels, rsi, volatility)
             
