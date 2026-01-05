@@ -526,9 +526,10 @@ class WheelStrategy:
         # For Puts: Requirement = Strike * 100
         # For Calls: Requirement = 0 (Covered)
         requirement = (strike * 100) if option_type == 'put' and 'sell' in side else 0
-        if requirement > 0:
-            if not self._is_bp_sufficient(requirement):
-                return
+        
+        # We always check BP to ensure min_obp_reserve is respected even for calls
+        if not self._is_bp_sufficient(requirement):
+            return
 
         if self.dry_run:
             self._log(f"[DRY RUN] Order: {side} {option['symbol']} @ {price}")

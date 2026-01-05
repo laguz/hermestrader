@@ -120,20 +120,22 @@ class TradierService:
             
             option_bp = sub_account.get('option_buying_power')
             stock_bp = sub_account.get('stock_buying_power')
+            total_equity = balances.get('total_equity')
+            total_cash = balances.get('total_cash')
             
             # Fallback for cash accounts
             if account_type == 'cash':
                  # In cash accounts, stock bp is usually cash available
                  if stock_bp is None:
-                     stock_bp = balances.get('total_cash')
+                     stock_bp = total_cash
                  if option_bp is None:
-                     option_bp = balances.get('total_cash')
+                     option_bp = total_cash
 
             return {
-                "total_equity": balances.get('total_equity'),
-                "option_buying_power": option_bp,
-                "stock_buying_power": stock_bp,
-                "cash": balances.get('total_cash')
+                "total_equity": float(total_equity) if total_equity is not None else 0.0,
+                "option_buying_power": float(option_bp) if option_bp is not None else 0.0,
+                "stock_buying_power": float(stock_bp) if stock_bp is not None else 0.0,
+                "cash": float(total_cash) if total_cash is not None else 0.0
             }
         except requests.RequestException as e:
             print(f"Error fetching account balances: {e}")

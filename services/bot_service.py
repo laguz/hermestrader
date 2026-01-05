@@ -580,9 +580,36 @@ class BotService:
                 wl_spreads = config.get('watchlist_credit_spreads', [])
                 wl_wheel = config.get('watchlist_wheel', [])
                 
-                # Dynamic Import/Reload or just use instance
-                # We want to run them if we have symbols
+                # 3. Global Circuit Breaker: Buying Power Check
+                balances = self.tradier.get_account_balances()
+                min_reserve = config.get('min_obp_reserve', 1000)
                 
+                if balances:
+                    obp = balances.get('option_buying_power', 0)
+                    if obp < min_reserve:
+                        self._log(f"🛑 CIRCUIT BREAKER: Option Buying Power ${obp:,.2f} is below Minimum Reserve ${min_reserve:,.2f}. Skipping all trading activity.")
+                        # Still manage positions? 
+                        # Closing positions usually increases BP. 
+                        # Let's allowed management (exits/rolls) but maybe skip entries?
+                        # Actually management might involve rolls which require BP.
+                        # For now, let's skip entries but allow management.
+                        
+                        self._log(f"Running Credit Spread MANAGEMENT (Exits) ONLY...")
+                        self.credit_spread_strategy.manage_positions()
+                        
+                        # Wheel management often involves rolls (new entries), so it's riskier.
+                        # But it also involves checking for ITM.
+                        # Let's skip Wheel for now if BP is CRITICALLY low.
+                        
+                        if self._stop_event.wait(timeout=60):
+                            break
+                        continue
+                else:
+                    self._log("⚠️ Could not fetch balances. Skipping strategy cycle for safety.")
+                    if self._stop_event.wait(timeout=60):
+                        break
+                    continue
+
                 if wl_spreads:
                     self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
                     # 1. Manage Existing
