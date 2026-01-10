@@ -27,8 +27,10 @@ class BotService:
         # Initialize Strategies
         from bot.strategies.credit_spreads import CreditSpreadStrategy
         from bot.strategies.wheel import WheelStrategy
+        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
         self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
         self.wheel_strategy = WheelStrategy(self.tradier, self.db)
+        self.credit_spread_rulebase_strategy = CreditSpreadRulebaseStrategy(self.tradier, self.db)
         
         self._init_db_config()
         # Reset state on startup to avoid phantom running state
@@ -53,6 +55,7 @@ class BotService:
                  "settings": {
                      "watchlist_credit_spreads": [], # Start empty, user adds via UI
                      "watchlist_wheel": [],         # Start empty, user adds via UI
+                     "watchlist_credit_spread_rulebase": ["TSLA", "NVDA", "SPY"], # Rule-based defaults
                      "max_drawdown": 500,
                      "max_position_size": 1000,
                      "max_credit_spreads_per_symbol": 5,
@@ -70,7 +73,9 @@ class BotService:
                  if 'watchlist_credit_spreads' not in settings:
                      updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_wheel' not in settings:
-                     updates['settings.watchlist_wheel'] = []
+                    updates['settings.watchlist_wheel'] = []
+                 if 'watchlist_credit_spread_rulebase' not in settings:
+                    updates['settings.watchlist_credit_spread_rulebase'] = ["TSLA", "NVDA", "SPY"]
                  if 'max_wheel_contracts_per_symbol' not in settings:
                      updates['settings.max_wheel_contracts_per_symbol'] = 1
                  
@@ -128,7 +133,7 @@ class BotService:
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
         # Safety check to only allow specific keys
-        if list_type not in ['credit_spreads', 'wheel']:
+        if list_type not in ['credit_spreads', 'wheel', 'credit_spread_rulebase']:
             self._log(f"Error: Invalid watchlist type {list_type}")
             return False
 
@@ -620,6 +625,13 @@ class BotService:
                 if wl_wheel:
                     self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
                     self.wheel_strategy.execute(wl_wheel, config)
+
+                # 4. Rule-Based Spread Strategy
+                wl_rulebase = config.get('watchlist_credit_spread_rulebase', [])
+                if wl_rulebase:
+                    self._log(f"Running Rule-Based Credit Spread Strategy on {len(wl_rulebase)} symbols...")
+                    self.credit_spread_rulebase_strategy.manage_positions()
+                    self.credit_spread_rulebase_strategy.execute(wl_rulebase, config)
                     
                 # Sleep cycle - responsive wait
                 # Wait for 60 seconds (strategies shouldn't run too hot) or until stop event

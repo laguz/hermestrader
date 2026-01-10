@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.wheel import WheelStrategy
+from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
 from utils.indicators import (
     calculate_rsi, 
     calculate_bollinger_bands, 
@@ -349,6 +350,13 @@ class BacktestService:
                 dry_run=False,
                 analysis_service=mock_analysis
             )
+        elif strategy_type == "credit_spread_rulebase":
+            strategy = CreditSpreadRulebaseStrategy(
+                tradier_service=mock_tradier,
+                db=mock_db,
+                dry_run=False,
+                analysis_service=mock_analysis
+            )
         else:
              return {"error": f"Strategy {strategy_type} not supported in refactored backtester yet."}
         
@@ -395,7 +403,7 @@ class BacktestService:
             # 3. Run Strategy: Manage Positions (Exits)
             # This triggers checks for Profit Targets and Stop Losses, and Wheel rolls/calls
             # WheelStrategy also uses _manage_positions
-            if strategy_type == "credit_spread":
+            if strategy_type in ["credit_spread", "credit_spread_rulebase"]:
                 strategy.manage_positions()
             elif strategy_type == "wheel":
                 # Wheel strategy logic calls _manage_positions potentially in execute or we call it explicitly?
@@ -471,6 +479,8 @@ class BacktestService:
             
             # 4. Run Strategy: Execute (Entries)
             if strategy_type == "credit_spread":
+                strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
+            elif strategy_type == "credit_spread_rulebase":
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             elif strategy_type == "wheel":
                 # Ensure Wheel runs logic
