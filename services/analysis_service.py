@@ -99,18 +99,38 @@ class AnalysisService:
         
         # Note: Period Min/Max are now included in key_levels by find_key_levels
 
-        # Calculate Volatility (Annualized from daily returns)
-        # Using full available history for better accuracy or just period?
-        # Standard to use last 1 year or 30 days depending on context. 
-        # using the period_df (which is at least 3m)
-        volatility = calculate_historical_volatility(df['close'], window=30) # Short term vol for near term expiry? Or 252?
-        # Utilizing a blend or standard 252 day vol if possible, checking data len
+        # Calculate Volatility
+        volatility = calculate_historical_volatility(df['close'], window=30)
         if len(df) > 30:
             volatility = calculate_historical_volatility(df['close'], window=min(len(df)-1, 252))
         else:
-            volatility = 0.5 # Default high vol fallback
-            
+            volatility = 0.5
+
         current_price = df.iloc[-1]['close']
+
+        # --- NEW: Retrieve Implied Volatility (IV) Proxy ---
+        implied_vol = None
+        try:
+            expirations = self.tradier_service.get_option_expirations(symbol)
+            if expirations:
+                # Find expiry closest to 30 days
+                today = datetime.now().date()
+                target_date = today + timedelta(days=30)
+                best_exp = min(expirations, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_date).days))
+                
+                chain = self.tradier_service.get_option_chains(symbol, best_exp)
+                if chain:
+                    # Filter for ATM options
+                    atm_options = [o for o in chain if abs(o['strike'] - current_price) / current_price < 0.05]
+                    ivs = [o.get('greeks', {}).get('mid_iv', 0) for o in atm_options if o.get('greeks', {}).get('mid_iv', 0) > 0]
+                    if ivs:
+                        implied_vol = sum(ivs) / len(ivs)
+                        print(f"DEBUG: Calculated blended IV for {symbol} at {best_exp}: {implied_vol:.4f}")
+        except Exception as e:
+            print(f"DEBUG: Error fetching IV for {symbol}: {e}")
+
+        # Use IV if available, otherwise fallback to HV
+        calc_vol = implied_vol if implied_vol else volatility
 
         # Calculate Entry Points (Rounded Key Levels)
         put_entry_points = []
@@ -147,16 +167,29 @@ class AnalysisService:
                         'strength': level.get('strength', 1)
                     })
                     
-        # Calculate PoP for all entry points (assuming 30 DTE)
-        # This gives user "If I sold 30 days out at this level..."
+        # Calculate PoP and POT for all entry points (assuming 30 DTE)
+        # Use calc_vol (IV or HV fallback)
+        from utils.indicators import calculate_prob_of_touch
         
         for ep in put_entry_points:
-            pop = calculate_prob_it_expires_otm(current_price, ep['price'], volatility, days_to_expiry=30)
+            # Shift break-even by estimated credit (approx 1/3 of width)
+            # Entry points are key levels, so we assume we sell at/near them.
+            # Simplified: assuming $5 wide spread, credit approx $1.50
+            est_credit = 1.0 if ep['price'] < 100 else 2.5
+            
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
+            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
+            
             ep['pop'] = round(pop * 100, 1)
+            ep['pot'] = round(pot * 100, 1)
             
         for ep in call_entry_points:
-            pop = calculate_prob_it_expires_otm(current_price, ep['price'], volatility, days_to_expiry=30)
+            est_credit = 1.0 if ep['price'] < 100 else 2.5
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
+            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
+            
             ep['pop'] = round(pop * 100, 1)
+            ep['pot'] = round(pot * 100, 1)
         
         # Sort entry points by price
         put_entry_points.sort(key=lambda x: x['price'])
@@ -385,7 +418,8 @@ class AnalysisService:
                 "adx": round(latest['adx'], 2),
                 "hv_rank": round(hv_rank, 1),
                 "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
-                "volatility": round(volatility * 100, 1)
+                "volatility": round(volatility * 100, 1),
+                "implied_volatility": round(implied_vol * 100, 1) if implied_vol else None
             },
             "chart_data": chart_data
         }

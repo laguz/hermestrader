@@ -240,55 +240,63 @@ def calculate_historical_volatility(close_series, window=252):
     volatility = log_returns.rolling(window=window).std() * np.sqrt(252)
     return volatility.iloc[-1]
 
-def calculate_prob_it_expires_otm(current_price, strike_price, volatility, days_to_expiry=30):
+def calculate_prob_it_expires_otm(current_price, strike_price, volatility, days_to_expiry=30, risk_free_rate=0.04, credit=0.0):
     """
-    Calculate the Probability of Profit (Probability IT expires OTM).
-    Using standard distribution of returns (simplified Black-Scholes logic).
+    Calculate the Probability of Profit (Probability it expires OTM).
+    Uses the d2 formula from Black-Scholes for a more professional estimate.
+    
+    Args:
+        current_price (float): Current underlying price.
+        strike_price (float): Strike price of the option.
+        volatility (float): Annualized Implied (or Historical) Volatility (e.g., 0.25 for 25%).
+        days_to_expiry (int): Days until expiration.
+        risk_free_rate (float): Annual risk-free rate (default 4%).
+        credit (float): Credit received (shifts break-even).
+        
+    Returns:
+        float: Probability (0 to 1).
     """
-    if volatility == 0 or days_to_expiry == 0:
+    if volatility <= 0 or days_to_expiry <= 0:
         return 0.5
         
-    # Convert days to years
+    # Adjustment for Bull Put Credit Spread: Break-even = Strike - Credit
+    # For Bear Call: Break-even = Strike + Credit
+    if strike_price < current_price: # Put
+        break_even = strike_price - credit
+    else: # Call
+        break_even = strike_price + credit
+
     t = days_to_expiry / 365.0
     
-    # Expected move (Standard Deviation)
-    # sigma * sqrt(T)
-    # This is percentage move
-    # Price move = P * sigma * sqrt(T)
+    # Professional d2 formula:
+    # d2 = [ln(S/K) + (r - q - 0.5*sigma^2)T] / (sigma * sqrt(T))
+    # We ignore dividend yield (q) for simplicity here.
     
-    # Calculate Z-Score
-    # ln(Strike / Current) / (Vol * sqrt(T))
-    # We ignore drift (risk free rate) for short durations as broad approximation or include it?
-    # Let's stick to simple "Probability of Touching" approximation usually assumes Drift=0
-    
+    num = np.log(current_price / break_even) + (risk_free_rate - 0.5 * volatility**2) * t
     denom = volatility * np.sqrt(t)
-    z_score = np.log(strike_price / current_price) / denom
-    
-    # If Selling Put (Bullish), Strike < Current. Z is negative.
-    # We want prob return > Z
-    # If Selling Call (Bearish), Strike > Current. Z is positive.
-    # We want prob return < Z
+    d2 = num / denom
     
     if strike_price < current_price:
-        # Put: We profit if price stays ABOVE strike.
-        # This corresponds to N(d2). 
-        # Using simple Normal Distribution CDN:
-        # Probability Price > Strike
-        # return norm.cdf(z_score) # This gives prob of being below? No.
-        
-        # Z is negative. CDF(Z) is probability of being BELOW Z (ITM).
-        # We want probability of being ABOVE Z (OTM).
-        # So 1 - CDF(Z)
-        prob_otm = 1 - norm.cdf(z_score) # z_score is negative, cdf is small (e.g. 0.05). result 0.95. Correct.
-        
+        # Put: We want Price > Break-even at expiry.
+        # N(d2) is the probability that Price > K.
+        prob_otm = norm.cdf(d2)
     else:
-        # Call: We profit if price stays BELOW strike.
-        # Z is positive.
-        # We want probability of being BELOW Z (OTM).
-        # So CDF(Z)
-        prob_otm = norm.cdf(z_score)
+        # Call: We want Price < Break-even at expiry.
+        # N(-d2) is the probability that Price < K.
+        prob_otm = norm.cdf(-d2)
         
     return prob_otm
+
+def calculate_prob_of_touch(current_price, strike_price, volatility, days_to_expiry=30, risk_free_rate=0.04):
+    """
+    Calculate the Probability of the stock price 'touching' the strike price 
+    at any point before expiration.
+    Approximation: POT = 2 * P(ITM) = 2 * (1 - POP)
+    """
+    prob_otm = calculate_prob_it_expires_otm(current_price, strike_price, volatility, days_to_expiry, risk_free_rate, credit=0)
+    prob_itm = 1 - prob_otm
+    pot = min(1.0, 2.0 * prob_itm)
+    return pot
 
 def calculate_option_price(current_price, strike_price, time_to_expiry_years, volatility, risk_free_rate=0.04, option_type='call'):
     """
