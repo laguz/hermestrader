@@ -82,6 +82,12 @@ class CreditSpreadRulebaseStrategy:
                 # For now, let's implement the Bull Put as described.
                 
                 if is_bullish:
+                    # Check Lots
+                    max_lots = config.get('max_credit_spread_rulebase_lots', 5)
+                    if not self._check_lots_sufficient(symbol, max_lots):
+                        self._log(f"Skipping {symbol}: Max lots ({max_lots}) reached.")
+                        continue
+                        
                     self._place_credit_spread(symbol, current_price, analysis, is_put=True, config=config)
                 else:
                     self._log(f"No directional bias for {symbol}")
@@ -315,6 +321,18 @@ class CreditSpreadRulebaseStrategy:
             self._log(f"🚫 Insufficient BP: OBP {obp} - Req {requirement} < Reserve {min_reserve}")
             return False
         return True
+
+    def _check_lots_sufficient(self, symbol, max_lots):
+        """
+        Count existing rule-based positions for this symbol.
+        """
+        try:
+            query = {"status": "OPEN", "symbol": symbol, "strategy": {"$regex": "Rule-Based"}}
+            count = self.db['auto_trades'].count_documents(query)
+            return count < max_lots
+        except Exception as e:
+            self._log(f"Error checking lots: {e}")
+            return False
 
     def _record_trade(self, symbol, strategy, price, response, legs_info):
         if self.db is not None:

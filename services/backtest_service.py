@@ -481,7 +481,7 @@ class BacktestService:
             if strategy_type == "credit_spread":
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             elif strategy_type == "credit_spread_rulebase":
-                strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
+                strategy.execute([symbol], config={'max_credit_spread_rulebase_lots': 5})
             elif strategy_type == "wheel":
                 # Ensure Wheel runs logic
                 strategy.execute([symbol])

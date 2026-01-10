@@ -59,6 +59,11 @@
                     <label class="md-text-field-label">Max Credit Spread Lots</label>
                 </div>
                 <div class="md-text-field-container">
+                    <input type="number" id="cfg-rb-lots" class="md-text-field" placeholder=" " min="1" max="20"
+                        required>
+                    <label class="md-text-field-label">Max Rule-Based Lots</label>
+                </div>
+                <div class="md-text-field-container">
                     <input type="number" id="cfg-wheel-lots" class="md-text-field" placeholder=" " min="1" max="20"
                         required>
                     <label class="md-text-field-label">Max Wheel Contracts</label>
@@ -108,6 +113,23 @@
             </div>
         </div>
 
+        <!-- Rule-Based Watchlist -->
+        <div class="md-card">
+            <h3 class="md-card__headline">Rule-Based CS Watchlist</h3>
+            <div id="chips-credit_spread_rulebase"
+                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+                <!-- Chips -->
+            </div>
+            <div style="display: flex; gap: 12px;">
+                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
+                    <input type="text" id="input-credit_spread_rulebase" class="md-text-field" placeholder=" "
+                        style="text-transform: uppercase;">
+                    <label class="md-text-field-label">Add Symbol</label>
+                </div>
+                <button class="md-button md-button--filled" onclick="addSymbol('credit_spread_rulebase')">Add</button>
+            </div>
+        </div>
+
     </div>
 </div>
 
@@ -143,7 +165,8 @@
     // Store both watchlists
     let currentWatchlists = {
         credit_spreads: [],
-        wheel: []
+        wheel: [],
+        credit_spread_rulebase: []
     };
 
     // Store last known settings to prevent overwriting user edits
@@ -172,6 +195,7 @@
         if (status.settings) {
             currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
             currentWatchlists.wheel = status.settings.watchlist_wheel || [];
+            currentWatchlists.credit_spread_rulebase = status.settings.watchlist_credit_spread_rulebase || [];
 
             // Backwards compatibility or migration display (optional)
             if (status.settings.watchlist && currentWatchlists.credit_spreads.length === 0) {
@@ -180,6 +204,7 @@
 
             renderWatchlist('credit_spreads');
             renderWatchlist('wheel');
+            renderWatchlist('credit_spread_rulebase');
         }
 
         // Update Logs
@@ -195,6 +220,7 @@
         if (status.settings) {
             const s = status.settings;
             updateInputIfSafe('cfg-cs-lots', s.max_credit_spreads_per_symbol || 5);
+            updateInputIfSafe('cfg-rb-lots', s.max_credit_spread_rulebase_lots || 5);
             updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
 
             lastSettings = s;
@@ -219,6 +245,7 @@
         // We map ID to the settings key for comparison
         let oldDbValue = null;
         if (id === 'cfg-cs-lots') oldDbValue = lastSettings.max_credit_spreads_per_symbol || 5;
+        if (id === 'cfg-rb-lots') oldDbValue = lastSettings.max_credit_spread_rulebase_lots || 5;
         if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
 
         // Loose comparison (string vs number)
@@ -230,6 +257,7 @@
 
     async function saveSettings() {
         const csLots = parseInt(document.getElementById('cfg-cs-lots').value) || 5;
+        const rbLots = parseInt(document.getElementById('cfg-rb-lots').value) || 5;
         const wheelLots = parseInt(document.getElementById('cfg-wheel-lots').value) || 1;
 
         try {
@@ -238,6 +266,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     max_credit_spreads_per_symbol: csLots,
+                    max_credit_spread_rulebase_lots: rbLots,
                     max_wheel_contracts_per_symbol: wheelLots
                 })
             });
@@ -361,7 +390,8 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     credit_spreads_watchlist: currentWatchlists.credit_spreads,
-                    wheel_watchlist: currentWatchlists.wheel
+                    wheel_watchlist: currentWatchlists.wheel,
+                    credit_spread_rulebase_watchlist: currentWatchlists.credit_spread_rulebase
                 })
             });
             const data = await res.json();

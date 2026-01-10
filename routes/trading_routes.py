@@ -199,6 +199,7 @@ def run_dry_run():
         db = Container.get_db()
         from bot.strategies.credit_spreads import CreditSpreadStrategy
         from bot.strategies.wheel import WheelStrategy
+        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
         
         # Determine watchlists
         data = request.json or {}
@@ -230,8 +231,20 @@ def run_dry_run():
         if not wheel_watchlist:
             wheel_watchlist = ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
             
+        # 3. Rule-Based Watchlist
+        rb_watchlist = data.get('credit_spread_rulebase_watchlist')
+        if not rb_watchlist:
+             bot_config = db.bot_config.find_one({"_id": "main_bot"})
+             if bot_config:
+                 settings = bot_config.get('settings', {})
+                 rb_watchlist = settings.get('watchlist_credit_spread_rulebase', [])
+                 
+        if not rb_watchlist:
+            rb_watchlist = ['TSLA', 'NVDA', 'SPY']
+            
         print(f"DEBUG: CS Watchlist ({len(cs_watchlist)}): {cs_watchlist}")
         print(f"DEBUG: Wheel Watchlist ({len(wheel_watchlist)}): {wheel_watchlist}")
+        print(f"DEBUG: Rule-Based Watchlist ({len(rb_watchlist)}): {rb_watchlist}")
 
         all_logs = []
 
@@ -275,6 +288,23 @@ def run_dry_run():
             all_logs.extend(w_logs)
         except Exception as e:
             error_msg = f"❌ Wheel Strategy Failed: {str(e)}"
+            all_logs.append(error_msg)
+            print(error_msg)
+            traceback.print_exc()
+
+        # Execute Rule-Based Spreads
+        all_logs.append("\n--- Rule-Based Credit Spread Strategy ---")
+        try:
+            strategy_rb = CreditSpreadRulebaseStrategy(tradier_service, db, dry_run=True)
+            # Management first
+            rb_m_logs = strategy_rb.manage_positions(simulation_mode=True)
+            if rb_m_logs: all_logs.extend(rb_m_logs)
+            
+            # Execution
+            strategy_rb.execute(rb_watchlist, config)
+            all_logs.extend(strategy_rb.execution_logs)
+        except Exception as e:
+            error_msg = f"❌ Rule-Based Strategy Failed: {str(e)}"
             all_logs.append(error_msg)
             print(error_msg)
             traceback.print_exc()

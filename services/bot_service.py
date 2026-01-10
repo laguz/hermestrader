@@ -59,6 +59,7 @@ class BotService:
                      "max_drawdown": 500,
                      "max_position_size": 1000,
                      "max_credit_spreads_per_symbol": 5,
+                     "max_credit_spread_rulebase_lots": 5,
                      "max_total_credit_spreads": 10,
                      "max_wheel_contracts_per_symbol": 1
                  }
@@ -78,6 +79,8 @@ class BotService:
                     updates['settings.watchlist_credit_spread_rulebase'] = ["TSLA", "NVDA", "SPY"]
                  if 'max_wheel_contracts_per_symbol' not in settings:
                      updates['settings.max_wheel_contracts_per_symbol'] = 1
+                 if 'max_credit_spread_rulebase_lots' not in settings:
+                     updates['settings.max_credit_spread_rulebase_lots'] = 5
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -154,6 +157,7 @@ class BotService:
             'max_drawdown', 
             'max_position_size', 
             'max_credit_spreads_per_symbol', 
+            'max_credit_spread_rulebase_lots',
             'max_total_credit_spreads',
             'max_wheel_contracts_per_symbol'
         ]
