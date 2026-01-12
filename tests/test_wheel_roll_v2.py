@@ -43,7 +43,7 @@ def test_wheel_roll_conditions():
     mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
 
     # Execute
-    strategy._manage_positions([position])
+    strategy._manage_positions([position], watchlist=['RIOT'])
 
     # Check triggers
     # BTC should be called
@@ -90,7 +90,7 @@ def test_wheel_no_roll_if_otm():
     mock_tradier.get_quote.return_value = {'last': 14.00} # OTM
     
     # Execute
-    strategy._manage_positions([position])
+    strategy._manage_positions([position], watchlist=['RIOT'])
 
     # BTC should NOT be called
     mock_tradier.place_order.assert_not_called()
@@ -114,8 +114,35 @@ def test_wheel_no_roll_if_dte_high():
     }
     
     # Execute
-    strategy._manage_positions([position])
+    strategy._manage_positions([position], watchlist=['RIOT'])
 
     # Quote should not even be fetched if DTE > 7
     mock_tradier.get_quote.assert_not_called()
     mock_tradier.place_order.assert_not_called()
+
+def test_wheel_no_roll_if_not_in_watchlist():
+    # Setup
+    today = datetime(2026, 1, 1, 12, 0)
+    mock_tradier = MockTradier(today)
+    mock_db = MagicMock()
+    strategy = WheelStrategy(mock_tradier, mock_db, dry_run=False)
+    
+    # TSLA Put, ITM, DTE 1
+    # This should be ignored because TSLA is NOT in the watchlist passed to _manage_positions
+    position = {
+        'symbol': 'TSLA260102P00046500',
+        'underlying': 'TSLA',
+        'quantity': -1,
+        'strike': 465.0,
+        'option_type': 'put'
+    }
+    
+    mock_tradier.get_quote.return_value = {'last': 450.00} # ITM
+    
+    # Execute with watchlist NOT containing TSLA
+    strategy._manage_positions([position], watchlist=['RIOT', 'NFLX'])
+
+    # BTC should NOT be called even if ITM
+    mock_tradier.place_order.assert_not_called()
+    # Quote should not even be fetched
+    mock_tradier.get_quote.assert_not_called()

@@ -34,7 +34,7 @@ def test_wheel_no_roll_if_dte_7():
     mock_tradier.get_quote.return_value = {'last': 12.00} 
     
     # Execute
-    strategy._manage_positions([position])
+    strategy._manage_positions([position], watchlist=['RIOT'])
 
     # BTC should NOT be called
     mock_tradier.place_order.assert_not_called()
@@ -68,7 +68,7 @@ def test_wheel_roll_if_dte_6():
     mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
 
     # Execute
-    strategy._manage_positions([position])
+    strategy._manage_positions([position], watchlist=['RIOT'])
 
     # BTC should be called
     assert mock_tradier.place_order.called

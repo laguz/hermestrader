@@ -60,7 +60,7 @@ class WheelStrategy:
                 traceback.print_exc()
 
         # 3. Manage Existing Roles (Check for ITM & < 7 DTE)
-        self._manage_positions(positions)
+        self._manage_positions(positions, watchlist=watchlist)
 
         return self.execution_logs
 
@@ -293,7 +293,7 @@ class WheelStrategy:
     # MANAGEMENT & ROLLING LOGIC
     # ------------------------------------------------------------------
 
-    def _manage_positions(self, positions):
+    def _manage_positions(self, positions, watchlist=None):
         """
         Scan open options.
         Trigger: ITM AND DTE <= 7 Days.
@@ -304,6 +304,20 @@ class WheelStrategy:
             # 1. Enrich Data if missing (Tradier raw data might lack keys)
             symbol = position.get('symbol', '')
             underlying = position.get('underlying')
+            
+            # Identify underlying for watchlist check
+            if not underlying:
+                # Fallback: Parse underlying from OCC symbol if possible
+                m_underlying = re.match(r'^([A-Z]+)\d', symbol)
+                if m_underlying:
+                    underlying = m_underlying.group(1)
+                else:
+                    underlying = symbol # Assume equity if not parsing as option
+            
+            # SKIP if not in watchlist
+            if watchlist is not None and underlying not in watchlist:
+                # self._log(f"DEBUG: Skipping management for {underlying} (not in wheel watchlist)")
+                continue
             option_type = position.get('option_type')
             strike = position.get('strike')
             
