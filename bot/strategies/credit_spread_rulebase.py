@@ -11,7 +11,7 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
         super().__init__(tradier_service, db, dry_run, analysis_service)
 
     def _log(self, message):
-        super()._log("CreditSpreadRulebaseStrategy", message)
+        super()._log(message, strategy_name="CreditSpreadRulebaseStrategy")
 
     def execute(self, watchlist, config=None):
         """
@@ -258,7 +258,8 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
                 duration='day',
                 price=net_credit,
                 order_class='multileg',
-                legs=legs
+                legs=legs,
+                tag="RULE_BASED_SPREADS"
             )
             if 'error' in response:
                 self._log(f"Order failed: {response['error']}")
@@ -300,7 +301,8 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
                 duration='day',
                 price=limit_price,
                 order_class='multileg',
-                legs=legs
+                legs=legs,
+                tag="RULE_BASED_SPREADS"
             )
             if 'id' in response:
                 self.db['auto_trades'].update_one({"_id": trade['_id']}, {"$set": {"status": "CLOSED", "close_date": datetime.now()}})

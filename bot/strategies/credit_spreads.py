@@ -3,7 +3,7 @@ import traceback
 import re
 from datetime import datetime
 from bot.strategies.base_strategy import AbstractStrategy
-from bot.utils import is_match, get_op_type, get_expiry_str, get_underlying
+from bot.utils import Colors, is_match, get_op_type, get_expiry_str, get_underlying
 
 class CreditSpreadStrategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
@@ -11,7 +11,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         self.min_confidence_score = 7
 
     def _log(self, message):
-        super()._log("CREDIT_SPREADS", message)
+        super()._log(message, strategy_name="CREDIT_SPREADS")
 
     def execute(self, watchlist, config=None):
         """
@@ -406,7 +406,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                 duration='day',
                 price=limit_price, # STRICT LIMIT
                 order_class='multileg',
-                legs=legs
+                legs=legs,
+                tag="CREDIT_SPREADS"
             )
             
             if 'error' in response:
@@ -524,19 +525,8 @@ class CreditSpreadStrategy(AbstractStrategy):
         expiry_counts = {}
         target_type_check = 'put' if is_put else 'call'
 
-        import re
+        from bot.utils import get_expiry_str
         
-        # Helper to parse Date from Symbol: ROOTyyMMdd...
-        def get_expiry_str(sym):
-            m = re.search(r'[A-Z]+(\d{6})[PC]', sym)
-            if m:
-                d_str = m.group(1)
-                try:
-                    dt = datetime.strptime(d_str, "%y%m%d")
-                    return dt.strftime("%Y-%m-%d")
-                except: pass
-            return None
-
         for p in positions:
             if not self._is_short_option(p): continue
             
@@ -749,7 +739,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                 duration='day',
                 price=net_credit,
                 order_class='multileg',
-                legs=legs
+                legs=legs,
+                tag="CREDIT_SPREADS"
             )
         
         if 'error' in response:
@@ -872,7 +863,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                 duration='day',
                 price=net_credit,
                 order_class='multileg',
-                legs=legs
+                legs=legs,
+                tag="CREDIT_SPREADS"
             )
         
         if 'error' in response:

@@ -56,7 +56,8 @@ def test_wheel_roll_conditions():
         duration='day',
         price=0.60,
         option_symbol='RIOT260102P00013000',
-        order_class='option'
+        order_class='option',
+        tag="WHEEL"
     )
     # STO should be called (at strike 12)
     mock_tradier.place_order.assert_any_call(
@@ -68,7 +69,8 @@ def test_wheel_roll_conditions():
         duration='day',
         price=1.49, # 1.50 - 0.01
         option_symbol='RIOT260213P00012000',
-        order_class='option'
+        order_class='option',
+        tag="WHEEL"
     )
 
 def test_wheel_no_roll_if_otm():

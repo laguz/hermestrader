@@ -17,12 +17,15 @@ class AbstractStrategy(ABC):
             from services.container import Container
             self.analysis_service = Container.get_analysis_service()
 
-    def _log(self, strategy_name, message):
+    def _log(self, message, strategy_name=None):
         """Standardized logging to DB and stdout."""
-        timestamp = datetime.now()
+        timestamp = self._get_current_datetime()
         log_entry = f"{timestamp.strftime('%H:%M:%S')} - {message}"
         self.execution_logs.append(log_entry)
         
+        if strategy_name is None:
+            strategy_name = self.__class__.__name__
+            
         prefix = f"[{strategy_name.upper()}]"
         
         # UI/Console Logging
@@ -59,6 +62,19 @@ class AbstractStrategy(ABC):
             return self.tradier.current_date.date()
         return date.today()
 
+    def _is_short_option(self, pos):
+        """Check if a position represents a short option."""
+        from bot.utils import get_op_type
+        op_type = get_op_type(pos)
+        if op_type in ['put', 'call']:
+            return pos.get('quantity', 0) < 0
+        return False
+
+    def _get_underlying_from_pos(self, pos):
+        """Extract underlying symbol from a position object."""
+        from bot.utils import get_underlying
+        return get_underlying(pos.get('symbol', ''))
+
     def _get_current_datetime(self):
         """Get effective current datetime (handling simulation/backtest)."""
         if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
@@ -72,12 +88,12 @@ class AbstractStrategy(ABC):
         
         balances = self.tradier.get_account_balances()
         if not balances:
-            self._log(self.__class__.__name__, "⚠️ Could not fetch balances for BP check. Skipping trade for safety.")
+            self._log("⚠️ Could not fetch balances for BP check. Skipping trade for safety.")
             return False
         
         obp = balances.get('option_buying_power', 0)
         if obp - requirement < min_reserve:
-            self._log(self.__class__.__name__, f"🚫 Insufficient Buying Power: OBP ${obp:,.2f} - Req ${requirement:,.2f} < Reserve ${min_reserve:,.2f}")
+            self._log(f"🚫 Insufficient Buying Power: OBP ${obp:,.2f} - Req ${requirement:,.2f} < Reserve ${min_reserve:,.2f}")
             return False
             
         return True
@@ -98,7 +114,7 @@ class AbstractStrategy(ABC):
             exp_dates.append(d)
         
         if not exp_dates:
-            self._log(self.__class__.__name__, f"No valid expirations found (Excluded: {exclude_dates})")
+            self._log(f"No valid expirations found (Excluded: {exclude_dates})")
             return None
         
         today = self._get_current_date()
@@ -113,7 +129,7 @@ class AbstractStrategy(ABC):
         
         if not candidates:
             rng = f"[{min_dte}, {max_dte}]" if min_dte is not None else "Any"
-            self._log(self.__class__.__name__, f"No expirations found in DTE range {rng} for {symbol}.")
+            self._log(f"No expirations found in DTE range {rng} for {symbol}.")
             return None
 
         if method == 'min':

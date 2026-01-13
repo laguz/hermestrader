@@ -192,7 +192,7 @@ class TradierService:
         quote = self.get_quote('SPY')
         return quote is not None
 
-    def place_order(self, account_id, symbol, side, quantity, order_type, duration='day', price=None, stop=None, option_symbol=None, order_class='equity', legs=None):
+    def place_order(self, account_id, symbol, side, quantity, order_type, duration='day', price=None, stop=None, option_symbol=None, order_class='equity', legs=None, tag=None):
         """
         Place an order with Tradier.
         Params:
@@ -207,6 +207,7 @@ class TradierService:
             option_symbol: str (Required for option orders)
             order_class: str ('equity', 'option', 'multileg', 'combo')
             legs: list of dicts [{'option_symbol': '...', 'side': '...', 'quantity': 1}, ...] (Required for multileg)
+            tag: str (Optional tag for tracking)
         """
         url = f"{self.endpoint}/accounts/{account_id}/orders"
         
@@ -217,6 +218,9 @@ class TradierService:
             'duration': duration,
         }
         
+        if tag:
+            data['tag'] = tag
+
         # For equity/option/combo, use top-level fields
         if order_class in ['equity', 'option', 'combo']:
             data['side'] = side

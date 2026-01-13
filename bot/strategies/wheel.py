@@ -19,7 +19,7 @@ class WheelStrategy(AbstractStrategy):
         self.DELTA_MAX = 0.37
 
     def _log(self, message):
-        super()._log("WHEEL", message)
+        super()._log(message, strategy_name="WHEEL")
 
     def execute(self, watchlist, config=None):
         """
@@ -299,7 +299,8 @@ class WheelStrategy(AbstractStrategy):
                         duration='day',
                         price=close_price,
                         option_symbol=symbol,
-                        order_class='option'
+                        order_class='option',
+                        tag="WHEEL"
                     )
                     
                     if 'error' in btc_res:
@@ -318,7 +319,8 @@ class WheelStrategy(AbstractStrategy):
                         duration='day',
                         price=open_price,
                         option_symbol=new_option['symbol'],
-                        order_class='option'
+                        order_class='option',
+                        tag="WHEEL"
                     )
                     
                     if 'error' in sto_res:
@@ -371,7 +373,8 @@ class WheelStrategy(AbstractStrategy):
                 duration='day',
                 price=price,
                 option_symbol=option['symbol'],
-                order_class='option'
+                order_class='option',
+                tag="WHEEL"
             )
             if 'error' in res:
                 self._log(f"Order Error: {res['error']}")
