@@ -3,34 +3,15 @@ import traceback
 import re
 import math
 from datetime import datetime, timedelta
-from bot.strategies.credit_spreads import Colors
+from bot.strategies.base_strategy import AbstractStrategy
+from bot.utils import Colors, is_match, get_op_type, get_expiry_str, get_underlying
 
-class CreditSpreadRulebaseStrategy:
+class CreditSpreadRulebaseStrategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
-        self.tradier = tradier_service
-        self.db = db
-        self.dry_run = dry_run
-        self.analysis_service = analysis_service
-        self.execution_logs = []
+        super().__init__(tradier_service, db, dry_run, analysis_service)
 
     def _log(self, message):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        clean_msg = f"[{timestamp}] {message}"
-        print(clean_msg)
-        self.execution_logs.append(clean_msg)
-        
-        if self.db is not None:
-            try:
-                self.db.logs.insert_one({
-                    "timestamp": datetime.now(),
-                    "message": message,
-                    "source": "CreditSpreadRulebaseStrategy"
-                })
-            except:
-                pass
-
-    def _get_current_date(self):
-        return datetime.now().date()
+        super()._log("CreditSpreadRulebaseStrategy", message)
 
     def execute(self, watchlist, config=None):
         """
@@ -105,8 +86,7 @@ class CreditSpreadRulebaseStrategy:
         """
         self._log(f"{Colors.HEADER}--- Managing Rule-Based Credit Spread Positions ---{Colors.ENDC}")
         
-        now = datetime.now()
-        today_str = now.strftime('%Y-%m-%d')
+        now = self._get_current_datetime()
 
         # Fetch open trades from DB
         query = {"status": "OPEN", "strategy": {"$regex": "Rule-Based"}}
@@ -117,7 +97,7 @@ class CreditSpreadRulebaseStrategy:
             return
 
         try:
-            positions = self.tradier.get_positions()
+            positions = self.tradier.get_positions() or []
         except Exception as e:
             self._log(f"Error fetching positions: {e}")
             return
@@ -135,11 +115,11 @@ class CreditSpreadRulebaseStrategy:
                 continue
 
             # 1. Time Exit (21 DTE)
-            expiry_date = self._parse_expiry_from_symbol(short_leg)
-            if not expiry_date:
-                continue
+            expiry_date_str = get_expiry_str(short_leg)
+            if not expiry_date_str: continue
+            expiry_date = datetime.strptime(expiry_date_str, "%Y-%m-%d")
                 
-            dte = (expiry_date.date() - now.date()).days
+            dte = (expiry_date.date() - self._get_current_date()).days
             if dte <= 21:
                 self._log(f"🕒 TIME EXIT: Closing {symbol} at {dte} DTE to avoid gamma risk.")
                 self._execute_close(trade, simulation_mode=simulation_mode)
@@ -264,7 +244,10 @@ class CreditSpreadRulebaseStrategy:
         
         if self.dry_run:
             response = {'id': 'dry_run_' + datetime.now().strftime("%Y%m%d%H%M%S"), 'status': 'ok'}
-            self._log(f"[DRY RUN] Order Placed for {symbol}")
+            self._record_trade(symbol, strategy_name, net_credit, response, {
+                'short_leg': short_leg['symbol'],
+                'long_leg': long_leg['symbol']
+            })
         else:
             response = self.tradier.place_order(
                 account_id=self.tradier.account_id,
@@ -277,50 +260,13 @@ class CreditSpreadRulebaseStrategy:
                 order_class='multileg',
                 legs=legs
             )
-
-        if 'id' in response:
-            self._record_trade(symbol, strategy_name, net_credit, response, {
-                'short_leg': short_leg['symbol'],
-                'long_leg': long_leg['symbol']
-            })
-
-    def _find_expiry(self, symbol, target_dte=45, min_dte=38, max_dte=52):
-        expirations = self.tradier.get_option_expirations(symbol)
-        if not expirations: return None
-        
-        today = datetime.now().date()
-        valid = []
-        for e_str in expirations:
-            e_date = datetime.strptime(e_str, "%Y-%m-%d").date()
-            dte = (e_date - today).days
-            if min_dte <= dte <= max_dte:
-                valid.append((e_str, abs(dte - target_dte)))
-        
-        if not valid: return None
-        return min(valid, key=lambda x: x[1])[0]
-
-    def _find_delta_strike(self, chain, option_type, min_delta=0.16, max_delta=0.30):
-        # We want delta closest to 0.25 (midpoint of 16-30)
-        target_delta = 0.25
-        candidates = []
-        for opt in chain:
-            if opt['option_type'] != option_type: continue
-            delta = abs(opt.get('greeks', {}).get('delta', 0))
-            if min_delta <= delta <= max_delta:
-                candidates.append((opt['strike'], abs(delta - target_delta)))
-        
-        if not candidates: return None
-        return min(candidates, key=lambda x: x[1])[0]
-
-    def _is_bp_sufficient(self, requirement, config):
-        min_reserve = config.get('min_obp_reserve', 1000)
-        balances = self.tradier.get_account_balances()
-        if not balances: return False
-        obp = balances.get('option_buying_power', 0)
-        if obp - requirement < min_reserve:
-            self._log(f"🚫 Insufficient BP: OBP {obp} - Req {requirement} < Reserve {min_reserve}")
-            return False
-        return True
+            if 'error' in response:
+                self._log(f"Order failed: {response['error']}")
+            else:
+                self._record_trade(symbol, strategy_name, net_credit, response, {
+                    'short_leg': short_leg['symbol'],
+                    'long_leg': long_leg['symbol']
+                })
 
     def _check_lots_sufficient(self, symbol, max_lots):
         """
@@ -333,20 +279,6 @@ class CreditSpreadRulebaseStrategy:
         except Exception as e:
             self._log(f"Error checking lots: {e}")
             return False
-
-    def _record_trade(self, symbol, strategy, price, response, legs_info):
-        if self.db is not None:
-            doc = {
-                "symbol": symbol,
-                "strategy": strategy,
-                "price": price,
-                "entry_date": datetime.now(),
-                "order_details": response,
-                "status": "OPEN",
-                "is_dry_run": self.dry_run,
-                **legs_info
-            }
-            self.db['auto_trades'].insert_one(doc)
 
     def _execute_close(self, trade, limit_price=None, simulation_mode=False):
         symbol = trade['symbol']
@@ -372,12 +304,6 @@ class CreditSpreadRulebaseStrategy:
             )
             if 'id' in response:
                 self.db['auto_trades'].update_one({"_id": trade['_id']}, {"$set": {"status": "CLOSED", "close_date": datetime.now()}})
-
-    def _parse_expiry_from_symbol(self, symbol):
-        match = re.search(r'[A-Z]+(\d{6})[PC]', symbol)
-        if match:
-            return datetime.strptime(match.group(1), '%y%m%d')
-        return None
 
     def _parse_strike_from_symbol(self, symbol):
         try:

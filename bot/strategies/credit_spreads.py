@@ -1,107 +1,17 @@
 import logging
 import traceback
+import re
 from datetime import datetime
+from bot.strategies.base_strategy import AbstractStrategy
+from bot.utils import is_match, get_op_type, get_expiry_str, get_underlying
 
-
-class Colors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-class CreditSpreadStrategy:
+class CreditSpreadStrategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
-        self.tradier = tradier_service
-        self.db = db
-        self.dry_run = dry_run
+        super().__init__(tradier_service, db, dry_run, analysis_service)
         self.min_confidence_score = 7
-        self.execution_logs = []
-        
-        # Dependency Injection (Analysis Service)
-        if analysis_service:
-            self.analysis_service = analysis_service
-        else:
-            from services.container import Container
-            self.analysis_service = Container.get_analysis_service()
-        
+
     def _log(self, message):
-        """Log message to DB via BotService mechanism (manually for now)."""
-        self.execution_logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {message}")
-        
-        # Cleaner stdout for dry run
-        if self.dry_run:
-            if "Analyzing" in message:
-                print(f"{Colors.HEADER}   {message}{Colors.ENDC}")
-            elif "Placing" in message and "✅" in message:
-                print(f"{Colors.OKGREEN}   {message}{Colors.ENDC}")
-            elif "Skipping" in message:
-                print(f"{Colors.OKCYAN}   {message}{Colors.ENDC}")
-            elif "Error" in message or "failed" in message or "❌" in message:
-                print(f"{Colors.FAIL}   {message}{Colors.ENDC}")
-            elif "•" in message:
-                print(f"{Colors.OKGREEN}   {message}{Colors.ENDC}")
-            else:
-                print(f"   {message}")
-        else:
-            print(f"[CREDIT_SPREADS] {message}")
-            
-        try:
-            if self.db is not None:
-                self.db['bot_config'].update_one(
-                    {"_id": "main_bot"},
-                    {"$push": {"logs": {"$each": [{
-                        "timestamp": datetime.now(),
-                        "message": f"[CREDIT_SPREADS] {message}"
-                    }], "$slice": -100}}}
-                )
-        except Exception as e:
-            print(f"Log Error: {e}")
-    def _get_current_date(self):
-        """Get effective current date (handling simulation)."""
-        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
-            return self.tradier.current_date.date()
-        from datetime import date
-        return date.today()
-
-    def _get_current_datetime(self):
-        """Get effective current datetime."""
-        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
-             return self.tradier.current_date
-        return datetime.now()
-
-    @staticmethod
-    def _get_underlying_from_pos(pos):
-        if pos.get('underlying'): return pos.get('underlying')
-        sym = pos.get('symbol', '')
-        # Option Symbol: ROOT...digits...
-        import re
-        if re.search(r'\d', sym):
-            m = re.match(r'^([A-Z]+)\d', sym)
-            if m: return m.group(1)
-        return sym # Fallback
-
-    @staticmethod
-    def _is_short_option(pos):
-        # Check Quantity
-        qty = pos.get('quantity', 0)
-        # Check Type
-        # Trust explicit type if valid
-        otype = pos.get('option_type')
-        if otype in ['put', 'call'] and qty < 0: return True
-        # If type missing (None), check quantity is neg and parse symbol
-        if qty >= 0: return False
-        
-        # Fallback: Parse Symbol for OCC format
-        import re
-        sym = pos.get('symbol', '')
-        if re.search(r'^[A-Z]+\d{6}[CP]\d+', sym):
-            return True
-        return False
+        super()._log("CREDIT_SPREADS", message)
 
     def execute(self, watchlist, config=None):
         """
@@ -110,6 +20,7 @@ class CreditSpreadStrategy:
         2. Check for entry signals.
         3. Place order if high confidence.
         """
+        # ... logic moved to chunks ...
         # analysis_service is now self.analysis_service
         current_hour = self._get_current_datetime().hour
 
@@ -973,38 +884,3 @@ class CreditSpreadStrategy:
                  'long_leg': next((l for l in legs if l['side'] == 'buy_to_open'), {}).get('option_symbol')
              }
              self._record_trade(symbol, "Bear Call Spread", net_credit, response, legs_info)
-
-    def _is_bp_sufficient(self, requirement, config):
-        """Check if Option Buying Power is sufficient after reserve."""
-        min_reserve = config.get('min_obp_reserve', 1000) if config else 1000
-        balances = self.tradier.get_account_balances()
-        if not balances:
-            self._log("⚠️ Could not fetch balances for BP check. Skipping trade for safety.")
-            return False
-        
-        obp = balances.get('option_buying_power', 0)
-        if obp - requirement < min_reserve:
-            self._log(f"🚫 Insufficient Buying Power: OBP ${obp:,.2f} - Req ${requirement:,.2f} < Reserve ${min_reserve:,.2f}")
-            return False
-            
-        return True
-
-    def _record_trade(self, symbol, strategy, price, response, legs_info=None):
-        if self.db is not None:
-            doc = {
-                "symbol": symbol,
-                "strategy": strategy,
-                "price": price,
-                "entry_date": datetime.now(),
-                "order_details": response,
-                "status": "DRY_RUN" if self.dry_run else "OPEN",
-                "pnl": 0.0,
-                "is_dry_run": self.dry_run,
-                "days_itm": 0,
-                "close_on_next_day": False,
-                "last_check_date": None
-            }
-            if legs_info:
-                doc.update(legs_info)
-                
-            self.db['auto_trades'].insert_one(doc)
