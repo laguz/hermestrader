@@ -130,22 +130,22 @@ class BotService:
         if not isinstance(watchlist, list):
             return False
         
-        # Upper case and dedup
-        clean_list = list(set([str(s).upper().strip() for s in watchlist if s]))
+        # Upper case and dedup, then sort
+        clean_list = sorted(list(set([str(s).upper().strip() for s in watchlist if s])))
         
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
         # Safety check to only allow specific keys
         if list_type not in ['credit_spreads', 'wheel', 'credit_spread_rulebase']:
             self._log(f"Error: Invalid watchlist type {list_type}")
-            return False
+            return None
 
         self.db['bot_config'].update_one(
             {"_id": "main_bot"},
             {"$set": {db_key: clean_list}}
         )
         self._log(f"Watchlist ({list_type}) updated: {clean_list}")
-        return True
+        return clean_list
 
     def update_settings(self, settings_update):
         """Generic method to update settings fields."""

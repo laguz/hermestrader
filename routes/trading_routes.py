@@ -166,9 +166,9 @@ def update_watchlist():
              return jsonify({'error': 'watchlist is required'}), 400
              
         service = Container.get_bot_service()
-        success = service.update_watchlist(watchlist, list_type)
-        if success:
-            return jsonify({"message": f"Watchlist ({list_type}) updated", "watchlist": watchlist})
+        updated_list = service.update_watchlist(watchlist, list_type)
+        if updated_list is not None:
+            return jsonify({"message": f"Watchlist ({list_type}) updated", "watchlist": updated_list})
         else:
             return jsonify({'error': 'Failed to update watchlist'}), 500
     except Exception as e:

@@ -303,12 +303,35 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ watchlist: newList, type: type })
             });
-            if (res.ok) {
-                fetchStatus(); // Refresh UI
+
+            // Check if response is valid JSON (sometimes auth redirect returns HTML)
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") !== -1) {
+                const data = await res.json();
+                if (res.ok) {
+                    // Success: Update local state with server-returned sorted list if available
+                    if (data.watchlist) {
+                        currentWatchlists[type] = data.watchlist;
+                        renderWatchlist(type);
+                    } else {
+                         fetchStatus(); // Fallback refresh
+                    }
+                } else {
+                    alert("Error saving watchlist: " + (data.error || "Unknown error"));
+                }
             } else {
-                alert("Failed to save watchlist");
+                // Non-JSON response (likely HTML error or Redirect)
+                console.error("Non-JSON response received", res);
+                if (res.status === 401 || res.status === 403) {
+                    alert("Session expired. Please reload page and log in again.");
+                } else {
+                    alert("Server error or invalid response (check console).");
+                }
             }
-        } catch (e) { console.error(e); }
+        } catch (e) { 
+            console.error(e); 
+            alert("Network or Parsing Error: " + e);
+        }
     }
 
     function addSymbol(type) {
