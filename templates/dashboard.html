@@ -18,6 +18,11 @@
             <h3>Stock Buying Power</h3>
             <p id="acc-stock-bp">-</p>
         </div>
+        <div class="metric-card">
+            <h3>Market Sentiment (VIX)</h3>
+            <p id="mkt-sentiment-val">-</p>
+            <div id="mkt-sentiment-text" style="font-size: 0.8rem; opacity: 0.8;">-</div>
+        </div>
     </div>
 </div>
 
@@ -50,6 +55,7 @@
     document.addEventListener('DOMContentLoaded', function () {
         loadAccountData();
         loadPositions();
+        loadMarketSentiment();
         startPolling();
     });
 
@@ -58,6 +64,8 @@
     function startPolling() {
         console.log("Starting market status polling...");
         setInterval(checkMarketStatus, POLL_INTERVAL);
+        // Also poll sentiment
+        setInterval(loadMarketSentiment, POLL_INTERVAL);
     }
 
     function checkMarketStatus() {
@@ -94,6 +102,28 @@
                 document.getElementById('acc-stock-bp').textContent = fmtMoney(data.stock_buying_power);
             })
             .catch(err => console.error("Error loading account data:", err));
+    }
+
+    function loadMarketSentiment() {
+        fetch('/api/market/sentiment')
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    // console.error("Sentiment API Error:", data.error); 
+                    // Fail silently or show '-'
+                    return;
+                }
+                const valEl = document.getElementById('mkt-sentiment-val');
+                const textEl = document.getElementById('mkt-sentiment-text');
+
+                if (valEl) valEl.textContent = data.value;
+                if (textEl) {
+                    textEl.textContent = data.sentiment;
+                    textEl.style.color = data.color;
+                    textEl.style.fontWeight = "bold";
+                }
+            })
+            .catch(err => console.error("Error loading sentiment:", err));
     }
 
     function loadPositions() {

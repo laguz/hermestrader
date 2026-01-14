@@ -17,3 +17,54 @@ def market_status():
             
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@market_bp.route('/api/market/sentiment', methods=['GET'])
+def market_sentiment():
+    """Get market sentiment (VIX)."""
+    try:
+        tradier_service = Container.get_tradier_service()
+        vix_quote = tradier_service.get_quote('VIX')
+        
+        # Fallback for Sandbox/Missing VIX
+        if not vix_quote:
+             # Check if we are in dry run or sandbox? 
+             # Just return a simulated neutral value so UI works
+             return jsonify({
+                'symbol': 'VIX (Simulated)',
+                'value': 18.50,
+                'sentiment': 'Normal (Simulated)',
+                'color': 'var(--md-sys-color-secondary)',
+                'description': 'Simulated VIX for Sandbox'
+             })
+             
+        vix_val = vix_quote.get('last')
+        if vix_val is None: vix_val = vix_quote.get('close')
+        
+        # Simple Sentiment Logic
+        sentiment = "Neutral"
+        color = "var(--md-sys-color-on-surface)"
+        
+        if vix_val:
+            if vix_val < 15:
+                sentiment = "Risk On (Complacent)"
+                color = "var(--md-sys-color-primary)" # Green-ish/Primary
+            elif vix_val < 20:
+                sentiment = "Normal"
+                color = "var(--md-sys-color-secondary)"
+            elif vix_val < 30:
+                sentiment = "Fear (Elevated)"
+                color = "orange"
+            else:
+                sentiment = "Extreme Fear"
+                color = "var(--md-sys-color-error)"
+                
+        return jsonify({
+            'symbol': 'VIX',
+            'value': vix_val,
+            'sentiment': sentiment,
+            'color': color,
+            'description': vix_quote.get('description', 'CBOE Volatility Index')
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

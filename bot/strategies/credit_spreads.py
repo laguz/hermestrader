@@ -821,7 +821,9 @@ class CreditSpreadStrategy(AbstractStrategy):
         short_leg = next((o for o in chain if o['strike'] == short_call_strike and o['option_type'] == 'call'), None)
         long_leg = next((o for o in chain if o['strike'] == long_call_strike and o['option_type'] == 'call'), None)
         
-        if not short_leg or not long_leg: return
+        if not short_leg or not long_leg:
+            self._log(f"Could not find option legs for Call Spread (Short: {short_call_strike}, Long: {long_call_strike})")
+            return
         
         short_price = (short_leg['bid'] + short_leg['ask']) / 2
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
