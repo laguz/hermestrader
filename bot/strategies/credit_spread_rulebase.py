@@ -196,7 +196,7 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
 
         # Strike Selection: 16-30 Delta
         target_side = 'put' if is_put else 'call'
-        short_strike = self._find_delta_strike(chain, target_side, min_delta=0.16, max_delta=0.30)
+        short_strike, _ = self._find_delta_strike(chain, target_side, min_d=0.16, max_d=0.30)
         
         if not short_strike:
             self._log(f"Could not find 16-30 delta {target_side} for {symbol}")
