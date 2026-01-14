@@ -64,11 +64,6 @@ def unlock_vault():
     else:
         return {'success': False, 'message': 'Vault unlock failed (Invalid DEK)'}, 400
 
-@auth_bp.route('/login/sqrl', methods=['POST'])
-def login_sqrl():
-    # Placeholder for SQRL flow
-    return {'success': False, 'message': 'Not implemented yet'}, 501
-
 @auth_bp.route('/register', methods=['GET', 'POST'])
 def register():
     # Only allow registration if no users exist (Personal App Mode)

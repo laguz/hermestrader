@@ -15,7 +15,6 @@ class User(UserMixin):
         self.password_hash = user_doc.get('password_hash', '')
         self.vault = user_doc.get('vault', {})
         self.nostr_pubkey = user_doc.get('nostr_pubkey', '')
-        self.sqrl_id = user_doc.get('sqrl_id', '')
 
     def get_id(self):
         return self.id
@@ -288,12 +287,6 @@ class AuthService:
         
         self.db['users'].update_one({"_id": user_id}, {"$set": {"vault": new_vault}})
         print("Migration complete.")
-
-    def login_with_sqrl(self, sqrl_id):
-        """Login with SQRL ID (Stub)."""
-        user_doc = self.db['users'].find_one({"sqrl_id": sqrl_id})
-        if not user_doc: return None
-        return User(user_doc)
 
     def get_api_key(self):
         return self._unlocked_tradier_key

@@ -394,3 +394,4 @@ def calculate_vwap(high, low, close, volume, window=14):
     rolling_vol = volume.rolling(window=window).sum()
     
     return rolling_tp_v / rolling_vol
+
