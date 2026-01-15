@@ -56,17 +56,14 @@
         loadAccountData();
         loadPositions();
         loadMarketSentiment();
-        startPolling();
+        // Poll every 30 seconds for Real Time feel
+        setInterval(() => {
+            checkMarketStatus();
+            loadMarketSentiment();
+        }, 30000);
     });
 
-    const POLL_INTERVAL = 600000; // 10 minutes
 
-    function startPolling() {
-        console.log("Starting market status polling...");
-        setInterval(checkMarketStatus, POLL_INTERVAL);
-        // Also poll sentiment
-        setInterval(loadMarketSentiment, POLL_INTERVAL);
-    }
 
     function checkMarketStatus() {
         fetch('/api/market/status')
@@ -105,25 +102,42 @@
     }
 
     function loadMarketSentiment() {
+        console.log("Loading VIX data..."); // Debug
         fetch('/api/market/sentiment')
-            .then(response => response.json())
+            .then(res => res.json())
             .then(data => {
-                if (data.error) {
-                    // console.error("Sentiment API Error:", data.error); 
-                    // Fail silently or show '-'
-                    return;
-                }
-                const valEl = document.getElementById('mkt-sentiment-val');
+                const el = document.getElementById('mkt-sentiment-val');
                 const textEl = document.getElementById('mkt-sentiment-text');
 
-                if (valEl) valEl.textContent = data.value;
-                if (textEl) {
-                    textEl.textContent = data.sentiment;
-                    textEl.style.color = data.color;
-                    textEl.style.fontWeight = "bold";
+                if (data.error) {
+                    el.textContent = "Error";
+                    textEl.textContent = "-";
+                    return;
                 }
+
+                // Format: 18.50 (+1.25%)
+                let pctHtml = '';
+                if (data.change_percent !== undefined) {
+                    const pct = parseFloat(data.change_percent);
+                    const colorClass = pct >= 0 ? 'text-success' : 'text-danger'; // Assuming these classes exist or define them
+                    const sign = pct >= 0 ? '+' : '';
+                    pctHtml = `<span class="${colorClass}" style="font-size: 0.8em; margin-left: 5px;">(${sign}${pct.toFixed(2)}%)</span>`;
+                }
+
+                el.innerHTML = `${data.value || '-'} ${pctHtml}`;
+
+                // Update Card Color Border/Text
+                if (data.color) {
+                    el.style.color = data.color;
+                }
+
+                // Add sentiment text line if needed, or tooltip
+                textEl.textContent = data.sentiment;
+                textEl.style.color = data.color;
+                textEl.style.fontWeight = "bold";
+                el.title = data.sentiment;
             })
-            .catch(err => console.error("Error loading sentiment:", err));
+            .catch(err => console.error("VIX Error:", err));
     }
 
     function loadPositions() {

@@ -32,6 +32,7 @@ def market_sentiment():
              return jsonify({
                 'symbol': 'VIX (Simulated)',
                 'value': 18.50,
+                'change_percent': 1.25, # Simulated +1.25%
                 'sentiment': 'Normal (Simulated)',
                 'color': 'var(--md-sys-color-secondary)',
                 'description': 'Simulated VIX for Sandbox'
@@ -39,6 +40,9 @@ def market_sentiment():
              
         vix_val = vix_quote.get('last')
         if vix_val is None: vix_val = vix_quote.get('close')
+        
+        # Get Percentage Change (Real Time)
+        change_pct = vix_quote.get('change_percentage', 0.0)
         
         # Simple Sentiment Logic
         sentiment = "Neutral"
@@ -61,6 +65,7 @@ def market_sentiment():
         return jsonify({
             'symbol': 'VIX',
             'value': vix_val,
+            'change_percent': change_pct,
             'sentiment': sentiment,
             'color': color,
             'description': vix_quote.get('description', 'CBOE Volatility Index')

@@ -56,12 +56,24 @@ class CreditSpreadStrategy(AbstractStrategy):
                 current_price = analysis.get('current_price')
                 
                 max_lots = config.get('max_credit_spreads_per_symbol', 5) if config else 5
+                
+                # Global Limit Check
+                current_total = self._count_total_spreads(symbol)
+                if current_total >= max_lots:
+                    self._log(f"⚠️ Max Spreads ({max_lots}) reached for {symbol} (Current: {current_total}). Skipping.")
+                    continue
+                
+                orders_placed_this_run = 0
 
                 # Attempt Bull Put Spread (if support exists below price)
-                self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
+                # Check capacity before attempt
+                if (current_total + orders_placed_this_run) < max_lots:
+                    if self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots, config=config):
+                        orders_placed_this_run += 1
                 
                 # Attempt Bear Call Spread (if resistance exists above price)
-                self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
+                if (current_total + orders_placed_this_run) < max_lots:
+                    self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
                     
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
@@ -407,7 +419,7 @@ class CreditSpreadStrategy(AbstractStrategy):
                 price=limit_price, # STRICT LIMIT
                 order_class='multileg',
                 legs=legs,
-                tag="CREDIT_SPREADS"
+                tag="CREDITSPREADS"
             )
             
             if 'error' in response:
@@ -619,6 +631,52 @@ class CreditSpreadStrategy(AbstractStrategy):
             
         return full_expiries
 
+    def _count_total_spreads(self, symbol):
+        """
+        Count TOTAL existing spreads (Positions + Pending Orders) for this symbol.
+        Aggregates Puts + Calls across ALL expiries.
+        """
+        count = 0
+        try:
+            positions = self.tradier.get_positions() or []
+            orders = self.tradier.get_orders() or []
+        except:
+            return 0
+            
+        # 1. Positions
+        for p in positions:
+            if not self._is_short_option(p): continue
+            if self._get_underlying_from_pos(p) != symbol: continue
+            count += abs(p.get('quantity', 1))
+            
+        # 2. Orders
+        pending_statuses = ['open', 'partially_filled', 'pending']
+        for o in orders:
+            if o.get('status') not in pending_statuses: continue
+            if self._get_underlying_from_pos(o) != symbol: continue
+            
+            # Check if it's a spread order (sell_to_open)
+            legs = o.get('leg') or o.get('legs', [])
+            if isinstance(legs, dict): legs = [legs]
+            
+            is_opening_spread = False
+            
+            if o.get('class') == 'multileg':
+                 for leg in legs:
+                     if leg.get('side') == 'sell_to_open':
+                         is_opening_spread = True
+                         break
+            elif o.get('class') == 'option' and o.get('side') == 'sell_to_open':
+                 is_opening_spread = True
+                 
+            if is_opening_spread:
+                if o.get('status') == 'partially_filled':
+                    count += abs(o.get('remaining_quantity', 0))
+                else:
+                    count += abs(o.get('quantity', 0))
+                    
+        return count
+
 
     def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5, config=None):
         """
@@ -695,7 +753,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         
         if not short_leg or not long_leg:
             self._log("Could not find option legs.")
-            return
+            return False
 
         # Calculate Price (Credit)
         # Sell Short, Buy Long. Credit = Short Bid - Long Ask (conservative) or Mid - Mid.
@@ -705,15 +763,17 @@ class CreditSpreadStrategy(AbstractStrategy):
         net_credit = round(short_price - long_price, 2)
         
         # Credit Threshold Check
-        threshold = min_credit if min_credit else 0.80
+        # Default to 20% of spread width if min_credit not specified
+        # e.g. Width 1.0 -> 0.20, Width 5.0 -> 1.00
+        threshold = min_credit if min_credit else (width * 0.20)
         
         if net_credit < threshold:
             if min_credit:
                 self._log(f"⚠️ Market Credit ({net_credit}) < Target ({min_credit}). Placing Limit Order at Target.")
                 net_credit = min_credit
             else:
-                self._log(f"Credit too low ({net_credit}) for risk (Min 0.80).")
-                return
+                self._log(f"Credit too low ({net_credit}) for risk (Min {threshold:.2f}).")
+                return False
 
         # BP Check
         requirement = abs(short_put_strike - long_put_strike) * 100
@@ -740,18 +800,21 @@ class CreditSpreadStrategy(AbstractStrategy):
                 price=net_credit,
                 order_class='multileg',
                 legs=legs,
-                tag="CREDIT_SPREADS"
+                tag="CREDITSPREADS"
             )
         
-        if 'error' in response:
-            self._log(f"Order failed: {response['error']}")
-        else:
-            self._log(f"Order placed: {response}")
-            legs_info = {
-                 'short_leg': next((l for l in legs if l['side'] == 'sell_to_open'), {}).get('option_symbol'),
-                 'long_leg': next((l for l in legs if l['side'] == 'buy_to_open'), {}).get('option_symbol')
-            }
-            self._record_trade(symbol, "Bull Put Spread", net_credit, response, legs_info)
+        # Order Placed
+            if 'error' in response:
+                self._log(f"Order failed: {response['error']}")
+                return False
+            else:
+                self._log(f"Order placed: {response}")
+                legs_info = {
+                     'short_leg': next((l for l in legs if l['side'] == 'sell_to_open'), {}).get('option_symbol'),
+                     'long_leg': next((l for l in legs if l['side'] == 'buy_to_open'), {}).get('option_symbol')
+                }
+                self._record_trade(symbol, "Bull Put Spread", net_credit, response, legs_info)
+                return True
 
     def _place_credit_call_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5, config=None):
         # Similar logic for Bear Call Spread
@@ -764,7 +827,7 @@ class CreditSpreadStrategy(AbstractStrategy):
 
         # Get Resistance Levels
         entry_points = analysis.get('call_entry_points', [])
-        if not entry_points: return
+        if not entry_points: return False
 
         self._log(f"DEBUG: {symbol} Call Entry Points: {entry_points} | Current Price: {current_price}")
 
@@ -823,27 +886,28 @@ class CreditSpreadStrategy(AbstractStrategy):
         
         if not short_leg or not long_leg:
             self._log(f"Could not find option legs for Call Spread (Short: {short_call_strike}, Long: {long_call_strike})")
-            return
+            return False
         
         short_price = (short_leg['bid'] + short_leg['ask']) / 2
         long_price = (long_leg['bid'] + long_leg['ask']) / 2
         net_credit = round(short_price - long_price, 2)
         
         # Credit Threshold Check
-        threshold = min_credit if min_credit else 0.80
+        # Default to 20% of spread width if min_credit not specified
+        threshold = min_credit if min_credit else (width * 0.20)
         
         if net_credit < threshold:
             if min_credit:
                 self._log(f"⚠️ Market Credit ({net_credit}) < Target ({min_credit}). Placing Limit Order at Target.")
                 net_credit = min_credit
             else:
-                self._log(f"Credit too low ({net_credit}).")
-                return
+                self._log(f"Credit too low ({net_credit}) for risk (Min {threshold:.2f}).")
+                return False
 
         # BP Check
         requirement = abs(short_call_strike - long_call_strike) * 100
         if not self._is_bp_sufficient(requirement, config):
-            return
+            return False
 
         self._log(f"Placing Bear Call Spread on {symbol} Exp: {expiry} Short: {short_call_strike} Long: {long_call_strike}")
 
@@ -866,11 +930,12 @@ class CreditSpreadStrategy(AbstractStrategy):
                 price=net_credit,
                 order_class='multileg',
                 legs=legs,
-                tag="CREDIT_SPREADS"
+                tag="CREDITSPREADS"
             )
         
         if 'error' in response:
             self._log(f"Order failed: {response['error']}")
+            return False
         else:
              self._log(f"Order placed: {response}")
              legs_info = {
@@ -878,3 +943,4 @@ class CreditSpreadStrategy(AbstractStrategy):
                  'long_leg': next((l for l in legs if l['side'] == 'buy_to_open'), {}).get('option_symbol')
              }
              self._record_trade(symbol, "Bear Call Spread", net_credit, response, legs_info)
+             return True
