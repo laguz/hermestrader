@@ -42,6 +42,9 @@ app.register_blueprint(market_bp)
 from routes.analysis_routes import analysis_bp
 app.register_blueprint(analysis_bp)
 
+from routes.rule1_routes import rule1_bp
+app.register_blueprint(rule1_bp)
+
 from flask import jsonify
 from exceptions import AppError
 

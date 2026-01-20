@@ -12,3 +12,7 @@ Flask-Login>=0.6.3
 cryptography>=42.0.0
 nostr-sdk>=0.44.0
 certifi
+lxml
+beautifulsoup4
+python-dateutil
+yfinance

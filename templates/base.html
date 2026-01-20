@@ -58,6 +58,11 @@
                     <span class="material-symbols-outlined">login</span>
                     <span class="md-tab__label">Entry Point</span>
                 </a>
+                <a href="{{ url_for('rule1.index') }}"
+                    class="md-tab {% if request.endpoint == 'rule1.index' %}active{% endif %}">
+                    <span class="material-symbols-outlined">calculate</span>
+                    <span class="md-tab__label">Rule #1</span>
+                </a>
 
                 {% if current_user.is_authenticated %}
                 <a href="{{ url_for('auth.logout') }}" class="md-tab">
@@ -65,7 +70,8 @@
                     <span class="md-tab__label">Logout</span>
                 </a>
                 {% else %}
-                <a href="{{ url_for('auth.login') }}" class="md-tab {% if request.endpoint == 'auth.login' %}active{% endif %}">
+                <a href="{{ url_for('auth.login') }}"
+                    class="md-tab {% if request.endpoint == 'auth.login' %}active{% endif %}">
                     <span class="material-symbols-outlined">login</span>
                     <span class="md-tab__label">Login</span>
                 </a>
