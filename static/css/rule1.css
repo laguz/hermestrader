@@ -10,28 +10,23 @@
     --warning: #f59e0b;
 }
 
-body {
-    font-family: 'Inter', sans-serif;
-    background-color: var(--bg-color);
-    color: var(--text-primary);
-    margin: 0;
-    min-height: 100vh;
-    display: flex;
-    justify-content: center;
-    padding: 2rem;
-}
+/* Scoped styles for Rule 1 page */
 
-.container {
+.rule1-container {
     width: 100%;
-    max-width: 900px;
+    max-width: 1200px;
+    /* Increased width for side-by-side */
+    margin: 0 auto;
+    font-family: 'Inter', sans-serif;
+    color: var(--text-primary);
 }
 
-header {
+.rule1-header {
     text-align: center;
     margin-bottom: 3rem;
 }
 
-header h1 {
+.rule1-header h1 {
     font-size: 2.5rem;
     font-weight: 700;
     margin: 0 0 0.5rem 0;
@@ -41,7 +36,7 @@ header h1 {
     -webkit-text-fill-color: transparent;
 }
 
-header p {
+.rule1-header p {
     color: var(--text-secondary);
     margin: 0;
 }
@@ -52,12 +47,12 @@ header p {
     text-align: center;
 }
 
-form {
+.rule1-container form {
     display: flex;
     gap: 1rem;
 }
 
-input[type="text"] {
+.rule1-container input[type="text"] {
     flex: 1;
     padding: 1rem;
     border-radius: 0.5rem;
@@ -69,11 +64,11 @@ input[type="text"] {
     transition: border-color 0.2s;
 }
 
-input[type="text"]:focus {
+.rule1-container input[type="text"]:focus {
     border-color: var(--accent);
 }
 
-button {
+.rule1-container button {
     padding: 0 2rem;
     background: var(--accent);
     color: #0f172a;
@@ -84,11 +79,11 @@ button {
     transition: background 0.2s, transform 0.1s;
 }
 
-button:hover {
+.rule1-container button:hover {
     background: var(--accent-hover);
 }
 
-button:active {
+.rule1-container button:active {
     transform: scale(0.98);
 }
 
@@ -129,8 +124,9 @@ button:active {
 
 .price-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    gap: 2rem;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    /* slightly smaller min for sidebar */
+    gap: 1.5rem;
 }
 
 .price-item {
@@ -151,37 +147,68 @@ button:active {
     font-weight: 700;
 }
 
-.details-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+/* Layout Grid for Perpendicular/Side-by-Side */
+.layout-grid {
+    display: flex;
+    flex-direction: column;
     gap: 1.5rem;
 }
 
-.details-grid h3 {
+@media (min-width: 1024px) {
+    .layout-grid {
+        display: grid;
+        grid-template-columns: 350px 1fr;
+        gap: 2rem;
+        align-items: start;
+    }
+
+    /* Adjust main result for sidebar placement */
+    .main-result .price-grid {
+        grid-template-columns: 1fr;
+        /* Stack prices in sidebar */
+        gap: 1rem;
+    }
+}
+
+.left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.right-col {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+
+.details-grid h3,
+.card h3 {
     margin-top: 0;
     color: var(--accent);
     margin-bottom: 1.5rem;
 }
 
-table {
+.rule1-container table {
     width: 100%;
     border-collapse: collapse;
 }
 
-th,
-td {
+.rule1-container th,
+.rule1-container td {
     padding: 0.75rem;
     text-align: left;
     border-bottom: 1px solid #334155;
     font-size: 0.9rem;
 }
 
-th {
+.rule1-container th {
     color: var(--text-secondary);
     font-weight: 400;
 }
 
-td:first-child {
+.rule1-container td:first-child {
     font-weight: 600;
     color: var(--text-primary);
 }
@@ -190,7 +217,7 @@ td:first-child {
     display: flex;
     flex-wrap: wrap;
     gap: 0.75rem;
-    justify-content: space-between;
+    justify-content: flex-start;
 }
 
 .roic-item {

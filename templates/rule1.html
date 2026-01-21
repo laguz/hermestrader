@@ -1,58 +1,70 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rule #1 Stock Analyzer</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/rule1.css') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>Rule #1 Analyzer</h1>
-            <p>Calculate Sticker Price & Margin of Safety</p>
-        </header>
+{% extends "base.html" %}
 
-        <section class="search-section">
-            <form method="POST" action="{{ url_for('rule1.index') }}">
-                <input type="text" name="ticker" placeholder="Enter Stock Symbol (e.g. AAPL)" value="{{ ticker }}" required>
-                <button type="submit">Analyze</button>
-            </form>
-            {% if error %}
-            <div class="error-message">
-                {{ error }}
-            </div>
-            {% endif %}
-        </section>
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/rule1.css') }}">
+{% endblock %}
 
-        {% if result %}
-        <section class="results-section">
-            <div class="card main-result {{ 'buy' if 'BUY' in result.recommendation else 'watch' }}">
-                <h2>{{ result.recommendation }}</h2>
-                <div class="price-grid">
-                    <div class="price-item">
-                        <span class="label">Sticker Price</span>
-                        <span class="value">{{ result.sticker_price }}</span>
+{% block content %}
+<div class="rule1-container">
+    <div class="rule1-header">
+        <h1>Rule #1 Analyzer</h1>
+        <p>Calculate Sticker Price & Margin of Safety</p>
+    </div>
+
+    <section class="search-section">
+        <form method="POST" action="{{ url_for('rule1.index') }}">
+            <input type="text" name="ticker" placeholder="Enter Stock Symbol (e.g. AAPL)" value="{{ ticker }}" required>
+            <button type="submit">Analyze</button>
+        </form>
+        {% if error %}
+        <div class="error-message">
+            {{ error }}
+        </div>
+        {% endif %}
+    </section>
+
+    {% if result %}
+    <section class="results-section">
+        <div class="layout-grid">
+            <div class="left-col">
+                <div class="card main-result {{ 'buy' if 'BUY' in result.recommendation else 'watch' }}">
+                    <h2>{{ result.recommendation }}</h2>
+                    <div class="price-grid">
+                        <div class="price-item">
+                            <span class="label">Sticker Price</span>
+                            <span class="value">{{ result.sticker_price }}</span>
+                        </div>
+                        <div class="price-item">
+                            <span class="label">Buy Price (MOS)</span>
+                            <span class="value">{{ result.buy_price }}</span>
+                        </div>
+                        <div class="price-item">
+                            <span class="label">Current Price</span>
+                            <span class="value">{{ result.current_price }}</span>
+                        </div>
                     </div>
-                    <div class="price-item">
-                        <span class="label">Buy Price (MOS)</span>
-                        <span class="value">{{ result.buy_price }}</span>
-                    </div>
-                    <div class="price-item">
-                        <span class="label">Current Price</span>
-                        <span class="value">{{ result.current_price }}</span>
-                    </div>
+                    {% if result.reason %}
+                    <p class="reason">{{ result.reason }}</p>
+                    {% endif %}
                 </div>
-                {% if result.reason %}
-                <p class="reason">{{ result.reason }}</p>
+
+                {% if result.metrics %}
+                <div class="card">
+                    <h3>Valuation Inputs</h3>
+                    <ul class="input-list">
+                        <li><strong>Current EPS:</strong> ${{ result.valuation.Current_EPS|round(2) }}</li>
+                        <li><strong>Est. Growth Rate:</strong> {{ (result.valuation.Estimated_Growth_Rate *
+                            100)|round(1)
+                            }}%</li>
+                        <li><strong>Future PE:</strong> {{ result.valuation.Future_PE|round(1) }}</li>
+                        <li><strong>Min Rate of Return:</strong> 15%</li>
+                    </ul>
+                </div>
                 {% endif %}
             </div>
 
             {% if result.metrics %}
-            <div class="details-grid">
+            <div class="right-col">
                 <div class="card">
                     <h3>Growth Rates</h3>
                     <table>
@@ -67,26 +79,38 @@
                         <tbody>
                             <tr>
                                 <td>Equity (BVPS)</td>
-                                <td>{{ (result.metrics.Equity_Growth['10y'] * 100)|round(1) if result.metrics.Equity_Growth['10y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.Equity_Growth['5y'] * 100)|round(1) if result.metrics.Equity_Growth['5y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.Equity_Growth['1y'] * 100)|round(1) if result.metrics.Equity_Growth['1y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Equity_Growth['10y'] * 100)|round(1) if
+                                    result.metrics.Equity_Growth['10y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Equity_Growth['5y'] * 100)|round(1) if
+                                    result.metrics.Equity_Growth['5y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Equity_Growth['1y'] * 100)|round(1) if
+                                    result.metrics.Equity_Growth['1y'] else '-' }}%</td>
                             </tr>
                             <tr>
                                 <td>EPS</td>
-                                <td>{{ (result.metrics.EPS_Growth['10y'] * 100)|round(1) if result.metrics.EPS_Growth['10y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.EPS_Growth['5y'] * 100)|round(1) if result.metrics.EPS_Growth['5y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.EPS_Growth['1y'] * 100)|round(1) if result.metrics.EPS_Growth['1y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.EPS_Growth['10y'] * 100)|round(1) if
+                                    result.metrics.EPS_Growth['10y']
+                                    else '-' }}%</td>
+                                <td>{{ (result.metrics.EPS_Growth['5y'] * 100)|round(1) if
+                                    result.metrics.EPS_Growth['5y']
+                                    else '-' }}%</td>
+                                <td>{{ (result.metrics.EPS_Growth['1y'] * 100)|round(1) if
+                                    result.metrics.EPS_Growth['1y']
+                                    else '-' }}%</td>
                             </tr>
-                             <tr>
+                            <tr>
                                 <td>Sales</td>
-                                <td>{{ (result.metrics.Revenue_Growth['10y'] * 100)|round(1) if result.metrics.Revenue_Growth['10y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.Revenue_Growth['5y'] * 100)|round(1) if result.metrics.Revenue_Growth['5y'] else '-' }}%</td>
-                                <td>{{ (result.metrics.Revenue_Growth['1y'] * 100)|round(1) if result.metrics.Revenue_Growth['1y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Revenue_Growth['10y'] * 100)|round(1) if
+                                    result.metrics.Revenue_Growth['10y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Revenue_Growth['5y'] * 100)|round(1) if
+                                    result.metrics.Revenue_Growth['5y'] else '-' }}%</td>
+                                <td>{{ (result.metrics.Revenue_Growth['1y'] * 100)|round(1) if
+                                    result.metrics.Revenue_Growth['1y'] else '-' }}%</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-                
+
                 <div class="card">
                     <h3>ROIC History (Last 10 Years)</h3>
                     <div class="roic-list">
@@ -98,20 +122,10 @@
                         {% endfor %}
                     </div>
                 </div>
-                
-                 <div class="card">
-                    <h3>Valuation Inputs</h3>
-                    <ul class="input-list">
-                        <li><strong>Current EPS:</strong> ${{ result.valuation.Current_EPS|round(2) }}</li>
-                         <li><strong>Est. Growth Rate:</strong> {{ (result.valuation.Estimated_Growth_Rate * 100)|round(1) }}%</li>
-                          <li><strong>Future PE:</strong> {{ result.valuation.Future_PE|round(1) }}</li>
-                           <li><strong>Min Rate of Return:</strong> 15%</li>
-                    </ul>
-                </div>
             </div>
             {% endif %}
-        </section>
-        {% endif %}
-    </div>
-</body>
-</html>
+        </div>
+    </section>
+    {% endif %}
+</div>
+{% endblock %}
