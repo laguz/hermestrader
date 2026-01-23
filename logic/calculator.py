@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import logging
 
 def calculate_growth_rate(series, periods):
     """
@@ -39,6 +40,8 @@ def calculate_metrics(df, splits=None):
     # Create copies to avoid setting warnings
     df = df.copy()
     
+    logger = logging.getLogger(__name__)
+
     if splits is not None and not splits.empty:
         # Splits is a Series: Date -> Ratio. E.g. 2020-08-31: 4.0
         # Iterate over splits
@@ -49,6 +52,9 @@ def calculate_metrics(df, splits=None):
                 if split_date.tzinfo is not None:
                     split_date = split_date.tz_localize(None)
                 mask = pd.to_datetime(df['FilingDate']) < split_date
+                
+                if mask.any():
+                    logger.info(f"Adjusting historical data for {ratio}:1 split on {date}")
                 
                 # Adjust EPS (Per Share)
                 if 'EPS' in df.columns:
