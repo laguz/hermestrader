@@ -211,7 +211,9 @@ def analyze_stock(ticker, df, splits=None):
     # Actually, often these apps use `yfinance` or similar. The user didn't ban it.
     # But for now, let's just calculate the Sticker Price.
     
-    current_eps = df['EPS'].iloc[-1]
+    # Use adjusted EPS if available
+    adjusted_df = metrics.get('Financials', df)
+    current_eps = adjusted_df['EPS'].iloc[-1]
     
     valuation = calculate_sticker_price(current_eps, estimated_growth, future_pe)
     

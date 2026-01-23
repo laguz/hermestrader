@@ -97,5 +97,45 @@ class TestRule1Splits(unittest.TestCase):
         # EPS 12.0 / 2 = 6.0
         self.assertAlmostEqual(result_df['EPS'].iloc[1], 6.0)
 
+    def test_analyze_stock_uses_adjusted_eps(self):
+        # 2:1 Split. 
+        # We need enough data for 5y growth (at least 6 points)
+        
+        data = {
+            'FilingDate': pd.date_range(start='2015-01-01', periods=6, freq='YE'), # 2015-2020
+            'EPS': [1.0, 1.2, 1.4, 1.6, 1.8, 2.0], # Current (2020) is 2.0
+            'Shares': [1000] * 6,
+            'NetIncome': [1000] * 6,
+            'Equity': [1000, 1200, 1400, 1600, 1800, 2000], # Consistent BVPS growth
+            'Revenue': [1000] * 6,
+            'Cash': [100] * 6,
+            'LongTermDebt': [0] * 6,
+            'OCF': [100] * 6
+        }
+        df = pd.DataFrame(data)
+        
+        # Split 2:1 on 2021-01-01 (After all data)
+        # However, to test historical adjustment affecting current EPS...
+        # If Split is in 2021, and Data ends 2020.
+        # ALL data is "Historical" relative to split?
+        # Yes. 2020 EPS (2.0) should be adjusted to 1.0.
+        
+        from logic.calculator import analyze_stock
+        
+        splits = pd.Series({'2021-01-01': 2.0})
+        
+        metrics, valuation = analyze_stock("TEST", df, splits)
+        
+        if 'Error' in valuation:
+             self.fail(f"Analysis failed with error: {valuation['Error']}")
+        
+        current_eps_used = valuation.get('Current_EPS')
+        
+        # Original Last EPS = 2.0
+        # Adjusted Last EPS = 1.0
+        # Method should use 1.0
+        
+        self.assertAlmostEqual(current_eps_used, 1.0)
+
 if __name__ == '__main__':
     unittest.main()
