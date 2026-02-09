@@ -81,11 +81,63 @@ async function loginWithNostr() {
     }
 }
 
-function loginWithSQRL() {
+async function loginWithSQRL() {
     const container = document.getElementById('sqrl-qr-container');
+    const qrDiv = document.getElementById('sqrl-qr-code');
+    const link = document.getElementById('sqrl-link');
+
     container.classList.remove('hidden');
-    container.innerHTML = '<p class="text-warning">SQRL integration pending backend implementation.</p>';
-    // TODO: Poll endpoint for SQRL status
+    qrDiv.innerHTML = ''; // Clear previous
+    // Show loading?
+
+    try {
+        // 1. Get Nut and URL
+        const response = await fetch('/login/sqrl/nut');
+        const data = await response.json();
+
+        if (!data.nut || !data.url) {
+            alert('Failed to initialize SQRL.');
+            return;
+        }
+
+        // 2. Render QR
+        new QRCode(qrDiv, {
+            text: data.url,
+            width: 200,
+            height: 200
+        });
+
+        // 3. Set formatted link (optional, for mobile same-device login)
+        // Render as sqrl://...
+        link.href = data.url;
+        link.innerText = "Tap here to open SQRL App";
+
+        // 4. Start Polling
+        const pollInterval = setInterval(async () => {
+            try {
+                const pollRes = await fetch('/login/sqrl/poll', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nut: data.nut })
+                });
+                const pollData = await pollRes.json();
+
+                if (pollData.success) {
+                    clearInterval(pollInterval);
+                    window.location.href = '/';
+                }
+            } catch (e) {
+                // Ignore poll errors (e.g. network blip)
+            }
+        }, 2000); // Poll every 2s
+
+        // Stop polling after 5 minutes?
+        setTimeout(() => clearInterval(pollInterval), 300000);
+
+    } catch (error) {
+        console.error("SQRL Error:", error);
+        container.innerHTML = '<p class="text-error">Error initiating SQRL.</p>';
+    }
 }
 
 async function registerWithNostr() {
@@ -141,5 +193,177 @@ async function registerWithNostr() {
     } catch (error) {
         console.error("Nostr Registration Error:", error);
         alert("Registration failed: " + error);
+    }
+}
+
+/**
+ * NIP-46 Login Logic
+ */
+async function loginWithNip46() {
+    const statusDiv = document.getElementById('nip46-status');
+    const input = document.getElementById('nostr-remote-address').value.trim();
+
+    if (!input) {
+        alert("Please enter a NIP-05 address or Bunker URI.");
+        return;
+    }
+
+    statusDiv.innerText = "Initializing Nostr Connect...";
+    statusDiv.style.color = "var(--md-sys-color-primary)";
+
+    try {
+        // Ensure NostrTools is loaded
+        if (typeof window.NostrTools === 'undefined') {
+            throw new Error("NostrTools library not loaded. Check internet connection or ad-blocker.");
+        }
+
+        const { Nip46, generateSecretKey, getPublicKey, nip19, SimplePool } = window.NostrTools;
+
+        // Note: old nostr-tools used generatePrivateKey, new uses generateSecretKey. 
+        // We try both to be safe or check version. Usually window.NostrTools implies recent bundle.
+        const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
+
+        let bunkerUri = input;
+
+        // Handle NIP-05 (user@domain)
+        if (!input.startsWith('bunker://')) {
+            if (input.includes('@')) {
+                statusDiv.innerText = "Looking up NIP-05...";
+                const profile = await window.NostrTools.nip05.queryProfile(input);
+                if (!profile) {
+                    throw new Error("NIP-05 profile not found.");
+                }
+
+                // Construct Bunker URI if possible, or support NIP-05 connect flow if library supports it.
+                // For MVP simplicity without a complex robust NIP-05->NIP-46 discovery implementation:
+                if (profile.nip46) {
+                    // If relays are present in nip46 field (some implementations), use them.
+                }
+            } else {
+                // Not a valid NIP-05 or Bunker URI
+                throw new Error("Invalid format. Use bunker://... or user@domain");
+            }
+        }
+
+        if (!bunkerUri.startsWith("bunker://")) {
+            // Fallback for user@domain if we didn't implement full NIP-05 resolution to bunker URI here
+            // Using a dummy check to warn user if they didn't input a bunker URI 
+            // as we are manually constructing the signer below.
+            if (!input.includes('bunker://')) {
+                // For now, let's just proceed and see if valid.
+                // Ideally we resolve NIP-05 to pubkey and use default relays?
+                // No, NIP-46 *needs* the specific relays the signer is listening on.
+                // So we compel the user to use Bunker URI for now or fail.
+                if (!input.startsWith('bunker://')) {
+                    // Attempt to be helpful?
+                    throw new Error("For this version, please use the full 'bunker://' URI from your signer app.");
+                }
+            }
+        }
+
+        // 1. Generate local ephemeral key
+        const localSk = generateSk();
+        // localSk is Uint8Array in new tools, hex string in old. 
+        // getPublicKey handles both usually?
+        let localPk;
+        try {
+            localPk = getPublicKey(localSk);
+        } catch (e) {
+            // Fallback for different version compatibility if needed?
+            throw e;
+        }
+
+        statusDiv.innerText = "Connecting to remote signer...";
+
+        // 2. Initialize Bunker Signer
+        // Parsing Bunker URI
+        const url = new URL(bunkerUri);
+        const remotePubkey = url.pathname.replace('//', '');
+        const params = new URLSearchParams(url.search);
+        const relays = params.getAll('relay');
+        const secret = params.get('secret'); // Optional
+
+        if (relays.length === 0) {
+            throw new Error("No relays found in Bunker URI.");
+        }
+
+        const pool = new SimplePool();
+        const signer = new Nip46.BunkerSigner(pool, localSk, remotePubkey, { secret });
+
+        // 3. Connect
+        await signer.connect(relays);
+
+        statusDiv.innerText = "Waiting for approval on device...";
+
+        // 4. Get Public Key (this triggers the "Connect" challenge on the remote device)
+        const userPubkey = await signer.getPublicKey();
+        console.log("Remote PubKey:", userPubkey);
+
+        statusDiv.innerText = "Authorized! Signing login event...";
+
+        // 5. Sign Auth Event
+        const eventTemplate = {
+            kind: 22242,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+                ['challenge', 'login_challenge_placeholder'],
+                ['domain', window.location.hostname]
+            ],
+            content: 'Login to Laguz Tech via NIP-46'
+        };
+
+        const signedEvent = await signer.signEvent(eventTemplate);
+
+        // 6. Send to Backend
+        statusDiv.innerText = "Verifying with server...";
+
+        const response = await fetch('/login/nostr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event: signedEvent })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            statusDiv.innerText = "Login successful!";
+            if (result.vault_locked && result.vault_metadata) {
+                statusDiv.innerText = "Vault locked. Requesting decryption...";
+                const metadata = result.vault_metadata;
+
+                try {
+                    // Request decryption from Bunker
+                    const decryptedDek = await signer.nip04.decrypt(
+                        metadata.sender_pubkey,
+                        metadata.encrypted_dek
+                    );
+
+                    const unlockResponse = await fetch('/api/auth/unlock', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ dek: decryptedDek })
+                    });
+
+                    const unlockResult = await unlockResponse.json();
+                    if (unlockResult.success) {
+                        window.location.href = '/';
+                    } else {
+                        throw new Error("Vault unlock failed: " + unlockResult.message);
+                    }
+
+                } catch (err) {
+                    throw new Error("Decryption failed: " + err.message);
+                }
+            } else {
+                window.location.href = '/';
+            }
+        } else {
+            throw new Error(result.message || "Login failed");
+        }
+
+    } catch (error) {
+        console.error("NIP-46 Error:", error);
+        statusDiv.innerText = "Error: " + error.message;
+        statusDiv.style.color = "var(--md-sys-color-error)";
     }
 }

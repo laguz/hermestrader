@@ -60,6 +60,15 @@ class Container:
             cls._auth_service = AuthService()
         return cls._auth_service
 
+    _sqrl_service = None
+
+    @classmethod
+    def get_sqrl_service(cls):
+        if not cls._sqrl_service:
+            from services.sqrl_service import SQRLService
+            cls._sqrl_service = SQRLService()
+        return cls._sqrl_service
+
     @classmethod
     def get_analysis_service(cls):
         from services.analysis_service import AnalysisService

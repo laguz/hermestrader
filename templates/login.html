@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 
 {% block scripts %}
+<script src="https://unpkg.com/nostr-tools/lib/nostr.bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
 {% endblock %}
 
@@ -54,19 +56,35 @@
             <button id="btn-sqrl" class="md-button md-button--tonal w-100 mt-3" onclick="loginWithSQRL()">
                 <span class="material-symbols-outlined">qr_code_scanner</span>
                 Login with SQRL
-            </button>
+            </button> <!-- SQRL Login Button -->
 
             <div id="sqrl-qr-container" class="hidden text-center mt-3">
                 <p class="text-secondary small">Scan with SQRL App</p>
-                <div id="sqrl-qr-code"></div>
+                <div id="sqrl-qr-code" style="display: flex; justify-content: center;"></div>
+                <a id="sqrl-link" href="#" class="small text-secondary mt-2 d-block">Click to launch App</a>
             </div>
-        </div>
 
-        <div class="card-footer text-center mt-4">
-            <small class="text-secondary">First time? <a href="{{ url_for('auth.register') }}"
-                    class="link-primary">Setup Vault</a></small>
+            <div class="divider mt-4"><span>Nostr Connect (NIP-46)</span></div>
+
+            <div class="md-text-field-container mt-3">
+                <input type="text" class="md-text-field" id="nostr-remote-address" placeholder=" "
+                    value="laguz@nostr.me">
+                <label for="nostr-remote-address" class="md-text-field-label">NIP-05 or Bunker URI</label>
+            </div>
+
+            <button id="btn-nip46" class="md-button md-button--tonal w-100 mt-2" onclick="loginWithNip46()">
+                <span class="material-symbols-outlined">settings_remote</span>
+                Login with Remote Signer
+            </button>
+            <div id="nip46-status" class="text-secondary text-center small mt-2"></div>
         </div>
     </div>
+
+    <div class="card-footer text-center mt-4">
+        <small class="text-secondary">First time? <a href="{{ url_for('auth.register') }}" class="link-primary">Setup
+                Vault</a></small>
+    </div>
+</div>
 </div>
 
 <style>
