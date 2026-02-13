@@ -22,7 +22,7 @@ class BotService:
         self.db = Container.get_db()
         self.tradier = Container.get_tradier_service()
         self.ml_service = None # Lazy load to avoid circular deps if any
-        self.ml_service = None # Lazy load to avoid circular deps if any
+
         
         # Initialize Strategies
         from bot.strategies.credit_spreads import CreditSpreadStrategy

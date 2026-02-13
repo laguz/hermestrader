@@ -9,7 +9,6 @@ from bot.strategies.wheel import WheelStrategy
 from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
 from utils.indicators import (
     calculate_rsi, 
-    calculate_bollinger_bands, 
     find_key_levels, 
     calculate_option_price,
     calculate_prob_it_expires_otm,

@@ -1,6 +1,19 @@
 import pandas as pd
 import numpy as np
-from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, calculate_bollinger_bands
+from datetime import datetime, timedelta
+from utils.indicators import (
+    calculate_rsi, 
+    calculate_macd, 
+    calculate_support_resistance, 
+    calculate_sma, 
+    calculate_bollinger_bands,
+    calculate_adx,
+    calculate_hv_rank,
+    find_key_levels,
+    calculate_historical_volatility,
+    calculate_prob_it_expires_otm,
+    calculate_prob_of_touch
+)
 
 class AnalysisService:
     def __init__(self, tradier_service, ml_service, db=None):
@@ -8,10 +21,8 @@ class AnalysisService:
         self.ml_service = ml_service
         self.db = db
 
+
     def analyze_symbol(self, symbol, period='6m'):
-        from datetime import datetime, timedelta
-        from utils.indicators import calculate_rsi, calculate_macd, calculate_support_resistance, calculate_sma, find_key_levels, calculate_historical_volatility, calculate_prob_it_expires_otm, calculate_bollinger_bands, calculate_adx, calculate_hv_rank
-        
         end_date = datetime.now()
         
         days_map = {
@@ -87,7 +98,7 @@ class AnalysisService:
             
         # Recalculate Key Levels specifically on this period data
         # Using new KMeans algo which expects Volume
-        from utils.indicators import find_key_levels
+        # from utils.indicators import find_key_levels
         
         # Pass high/low series to automatically get min/max levels
         key_levels = find_key_levels(
@@ -169,7 +180,7 @@ class AnalysisService:
                     
         # Calculate PoP and POT for all entry points (assuming 30 DTE)
         # Use calc_vol (IV or HV fallback)
-        from utils.indicators import calculate_prob_of_touch
+        # from utils.indicators import calculate_prob_of_touch
         
         for ep in put_entry_points:
             # Shift break-even by estimated credit (approx 1/3 of width)
