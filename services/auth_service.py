@@ -1,4 +1,6 @@
+import logging
 import os
+logger = logging.getLogger(__name__)
 import base64
 from datetime import datetime
 from flask_login import UserMixin
@@ -241,7 +243,7 @@ class AuthService:
                 return User(user_doc)
                 
         except Exception as e:
-            print(f"Login/Unlock Error: {e}")
+            logger.error(f"Login/Unlock Error: {e}")
             return None
         
         # If we failed to unlock but password was correct (hash check passed before), 
@@ -258,7 +260,7 @@ class AuthService:
 
     def _migrate_to_dek(self, user_id, password, tradier_key, account_id):
         """Migrate legacy vault to DEK vault."""
-        print(f"Migrating user {user_id} to Vault V2...")
+        logger.info(f"Migrating user {user_id} to Vault V2...")
         
         # Generate DEK
         dek = Fernet.generate_key()
@@ -287,7 +289,7 @@ class AuthService:
         }
         
         self.db['users'].update_one({"_id": user_id}, {"$set": {"vault": new_vault}})
-        print("Migration complete.")
+        logger.info("Migration complete.")
 
     def get_api_key(self):
         return self._unlocked_tradier_key

@@ -1,9 +1,37 @@
+# Environment & Secrets
 .env
-# LEAN
-**/__pycache__
-*.pyc
-data/
+.env.*
 
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ML Models (large binary files — use Git LFS or cloud storage)
+models/*.pkl
+models/*.keras
+models/*.h5
+models/*.json
+
+# Logs
+logs/
+*.log
+
+# LEAN
 .lean/
-.DS_Store
+data/
 algorithms/backtests
+
+# IDE & OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

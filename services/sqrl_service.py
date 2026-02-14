@@ -1,4 +1,7 @@
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 import base64
 import hashlib
 import time
@@ -59,7 +62,7 @@ class SQRLService:
             pub_key.verify(sig_bytes, message)
             return True
         except (InvalidSignature, ValueError) as e:
-            print(f"Sig Verify Failed: {e}")
+            logger.error(f"Sig Verify Failed: {e}")
             return False
 
     def handle_request(self, client_param, server_param, ids_param, pds_param, urs_param):
@@ -108,7 +111,7 @@ class SQRLService:
                 return self._response_error(400) # Unknown cmd
 
         except Exception as e:
-            print(f"SQRL Handle Error: {e}")
+            logger.error(f"SQRL Handle Error: {e}")
             return self._response_error(500)
 
     def _handle_query(self, nut, idk):

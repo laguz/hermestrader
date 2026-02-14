@@ -74,6 +74,7 @@ def place_order():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/options/expirations', methods=['GET'])
+@login_required
 def get_expirations():
     """Get option expirations for a symbol."""
     symbol = request.args.get('symbol')
@@ -88,6 +89,7 @@ def get_expirations():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/options/chain', methods=['GET'])
+@login_required
 def get_option_chain():
     """Get option chain for a symbol and expiration."""
     symbol = request.args.get('symbol')
@@ -106,6 +108,7 @@ def get_option_chain():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/quotes', methods=['GET'])
+@login_required
 def get_quote():
     """Get quote for a symbol."""
     symbol = request.args.get('symbol')
@@ -124,6 +127,7 @@ def get_quote():
 # ---------------------------------------------------------------------
 
 @trading_bp.route('/api/bot/status', methods=['GET'])
+@login_required
 def bot_status():
     try:
         service = Container.get_bot_service()
@@ -195,124 +199,13 @@ def update_bot_settings():
 @login_required
 def run_dry_run():
     try:
-        tradier_service = Container.get_tradier_service()
-        db = Container.get_db()
-        from bot.strategies.credit_spreads import CreditSpreadStrategy
-        from bot.strategies.wheel import WheelStrategy
-        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
-        
-        # Determine watchlists
+        service = Container.get_bot_service()
         data = request.json or {}
-        
-        # 1. Credit Spreads Watchlist
-        cs_watchlist = data.get('credit_spreads_watchlist')
-        if not cs_watchlist:
-             # Backward compatibility: 'watchlist' field
-             cs_watchlist = data.get('watchlist')
-             
-        if not cs_watchlist:
-             # Fetch from DB
-             bot_config = db.bot_config.find_one({"_id": "main_bot"})
-             if bot_config:
-                 settings = bot_config.get('settings', {})
-                 cs_watchlist = settings.get('watchlist_credit_spreads', [])
-
-        if not cs_watchlist:
-            cs_watchlist = ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
-
-        # 2. Wheel Watchlist
-        wheel_watchlist = data.get('wheel_watchlist')
-        if not wheel_watchlist:
-             bot_config = db.bot_config.find_one({"_id": "main_bot"})
-             if bot_config:
-                 settings = bot_config.get('settings', {})
-                 wheel_watchlist = settings.get('watchlist_wheel', [])
-                 
-        if not wheel_watchlist:
-            wheel_watchlist = ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
-            
-        # 3. Rule-Based Watchlist
-        rb_watchlist = data.get('credit_spread_rulebase_watchlist')
-        if not rb_watchlist:
-             bot_config = db.bot_config.find_one({"_id": "main_bot"})
-             if bot_config:
-                 settings = bot_config.get('settings', {})
-                 rb_watchlist = settings.get('watchlist_credit_spread_rulebase', [])
-                 
-        if not rb_watchlist:
-            rb_watchlist = ['TSLA', 'NVDA', 'SPY']
-            
-        print(f"DEBUG: CS Watchlist ({len(cs_watchlist)}): {cs_watchlist}")
-        print(f"DEBUG: Wheel Watchlist ({len(wheel_watchlist)}): {wheel_watchlist}")
-        print(f"DEBUG: Rule-Based Watchlist ({len(rb_watchlist)}): {rb_watchlist}")
-
-        all_logs = []
-
-        # Fetch Config for Limits
-        bot_config = db.bot_config.find_one({"_id": "main_bot"}) or {}
-        config = bot_config.get('settings', {})
-        print(f"DEBUG: Dry Run Config Fetched: {config}")
-        
-        # Execute Credit Spreads
-        all_logs.append(f"--- Credit Spread Strategy (Limit: {config.get('max_credit_spreads_per_symbol', 5)}) ---")
-        try:
-            strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
-            cs_logs = strategy_cs.execute(cs_watchlist, config)
-            all_logs.extend(cs_logs)
-        except Exception as e:
-            error_msg = f"❌ Credit Spread Strategy Failed: {str(e)}"
-            all_logs.append(error_msg)
-            print(error_msg)
-            traceback.print_exc()
-
-        # Check Open Positions (Simulation)
-        all_logs.append("\n--- Checking Open Credit Spreads (Closing Logic) ---")
-        try:
-            # We reuse strategy_cs instance which has dry_run=True
-            closing_logs = strategy_cs.manage_positions(simulation_mode=True)
-            if closing_logs:
-                all_logs.extend(closing_logs)
-            else:
-                all_logs.append("No open positions to manage or no actions needed.")
-        except Exception as e:
-            msg = f"❌ Closing Logic Check Failed: {str(e)}"
-            all_logs.append(msg)
-            print(msg)
-            traceback.print_exc()
-
-        # Execute Wheel
-        all_logs.append("\n--- Wheel Strategy ---")
-        try:
-            strategy_wheel = WheelStrategy(tradier_service, db, dry_run=True)
-            w_logs = strategy_wheel.execute(wheel_watchlist, config)
-            all_logs.extend(w_logs)
-        except Exception as e:
-            error_msg = f"❌ Wheel Strategy Failed: {str(e)}"
-            all_logs.append(error_msg)
-            print(error_msg)
-            traceback.print_exc()
-
-        # Execute Rule-Based Spreads
-        all_logs.append("\n--- Rule-Based Credit Spread Strategy ---")
-        try:
-            strategy_rb = CreditSpreadRulebaseStrategy(tradier_service, db, dry_run=True)
-            # Management first
-            rb_m_logs = strategy_rb.manage_positions(simulation_mode=True)
-            if rb_m_logs: all_logs.extend(rb_m_logs)
-            
-            # Execution
-            strategy_rb.execute(rb_watchlist, config)
-            all_logs.extend(strategy_rb.execution_logs)
-        except Exception as e:
-            error_msg = f"❌ Rule-Based Strategy Failed: {str(e)}"
-            all_logs.append(error_msg)
-            print(error_msg)
-            traceback.print_exc()
-        
-        return jsonify({'status': 'success', 'logs': all_logs})
-
+        result = service.run_dry_run(data)
+        return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 @trading_bp.route('/bot_performance', strict_slashes=False)
 @login_required
 def bot_performance():
@@ -320,6 +213,7 @@ def bot_performance():
     return render_template('bot_performance.html')
 
 @trading_bp.route('/api/bot/performance', methods=['GET'])
+@login_required
 def get_bot_performance():
     try:
         service = Container.get_bot_service()
@@ -329,6 +223,7 @@ def get_bot_performance():
         return jsonify({'error': str(e)}), 500
 
 @trading_bp.route('/api/bot/trades', methods=['GET'])
+@login_required
 def get_bot_trades():
     try:
         service = Container.get_bot_service()

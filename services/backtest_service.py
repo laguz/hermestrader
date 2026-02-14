@@ -1,4 +1,7 @@
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 import numpy as np
 
 from datetime import datetime, timedelta
@@ -132,7 +135,7 @@ class MockTradierService:
                         delta = stats.norm.cdf(d1)
                     else:
                         delta = stats.norm.cdf(d1) - 1
-                except:
+                except Exception:
                     delta = 0.5
                 
                 # Symbol
@@ -308,7 +311,7 @@ class BacktestService:
         pass
 
     def run_backtest(self, symbol, strategy_type, start_date, end_date):
-        print(f"DEBUG: Starting Backtest for {symbol}")
+        logger.info(f"Starting Backtest for {symbol}")
         
         # 1. Fetch History (using REAL tradier service from Container because we are in a service method)
         from services.container import Container

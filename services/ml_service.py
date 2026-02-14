@@ -1,5 +1,7 @@
+import logging
 import numpy as np
 import pandas as pd
+logger = logging.getLogger(__name__)
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -20,7 +22,7 @@ try:
     from tensorflow.keras.callbacks import EarlyStopping
     HAS_TENSORFLOW = True
 except ImportError:
-    print("Warning: TensorFlow not found. LSTM model will be disabled.")
+    logger.warning("TensorFlow not found. LSTM model will be disabled.")
     HAS_TENSORFLOW = False
     
 # Global setting for Mixed Precision to speed up training
@@ -33,9 +35,9 @@ if HAS_TENSORFLOW:
         # Only set if GPU available to avoid issues on some CPU-only setups
         if tf.config.list_physical_devices('GPU'):
             mixed_precision.set_global_policy(policy)
-            print("ML: Mixed precision enabled (float16)")
+            logger.info("ML: Mixed precision enabled (float16)")
     except Exception as e:
-        print(f"ML: Could not enable mixed precision: {e}")
+        logger.warning(f"ML: Could not enable mixed precision: {e}")
 
 class NYSEHolidayCalendar(AbstractHolidayCalendar):
     rules = [
@@ -75,20 +77,20 @@ class MLService:
         Backfill historical data for a symbol.
         """
         if self.db is None:
-            print("DB unavailable for backfill.")
+            logger.error("DB unavailable for backfill.")
             return False
 
-        print(f"Backfilling history for {symbol} ({years} years)...")
+        logger.info(f"Backfilling history for {symbol} ({years} years)...")
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=365 * years)).strftime('%Y-%m-%d')
         
         history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
         
         if not history:
-            print("No data returned from Tradier.")
+            logger.warning("No data returned from Tradier.")
             return False
 
-        print(f"Retrieved {len(history)} records. Saving to MongoDB...")
+        logger.info(f"Retrieved {len(history)} records. Saving to MongoDB...")
         
         collection = self.db['market_data']
         count = 0
@@ -112,7 +114,7 @@ class MLService:
             if result.upserted_id or result.modified_count > 0:
                 count += 1
                 
-        print(f"Backfill Complete! Processed {count} records.")
+        logger.info(f"Backfill Complete! Processed {count} records.")
         return True
 
     def prepare_features(self, df):
@@ -177,7 +179,7 @@ class MLService:
         top_indices = indices[:n_top]
         top_features = [potential_features[i] for i in top_indices]
         
-        print(f"Top {n_top} Features selected: {top_features}")
+        logger.info(f"Top {n_top} Features selected: {top_features}")
         return top_features
 
     def _prepare_lstm_data(self, df, features, fit_scaler=False, scaler=None):
@@ -221,11 +223,11 @@ class MLService:
         Train on expanding window [0..t], predict on [t..t+test_size].
         Returns average MSE and other metrics.
         """
-        print(f"Starting Walk-Forward Validation for {model_type.upper()}...")
+        logger.info(f"Starting Walk-Forward Validation for {model_type.upper()}...")
         
         n_samples = len(df)
         if n_samples < min_train_size + test_size:
-            print("Not enough data for Walk-Forward Validation. Skipping.")
+            logger.warning("Not enough data for Walk-Forward Validation. Skipping.")
             return {}
 
         errors = []
@@ -314,7 +316,7 @@ class MLService:
         avg_mse = np.mean(errors) if errors else 0
         avg_acc = np.mean(accuracies) if accuracies else 0
         
-        print(f"Validation Complete. Avg MSE: {avg_mse:.6f}, Avg Accuracy: {avg_acc:.2%}")
+        logger.info(f"Validation Complete. Avg MSE: {avg_mse:.6f}, Avg Accuracy: {avg_acc:.2%}")
         return {"val_mse": avg_mse, "val_accuracy": avg_acc}
 
     def _fetch_and_prepare_training_data(self, symbol):
@@ -330,7 +332,7 @@ class MLService:
         
         data = list(cursor)
         if not data:
-            print(f"No data found for {symbol}. Attempting backfill...")
+            logger.warning(f"No data found for {symbol}. Attempting backfill...")
             success = self.backfill_symbol(symbol)
             if success:
                 # Re-fetch
@@ -366,7 +368,7 @@ class MLService:
     def train_model(self, symbol, model_type='rf', express=False, pre_prepared_df=None):
         symbol = symbol.upper()
         if model_type == 'ensemble':
-            print(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
+            logger.info(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
             
             # Step 1: Prepare data once for BOTH models
             # This is the "Data Reuse" optimization
@@ -393,7 +395,7 @@ class MLService:
                 "lstm_mse": res_lstm['mse']
             }
 
-        print(f"Starting {model_type.upper()} training for {symbol}...")
+        logger.info(f"Starting {model_type.upper()} training for {symbol}...")
         
         # Use pre-prepared data if available
         if pre_prepared_df is not None:
@@ -415,7 +417,7 @@ class MLService:
         if not express:
             validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
         else:
-            print("Express mode enabled: Skipping Walk-Forward Validation.")
+            logger.info("Express mode enabled: Skipping Walk-Forward Validation.")
             validation_results = {}
         
         mse = 0
@@ -511,7 +513,7 @@ class MLService:
             mse = mean_squared_error(actual_prices, pred_prices)
             joblib.dump(model, f"{self.model_dir}/{symbol}_rf.pkl")
         
-        print(f"Model ({model_type}) MSE: {mse}")
+        logger.info(f"Model ({model_type}) MSE: {mse}")
         
         return {
             "status": "trained", 
@@ -539,7 +541,7 @@ class MLService:
         data = list(cursor)
         
         if not data:
-             print(f"No recent data for {symbol}. Attempting backfill...")
+             logger.warning(f"No recent data for {symbol}. Attempting backfill...")
              success = self.backfill_symbol(symbol)
              if success:
                  cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
@@ -560,7 +562,7 @@ class MLService:
         # Load Selected Features
         feature_file = self._get_feature_file_path(symbol)
         if not os.path.exists(feature_file):
-            print(f"Warning: Feature file for {symbol} not found. using defaults.")
+            logger.warning(f"Feature file for {symbol} not found. Using defaults.")
             features = [f for f in self.default_features if f in df.columns]
         else:
             with open(feature_file, 'r') as f:
@@ -621,7 +623,7 @@ class MLService:
                     upsert=True
                 )
             except Exception as e:
-                print(f"Error saving ensemble prediction: {e}")
+                logger.error(f"Error saving ensemble prediction: {e}")
                 
             return {
                 "symbol": symbol,
@@ -723,10 +725,10 @@ class MLService:
                     prediction = raw_prediction
                     bias_correction = 0.0
                     
-                print(f"Applying Bias Correction for {symbol}: Raw={raw_prediction:.2f}, Bias={bias_correction:.2f}, Final={prediction:.2f}")
+                logger.info(f"Applying Bias Correction for {symbol}: Raw={raw_prediction:.2f}, Bias={bias_correction:.2f}, Final={prediction:.2f}")
 
         except Exception as e:
-            print(f"Error calculating bias correction: {e}")
+            logger.error(f"Error calculating bias correction: {e}")
 
         
         last_close = last_row['close']
@@ -760,9 +762,9 @@ class MLService:
                 {"$set": pred_doc},
                 upsert=True
             )
-            print(f"Saved prediction for {symbol} ({model_type}) on {prediction_date} (Actual: {actual_close_price})")
+            logger.info(f"Saved prediction for {symbol} ({model_type}) on {prediction_date} (Actual: {actual_close_price})")
         except Exception as e:
-            print(f"Error saving prediction to DB: {e}")
+            logger.error(f"Error saving prediction to DB: {e}")
 
         return {
             "symbol": symbol,

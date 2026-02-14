@@ -1,9 +1,12 @@
 import time
+import logging
 import threading
 import traceback
 from datetime import datetime
 from services.container import Container
 from exceptions import AppError
+
+logger = logging.getLogger(__name__)
 
 class BotService:
     _instance = None
@@ -170,7 +173,7 @@ class BotService:
                 try:
                     if 'max' in k: safe_updates[f"settings.{k}"] = int(v)
                     else: safe_updates[f"settings.{k}"] = v
-                except:
+                except Exception:
                    self._log(f"Invalid value for {k}: {v}")
 
         if not safe_updates:
@@ -563,7 +566,7 @@ class BotService:
     def _log(self, message):
         """Append log to DB."""
         if self.db is None: return
-        print(f"[BOT] {message}")
+        logger.info(f"[BOT] {message}")
         entry = {
             "timestamp": datetime.now(),
             "message": message
@@ -643,7 +646,7 @@ class BotService:
                     break
                     
             except Exception as e:
-                traceback.print_exc()
+                logger.error(f"Error in bot loop: {e}", exc_info=True)
                 self._log(f"Error in loop: {e}")
                 # Prevent tight loop on error (wait 10s)
                 if self._stop_event.wait(timeout=10):
@@ -651,3 +654,92 @@ class BotService:
         
         self._update_status("STOPPED")
         self._log("Bot loop ended.")
+
+    def run_dry_run(self, data: dict = None) -> dict:
+        """
+        Execute a single dry-run cycle of all strategies.
+        Returns {'status': 'success', 'logs': [...]} or {'error': '...'}.
+        """
+        data = data or {}
+        tradier_service = self.tradier
+        db = self.db
+
+        from bot.strategies.credit_spreads import CreditSpreadStrategy
+        from bot.strategies.wheel import WheelStrategy
+        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
+
+        # --- Resolve watchlists from request data, DB config, or defaults ---
+        def _resolve_watchlist(request_key: str, db_key: str, defaults: list) -> list:
+            wl = data.get(request_key)
+            if not wl and request_key == 'credit_spreads_watchlist':
+                wl = data.get('watchlist')  # backward compat
+            if not wl:
+                bot_cfg = db.bot_config.find_one({"_id": "main_bot"}) or {}
+                wl = bot_cfg.get('settings', {}).get(db_key, [])
+            return wl or defaults
+
+        cs_watchlist = _resolve_watchlist(
+            'credit_spreads_watchlist', 'watchlist_credit_spreads',
+            ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
+        )
+        wheel_watchlist = _resolve_watchlist(
+            'wheel_watchlist', 'watchlist_wheel',
+            ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
+        )
+        rb_watchlist = _resolve_watchlist(
+            'credit_spread_rulebase_watchlist', 'watchlist_credit_spread_rulebase',
+            ['TSLA', 'NVDA', 'SPY']
+        )
+
+        logger.debug(f"Dry-run watchlists — CS: {cs_watchlist}, Wheel: {wheel_watchlist}, RB: {rb_watchlist}")
+
+        # Fetch config
+        bot_config = (db.bot_config.find_one({"_id": "main_bot"}) or {}).get('settings', {})
+        all_logs: list[str] = []
+
+        # --- Credit Spreads ---
+        all_logs.append(f"--- Credit Spread Strategy (Limit: {bot_config.get('max_credit_spreads_per_symbol', 5)}) ---")
+        try:
+            strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
+            cs_logs = strategy_cs.execute(cs_watchlist, bot_config)
+            all_logs.extend(cs_logs)
+        except Exception as e:
+            logger.error(f"Credit Spread dry-run failed: {e}", exc_info=True)
+            all_logs.append(f"❌ Credit Spread Strategy Failed: {e}")
+
+        # --- Credit Spread management ---
+        all_logs.append("\n--- Checking Open Credit Spreads (Closing Logic) ---")
+        try:
+            closing_logs = strategy_cs.manage_positions(simulation_mode=True)
+            if closing_logs:
+                all_logs.extend(closing_logs)
+            else:
+                all_logs.append("No open positions to manage or no actions needed.")
+        except Exception as e:
+            logger.error(f"Credit Spread closing-logic dry-run failed: {e}", exc_info=True)
+            all_logs.append(f"❌ Closing Logic Check Failed: {e}")
+
+        # --- Wheel ---
+        all_logs.append("\n--- Wheel Strategy ---")
+        try:
+            strategy_wheel = WheelStrategy(tradier_service, db, dry_run=True)
+            w_logs = strategy_wheel.execute(wheel_watchlist, bot_config)
+            all_logs.extend(w_logs)
+        except Exception as e:
+            logger.error(f"Wheel dry-run failed: {e}", exc_info=True)
+            all_logs.append(f"❌ Wheel Strategy Failed: {e}")
+
+        # --- Rule-Based Credit Spreads ---
+        all_logs.append("\n--- Rule-Based Credit Spread Strategy ---")
+        try:
+            strategy_rb = CreditSpreadRulebaseStrategy(tradier_service, db, dry_run=True)
+            rb_m_logs = strategy_rb.manage_positions(simulation_mode=True)
+            if rb_m_logs:
+                all_logs.extend(rb_m_logs)
+            strategy_rb.execute(rb_watchlist, bot_config)
+            all_logs.extend(strategy_rb.execution_logs)
+        except Exception as e:
+            logger.error(f"Rule-Based dry-run failed: {e}", exc_info=True)
+            all_logs.append(f"❌ Rule-Based Strategy Failed: {e}")
+
+        return {'status': 'success', 'logs': all_logs}

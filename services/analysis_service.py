@@ -1,4 +1,7 @@
+import logging
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 import numpy as np
 from datetime import datetime, timedelta
 from utils.indicators import (
@@ -136,9 +139,9 @@ class AnalysisService:
                     ivs = [o.get('greeks', {}).get('mid_iv', 0) for o in atm_options if o.get('greeks', {}).get('mid_iv', 0) > 0]
                     if ivs:
                         implied_vol = sum(ivs) / len(ivs)
-                        print(f"DEBUG: Calculated blended IV for {symbol} at {best_exp}: {implied_vol:.4f}")
+                        logger.debug(f"Calculated blended IV for {symbol} at {best_exp}: {implied_vol:.4f}")
         except Exception as e:
-            print(f"DEBUG: Error fetching IV for {symbol}: {e}")
+            logger.warning(f"Error fetching IV for {symbol}: {e}")
 
         # Use IV if available, otherwise fallback to HV
         calc_vol = implied_vol if implied_vol else volatility
@@ -217,7 +220,7 @@ class AnalysisService:
         try:
             prediction_result = self.ml_service.predict_next_day(symbol)
         except Exception as e:
-            print(f"Error getting prediction: {e}")
+            logger.error(f"Error getting prediction: {e}")
         
         predicted_price = prediction_result.get('predicted_price')
         pred_change_pct = 0
@@ -445,8 +448,8 @@ class AnalysisService:
                     {'$set': result},
                     upsert=True
                 )
-                print(f"Saved analysis for {symbol} to entries collection.")
+                logger.info(f"Saved analysis for {symbol} to entries collection.")
             except Exception as e:
-                print(f"Error saving entry to DB: {e}")
+                logger.error(f"Error saving entry to DB: {e}")
         
         return result
