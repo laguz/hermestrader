@@ -1,1 +1,1 @@
-["close", "high", "low", "open", "close_lag_1", "obv", "macd_signal", "atr", "daily_return_lag_1", "volume"]
+["close", "low", "high", "open", "obv", "sma_50", "daily_return_lag_1", "macd_signal", "close_lag_1", "rsi"]
