@@ -1,11 +1,12 @@
+import re
 import logging
-import pandas as pd
+import uuid
 
-logger = logging.getLogger(__name__)
 import numpy as np
+import pandas as pd
+import scipy.stats as stats
 
 from datetime import datetime, timedelta
-
 
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.wheel import WheelStrategy
@@ -18,6 +19,13 @@ from utils.indicators import (
     calculate_historical_volatility
 )
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Mock Services for Backtesting
+# ---------------------------------------------------------------------------
+
 class MockTradierService:
     def __init__(self):
         self.account_id = "mock_account"
@@ -25,10 +33,10 @@ class MockTradierService:
         self.current_price = 0.0
         self.current_volatility = 0.0
         
-        self.positions = [] # List of positions dicts
-        self.orders = []    # List of order dicts
+        self.positions = []  # List of positions dicts
+        self.orders = []     # List of order dicts
         
-        self.new_orders = [] # Orders placed in current step
+        self.new_orders = []  # Orders placed in current step
         self.cash = 10000.0   # Default starting cash
 
     def set_context(self, date_str, price, volatility):
@@ -56,37 +64,44 @@ class MockTradierService:
         # Return synthetic quotes for options based on BS model
         quotes = []
         for sym in symbols:
-            # Parse Option Symbol to get details
-            # SYMBOLyyMMdd[C|P]strike
             details = self._parse_option_symbol(sym)
             if not details:
-                # Should be underlying (Equity)
-                quotes.append({'symbol': sym, 'last': self.current_price, 'bid': self.current_price, 'ask': self.current_price})
+                # Underlying (Equity)
+                quotes.append({
+                    'symbol': sym, 'last': self.current_price,
+                    'bid': self.current_price, 'ask': self.current_price
+                })
                 continue
                 
-            # Calculate Price
+            # Calculate Price with skew
             dte_days = (details['expiry'] - self.current_date).days
             t_years = max(0, dte_days / 365.0)
+
+            # Apply volatility skew for OTM options
+            strike_vol = self._apply_vol_skew(
+                self.current_volatility, details['strike'],
+                self.current_price, details['type']
+            )
             
             price = calculate_option_price(
                 self.current_price, 
                 details['strike'], 
                 t_years, 
-                self.current_volatility, 
+                strike_vol, 
                 option_type=details['type']
             )
             
-            # Simulated Bid/Ask Spread (wider for longer dated?)
+            # Simulated Bid/Ask Spread
             spread = max(0.05, price * 0.05)
-            bid = max(0, price - spread/2)
-            ask = price + spread/2
+            bid = max(0, price - spread / 2)
+            ask = price + spread / 2
             
             quotes.append({
                 'symbol': sym,
                 'last': price,
                 'bid': bid,
                 'ask': ask,
-                'greeks': {'delta': 0.5} # Placeholder if needed
+                'greeks': {'delta': 0.5}  # Placeholder
             })
         return quotes
 
@@ -95,7 +110,7 @@ class MockTradierService:
         expirations = []
         d = self.current_date
         while len(expirations) < 12:
-            if d.weekday() == 4: # Friday
+            if d.weekday() == 4:  # Friday
                 expirations.append(d.strftime("%Y-%m-%d"))
             d += timedelta(days=1)
         return expirations
@@ -119,18 +134,23 @@ class MockTradierService:
         for k in range(int(start_strike), int(end_strike) + step, step):
             strike = float(k)
             for opt_type in ['call', 'put']:
-                # Price
+                # Apply volatility skew
+                strike_vol = self._apply_vol_skew(
+                    self.current_volatility, strike,
+                    self.current_price, opt_type
+                )
+
                 price = calculate_option_price(
-                    self.current_price, strike, t_years, self.current_volatility, option_type=opt_type
+                    self.current_price, strike, t_years, strike_vol, option_type=opt_type
                 )
                 
                 # Filter penny options
-                if price < 0.01: continue
+                if price < 0.01:
+                    continue
                 
                 # Approximate Delta
-                import scipy.stats as stats
                 try:
-                    d1 = (np.log(self.current_price / strike) + (0.04 + 0.5 * self.current_volatility ** 2) * t_years) / (self.current_volatility * np.sqrt(t_years))
+                    d1 = (np.log(self.current_price / strike) + (0.04 + 0.5 * strike_vol ** 2) * t_years) / (strike_vol * np.sqrt(t_years))
                     if opt_type == 'call':
                         delta = stats.norm.cdf(d1)
                     else:
@@ -149,21 +169,21 @@ class MockTradierService:
                     'strike': strike,
                     'option_type': opt_type,
                     'last': price,
-                    'bid': price, # simplify
+                    'bid': price,
                     'ask': price,
                     'greeks': {'delta': delta}
                 })
         return chain
 
-    def place_order(self, account_id, symbol, side, quantity, order_type, duration, price=None, stop=None, option_symbol=None, order_class='equity', legs=None):
-        # Capture order
+    def place_order(self, account_id, symbol, side, quantity, order_type, duration,
+                    price=None, stop=None, option_symbol=None, order_class='equity', legs=None):
         order = {
             'id': f"ord_{len(self.orders)+1}",
             'symbol': symbol,
             'side': side,
             'quantity': quantity,
             'type': order_type,
-            'status': 'open', # assume fills immediately in simulation loop, or pending
+            'status': 'open',
             'class': order_class,
             'legs': legs,
             'option_symbol': option_symbol,
@@ -175,7 +195,6 @@ class MockTradierService:
         return {'id': order['id'], 'status': 'ok'}
 
     def _parse_option_symbol(self, sym):
-        import re
         m = re.match(r'([A-Z]+)(\d{6})([CP])(\d+)', sym)
         if m:
             root, date_str, type_char, strike_str = m.groups()
@@ -186,6 +205,22 @@ class MockTradierService:
                 'strike': int(strike_str) / 1000.0
             }
         return None
+
+    @staticmethod
+    def _apply_vol_skew(base_vol, strike, spot, option_type):
+        """
+        Apply a simple volatility skew model.
+        OTM puts get higher IV, OTM calls slightly lower.
+        """
+        moneyness = (spot - strike) / spot  # positive = OTM put, negative = OTM call
+        if option_type == 'put':
+            # OTM puts: boost vol by up to ~15% for deep OTM
+            skew = 1.0 + max(0, moneyness) * 0.8
+        else:
+            # OTM calls: slight vol reduction
+            skew = 1.0 - max(0, -moneyness) * 0.3
+        return base_vol * max(0.5, min(skew, 2.0))  # Clamp to reasonable range
+
 
 class MockAnalysisService:
     def __init__(self):
@@ -200,26 +235,21 @@ class MockAnalysisService:
         }
 
     def analyze_symbol(self, symbol, period=None):
-        # Return structure expected by CreditSpreadStrategy
         price = self.current_context['current_price']
         vol = self.current_context['volatility']
         key_levels = self.current_context['key_levels']
         
-        # Split key levels into Put (Support) and Call (Resistance) entry points
         put_entry_points = []
         call_entry_points = []
         
         for level in key_levels:
-            # POP calculation
             pop = calculate_prob_it_expires_otm(price, level['price'], vol, days_to_expiry=30) * 100
-            
             point = {
                 'price': level['price'],
                 'type': level['type'],
                 'strength': level['strength'],
                 'pop': pop
             }
-            
             if level['type'] == 'support':
                 put_entry_points.append(point)
             elif level['type'] == 'resistance':
@@ -231,15 +261,15 @@ class MockAnalysisService:
             'rsi': self.current_context['rsi'],
             'put_entry_points': put_entry_points,
             'call_entry_points': call_entry_points,
-            'recommendation': 'NEUTRAL' # Strategy decides
+            'recommendation': 'NEUTRAL'
         }
+
 
 class MockCollection:
     def __init__(self, data=None):
         self.data = data if data is not None else []
 
     def find(self, query):
-        # ROI: Supports basic exact match query
         results = []
         for item in self.data:
             match = True
@@ -253,14 +283,11 @@ class MockCollection:
 
     def insert_one(self, document):
         if "_id" not in document:
-            import uuid
             document["_id"] = str(uuid.uuid4())
         self.data.append(document)
         return type('obj', (object,), {'inserted_id': document["_id"]})
 
     def update_one(self, query, update):
-        # ROI: Supports $set, $push
-        # Find item
         item = None
         for i in self.data:
             match = True
@@ -278,11 +305,11 @@ class MockCollection:
                     item[k] = v
             if "$push" in update:
                 for k, v in update["$push"].items():
-                    # Handle $each and $slice if present (common in logging)
                     val = v
                     if isinstance(v, dict) and "$each" in v:
                         to_add = v["$each"]
-                        if k not in item: item[k] = []
+                        if k not in item:
+                            item[k] = []
                         item[k].extend(to_add)
                         if "$slice" in v:
                             sl = v["$slice"]
@@ -291,9 +318,11 @@ class MockCollection:
                             else:
                                 item[k] = item[k][:sl]
                     else:
-                        if k not in item: item[k] = []
+                        if k not in item:
+                            item[k] = []
                         item[k].append(val)
         return None
+
 
 class MockDB:
     def __init__(self):
@@ -304,29 +333,39 @@ class MockDB:
             self.collections[name] = MockCollection()
         return self.collections[name]
 
-class BacktestService:
-    def __init__(self, tradier_service_real):
-        # We ignore the real service for backtesting, 
-        # but keep signature to match injection if needed
-        pass
 
-    def run_backtest(self, symbol, strategy_type, start_date, end_date):
-        logger.info(f"Starting Backtest for {symbol}")
+# ---------------------------------------------------------------------------
+# Backtest Engine
+# ---------------------------------------------------------------------------
+
+class BacktestService:
+    # Default configuration
+    COMMISSION_PER_CONTRACT = 0.50   # $0.50 per contract
+    IV_HV_MULTIPLIER = 1.2          # IV proxy = HV * multiplier
+    RISK_FREE_RATE = 0.04           # 4% default
+
+    def __init__(self, tradier_service_real):
+        self.real_tradier = tradier_service_real
+
+    def run_backtest(self, symbol, strategy_type, start_date, end_date,
+                     commission=None, iv_multiplier=None, risk_free_rate=None):
+        logger.info(f"Starting Backtest for {symbol} ({strategy_type}) {start_date} → {end_date}")
+
+        # Apply configurable parameters
+        commission_per = commission if commission is not None else self.COMMISSION_PER_CONTRACT
+        iv_mult = iv_multiplier if iv_multiplier is not None else self.IV_HV_MULTIPLIER
         
-        # 1. Fetch History (using REAL tradier service from Container because we are in a service method)
-        from services.container import Container
-        real_tradier = Container.get_tradier_service()
-        
-        # Warmup
+        # 1. Fetch History (use real Tradier service stored from __init__)
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         warmup_start = (start_dt - timedelta(days=90)).strftime('%Y-%m-%d')
         
         try:
-            history = real_tradier.get_historical_pricing(symbol, warmup_start, end_date)
+            history = self.real_tradier.get_historical_pricing(symbol, warmup_start, end_date)
         except Exception as e:
             return {"error": f"Failed to fetch history: {e}"}
             
-        if not history: return {"error": "No data found"}
+        if not history:
+            return {"error": "No data found"}
         
         df = pd.DataFrame(history)
         df['date'] = pd.to_datetime(df['date'])
@@ -334,15 +373,14 @@ class BacktestService:
         # 2. Setup Mocks
         mock_tradier = MockTradierService()
         mock_analysis = MockAnalysisService()
-        mock_db = MockDB() # Use MockDB!
+        mock_db = MockDB()
         
         # 3. Setup Strategy
-        # Inject our mocks!
         if strategy_type == "credit_spread":
             strategy = CreditSpreadStrategy(
                 tradier_service=mock_tradier, 
                 db=mock_db, 
-                dry_run=False, # Must be False to trigger place_order on MockTradier
+                dry_run=False,
                 analysis_service=mock_analysis
             )
         elif strategy_type == "wheel":
@@ -360,32 +398,48 @@ class BacktestService:
                 analysis_service=mock_analysis
             )
         else:
-             return {"error": f"Strategy {strategy_type} not supported in refactored backtester yet."}
+            return {"error": f"Strategy {strategy_type} not supported."}
         
-        # Results container
+        # Results containers
         portfolio_values = []
         dates = []
         trades_log = []
-        cash = 10000.0
+        starting_cash = 10000.0
+        cash = starting_cash
+        total_commissions = 0.0
+
+        # Per-trade P&L tracking: maps position symbol → entry info
+        open_trade_credits = {}  # symbol -> {'credit': float, 'date': str, 'contracts': int}
+        
+        # Buy & hold benchmark
+        benchmark_values = []
+        benchmark_start_price = None
         
         # Simulation Loop
-        
         for index, row in df.iterrows():
-            if row['date'] < start_dt: continue # skip warmup days for execution, but use them for indicators
+            if row['date'] < start_dt:
+                continue  # Skip warmup days
             
             current_date_str = row['date'].strftime("%Y-%m-%d")
             price = row['close']
+
+            # Initialize benchmark
+            if benchmark_start_price is None:
+                benchmark_start_price = price
+            benchmark_values.append(starting_cash * (price / benchmark_start_price))
             
-            # 1. Calculate Indicators on-the-fly (windowed)
+            # 1. Calculate Indicators (windowed)
             window_df = df.iloc[max(0, index-90):index+1]
-            if len(window_df) < 30: continue 
+            if len(window_df) < 30:
+                continue 
             
-            # Volatility
+            # Historical Volatility
             volatility = calculate_historical_volatility(window_df['close'])
-            if pd.isna(volatility): volatility = 0.5
+            if pd.isna(volatility):
+                volatility = 0.5
             
-            # IV Proxy: Boost Volatility by 1.2x to simulate Implied Volatility (usually > HV)
-            volatility = volatility * 1.2
+            # IV Proxy (configurable multiplier)
+            implied_vol = volatility * iv_mult
             
             # Key Levels
             key_levels = find_key_levels(
@@ -398,120 +452,129 @@ class BacktestService:
             rsi = calculate_rsi(window_df['close']).iloc[-1]
             
             # 2. Update Mock Context
-            mock_tradier.cash = cash # Sync cash
-            mock_tradier.set_context(current_date_str, price, volatility)
-            mock_analysis.set_context(price, key_levels, rsi, volatility)
+            mock_tradier.cash = cash
+            mock_tradier.set_context(current_date_str, price, implied_vol)
+            mock_analysis.set_context(price, key_levels, rsi, implied_vol)
             
-            # 3. Run Strategy: Manage Positions (Exits)
-            # This triggers checks for Profit Targets and Stop Losses, and Wheel rolls/calls
-            # WheelStrategy also uses _manage_positions
+            # 3. Run Strategy: Manage Positions (Exits/Rolls)
             if strategy_type in ["credit_spread", "credit_spread_rulebase"]:
                 strategy.manage_positions()
             elif strategy_type == "wheel":
-                # Wheel strategy logic calls _manage_positions potentially in execute or we call it explicitly?
-                # WheelStrategy doesn't have public check method. It checks in execute.
-                # Actually, check code: _manage_positions() is internal.
-                # Wheel usually checks existing positions first.
-                # Let's verify WheelStrategy structure later. Assuming for now we call execute() which does both?
-                # No, standard is distinct. We might need to call strategy.execute() which does management.
-                pass 
-                
-            
-            # Process Exits
-            exit_orders = list(mock_tradier.new_orders) # Copy
-            mock_tradier.new_orders = [] # Clear for next phase
+                # Wheel handles management inside execute(), but we also
+                # need to process any management-only orders separately
+                strategy.execute([symbol])
+
+            # Process Exit Orders
+            exit_orders = list(mock_tradier.new_orders)
+            mock_tradier.new_orders = []
             
             for order in exit_orders:
-                if 'close' in order['side'] or 'buy' in order['side']: # buy_to_close, sell_to_close (or just buy market)
-                     # Execute Close
-                     # 1. Determine Fill Price
-                     fill_price = order.get('price')
-                     
-                     # Market Order handling
-                     if not fill_price: 
-                         # Get current quote
-                         fill_price = 0.0
-                         if order.get('legs'):
-                             for leg in order['legs']:
-                                 opt_sym = leg['option_symbol']
-                                 qs = mock_tradier.get_quotes([opt_sym])
-                                 if qs:
-                                     q = qs[0]
-                                     leg_price = q['ask'] if 'buy' in leg['side'] else q['bid']
-                                     fill_price += leg_price
-                         else:
-                             # Fallback non-multileg (Equity or Single Option)
-                             qs = mock_tradier.get_quotes([order['symbol']])
-                             if qs:
-                                 fill_price = qs[0]['ask'] # Buying to close
-                     
-                     # 2. Apply Slippage (Debit = paying more)
-                     slippage = 0.01 * (len(order.get('legs') or []) or 1)
-                     final_price = fill_price + slippage
-                     
-                     cost = final_price * abs(order['quantity']) * 100
-                     if order.get('class') == 'equity':
-                         cost = final_price * abs(order['quantity']) # Equity is x1 not x100
-                         
-                     cash -= cost # Deduct cash for closing debit
-                     
-                     trades_log.append({
+                if 'close' in order['side'] or order['side'] == 'buy_to_close':
+                    # Determine Fill Price
+                    fill_price = order.get('price')
+                    
+                    if not fill_price: 
+                        fill_price = 0.0
+                        if order.get('legs'):
+                            for leg in order['legs']:
+                                opt_sym = leg['option_symbol']
+                                qs = mock_tradier.get_quotes([opt_sym])
+                                if qs:
+                                    q = qs[0]
+                                    leg_price = q['ask'] if 'buy' in leg['side'] else q['bid']
+                                    fill_price += leg_price
+                        else:
+                            qs = mock_tradier.get_quotes([order['symbol']])
+                            if qs:
+                                fill_price = qs[0]['ask']
+                    
+                    # Slippage (Debit = paying more)
+                    num_legs = len(order.get('legs') or []) or 1
+                    slippage = 0.01 * num_legs
+                    final_price = fill_price + slippage
+                    
+                    qty = abs(order['quantity'])
+                    multiplier = 1 if order.get('class') == 'equity' else 100
+                    cost = final_price * qty * multiplier
+                    
+                    # Commission
+                    commission_cost = commission_per * qty * num_legs
+                    total_commissions += commission_cost
+                    
+                    cash -= (cost + commission_cost)
+                    
+                    # Compute per-trade realized P&L
+                    close_symbol = order['symbol']
+                    entry_info = open_trade_credits.pop(close_symbol, None)
+                    realized_pnl = 0
+                    if entry_info:
+                        realized_pnl = round((entry_info['credit'] - final_price) * qty * multiplier, 2)
+                    
+                    trades_log.append({
                         'date': current_date_str,
-                        'action': f"CLOSE {order['symbol']}",
-                        'debit': final_price,
+                        'action': f"CLOSE {close_symbol}",
+                        'debit': round(final_price, 4),
                         'slippage': slippage,
-                        'pnl': 0 # PnL is realized relative to entry. Hard to track here.
+                        'commission': round(commission_cost, 2),
+                        'pnl': realized_pnl
                     })
                     
-                     # 3. Remove Position
-                     if order.get('legs'):
-                         for leg in order['legs']:
-                             symbol_to_remove = leg['option_symbol']
-                             for p in list(mock_tradier.positions):
-                                 if p['symbol'] == symbol_to_remove:
-                                     mock_tradier.positions.remove(p)
-                                     break
-                     else:
-                         # Single leg removal
-                         for p in list(mock_tradier.positions):
-                                 if p['symbol'] == order['symbol']:
-                                     mock_tradier.positions.remove(p)
-                                     break
+                    # Remove Position
+                    if order.get('legs'):
+                        for leg in order['legs']:
+                            symbol_to_remove = leg['option_symbol']
+                            for p in list(mock_tradier.positions):
+                                if p['symbol'] == symbol_to_remove:
+                                    mock_tradier.positions.remove(p)
+                                    break
+                    else:
+                        for p in list(mock_tradier.positions):
+                            if p['symbol'] == order['symbol']:
+                                mock_tradier.positions.remove(p)
+                                break
             
-            
-            # 4. Run Strategy: Execute (Entries)
+            # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
             if strategy_type == "credit_spread":
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             elif strategy_type == "credit_spread_rulebase":
                 strategy.execute([symbol], config={'max_credit_spread_rulebase_lots': 5})
-            elif strategy_type == "wheel":
-                # Ensure Wheel runs logic
-                strategy.execute([symbol])
+            # Wheel already executed above in step 3
             
-            # 5. Process New Orders -> Create Positions (Entries)
+            # 5. Process New Orders → Create Positions (Entries)
             entry_orders = mock_tradier.new_orders
             for order in entry_orders:
                 if order['side'] == 'sell_to_open' or (order['class'] == 'multileg'):
-                    # Assume fill at 'price'. This is usually a Limit Order for Credit.
                     requested_price = order['price']
                     
-                    # Slippage on Entry
-                    slippage = 0.01 * (len(order.get('legs') or []) or 1)
+                    # Slippage on Entry (Credit = receive less)
+                    num_legs = len(order.get('legs') or []) or 1
+                    slippage = 0.01 * num_legs
                     fill_price = max(0, requested_price - slippage)
                     
                     qty = order['quantity']
+                    multiplier = 1 if order.get('class') == 'equity' else 100
                     
-                    # Deduct/Add Cash (Credit = Add)
-                    multiplier = 100
-                    if order.get('class') == 'equity': multiplier = 1
+                    # Commission
+                    commission_cost = commission_per * qty * num_legs
+                    total_commissions += commission_cost
                     
-                    cash += (fill_price * qty * multiplier)
+                    cash += (fill_price * qty * multiplier) - commission_cost
+
+                    # Track entry credit for P&L calculation on close
+                    open_trade_credits[order['symbol']] = {
+                        'credit': fill_price,
+                        'date': current_date_str,
+                        'contracts': qty
+                    }
+                    
+                    leg_desc = order['legs'][0]['option_symbol'] if order.get('legs') else ''
                     trades_log.append({
                         'date': current_date_str,
-                        'action': f"OPEN {order['symbol']} ({order['legs'][0]['option_symbol'] if order['legs'] else ''})",
-                        'credit': fill_price,
+                        'action': f"OPEN {order['symbol']} ({leg_desc})",
+                        'credit': round(fill_price, 4),
                         'slippage': slippage,
-                        'pnl': 0
+                        'commission': round(commission_cost, 2),
+                        'pnl': 0  # P&L realized on close
                     })
                     
                     # Create Position Object
@@ -524,155 +587,214 @@ class BacktestService:
                                 'date_acquired': current_date_str
                             })
                     else:
-                        # Single Leg / Equity
-                         # Use option_symbol if available, else symbol (Equity)
-                         pos_symbol = order.get('option_symbol') or order['symbol']
-                         mock_tradier.positions.append({
+                        pos_symbol = order.get('option_symbol') or order['symbol']
+                        mock_tradier.positions.append({
                             'symbol': pos_symbol,
                             'quantity': -qty if 'sell' in order['side'] else qty,
                             'cost_basis': fill_price,
                             'date_acquired': current_date_str
                         })
 
-            
             # 6. Mark to Market Portfolio Value
-            # Cash + Net Liquidating Value of Positions
             nlv = 0
             for pos in mock_tradier.positions:
-                # get quote
                 qs = mock_tradier.get_quotes([pos['symbol']])
                 if qs:
                     price_q = qs[0]['last']
-                    multiplier = 100
-                    # if equity, mult 1. Check if symbol is equity (no option parse)
-                    if not mock_tradier._parse_option_symbol(pos['symbol']):
-                         multiplier = 1
-                    nlv += (price_q * pos['quantity'] * multiplier)
+                    mult = 1 if not mock_tradier._parse_option_symbol(pos['symbol']) else 100
+                    nlv += (price_q * pos['quantity'] * mult)
             
             total_val = cash + nlv
             dates.append(current_date_str)
             portfolio_values.append(total_val)
             
-            # 7. Expiry Check (End of Day) - ASSIGNMENT LOGIC
-            active_positions = mock_tradier.positions
-            for pos in list(active_positions):
+            # 7. Expiry Check — Assignment Logic
+            for pos in list(mock_tradier.positions):
                 details = mock_tradier._parse_option_symbol(pos['symbol'])
                 if details and details['expiry'].date() <= row['date'].date():
-                    # Expired
                     strike = details['strike']
                     is_call = details['type'] == 'call'
                     is_itm = (is_call and price > strike) or (not is_call and price < strike)
                     
                     if is_itm:
-                        # ITM Assignment
-                        # If Short Put -> Buy Stock at Strike
-                        # If Short Call -> Sell Stock at Strike
-                        
-                        qty = pos['quantity'] # -1 for short
+                        qty = pos['quantity']
                         is_short = qty < 0
                         
-                        if is_short and not is_call: # Short Put ITM
-                             # ASSIGNMENT: Buy Stock
-                             # 1. Close Option (Value 0 now, but we take delivery)
-                             active_positions.remove(pos)
-                             
-                             # 2. Add Stock Position
-                             num_shares = abs(qty) * 100
-                             stock_cost = strike * num_shares
-                             cash -= stock_cost # Buy shares
-                             
-                             mock_tradier.positions.append({
-                                 'symbol': details['root'], # SPY
-                                 'quantity': num_shares,
-                                 'cost_basis': strike,
-                                 'date_acquired': current_date_str
-                             })
-                             
-                             trades_log.append({
+                        if is_short and not is_call:  # Short Put ITM → Assignment
+                            mock_tradier.positions.remove(pos)
+                            num_shares = abs(qty) * 100
+                            stock_cost = strike * num_shares
+                            cash -= stock_cost
+                            
+                            mock_tradier.positions.append({
+                                'symbol': details['root'],
+                                'quantity': num_shares,
+                                'cost_basis': strike,
+                                'date_acquired': current_date_str
+                            })
+                            
+                            # Realize P&L from the option itself
+                            entry = open_trade_credits.pop(pos['symbol'], None)
+                            option_pnl = 0
+                            if entry:
+                                # Put expired ITM: the option is worth intrinsic
+                                intrinsic = strike - price
+                                option_pnl = round((entry['credit'] - intrinsic) * abs(qty) * 100, 2)
+                            
+                            trades_log.append({
                                 'date': current_date_str,
                                 'action': f"ASSIGNED (PUT) {pos['symbol']}: Bought {num_shares} {details['root']} @ {strike}",
                                 'debit': strike,
-                                'pnl': 0
+                                'pnl': option_pnl
                             })
                             
-                        elif is_short and is_call: # Short Call ITM
-                             # ASSIGNMENT: Sell Stock (Called Away)
-                             # 1. Close Option
-                             active_positions.remove(pos)
-                             
-                             # 2. Remove Stock Position (Assuming Covered Call)
-                             # Find stock
-                             shares_needed = abs(qty) * 100
-                             # Reduce stock holding
-                             stock_found = False
-                             for sp in list(mock_tradier.positions):
-                                 if sp['symbol'] == details['root'] and sp['quantity'] > 0:
-                                     # Sell these shares
-                                     # Simplified: Assume enough shares or go short
-                                     # Taking shares away:
-                                     cash += (strike * shares_needed) # Receive cash strike
-                                     sp['quantity'] -= shares_needed
-                                     if sp['quantity'] <= 0:
-                                         mock_tradier.positions.remove(sp)
-                                     
-                                     stock_found = True
-                                     trades_log.append({
+                        elif is_short and is_call:  # Short Call ITM → Called Away
+                            mock_tradier.positions.remove(pos)
+                            shares_needed = abs(qty) * 100
+                            stock_found = False
+                            
+                            for sp in list(mock_tradier.positions):
+                                if sp['symbol'] == details['root'] and sp['quantity'] > 0:
+                                    cash += (strike * shares_needed)
+                                    sp['quantity'] -= shares_needed
+                                    if sp['quantity'] <= 0:
+                                        mock_tradier.positions.remove(sp)
+                                    
+                                    stock_found = True
+                                    
+                                    # Realize stock P&L
+                                    stock_pnl = round((strike - sp.get('cost_basis', strike)) * shares_needed, 2)
+                                    entry = open_trade_credits.pop(pos['symbol'], None)
+                                    call_credit_pnl = 0
+                                    if entry:
+                                        call_credit_pnl = round(entry['credit'] * abs(qty) * 100, 2)
+                                    
+                                    trades_log.append({
                                         'date': current_date_str,
                                         'action': f"CALLED AWAY {pos['symbol']}: Sold {shares_needed} {details['root']} @ {strike}",
                                         'credit': strike,
-                                        'pnl': 0
+                                        'pnl': stock_pnl + call_credit_pnl
                                     })
-                                     break
-                             
-                             if not stock_found:
-                                 # Naked Call Assignment? (Short Stock)
-                                 # Cash += Strike * Shares. Position = -Shares.
-                                 cash += (strike * shares_needed)
-                                 mock_tradier.positions.append({
-                                     'symbol': details['root'],
-                                     'quantity': -shares_needed,
-                                     'cost_basis': strike,
-                                     'date_acquired': current_date_str
-                                 })
+                                    break
+                            
+                            if not stock_found:
+                                # Naked Call Assignment → Short Stock
+                                cash += (strike * shares_needed)
+                                mock_tradier.positions.append({
+                                    'symbol': details['root'],
+                                    'quantity': -shares_needed,
+                                    'cost_basis': strike,
+                                    'date_acquired': current_date_str
+                                })
 
                         else:
-                            # Long Option ITM ? Exercise?
-                            # Backtest usually handles Shorts.
-                            # Just Cash Settle for simplicity if Long.
+                            # Long Option ITM → Cash Settle
                             intrinsic = abs(price - strike)
                             cash_impact = intrinsic * pos['quantity'] * 100
                             cash += cash_impact
                             trades_log.append({
                                 'date': current_date_str,
                                 'action': f"EXERCISED ITM {pos['symbol']}",
-                                'pnl': cash_impact
+                                'pnl': round(cash_impact, 2)
                             })
-                            active_positions.remove(pos)
+                            mock_tradier.positions.remove(pos)
 
                     else:
+                        # Expired OTM — full credit kept
+                        entry = open_trade_credits.pop(pos['symbol'], None)
+                        expired_pnl = 0
+                        if entry:
+                            expired_pnl = round(entry['credit'] * entry['contracts'] * 100, 2)
+                        
                         trades_log.append({
                             'date': current_date_str,
                             'action': f"EXPIRED OTM {pos['symbol']}",
-                            'pnl': 0 # already collected credit
+                            'pnl': expired_pnl
                         })
-                        active_positions.remove(pos)
+                        mock_tradier.positions.remove(pos)
 
+        # ---------------------------------------------------------------
         # Summary Metrics
+        # ---------------------------------------------------------------
         if not portfolio_values:
             return {"error": "No simulation steps"}
 
-        total_return = (portfolio_values[-1] - 10000.0) / 10000.0
+        metrics = self._compute_metrics(
+            portfolio_values, benchmark_values, dates,
+            trades_log, starting_cash, total_commissions
+        )
         
         return {
             "dates": dates,
-            "values": float_list(portfolio_values),
+            "values": [float(x) for x in portfolio_values],
+            "benchmark_values": [float(x) for x in benchmark_values],
             "trades": trades_log,
-            "metrics": {
-                "total_return": f"{total_return*100:.2f}%",
-                "final_value": f"${portfolio_values[-1]:.2f}",
-                "trade_count": len(trades_log)
-            }
+            "metrics": metrics
         }
 
-def float_list(l):
-    return [float(x) for x in l]
+    @staticmethod
+    def _compute_metrics(portfolio_values, benchmark_values, dates,
+                         trades_log, starting_cash, total_commissions):
+        """Compute comprehensive risk and performance metrics."""
+        pv = np.array(portfolio_values, dtype=float)
+
+        # --- Return metrics ---
+        total_return = (pv[-1] - starting_cash) / starting_cash
+        n_days = len(pv)
+        annualized_return = ((pv[-1] / starting_cash) ** (252 / max(n_days, 1))) - 1
+
+        # --- Benchmark ---
+        bv = np.array(benchmark_values, dtype=float) if benchmark_values else np.full(len(pv), starting_cash)
+        benchmark_return = (bv[-1] - starting_cash) / starting_cash
+
+        # --- Max Drawdown ---
+        running_max = np.maximum.accumulate(pv)
+        drawdowns = (pv - running_max) / running_max
+        max_drawdown = float(np.min(drawdowns))
+
+        # --- Daily Returns & Sharpe Ratio ---
+        daily_returns = np.diff(pv) / pv[:-1] if len(pv) > 1 else np.array([0.0])
+        avg_daily = np.mean(daily_returns)
+        std_daily = np.std(daily_returns)
+        sharpe_ratio = (avg_daily / std_daily * np.sqrt(252)) if std_daily > 0 else 0.0
+
+        # --- Trade-level metrics ---
+        trade_pnls = [t['pnl'] for t in trades_log if t.get('pnl', 0) != 0]
+        wins = [p for p in trade_pnls if p > 0]
+        losses = [p for p in trade_pnls if p < 0]
+        
+        total_trades = len(trade_pnls)
+        win_rate = (len(wins) / total_trades * 100) if total_trades > 0 else 0.0
+        avg_win = np.mean(wins) if wins else 0.0
+        avg_loss = np.mean(losses) if losses else 0.0
+        
+        gross_profit = sum(wins)
+        gross_loss = abs(sum(losses))
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else float('inf') if gross_profit > 0 else 0.0
+
+        # Max consecutive losses
+        max_consec_losses = 0
+        current_streak = 0
+        for p in trade_pnls:
+            if p < 0:
+                current_streak += 1
+                max_consec_losses = max(max_consec_losses, current_streak)
+            else:
+                current_streak = 0
+
+        return {
+            "total_return": f"{total_return * 100:.2f}%",
+            "annualized_return": f"{annualized_return * 100:.2f}%",
+            "final_value": f"${pv[-1]:.2f}",
+            "benchmark_return": f"{benchmark_return * 100:.2f}%",
+            "max_drawdown": f"{max_drawdown * 100:.2f}%",
+            "sharpe_ratio": round(float(sharpe_ratio), 2),
+            "trade_count": len(trades_log),
+            "closed_trades": total_trades,
+            "win_rate": f"{win_rate:.1f}%",
+            "avg_win": f"${avg_win:.2f}",
+            "avg_loss": f"${avg_loss:.2f}",
+            "profit_factor": round(float(profit_factor), 2) if profit_factor != float('inf') else "∞",
+            "max_consecutive_losses": max_consec_losses,
+            "total_commissions": f"${total_commissions:.2f}"
+        }

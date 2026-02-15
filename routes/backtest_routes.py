@@ -1,8 +1,10 @@
+import logging
 from flask import Blueprint, jsonify, request
 from services.container import Container
 from services.backtest_service import BacktestService
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
 backtest_bp = Blueprint('backtest', __name__)
 
 @backtest_bp.route('/api/status')
@@ -17,7 +19,7 @@ def status():
 @backtest_bp.route('/api/backtest', methods=['POST'])
 def run_backtest():
     data = request.json
-    print(f"DEBUG: Received backtest request: {data}")
+    logger.debug(f"Received backtest request: {data}")
     symbol = data.get('symbol')
     strategy = data.get('strategy')
     start_date = data.get('start_date')
@@ -28,12 +30,13 @@ def run_backtest():
     
     try:
         result = backtester.run_backtest(symbol, strategy, start_date, end_date)
-        print(f"DEBUG: Backtest complete. Metrics: {result.get('metrics')}")
+        logger.info(f"Backtest complete. Metrics: {result.get('metrics')}")
     except Exception as e:
-        print(f"DEBUG: Exception during backtest execution: {e}")
+        logger.error(f"Exception during backtest execution: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
     
     if "error" in result:
         return jsonify(result), 400
         
     return jsonify(result)
+
