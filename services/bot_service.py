@@ -2,7 +2,7 @@ import time
 import logging
 import threading
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from services.container import Container
 from exceptions import AppError
 
@@ -43,6 +43,13 @@ class BotService:
         # Resurrect state on app start? 
         # If DB says active, we should theoretically auto-start. 
         # But for safety, we default to stopped on restart unless explicit.
+
+    def _get_ml_service(self):
+        """Lazy-load MLService to avoid circular imports."""
+        if self.ml_service is None:
+            from services.ml_service import MLService
+            self.ml_service = MLService(self.tradier)
+        return self.ml_service
 
     def _init_db_config(self):
         """Ensure initial bot configuration exists in DB."""
@@ -639,6 +646,9 @@ class BotService:
                     self._log(f"Running Rule-Based Credit Spread Strategy on {len(wl_rulebase)} symbols...")
                     self.credit_spread_rulebase_strategy.manage_positions()
                     self.credit_spread_rulebase_strategy.execute(wl_rulebase, config)
+
+                # 5. ML Scheduler: Daily Predictions + Biweekly Training
+                self._run_ml_scheduler(config)
                     
                 # Sleep cycle - responsive wait
                 # Wait for 60 seconds (strategies shouldn't run too hot) or until stop event
@@ -654,6 +664,78 @@ class BotService:
         
         self._update_status("STOPPED")
         self._log("Bot loop ended.")
+
+    def _run_ml_scheduler(self, config):
+        """
+        Run daily predictions and biweekly training for all watchlist symbols.
+        Called from _run_loop after strategy execution.
+        """
+        today_str = datetime.now().strftime('%Y-%m-%d')
+
+        # Collect unique symbols from ALL watchlists
+        all_symbols = set()
+        all_symbols.update(config.get('watchlist_credit_spreads', []))
+        all_symbols.update(config.get('watchlist_wheel', []))
+        all_symbols.update(config.get('watchlist_credit_spread_rulebase', []))
+        all_symbols = sorted(all_symbols)
+
+        if not all_symbols:
+            return
+
+        # Read scheduler state from DB
+        bot_doc = self.db['bot_config'].find_one({"_id": "main_bot"}) or {}
+        scheduler = bot_doc.get('ml_scheduler', {})
+        last_prediction_date = scheduler.get('last_prediction_date', '')
+        last_training_date = scheduler.get('last_training_date', '')
+
+        # --- Daily Predictions ---
+        if last_prediction_date != today_str:
+            self._log(f"🔮 Running daily ML predictions for {len(all_symbols)} symbols...")
+            try:
+                ml = self._get_ml_service()
+                results = ml.run_batch_predictions(all_symbols)
+                self._log(f"📊 Predictions done: {results['success']} OK, {results['skipped']} skipped, {results['errors']} errors")
+
+                # Mark as done for today
+                self.db['bot_config'].update_one(
+                    {"_id": "main_bot"},
+                    {"$set": {"ml_scheduler.last_prediction_date": today_str}}
+                )
+            except Exception as e:
+                logger.error(f"ML Prediction scheduler error: {e}", exc_info=True)
+                self._log(f"❌ ML Predictions failed: {e}")
+
+        # --- Biweekly Training ---
+        should_train = False
+        if not last_training_date:
+            should_train = True  # Never trained before
+        else:
+            try:
+                last_dt = datetime.strptime(last_training_date, '%Y-%m-%d')
+                if (datetime.now() - last_dt).days >= 14:
+                    should_train = True
+            except ValueError:
+                should_train = True  # Invalid date, retrain
+
+        if should_train:
+            self._log(f"🎓 Starting biweekly ML training for {len(all_symbols)} symbols (background thread)...")
+            def _train_worker():
+                try:
+                    ml = self._get_ml_service()
+                    results = ml.run_batch_training(all_symbols, express=True)
+                    self._log(f"🎓 Training done: {results['success']} OK, {results['errors']} errors")
+
+                    # Mark as done
+                    self.db['bot_config'].update_one(
+                        {"_id": "main_bot"},
+                        {"$set": {"ml_scheduler.last_training_date": today_str}}
+                    )
+                except Exception as e:
+                    logger.error(f"ML Training scheduler error: {e}", exc_info=True)
+                    self._log(f"❌ ML Training failed: {e}")
+
+            train_thread = threading.Thread(target=_train_worker, daemon=True)
+            train_thread.start()
 
     def run_dry_run(self, data: dict = None) -> dict:
         """

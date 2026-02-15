@@ -113,11 +113,11 @@
                 const data = await res.json();
                 if (data.error) throw new Error(data.error);
 
-                document.getElementById('res-price').textContent = `$${data.predicted_price}`;
-                document.getElementById('res-last').textContent = `$${data.last_close}`;
+                document.getElementById('res-price').textContent = `$${Number(data.predicted_price).toFixed(2)}`;
+                document.getElementById('res-last').textContent = `$${Number(data.last_close).toFixed(2)}`;
 
                 const changeEl = document.getElementById('res-change');
-                changeEl.textContent = `${data.change > 0 ? '+' : ''}${data.change} (${data.percent_change_str})`;
+                changeEl.textContent = `${data.change >= 0 ? '+' : ''}${Number(data.change).toFixed(2)} (${data.percent_change_str})`;
                 changeEl.className = data.change >= 0 ? 'positive' : 'negative';
 
                 document.getElementById('res-date-display').textContent = data.prediction_date;

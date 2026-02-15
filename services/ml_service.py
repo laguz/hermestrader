@@ -610,12 +610,12 @@ class MLService:
                     "symbol": symbol,
                     "model_type": 'ensemble',
                     "prediction_date": prediction_date,
-                    "predicted_price": float(prediction),
+                    "predicted_price": round(float(prediction), 2),
                     "raw_prediction": float(prediction),
                     "bias_correction": 0.0,
                     "actual_close_price": None,
                     "created_at": datetime.now(),
-                    "components": {"rf": float(p_rf), "lstm": float(p_lstm)}
+                    "components": {"rf": round(float(p_rf), 2), "lstm": round(float(p_lstm), 2)}
                 }
                 self.db['predictions'].update_one(
                     {"symbol": symbol, "model_type": 'ensemble', "prediction_date": prediction_date},
@@ -745,7 +745,7 @@ class MLService:
                 "symbol": symbol,
                 "model_type": model_type,
                 "prediction_date": prediction_date,
-                "predicted_price": float(prediction),
+                "predicted_price": round(float(prediction), 2),
                 "raw_prediction": float(raw_prediction),
                 "bias_correction": float(bias_correction),
                 "actual_close_price": float(actual_close_price) if actual_close_price else None,
@@ -1104,3 +1104,60 @@ class MLService:
             "accuracy": round(acc, 2),
             "predictions": results
         }
+
+    # ---------------------------------------------------------------
+    # Batch Operations (called by BotService scheduler)
+    # ---------------------------------------------------------------
+
+    def run_batch_predictions(self, symbols):
+        """
+        Run predict_next_day for each symbol across all model types.
+        Skips models that aren't trained yet. Returns summary dict.
+        """
+        model_types = ['rf', 'lstm', 'ensemble']
+        results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
+
+        # Refresh actuals first (backfill any missing close prices)
+        try:
+            self.refresh_prediction_actuals()
+        except Exception as e:
+            logger.error(f"Batch: Error refreshing actuals: {e}")
+
+        for symbol in symbols:
+            for mt in model_types:
+                try:
+                    result = self.predict_next_day(symbol, model_type=mt)
+                    results["success"] += 1
+                    logger.info(f"✅ Prediction {mt.upper()} for {symbol}: ${result['predicted_price']}")
+                except ResourceNotFoundError:
+                    # Model not trained yet — skip silently
+                    results["skipped"] += 1
+                except Exception as e:
+                    results["errors"] += 1
+                    logger.error(f"❌ Prediction {mt.upper()} for {symbol} failed: {e}")
+                    results["details"].append(f"{symbol}/{mt}: {str(e)[:80]}")
+
+        logger.info(f"📊 Batch Predictions Complete: {results['success']} OK, {results['skipped']} skipped, {results['errors']} errors")
+        return results
+
+    def run_batch_training(self, symbols, express=True):
+        """
+        Train ensemble model (RF + LSTM) for each symbol.
+        Uses express mode by default for speed (skips walk-forward validation).
+        Returns summary dict.
+        """
+        results = {"success": 0, "errors": 0, "details": []}
+
+        for symbol in symbols:
+            try:
+                logger.info(f"🔄 Training ensemble for {symbol}...")
+                result = self.train_model(symbol, model_type='ensemble', express=express)
+                results["success"] += 1
+                logger.info(f"✅ Training complete for {symbol}: RF MSE={result.get('rf_mse')}, LSTM MSE={result.get('lstm_mse')}")
+            except Exception as e:
+                results["errors"] += 1
+                logger.error(f"❌ Training failed for {symbol}: {e}")
+                results["details"].append(f"{symbol}: {str(e)[:100]}")
+
+        logger.info(f"🎓 Batch Training Complete: {results['success']} OK, {results['errors']} errors")
+        return results
