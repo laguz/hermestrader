@@ -1142,22 +1142,27 @@ class MLService:
 
     def run_batch_training(self, symbols, express=True):
         """
-        Train ensemble model (RF + LSTM) for each symbol.
+        Train all model types (RF, LSTM, Ensemble) for each symbol.
         Uses express mode by default for speed (skips walk-forward validation).
         Returns summary dict.
         """
+        model_types = ['rf', 'lstm', 'ensemble']
         results = {"success": 0, "errors": 0, "details": []}
 
         for symbol in symbols:
-            try:
-                logger.info(f"🔄 Training ensemble for {symbol}...")
-                result = self.train_model(symbol, model_type='ensemble', express=express)
-                results["success"] += 1
-                logger.info(f"✅ Training complete for {symbol}: RF MSE={result.get('rf_mse')}, LSTM MSE={result.get('lstm_mse')}")
-            except Exception as e:
-                results["errors"] += 1
-                logger.error(f"❌ Training failed for {symbol}: {e}")
-                results["details"].append(f"{symbol}: {str(e)[:100]}")
+            for mt in model_types:
+                try:
+                    logger.info(f"🔄 Training {mt.upper()} for {symbol}...")
+                    result = self.train_model(symbol, model_type=mt, express=express)
+                    results["success"] += 1
+                    if mt == 'ensemble':
+                        logger.info(f"✅ {symbol} ensemble: RF MSE={result.get('rf_mse')}, LSTM MSE={result.get('lstm_mse')}")
+                    else:
+                        logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
+                except Exception as e:
+                    results["errors"] += 1
+                    logger.error(f"❌ Training {mt.upper()} failed for {symbol}: {e}")
+                    results["details"].append(f"{symbol}/{mt}: {str(e)[:100]}")
 
         logger.info(f"🎓 Batch Training Complete: {results['success']} OK, {results['errors']} errors")
         return results
