@@ -11,6 +11,7 @@ class MockTradier:
         self.get_quote = MagicMock()
         self.get_option_chains = MagicMock()
         self.get_option_expirations = MagicMock()
+        self.get_orders = MagicMock(return_value=[])
         self.place_order = MagicMock()
 
 def test_wheel_no_roll_if_dte_7():

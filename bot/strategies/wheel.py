@@ -46,7 +46,7 @@ class WheelStrategy(AbstractStrategy):
                 traceback.print_exc()
 
         # 3. Manage Existing Roles (Check for ITM & < 7 DTE)
-        self._manage_positions(positions, watchlist=watchlist)
+        self._manage_positions(positions, watchlist=watchlist, config=self.config)
 
         return self.execution_logs
 
@@ -211,10 +211,33 @@ class WheelStrategy(AbstractStrategy):
         else:
             self._log(f"🚫 No valid Call Entry found for {symbol} (checked S/R & Delta).")
 
-    def _manage_positions(self, positions, watchlist=None):
+    def _manage_positions(self, positions, watchlist=None, config=None):
         """
         Scan open options and trigger roll if ITM AND DTE <= 7 Days.
+        Respects max_lots: only rolls up to max_lots puts per underlying.
+        Excess positions are closed (BTC only) without opening a replacement.
+        Skips positions that already have a pending BTC order (prevents duplicate rolls).
         """
+        config = config or {}
+        default_max_lots = int(config.get('max_wheel_contracts_per_symbol', 1))
+        rolls_done = {}  # Track rolls per underlying: {'RIOT': 1, ...}
+
+        # Fetch pending orders ONCE to avoid re-rolling positions with open BTC orders
+        pending_close_symbols = set()
+        try:
+            orders = self.tradier.get_orders() or []
+            pending_statuses = ['open', 'partially_filled', 'pending']
+            for o in orders:
+                if o.get('status') in pending_statuses and o.get('side') == 'buy_to_close':
+                    osym = o.get('option_symbol', '')
+                    if osym:
+                        pending_close_symbols.add(osym)
+        except Exception:
+            pass  # If we can't fetch orders, proceed without the guard
+
+        if pending_close_symbols:
+            self._log(f"📋 Pending BTC orders detected for: {pending_close_symbols}. Will skip these.")
+
         for position in positions:
             symbol = position.get('symbol', '')
             underlying = get_underlying(symbol)
@@ -224,6 +247,11 @@ class WheelStrategy(AbstractStrategy):
 
             option_type = get_op_type(position)
             if option_type not in ['put', 'call'] or position.get('quantity', 0) >= 0:
+                continue
+
+            # Skip if there's already a pending BTC for this option
+            if symbol in pending_close_symbols:
+                self._log(f"⏭️ {symbol}: Pending BTC order exists. Skipping to avoid duplicate roll.")
                 continue
             
             # Parse Strike and Expiry
@@ -255,7 +283,15 @@ class WheelStrategy(AbstractStrategy):
                     self._log(f"ℹ️ {symbol} is OTM (Price {current_price}, Strike {strike}). Allowing to expire.")
                     continue
 
-                self._log(f"🚨 {symbol} is ITM (Price {current_price}, Strike {strike}). Triggering ROLL.")
+                # Check max_lots before rolling
+                max_lots = default_max_lots
+                rolled_count = rolls_done.get(underlying, 0)
+                should_roll = rolled_count < max_lots
+
+                if should_roll:
+                    self._log(f"🚨 {symbol} is ITM (Price {current_price}, Strike {strike}). Triggering ROLL ({rolled_count+1}/{max_lots}).")
+                else:
+                    self._log(f"🚨 {symbol} is ITM. Max rolls reached ({rolled_count}/{max_lots}). Closing WITHOUT replacement.")
 
                 # Execute Roll
                 chain = self.tradier.get_option_chains(underlying, expiry_str)
@@ -288,9 +324,14 @@ class WheelStrategy(AbstractStrategy):
                      continue
 
                 if self.dry_run:
-                    self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
-                    self._record_trade(underlying, "Wheel Roll BTC", close_price, {'id': 'dry_run_btc'})
-                    self._record_trade(underlying, "Wheel Roll STO", open_price, {'id': 'dry_run_sto'})
+                    if should_roll:
+                        self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
+                        self._record_trade(underlying, "Wheel Roll BTC", close_price, {'id': 'dry_run_btc'})
+                        self._record_trade(underlying, "Wheel Roll STO", open_price, {'id': 'dry_run_sto'})
+                        rolls_done[underlying] = rolled_count + 1
+                    else:
+                        self._log(f"[DRY RUN] Close excess: BTC {symbol} @ {close_price} (no replacement)")
+                        self._record_trade(underlying, "Wheel Excess BTC", close_price, {'id': 'dry_run_btc'})
                 else:
                     # BTC
                     btc_res = self.tradier.place_order(
@@ -312,24 +353,29 @@ class WheelStrategy(AbstractStrategy):
                     
                     self._record_trade(underlying, "Wheel Roll BTC", close_price, btc_res)
 
-                    # STO
-                    sto_res = self.tradier.place_order(
-                        account_id=self.tradier.account_id,
-                        symbol=underlying,
-                        side='sell_to_open',
-                        quantity=abs(int(position['quantity'])),
-                        order_type='limit',
-                        duration='day',
-                        price=open_price,
-                        option_symbol=new_option['symbol'],
-                        order_class='option',
-                        tag="WHEEL"
-                    )
-                    
-                    if 'error' in sto_res:
-                        self._log(f"❌ STO Error: {sto_res['error']}")
+                    # STO only if under max_lots
+                    if should_roll:
+                        sto_res = self.tradier.place_order(
+                            account_id=self.tradier.account_id,
+                            symbol=underlying,
+                            side='sell_to_open',
+                            quantity=abs(int(position['quantity'])),
+                            order_type='limit',
+                            duration='day',
+                            price=open_price,
+                            option_symbol=new_option['symbol'],
+                            order_class='option',
+                            tag="WHEEL"
+                        )
+                        
+                        if 'error' in sto_res:
+                            self._log(f"❌ STO Error: {sto_res['error']}")
+                        else:
+                            self._record_trade(underlying, "Wheel Roll STO", open_price, sto_res)
+                            rolls_done[underlying] = rolled_count + 1
                     else:
-                        self._record_trade(underlying, "Wheel Roll STO", open_price, sto_res)
+                        self._log(f"✅ Excess position {symbol} closed. No replacement opened.")
+                        self._record_trade(underlying, "Wheel Excess BTC", close_price, btc_res)
 
             except Exception as e:
                 self._log(f"❌ Error managing {symbol}: {e}")
