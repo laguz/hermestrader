@@ -83,8 +83,11 @@ class WheelStrategy(AbstractStrategy):
         
         # 2. Evaluate Cash Secured Puts
         open_put_contracts = sum(abs(p['quantity']) for p in short_puts)
-        self._log(f"🟢 {symbol}: Clean or Partial Put State ({open_put_contracts} active). Evaluating Put Sale...")
-        self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
+        if open_put_contracts >= max_lots:
+            self._log(f"ℹ️ {symbol}: Max put contracts reached ({open_put_contracts}/{max_lots}). Skipping new entry.")
+        else:
+            self._log(f"🟢 {symbol}: Put slot available ({open_put_contracts}/{max_lots}). Evaluating Put Sale...")
+            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
 
     def execute_single_leg(self, symbol, leg_type, min_credit=None):
         """

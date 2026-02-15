@@ -1,6 +1,7 @@
 import os
 import logging
 import requests
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ HEADERS = {
 REQUEST_TIMEOUT = 10
 
 
-def get_cik_from_ticker(ticker: str) -> str | None:
+def get_cik_from_ticker(ticker: str) -> Optional[str]:
     """Fetch the CIK for a given ticker symbol using the SEC's company_tickers.json."""
     url = "https://www.sec.gov/files/company_tickers.json"
     logger.info(f"Fetching CIK mapping from {url}")
@@ -48,7 +49,7 @@ def get_cik_from_ticker(ticker: str) -> str | None:
         return None
 
 
-def get_company_facts(ticker: str) -> dict | None:
+def get_company_facts(ticker: str) -> Optional[dict]:
     """Fetch the 'Company Facts' JSON for a given ticker from SEC EDGAR."""
     cik = get_cik_from_ticker(ticker)
     if not cik:

@@ -148,3 +148,36 @@ def test_wheel_no_roll_if_not_in_watchlist():
     mock_tradier.place_order.assert_not_called()
     # Quote should not even be fetched
     mock_tradier.get_quote.assert_not_called()
+
+def test_no_new_put_when_max_lots_reached():
+    """Verify _process_symbol does NOT open a new put when max_lots is already met."""
+    today = datetime(2026, 1, 15, 12, 0)
+    mock_tradier = MockTradier(today)
+    mock_db = MagicMock()
+    strategy = WheelStrategy(mock_tradier, mock_db, dry_run=True)
+
+    # Existing short put position (1 contract = max_lots already reached)
+    positions = [
+        {
+            'symbol': 'RIOT260227P00012000',
+            'underlying': 'RIOT',
+            'quantity': -1,
+            'option_type': 'put'
+        }
+    ]
+
+    mock_analysis = MagicMock()
+    mock_analysis.analyze_symbol.return_value = {
+        'current_price': 13.00,
+        'put_entry_points': [{'price': 12.0, 'pop': 60}],
+    }
+
+    # Execute with max_lots=1
+    strategy._process_symbol('RIOT', positions, mock_analysis, max_lots=1)
+
+    # Should NOT have tried to fetch chains or expirations for a new put
+    mock_tradier.get_option_expirations.assert_not_called()
+    mock_tradier.get_option_chains.assert_not_called()
+
+    # Verify the log confirms skipping
+    assert any("Max put contracts reached" in log for log in strategy.execution_logs)
