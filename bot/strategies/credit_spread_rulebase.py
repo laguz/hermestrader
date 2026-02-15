@@ -207,8 +207,9 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
         width = 10.0 if current_price > 200 else 5.0
         long_strike = short_strike - width if is_put else short_strike + width
 
-        # Calculate Credit Target: 1/3 of width
-        target_credit = round(width / 3.0, 2)
+        # Calculate Credit Target: configurable, defaults to 1/3 of width
+        min_credit_pct = config.get('min_credit_pct', 1/3) if config else 1/3
+        target_credit = round(width * min_credit_pct, 2)
         
         # Get actual prices
         short_leg = next((o for o in chain if o['strike'] == short_strike and o['option_type'] == target_side), None)
@@ -224,7 +225,7 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
         net_credit = round(short_mid - long_mid, 2)
 
         if net_credit < target_credit:
-            self._log(f"Skipping {symbol}: Credit {net_credit} < Target {target_credit} (1/3 width)")
+            self._log(f"Skipping {symbol}: Credit {net_credit} < Target {target_credit} ({min_credit_pct:.0%} width)")
             return
 
         # BP Check
