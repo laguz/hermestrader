@@ -33,6 +33,14 @@ def create_app():
     _register_blueprints(app)
     _register_error_handlers(app)
 
+    @app.before_request
+    def require_login():
+        from flask_login import current_user
+        if not current_user.is_authenticated:
+            # Allow static files and auth routes
+            if request.endpoint and request.endpoint != 'static' and not request.endpoint.startswith('auth.'):
+                return app.login_manager.unauthorized()
+
     return app
 
 
