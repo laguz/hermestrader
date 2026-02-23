@@ -11,8 +11,8 @@ class WheelStrategy(AbstractStrategy):
         super().__init__(tradier_service, db, dry_run, analysis_service)
         # Constants
         self.TARGET_DTE = 42 # 6 Weeks
-        self.MIN_POP = 55
-        self.MAX_POP = 70
+        self.MIN_POP = 80
+        self.MAX_POP = 100
         self.ROLL_TRIGGER_DTE = 7
         self.ROLL_MAX_DEBIT = 0.90
         self.DELTA_MIN = 0.30
