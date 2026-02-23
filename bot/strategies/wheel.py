@@ -266,6 +266,48 @@ class WheelStrategy(AbstractStrategy):
             today = self._get_current_date()
             dte = (expiry_date - today).days
 
+            # --- PROFIT TAKING (80%) ---
+            try:
+                opt_quote = self.tradier.get_quote(symbol)
+                if opt_quote:
+                    raw_ask = opt_quote.get('ask')
+                    raw_last = opt_quote.get('last')
+                    raw_close = opt_quote.get('close')
+                    
+                    ask_price = float(raw_ask) if raw_ask is not None else float(raw_last) if raw_last is not None else float(raw_close) if raw_close is not None else 0.0
+                    
+                    cost_basis = float(position.get('cost_basis', 0))
+                    qty = abs(float(position.get('quantity', 1)))
+                    entry_price = abs(cost_basis) / (qty * 100) if qty > 0 else 0
+                    
+                    if entry_price > 0 and ask_price > 0:
+                        profit_pct = (entry_price - ask_price) / entry_price
+                        if profit_pct >= 0.80:
+                            self._log(f"🎯 {symbol} reached {profit_pct*100:.1f}% profit (Entry: {entry_price:.2f}, Ask: {ask_price:.2f}). Taking profit!")
+                            if self.dry_run:
+                                self._log(f"[DRY RUN] Take Profit: BTC {symbol} @ {ask_price:.2f}")
+                                self._record_trade(underlying, "Wheel Take Profit BTC", ask_price, {'id': 'dry_run_btc_tp'})
+                            else:
+                                btc_res = self.tradier.place_order(
+                                    account_id=self.tradier.account_id,
+                                    symbol=underlying,
+                                    side='buy_to_close',
+                                    quantity=int(qty),
+                                    order_type='limit',
+                                    duration='day',
+                                    price=round(ask_price, 2),
+                                    option_symbol=symbol,
+                                    order_class='option',
+                                    tag="WHEEL_TP"
+                                )
+                                if 'error' in btc_res:
+                                    self._log(f"❌ Take Profit BTC Error: {btc_res['error']}")
+                                else:
+                                    self._record_trade(underlying, "Wheel Take Profit BTC", round(ask_price, 2), btc_res)
+                            continue # Successfully placed BTC order, skip normal roll logic
+            except Exception as e:
+                self._log(f"❌ Error checking profit for {symbol}: {e}")
+
             if dte >= self.ROLL_TRIGGER_DTE: 
                 continue 
             
