@@ -15,8 +15,8 @@ class WheelStrategy(AbstractStrategy):
         self.MAX_POP = 100
         self.ROLL_TRIGGER_DTE = 7
         self.ROLL_MAX_DEBIT = 0.90
-        self.DELTA_MIN = 0.30
-        self.DELTA_MAX = 0.37
+        self.DELTA_MIN = 0.10
+        self.DELTA_MAX = 0.20
 
     def _log(self, message):
         super()._log(message, strategy_name="WHEEL")
@@ -147,7 +147,7 @@ class WheelStrategy(AbstractStrategy):
         
         # --- Priority B: Greeks Fallback ---
         if not target_strike:
-            self._log("🔹 No S/R criteria met. Checking Greeks (Delta 0.30-0.37)...")
+            self._log(f"🔹 No S/R criteria met. Checking Greeks (Delta {self.DELTA_MIN:.2f}-{self.DELTA_MAX:.2f})...")
             chain = self.tradier.get_option_chains(symbol, target_expiry)
             if not chain: 
                 self._log(f"❌ Failed to fetch option chain for {target_expiry}")
@@ -195,7 +195,7 @@ class WheelStrategy(AbstractStrategy):
 
         # --- Priority B: Greeks Fallback ---
         if not target_strike:
-            self._log("🔹 No S/R criteria met. Checking Greeks (Delta 0.30-0.37)...")
+            self._log(f"🔹 No S/R criteria met. Checking Greeks (Delta {self.DELTA_MIN:.2f}-{self.DELTA_MAX:.2f})...")
             chain = self.tradier.get_option_chains(symbol, target_expiry)
             if not chain: 
                 self._log(f"❌ Failed to fetch option chain for {target_expiry}")
@@ -344,15 +344,20 @@ class WheelStrategy(AbstractStrategy):
                 new_expiry = self._find_expiry(underlying, target_dte=42, min_dte=42, max_dte=63)
                 if not new_expiry: continue
 
-                target_strike = strike - 1.0
                 new_chain = self.tradier.get_option_chains(underlying, new_expiry)
-                new_option = next((o for o in new_chain if o['strike'] == target_strike and o['option_type'] == option_type), None)
                 
+                # Get strike using same >80% POP Delta fallback mechanism as main entry
+                # For puts, we want it to go down, for calls, up, but delta handles the abstract targeting
+                target_strike, delta = self._find_delta_strike(new_chain, option_type, self.DELTA_MIN, self.DELTA_MAX)
+                
+                if target_strike is None:
+                    self._log(f"⚠️ Could not find valid Delta({self.DELTA_MIN}-{self.DELTA_MAX}) roll strike for {underlying}. Aborting roll.")
+                    continue
+                    
+                new_option = next((o for o in new_chain if o['strike'] == target_strike and o['option_type'] == option_type), None)
                 if not new_option:
-                    candidates = [o for o in new_chain if o['option_type'] == option_type]
-                    if not candidates: continue
-                    new_option = min(candidates, key=lambda x: abs(x['strike'] - target_strike))
-                    self._log(f"⚠️ Target strike {target_strike} not available. Snapping to {new_option['strike']}.")
+                    self._log(f"⚠️ Target strike {target_strike} not found in chain. Aborting roll.")
+                    continue
 
                 open_price = round(new_option['bid'] - 0.01, 2)
                 net_credit = open_price - close_price
@@ -437,10 +442,13 @@ class WheelStrategy(AbstractStrategy):
 
         # Price Logic: Bid - 0.01 (Aggressive)
         price = round(option['bid'] - 0.01, 2)
-        if price < 0.30:
-            self._log(f"🚫 Aggressive Entry Aborted: Price {price} < 0.30 Minimum.")
+        
+        # Lowered strictly hardcoded $0.30 minimum to $0.05 to allow for 80% POP trades which often have low premiums
+        minimum = min_credit if min_credit is not None else 0.05
+        if price < minimum:
+            self._log(f"🚫 Aggressive Entry Aborted: Price {price} < {minimum:.2f} Minimum.")
             return
-
+        
         if min_credit and price < min_credit:
              self._log(f"⚠️ Market Price ({price}) < Target ({min_credit}). Placing Limit Order at Target.")
              price = min_credit

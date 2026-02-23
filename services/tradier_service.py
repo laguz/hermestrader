@@ -129,6 +129,11 @@ class TradierService:
                 acct_id = session['account_id']
         except ImportError:
             pass
+            
+        if not acct_id:
+            import os
+            acct_id = os.getenv('TRADIER_ACCOUNT_ID')
+            
         return acct_id
 
     def get_account_balances(self) -> Optional[dict]:
