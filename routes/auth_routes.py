@@ -31,8 +31,22 @@ def login_nostr():
     data = request.json
     event = data.get('event')
     
-    if not event:
-        return {'success': False, 'message': 'Missing event data'}, 400
+    if not event or not isinstance(event, dict):
+        return {'success': False, 'message': 'Missing or invalid event data'}, 400
+        
+    pubkey = event.get('pubkey')
+    if not pubkey or not isinstance(pubkey, str):
+        return {'success': False, 'message': 'Invalid pubkey format'}, 400
+        
+    # Verify NIP-98/Auth event signature
+    from nostr_sdk import Event
+    try:
+        import json
+        event_obj = Event.from_json(json.dumps(event))
+        if not event_obj.verify():
+            return {'success': False, 'message': 'Invalid signature'}, 401
+    except Exception as e:
+        return {'success': False, 'message': f'Signature verification failed: {str(e)}'}, 401
         
     auth_service = Container.get_auth_service()
     user, nostr_manager = auth_service.login_with_nostr(event)
@@ -101,16 +115,29 @@ def register_nostr():
     tradier_key = data.get('tradier_key')
     account_id = data.get('account_id')
     
-    if not event or not tradier_key or not account_id:
+    if not event or not isinstance(event, dict) or not tradier_key or not account_id:
         return {'success': False, 'message': 'Missing data'}, 400
         
     pubkey = event.get('pubkey')
-    if not pubkey:
-        return {'success': False, 'message': 'Invalid event'}, 400
+    if not pubkey or not isinstance(pubkey, str):
+        return {'success': False, 'message': 'Invalid event pubkey'}, 400
+        
+    # Verify NIP-98/Auth event signature
+    from nostr_sdk import Event
+    try:
+        import json
+        event_obj = Event.from_json(json.dumps(event))
+        if not event_obj.verify():
+            return {'success': False, 'message': 'Invalid signature'}, 401
+    except Exception as e:
+        return {'success': False, 'message': f'Signature verification failed: {str(e)}'}, 401
         
     auth_service = Container.get_auth_service()
     
-    # We should verify sig here ideally.
+    if auth_service.db is not None:
+        user_count = auth_service.db['users'].count_documents({})
+        if user_count > 0:
+             return {'success': False, 'message': 'Registration is disabled.'}, 403
     
     user = auth_service.create_user_with_nostr(username, pubkey, tradier_key, account_id)
     

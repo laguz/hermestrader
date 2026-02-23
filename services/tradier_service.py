@@ -26,19 +26,29 @@ class TradierService:
         self.account_id = account_id
 
     def _get_headers(self) -> dict:
-        if not self.access_token:
+        auth_token = self.access_token
+        
+        try:
+            from flask import session, has_request_context
+            if has_request_context() and session.get('tradier_key'):
+                auth_token = session['tradier_key']
+        except ImportError:
+            pass
+            
+        if not auth_token:
             try:
                 from services.container import Container
                 auth = Container.get_auth_service()
-                self.access_token = auth.get_api_key()
+                if auth.get_api_key():
+                    auth_token = auth.get_api_key()
             except Exception:
                 pass
                 
-        if not self.access_token:
+        if not auth_token:
             logger.warning("Tradier access_token is missing. Unauthorized error likely.")
             
         return {
-            'Authorization': f'Bearer {self.access_token or ""}',
+            'Authorization': f'Bearer {auth_token or ""}',
             'Accept': 'application/json'
         }
 
@@ -111,12 +121,23 @@ class TradierService:
             logger.error(f"Error fetching history for {symbol}: {e}")
             return None
 
+    def _get_account_id(self) -> Optional[str]:
+        acct_id = self.account_id
+        try:
+            from flask import session, has_request_context
+            if has_request_context() and session.get('account_id'):
+                acct_id = session['account_id']
+        except ImportError:
+            pass
+        return acct_id
+
     def get_account_balances(self) -> Optional[dict]:
         """Fetch account balances including total equity and option buying power."""
-        if not self.account_id:
+        current_account_id = self._get_account_id()
+        if not current_account_id:
             logger.error("Cannot fetch account balances: account_id is missing.")
             return None
-        url = f"{self.endpoint}/accounts/{self.account_id}/balances"
+        url = f"{self.endpoint}/accounts/{current_account_id}/balances"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -152,10 +173,11 @@ class TradierService:
 
     def get_positions(self) -> list:
         """Fetch open positions for the account."""
-        if not self.account_id:
+        current_account_id = self._get_account_id()
+        if not current_account_id:
             logger.error("Cannot fetch positions: account_id is missing.")
             return []
-        url = f"{self.endpoint}/accounts/{self.account_id}/positions"
+        url = f"{self.endpoint}/accounts/{current_account_id}/positions"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -175,10 +197,11 @@ class TradierService:
 
     def get_orders(self, page: int = 1, limit: int = 100) -> list:
         """Fetch orders for the account."""
-        if not self.account_id:
+        current_account_id = self._get_account_id()
+        if not current_account_id:
             logger.error("Cannot fetch orders: account_id is missing.")
             return []
-        url = f"{self.endpoint}/accounts/{self.account_id}/orders"
+        url = f"{self.endpoint}/accounts/{current_account_id}/orders"
         params = {'page': page, 'limit': limit}
         try:
             response = requests.get(url, params=params,
@@ -290,7 +313,12 @@ class TradierService:
                      end_date: Optional[str] = None,
                      symbol: Optional[str] = None) -> list:
         """Fetch realized gain/loss data from Tradier."""
-        url = f"{self.endpoint}/accounts/{self.account_id}/gainloss"
+        current_account_id = self._get_account_id()
+        if not current_account_id:
+            logger.error("Cannot fetch gain/loss: account_id is missing.")
+            return []
+            
+        url = f"{self.endpoint}/accounts/{current_account_id}/gainloss"
         params = {
             'page': page,
             'limit': limit,

@@ -20,7 +20,14 @@ logger = logging.getLogger(__name__)
 def create_app():
     """Application factory pattern."""
     app = Flask(__name__)
-    app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY') or 'super_secret_key_change_me'
+    
+    secret_key = os.getenv('FLASK_SECRET_KEY')
+    if not secret_key:
+        raise RuntimeError("FLASK_SECRET_KEY is required but missing from environment variables.")
+        
+    app.config['SECRET_KEY'] = secret_key
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
+    app.config['SESSION_COOKIE_SECURE'] = True # Strongly recommended if behind HTTPS
 
     _init_login_manager(app)
     _register_blueprints(app)

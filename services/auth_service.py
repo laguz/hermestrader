@@ -27,7 +27,7 @@ from nostr_sdk import Keys, PublicKey, SecretKey, nip04_encrypt, init_logger, Lo
 class AuthService:
     def __init__(self):
         self.db = Container.get_db()
-        self._unlocked_tradier_key = None # In-memory storage
+        # Removed _unlocked_tradier_key to prevent singleton data leakage
         
         # Initialize logger for nostr-sdk if needed, but only once
         try:
@@ -252,7 +252,14 @@ class AuthService:
         return User(user_doc)
 
     def _unlock_session(self, key, account_id):
-        self._unlocked_tradier_key = key
+        from flask import session, has_request_context
+        if has_request_context():
+            session['tradier_key'] = key
+            if account_id:
+                session['account_id'] = account_id
+        
+        # We still update the tradier service, but the tradier service itself 
+        # needs to be modified to pull from session instead of storing it on tracking instances.
         ts = Container.get_tradier_service()
         ts.update_access_token(key)
         if account_id: 
@@ -292,4 +299,7 @@ class AuthService:
         logger.info("Migration complete.")
 
     def get_api_key(self):
-        return self._unlocked_tradier_key
+        from flask import session, has_request_context
+        if has_request_context():
+            return session.get('tradier_key')
+        return None
