@@ -176,6 +176,35 @@ class AbstractStrategy(ABC):
                 doc.update(extra_fields)
             self.db['auto_trades'].insert_one(doc)
 
+    def _close_trade(self, underlying, option_symbol, exit_price, btc_res=None):
+        """Find the matching STO trade in the DB and mark it CLOSED with P&L calculated."""
+        if self.db is not None:
+            # Find the OPEN trade matching underlying
+            query = {"symbol": underlying, "status": "OPEN", "strategy": {"$regex": "sto|sell_to_open", "$options": "i"}}
+            
+            # Prioritize exact match if option_symbol was tracked
+            match = self.db['auto_trades'].find_one({**query, "option_symbol": option_symbol})
+            if not match:
+                match = self.db['auto_trades'].find_one(query, sort=[("entry_date", 1)])
+                
+            if match:
+                entry_price = match.get('price', 0)
+                qty = match.get('quantity', 1)
+                pnl = (entry_price - exit_price) * 100 * qty
+                
+                self.db['auto_trades'].update_one(
+                    {"_id": match['_id']},
+                    {"$set": {
+                        "status": "CLOSED",
+                        "close_date": datetime.now(),
+                        "exit_price": exit_price,
+                        "pnl": round(pnl, 2),
+                        "close_order_details": btc_res
+                    }}
+                )
+            else:
+                self._log(f"⚠️ Could not find OPEN auto_trade for {underlying} to mark CLOSED.")
+
     @abstractmethod
     def execute(self, watchlist, config=None):
         pass

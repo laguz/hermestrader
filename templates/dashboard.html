@@ -1,54 +1,73 @@
 {% extends "base.html" %}
 
-{% block main_class %}full-width-layout{% endblock %}
+{% block main_class %}space-y-6{% endblock %}
 
 {% block content %}
-<div class="md-card col-span-full">
-    <h2 class="md-card__headline">Account Overview</h2>
-    <div class="metrics-grid">
-        <div class="metric-card">
-            <h3>Total Equity</h3>
-            <p id="acc-total-equity">-</p>
-        </div>
-        <div class="metric-card">
-            <h3>Option Buying Power</h3>
-            <p id="acc-option-bp">-</p>
-        </div>
-        <div class="metric-card">
-            <h3>Stock Buying Power</h3>
-            <p id="acc-stock-bp">-</p>
-        </div>
-        <div class="metric-card">
-            <h3>Market Sentiment (VIX)</h3>
-            <p id="mkt-sentiment-val">-</p>
-            <div id="mkt-sentiment-text" style="font-size: 0.8rem; opacity: 0.8;">-</div>
-        </div>
+
+<!-- Overview Widget Row -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-widest">Total Equity
+        </h3>
+        <p id="acc-total-equity" class="text-3xl font-bold text-gray-900 dark:text-white">-</p>
+    </div>
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-widest">Option BP</h3>
+        <p id="acc-option-bp" class="text-3xl font-bold text-gray-900 dark:text-white">-</p>
+    </div>
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-widest">Stock BP</h3>
+        <p id="acc-stock-bp" class="text-3xl font-bold text-gray-900 dark:text-white">-</p>
+    </div>
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="mb-2 text-sm font-medium text-gray-500 dark:text-gray-400 uppercase tracking-widest">Market Sentiment
+            (VIX)</h3>
+        <p id="mkt-sentiment-val" class="text-3xl font-bold text-gray-900 dark:text-white">-</p>
+        <div id="mkt-sentiment-text" class="text-sm font-medium mt-1">-</div>
     </div>
 </div>
 
-<div class="md-card col-span-full">
-    <h2 class="md-card__headline">Open Positions</h2>
-    <div id="loading-positions" class="hidden">Loading positions...</div>
-    <div id="positions-error" class="hidden" style="color: var(--md-sys-color-error, #ffb4ab);"></div>
+<!-- Chart & Positions Row -->
+<div class="flex flex-col gap-6">
 
-    <div class="md-table-container">
-        <table id="positions-table">
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Qty</th>
-                    <th>Cost Basis</th>
-                    <th>Current Price</th>
-                    <th>Market Value</th>
-                    <th>PnL (Open)</th>
-                    <th>PnL %</th>
-                </tr>
-            </thead>
-            <tbody>
-                <!-- Populated by JS -->
-            </tbody>
-        </table>
+    <!-- Mini Equity/VIX Chart Placeholder -->
+    <div
+        class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 w-full flex flex-col">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Market Overview</h2>
+        <div id="mini-tv-chart"
+            class="w-full flex-grow min-h-[300px] bg-gray-50 dark:bg-gray-900 rounded border border-gray-100 dark:border-gray-700">
+        </div>
     </div>
+
+    <!-- Open Positions Table -->
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 w-full">
+        <div class="flex justify-between items-center mb-4">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Open Positions</h2>
+            <div id="loading-positions" class="text-sm text-gray-500 dark:text-gray-400 hidden">Loading data...</div>
+            <div id="positions-error" class="text-sm text-red-600 dark:text-red-500 hidden"></div>
+        </div>
+
+        <div class="relative overflow-x-auto rounded-lg">
+            <table id="positions-table"
+                class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+                <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                    <tr>
+                        <th scope="col" class="px-6 py-3">Symbol</th>
+                        <th scope="col" class="px-6 py-3 text-right">Qty</th>
+                        <th scope="col" class="px-6 py-3 text-right">Cost Basis</th>
+                        <th scope="col" class="px-6 py-3 text-right">Current Price</th>
+                        <th scope="col" class="px-6 py-3 text-right">Market Value</th>
+                        <th scope="col" class="px-6 py-3 text-right">PnL</th>
+                        <th scope="col" class="px-6 py-3 text-right">PnL %</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
 </div>
 
 <script>
@@ -56,25 +75,66 @@
         loadAccountData();
         loadPositions();
         loadMarketSentiment();
-        // Poll every 30 seconds for Real Time feel
+        initMiniChart();
+
         setInterval(() => {
             checkMarketStatus();
             loadMarketSentiment();
         }, 30000);
     });
 
+    function initMiniChart() {
+        const chartContainer = document.getElementById('mini-tv-chart');
+        if (!chartContainer || typeof LightweightCharts === 'undefined') return;
 
+        const chart = LightweightCharts.createChart(chartContainer, {
+            layout: {
+                background: { type: 'solid', color: 'transparent' },
+                textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563',
+            },
+            grid: {
+                vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+            },
+            rightPriceScale: {
+                borderVisible: false,
+            },
+            timeScale: {
+                borderVisible: false,
+            },
+        });
+
+        const lineSeries = chart.addLineSeries({
+            color: '#3b82f6',
+            lineWidth: 2,
+        });
+
+        // Placeholder data for the visual
+        const data = [];
+        let cur = 100;
+        const now = Math.floor(Date.now() / 1000);
+        for (let i = 30; i >= 0; i--) {
+            data.push({ time: now - (i * 86400), value: cur });
+            cur += (Math.random() - 0.4) * 2;
+        }
+        lineSeries.setData(data);
+        chart.timeScale().fitContent();
+
+        // Handle resize layout
+        new ResizeObserver(entries => {
+            if (entries.length === 0 || entries[0].target !== chartContainer) { return; }
+            const newRect = entries[0].contentRect;
+            chart.applyOptions({ height: newRect.height, width: newRect.width });
+        }).observe(chartContainer);
+    }
 
     function checkMarketStatus() {
         fetch('/api/market/status')
             .then(response => response.json())
             .then(data => {
                 if (data.clock && data.clock.state === 'open') {
-                    console.log("Market is open. Refreshing data...");
                     loadAccountData();
                     loadPositions();
-                } else {
-                    console.log("Market is closed. Skipping refresh.");
                 }
             })
             .catch(err => console.error("Error checking market status:", err));
@@ -84,16 +144,8 @@
         fetch('/api/account')
             .then(response => response.json())
             .then(data => {
-                if (data.error) {
-                    console.error("Account API Error:", data.error);
-                    return;
-                }
-
-                const fmtMoney = (val) => {
-                    if (val === undefined || val === null) return '-';
-                    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
-                };
-
+                if (data.error) return;
+                const fmtMoney = (val) => val != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val) : '-';
                 document.getElementById('acc-total-equity').textContent = fmtMoney(data.total_equity);
                 document.getElementById('acc-option-bp').textContent = fmtMoney(data.option_buying_power);
                 document.getElementById('acc-stock-bp').textContent = fmtMoney(data.stock_buying_power);
@@ -102,7 +154,6 @@
     }
 
     function loadMarketSentiment() {
-        console.log("Loading VIX data..."); // Debug
         fetch('/api/market/sentiment')
             .then(res => res.json())
             .then(data => {
@@ -110,32 +161,22 @@
                 const textEl = document.getElementById('mkt-sentiment-text');
 
                 if (data.error) {
-                    el.textContent = "Error";
-                    textEl.textContent = "-";
-                    return;
+                    el.textContent = "Error"; textEl.textContent = "-"; return;
                 }
 
-                // Format: 18.50 (+1.25%)
                 let pctHtml = '';
                 if (data.change_percent !== undefined) {
                     const pct = parseFloat(data.change_percent);
-                    const colorClass = pct >= 0 ? 'text-success' : 'text-danger'; // Assuming these classes exist or define them
+                    const colorClass = pct >= 0 ? 'text-green-500' : 'text-red-500';
                     const sign = pct >= 0 ? '+' : '';
-                    pctHtml = `<span class="${colorClass}" style="font-size: 0.8em; margin-left: 5px;">(${sign}${pct.toFixed(2)}%)</span>`;
+                    pctHtml = `<span class="${colorClass} text-sm ml-2 font-medium">(${sign}${pct.toFixed(2)}%)</span>`;
                 }
 
                 el.innerHTML = `${data.value || '-'} ${pctHtml}`;
-
-                // Update Card Color Border/Text
-                if (data.color) {
-                    el.style.color = data.color;
-                }
-
-                // Add sentiment text line if needed, or tooltip
                 textEl.textContent = data.sentiment;
-                textEl.style.color = data.color;
-                textEl.style.fontWeight = "bold";
-                el.title = data.sentiment;
+
+                // Tailwind dynamic color classes based on VIX levels
+                textEl.className = `text-sm font-medium mt-1 ${data.sentiment === 'Extreme Fear' ? 'text-red-500' : (data.sentiment === 'Greed' ? 'text-green-500' : 'text-yellow-500')}`;
             })
             .catch(err => console.error("VIX Error:", err));
     }
@@ -153,82 +194,53 @@
                 tableBody.innerHTML = '';
 
                 if (!data || data.length === 0) {
-                    const row = tableBody.insertRow();
-                    const cell = row.insertCell();
-                    cell.colSpan = 7;
-                    cell.textContent = "No open positions found.";
-                    cell.style.textAlign = "center";
+                    tableBody.innerHTML = `<tr><td colspan="7" class="px-6 py-8 text-center text-gray-500">No open positions found.</td></tr>`;
                     return;
                 }
 
                 data.forEach(pos => {
-                    const row = tableBody.insertRow();
+                    const fmtMoney = (val) => val != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val) : '-';
+                    const fmtPct = (val) => val != null ? val.toFixed(2) + '%' : '-';
 
-                    // Helper to format currency
-                    const fmtMoney = (val) => {
-                        if (val === undefined || val === null || val === '-') return '-';
-                        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
-                    };
-
-                    const fmtPct = (val) => {
-                        if (val === undefined || val === null || val === '-') return '-';
-                        return (val).toFixed(2) + '%';
-                    };
-
-                    const symbol = pos.symbol;
-                    const qty = pos.quantity;
-                    const cost_basis = pos.cost_basis;
-                    const current_price = pos.current_price;
-
-                    // Option Details
                     const isOption = pos.expiration_date !== undefined;
-                    let displaySymbol = symbol;
+                    let displaySymbol = `
+                        <div class="font-semibold text-gray-900 dark:text-white">${pos.symbol}</div>
+                    `;
                     if (isOption) {
                         displaySymbol = `
-                            <div><span style="font-weight:bold">${pos.underlying || symbol}</span></div>
-                            <div style="font-size:0.8em; opacity:0.8;">
-                                ${pos.option_type === 'call' ? 'C' : 'P'} ${pos.strike} ${pos.expiration_date}
-                            </div>
-                            <div style="font-size:0.75em; opacity:0.5; font-family:monospace;">${symbol}</div>
+                            <div class="font-semibold text-gray-900 dark:text-white">${pos.underlying || pos.symbol}</div>
+                            <div class="text-xs text-gray-500">${pos.option_type === 'call' ? 'C' : 'P'} ${pos.strike} ${pos.expiration_date}</div>
                         `;
-                    } else {
-                        displaySymbol = `<span style="font-weight:500">${symbol}</span>`;
                     }
 
                     let market_value = '-';
                     let pnl = '-';
                     let pnl_pct = '-';
 
-                    if (current_price && qty) {
-                        market_value = current_price * qty * (isOption ? 100 : 1); // Adjust for option multiplier? 
-                        // Note: Tradier positions already define cost_basis as total cost. 
-                        // But market_value needs calculation. 
-                        // If qty is contracts, need * 100.
-                        // Tradier API: qty is contracts. 
-
-                        pnl = market_value - cost_basis;
-                        if (cost_basis !== 0) {
-                            pnl_pct = (pnl / Math.abs(cost_basis)) * 100;
-                        }
+                    if (pos.current_price && pos.quantity) {
+                        market_value = pos.current_price * pos.quantity * (isOption ? 100 : 1);
+                        pnl = market_value - pos.cost_basis;
+                        if (pos.cost_basis !== 0) pnl_pct = (pnl / Math.abs(pos.cost_basis)) * 100;
                     }
 
-                    // Styling for PnL
-                    const pnlColor = pnl > 0 ? 'var(--md-sys-color-primary)' : (pnl < 0 ? 'var(--md-sys-color-error, #ffb4ab)' : 'inherit');
+                    const pnlColorClass = pnl > 0 ? 'text-green-500' : (pnl < 0 ? 'text-red-500' : 'text-gray-900 dark:text-white');
 
+                    const row = document.createElement('tr');
+                    row.className = "bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600";
                     row.innerHTML = `
-                    <td>${displaySymbol}</td>
-                    <td>${qty}</td>
-                    <td>${fmtMoney(cost_basis)}</td>
-                    <td>${fmtMoney(current_price)}</td>
-                    <td>${fmtMoney(market_value)}</td>
-                    <td style="color: ${pnlColor}">${fmtMoney(pnl)}</td>
-                    <td style="color: ${pnlColor}">${fmtPct(pnl_pct)}</td>
-                `;
+                        <td class="px-6 py-4">${displaySymbol}</td>
+                        <td class="px-6 py-4 text-right font-medium text-gray-900 dark:text-white">${pos.quantity}</td>
+                        <td class="px-6 py-4 text-right">${fmtMoney(pos.cost_basis)}</td>
+                        <td class="px-6 py-4 text-right">${fmtMoney(pos.current_price)}</td>
+                        <td class="px-6 py-4 text-right font-medium text-gray-900 dark:text-white">${fmtMoney(market_value)}</td>
+                        <td class="px-6 py-4 text-right font-bold ${pnlColorClass}">${fmtMoney(pnl)}</td>
+                        <td class="px-6 py-4 text-right font-bold ${pnlColorClass}">${fmtPct(pnl_pct)}</td>
+                    `;
+                    tableBody.appendChild(row);
                 });
             })
             .catch(error => {
                 loading.classList.add('hidden');
-                console.error('Error:', error);
                 document.getElementById('positions-error').textContent = 'Error loading positions.';
                 document.getElementById('positions-error').classList.remove('hidden');
             });

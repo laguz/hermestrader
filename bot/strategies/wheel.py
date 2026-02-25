@@ -286,7 +286,7 @@ class WheelStrategy(AbstractStrategy):
                             self._log(f"🎯 {symbol} reached {profit_pct*100:.1f}% profit (Entry: {entry_price:.2f}, Ask: {ask_price:.2f}). Taking profit!")
                             if self.dry_run:
                                 self._log(f"[DRY RUN] Take Profit: BTC {symbol} @ {ask_price:.2f}")
-                                self._record_trade(underlying, "Wheel Take Profit BTC", ask_price, {'id': 'dry_run_btc_tp'})
+                                self._close_trade(underlying, symbol, ask_price, {'id': 'dry_run_btc_tp'})
                             else:
                                 btc_res = self.tradier.place_order(
                                     account_id=self.tradier.account_id,
@@ -303,7 +303,7 @@ class WheelStrategy(AbstractStrategy):
                                 if 'error' in btc_res:
                                     self._log(f"❌ Take Profit BTC Error: {btc_res['error']}")
                                 else:
-                                    self._record_trade(underlying, "Wheel Take Profit BTC", round(ask_price, 2), btc_res)
+                                    self._close_trade(underlying, symbol, round(ask_price, 2), btc_res)
                             continue # Successfully placed BTC order, skip normal roll logic
             except Exception as e:
                 self._log(f"❌ Error checking profit for {symbol}: {e}")
@@ -373,12 +373,12 @@ class WheelStrategy(AbstractStrategy):
                 if self.dry_run:
                     if should_roll:
                         self._log(f"[DRY RUN] Rollover: BTC {symbol} @ {close_price}, STO {new_option['symbol']} @ {open_price}")
-                        self._record_trade(underlying, "Wheel Roll BTC", close_price, {'id': 'dry_run_btc'})
-                        self._record_trade(underlying, "Wheel Roll STO", open_price, {'id': 'dry_run_sto'})
+                        self._close_trade(underlying, symbol, close_price, btc_res={'id': 'dry_run_btc'})
+                        self._record_trade(underlying, "Wheel Roll STO", open_price, {'id': 'dry_run_sto'}, {'option_symbol': new_option['symbol']})
                         rolls_done[underlying] = rolled_count + 1
                     else:
                         self._log(f"[DRY RUN] Close excess: BTC {symbol} @ {close_price} (no replacement)")
-                        self._record_trade(underlying, "Wheel Excess BTC", close_price, {'id': 'dry_run_btc'})
+                        self._close_trade(underlying, symbol, close_price, btc_res={'id': 'dry_run_btc'})
                 else:
                     # BTC
                     btc_res = self.tradier.place_order(
@@ -398,7 +398,7 @@ class WheelStrategy(AbstractStrategy):
                         self._log(f"❌ BTC Error: {btc_res['error']}")
                         continue
                     
-                    self._record_trade(underlying, "Wheel Roll BTC", close_price, btc_res)
+                    self._close_trade(underlying, symbol, close_price, btc_res)
 
                     # STO only if under max_lots
                     if should_roll:
@@ -418,11 +418,11 @@ class WheelStrategy(AbstractStrategy):
                         if 'error' in sto_res:
                             self._log(f"❌ STO Error: {sto_res['error']}")
                         else:
-                            self._record_trade(underlying, "Wheel Roll STO", open_price, sto_res)
+                            self._record_trade(underlying, "Wheel Roll STO", open_price, sto_res, {'option_symbol': new_option['symbol']})
                             rolls_done[underlying] = rolled_count + 1
                     else:
                         self._log(f"✅ Excess position {symbol} closed. No replacement opened.")
-                        self._record_trade(underlying, "Wheel Excess BTC", close_price, btc_res)
+                        self._close_trade(underlying, symbol, close_price, btc_res)
 
             except Exception as e:
                 self._log(f"❌ Error managing {symbol}: {e}")
@@ -461,7 +461,7 @@ class WheelStrategy(AbstractStrategy):
 
         if self.dry_run:
             self._log(f"[DRY RUN] Order: {side} {option['symbol']} @ {price}")
-            self._record_trade(symbol, f"Wheel {side}", price, {'id': 'dry_run_id'})
+            self._record_trade(symbol, f"Wheel {side}", price, {'id': 'dry_run_id'}, {'option_symbol': option['symbol']})
         else:
             res = self.tradier.place_order(
                 account_id=self.tradier.account_id,
@@ -478,7 +478,7 @@ class WheelStrategy(AbstractStrategy):
             if 'error' in res:
                 self._log(f"Order Error: {res['error']}")
             else:
-                self._record_trade(symbol, f"Wheel {side}", price, res)
+                self._record_trade(symbol, f"Wheel {side}", price, res, {'option_symbol': option['symbol']})
 
     def _check_expiry_constraints(self, symbol, max_lots=1):
         """

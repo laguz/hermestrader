@@ -3,130 +3,150 @@
 {% block main_class %}full-width-layout{% endblock %}
 
 {% block content %}
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start;">
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
 
     <!-- LEFT COLUMN: Status & Config -->
-    <div style="display: flex; flex-direction: column; gap: 24px;">
+    <div class="space-y-6">
 
         <!-- Status Card -->
-        <div class="md-card">
-            <h2 class="md-card__headline">Bot Status</h2>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <span id="status-icon" class="material-symbols-outlined"
-                        style="font-size: 32px; color: var(--md-sys-color-secondary);">radio_button_unchecked</span>
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-6">Bot Status</h2>
+            <div class="flex items-center justify-between mb-6">
+                <div class="flex items-center gap-3">
+                    <span id="status-icon"
+                        class="material-symbols-outlined text-4xl text-gray-400">radio_button_unchecked</span>
                     <div>
-                        <div style="font-size: 14px; color: var(--md-sys-color-secondary);">Current State</div>
-                        <strong id="status-text" style="font-size: 18px;">Checking...</strong>
+                        <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Current State</div>
+                        <strong id="status-text"
+                            class="text-lg font-bold text-gray-900 dark:text-white">Checking...</strong>
                     </div>
                 </div>
-                <div style="text-align: right;">
-                    <div style="font-size: 12px; color: var(--md-sys-color-secondary);">Last Heartbeat</div>
-                    <span id="last-heartbeat" style="font-family: monospace;">Never</span>
+                <div class="text-right">
+                    <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Last Heartbeat</div>
+                    <span id="last-heartbeat" class="font-mono text-sm text-gray-900 dark:text-white">Never</span>
                 </div>
             </div>
 
-            <div style="display: flex; gap: 12px;">
-                <button id="btn-start" class="md-button md-button--filled" onclick="startBot()">
-                    <span class="material-symbols-outlined" style="font-size:18px;">play_arrow</span> Start Bot
+            <div class="flex flex-wrap gap-3">
+                <button id="btn-start"
+                    class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-white bg-primary-700 rounded-lg hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="startBot()">
+                    <span class="material-symbols-outlined text-[18px] mr-2">play_arrow</span> Start Bot
                 </button>
-                <button id="btn-stop" class="md-button md-button--tonal" onclick="stopBot()"
-                    style="display: none; border: 1px solid var(--md-sys-color-error); color: var(--md-sys-color-error);">
-                    <span class="material-symbols-outlined" style="font-size:18px;">stop</span> Stop Bot
+                <button id="btn-stop"
+                    class="hidden inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-red-700 bg-white border border-red-700 rounded-lg hover:bg-red-50 focus:ring-4 focus:ring-red-300 dark:bg-transparent dark:text-red-500 dark:border-red-500 dark:hover:bg-gray-700 dark:hover:text-red-400 focus:outline-none dark:focus:ring-red-800"
+                    onclick="stopBot()">
+                    <span class="material-symbols-outlined text-[18px] mr-2">stop</span> Stop Bot
                 </button>
-                <button id="btn-dry-run" class="md-button md-button--tonal" onclick="runDryRun()">
-                    <span class="material-symbols-outlined" style="font-size:18px;">science</span> Test Dry Run
+                <button id="btn-dry-run"
+                    class="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700"
+                    onclick="runDryRun()">
+                    <span class="material-symbols-outlined text-[18px] mr-2">science</span> Test Dry Run
                 </button>
             </div>
         </div>
 
         <!-- Logs Card -->
-        <div class="md-card">
-            <h3 class="md-card__headline">Live Logs</h3>
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Live Logs</h3>
             <div id="bot-logs"
-                style="background: rgba(0,0,0,0.3); color: #4af; padding: 16px; border-radius: 8px; font-family: 'JetBrains Mono', monospace; height: 300px; overflow-y: auto; font-size: 13px; border: 1px solid rgba(255,255,255,0.05);">
-                <div style="color: var(--md-sys-color-secondary);">Waiting for logs...</div>
+                class="h-64 p-4 overflow-y-auto text-sm font-mono text-blue-400 bg-gray-900 rounded-lg border border-gray-700">
+                <div class="text-gray-500">Waiting for logs...</div>
             </div>
         </div>
 
         <!-- Configuration Card -->
-        <div class="md-card">
-            <h3 class="md-card__headline">Settings</h3>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
-                <div class="md-text-field-container">
-                    <input type="number" id="cfg-cs-lots" class="md-text-field" placeholder=" " min="1" max="20"
-                        required>
-                    <label class="md-text-field-label">Max Credit Spread Lots</label>
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Settings</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                    <label for="cfg-cs-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
+                        Credit Spread Lots</label>
+                    <input type="number" id="cfg-cs-lots"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0" min="1" max="20" required>
                 </div>
-                <div class="md-text-field-container">
-                    <input type="number" id="cfg-rb-lots" class="md-text-field" placeholder=" " min="1" max="20"
-                        required>
-                    <label class="md-text-field-label">Max Rule-Based Lots</label>
+                <div>
+                    <label for="cfg-rb-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
+                        Rule-Based Lots</label>
+                    <input type="number" id="cfg-rb-lots"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0" min="1" max="20" required>
                 </div>
-                <div class="md-text-field-container">
-                    <input type="number" id="cfg-wheel-lots" class="md-text-field" placeholder=" " min="1" max="20"
-                        required>
-                    <label class="md-text-field-label">Max Wheel Contracts</label>
+                <div>
+                    <label for="cfg-wheel-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
+                        Wheel Contracts</label>
+                    <input type="number" id="cfg-wheel-lots"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0" min="1" max="20" required>
                 </div>
             </div>
-            <div style="text-align: right;">
-                <button class="md-button md-button--tonal" onclick="saveSettings()">Save Configuration</button>
+            <div class="text-right">
+                <button type="button"
+                    class="text-gray-900 bg-white border border-gray-300 focus:outline-none hover:bg-gray-100 focus:ring-4 focus:ring-gray-100 font-medium rounded-lg text-sm px-5 py-2.5 me-2 mb-2 dark:bg-gray-800 dark:text-white dark:border-gray-600 dark:hover:bg-gray-700 dark:hover:border-gray-600 dark:focus:ring-gray-700"
+                    onclick="saveSettings()">Save Configuration</button>
             </div>
         </div>
 
     </div>
 
     <!-- RIGHT COLUMN: Watchlists -->
-    <div style="display: flex; flex-direction: column; gap: 24px;">
+    <div class="space-y-6">
 
         <!-- Credit Spreads Watchlist -->
-        <div class="md-card">
-            <h3 class="md-card__headline">Credit Spreads Watchlist</h3>
-            <div id="chips-credit_spreads"
-                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Credit Spreads Watchlist</h3>
+            <div id="chips-credit_spreads" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
                 <!-- Chips -->
             </div>
-            <div style="display: flex; gap: 12px;">
-                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
-                    <input type="text" id="input-credit_spreads" class="md-text-field" placeholder=" "
-                        style="text-transform: uppercase;">
-                    <label class="md-text-field-label">Add Symbol</label>
+            <div class="flex gap-3">
+                <div class="flex-grow">
+                    <label for="input-credit_spreads" class="sr-only">Add Symbol</label>
+                    <input type="text" id="input-credit_spreads"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="ADD SYMBOL">
                 </div>
-                <button class="md-button md-button--filled" onclick="addSymbol('credit_spreads')">Add</button>
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="addSymbol('credit_spreads')">Add</button>
             </div>
         </div>
 
         <!-- Wheel Watchlist -->
-        <div class="md-card">
-            <h3 class="md-card__headline">Wheel Watchlist</h3>
-            <div id="chips-wheel"
-                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Wheel Watchlist</h3>
+            <div id="chips-wheel" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
                 <!-- Chips -->
             </div>
-            <div style="display: flex; gap: 12px;">
-                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
-                    <input type="text" id="input-wheel" class="md-text-field" placeholder=" "
-                        style="text-transform: uppercase;">
-                    <label class="md-text-field-label">Add Symbol</label>
+            <div class="flex gap-3">
+                <div class="flex-grow">
+                    <label for="input-wheel" class="sr-only">Add Symbol</label>
+                    <input type="text" id="input-wheel"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="ADD SYMBOL">
                 </div>
-                <button class="md-button md-button--filled" onclick="addSymbol('wheel')">Add</button>
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="addSymbol('wheel')">Add</button>
             </div>
         </div>
 
         <!-- Rule-Based Watchlist -->
-        <div class="md-card">
-            <h3 class="md-card__headline">Rule-Based CS Watchlist</h3>
-            <div id="chips-credit_spread_rulebase"
-                style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; min-height: 40px;">
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Rule-Based CS Watchlist</h3>
+            <div id="chips-credit_spread_rulebase" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
                 <!-- Chips -->
             </div>
-            <div style="display: flex; gap: 12px;">
-                <div class="md-text-field-container" style="flex: 1; margin-bottom: 0;">
-                    <input type="text" id="input-credit_spread_rulebase" class="md-text-field" placeholder=" "
-                        style="text-transform: uppercase;">
-                    <label class="md-text-field-label">Add Symbol</label>
+            <div class="flex gap-3">
+                <div class="flex-grow">
+                    <label for="input-credit_spread_rulebase" class="sr-only">Add Symbol</label>
+                    <input type="text" id="input-credit_spread_rulebase"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="ADD SYMBOL">
                 </div>
-                <button class="md-button md-button--filled" onclick="addSymbol('credit_spread_rulebase')">Add</button>
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="addSymbol('credit_spread_rulebase')">Add</button>
             </div>
         </div>
 
@@ -134,22 +154,42 @@
 </div>
 
 <!-- Dry Run Results Modal -->
-<div id="dry-run-modal"
-    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-    <div
-        style="background: white; width: 80%; max-width: 800px; max-height: 80vh; border-radius: 8px; display: flex; flex-direction: column; overflow: hidden;">
-        <div
-            style="padding: 15px 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin: 0;">Dry Run Execution Log</h3>
-            <button onclick="closeDryRunModal()"
-                style="background: none; border: none; font-size: 1.5rem; cursor: pointer;">&times;</button>
-        </div>
-        <div id="dry-run-logs"
-            style="padding: 20px; overflow-y: auto; background: #f5f5f5; color: #333333; font-family: monospace; white-space: pre-wrap;">
-            Running...
-        </div>
-        <div style="padding: 15px 20px; border-top: 1px solid #eee; text-align: right;">
-            <button class="md-button" onclick="closeDryRunModal()">Close</button>
+<div id="dry-run-modal" tabindex="-1" aria-hidden="true"
+    class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/50 dark:bg-gray-900/80">
+    <div class="relative w-full max-w-4xl max-h-full">
+        <!-- Modal content -->
+        <div class="relative bg-white rounded-lg shadow-sm dark:bg-gray-700">
+            <!-- Modal header -->
+            <div
+                class="flex items-center justify-between p-4 md:p-5 border-b rounded-t dark:border-gray-600 border-gray-200">
+                <h3 class="text-xl font-semibold text-gray-900 dark:text-white">
+                    Dry Run Execution Log
+                </h3>
+                <button type="button"
+                    class="text-gray-400 bg-transparent hover:bg-gray-200 hover:text-gray-900 rounded-lg text-sm w-8 h-8 ms-auto inline-flex justify-center items-center dark:hover:bg-gray-600 dark:hover:text-white"
+                    onclick="closeDryRunModal()">
+                    <svg class="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none"
+                        viewBox="0 0 14 14">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6" />
+                    </svg>
+                    <span class="sr-only">Close modal</span>
+                </button>
+            </div>
+            <!-- Modal body -->
+            <div class="p-4 md:p-5 space-y-4">
+                <div id="dry-run-logs"
+                    class="p-4 bg-gray-100 rounded-lg dark:bg-gray-800 dark:text-gray-300 h-96 overflow-y-auto font-mono text-sm whitespace-pre-wrap">
+                    Running...
+                </div>
+            </div>
+            <!-- Modal footer -->
+            <div
+                class="flex items-center justify-end p-4 md:p-5 border-t border-gray-200 rounded-b dark:border-gray-600">
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:outline-none focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800"
+                    onclick="closeDryRunModal()">Close</button>
+            </div>
         </div>
     </div>
 </div>
@@ -175,16 +215,20 @@
     function updateUI(status) {
         if (status.status === 'RUNNING') {
             statusIcon.textContent = 'radio_button_checked';
-            statusIcon.style.color = '#4caf50'; // Green
+            statusIcon.className = 'material-symbols-outlined text-4xl text-green-500';
             statusText.textContent = 'RUNNING';
-            btnStart.style.display = 'none';
-            btnStop.style.display = 'inline-block';
+            btnStart.classList.add('hidden');
+            btnStart.classList.remove('inline-flex');
+            btnStop.classList.remove('hidden');
+            btnStop.classList.add('inline-flex');
         } else {
             statusIcon.textContent = 'radio_button_unchecked';
-            statusIcon.style.color = 'grey';
+            statusIcon.className = 'material-symbols-outlined text-4xl text-gray-400';
             statusText.textContent = 'STOPPED';
-            btnStart.style.display = 'inline-block';
-            btnStop.style.display = 'none';
+            btnStart.classList.remove('hidden');
+            btnStart.classList.add('inline-flex');
+            btnStop.classList.add('hidden');
+            btnStop.classList.remove('inline-flex');
         }
 
         if (status.last_heartbeat) {
@@ -211,7 +255,7 @@
         if (status.logs && status.logs.length > 0) {
             logsContainer.innerHTML = status.logs.map(log => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
-                return `<div><span style="color: #888;">[${time}]</span> ${log.message}</div>`;
+                return `<div><span class="text-gray-500">[${time}]</span> ${log.message}</div>`;
             }).join('');
             logsContainer.scrollTop = logsContainer.scrollHeight;
         }
@@ -287,12 +331,14 @@
         const list = currentWatchlists[type] || [];
 
         container.innerHTML = list.map(sym => `
-            <div style="background: rgba(255,255,255,0.1); color: var(--md-sys-color-on-surface); padding: 6px 16px; border-radius: 16px; font-size: 0.9em; display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,0.1);">
-                <span style="font-weight: 500;">${sym}</span>
-                <span onclick="removeSymbol('${type}', '${sym}')" style="cursor: pointer; opacity: 0.7; font-weight: bold; margin-left: 4px; display:flex; align-items:center;">
-                    <span class="material-symbols-outlined" style="font-size: 16px;">close</span>
-                </span>
-            </div>
+            <span class="inline-flex items-center px-3 py-1 bg-primary-100 text-primary-800 rounded-full text-sm font-medium dark:bg-primary-900 dark:text-primary-300">
+                ${sym}
+                <button type="button" class="inline-flex items-center justify-center ms-2 text-sm text-primary-400 bg-transparent rounded-sm hover:bg-primary-200 hover:text-primary-900 dark:hover:bg-primary-800 dark:hover:text-primary-300" onclick="removeSymbol('${type}', '${sym}')" aria-label="Remove">
+                    <svg class="w-2 h-2" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
+                    </svg>
+                </button>
+            </span>
         `).join('');
     }
 
@@ -314,7 +360,7 @@
                         currentWatchlists[type] = data.watchlist;
                         renderWatchlist(type);
                     } else {
-                         fetchStatus(); // Fallback refresh
+                        fetchStatus(); // Fallback refresh
                     }
                 } else {
                     alert("Error saving watchlist: " + (data.error || "Unknown error"));
@@ -328,8 +374,8 @@
                     alert("Server error or invalid response (check console).");
                 }
             }
-        } catch (e) { 
-            console.error(e); 
+        } catch (e) {
+            console.error(e);
             alert("Network or Parsing Error: " + e);
         }
     }
@@ -404,7 +450,8 @@
         btn.disabled = true;
         btn.textContent = "Running...";
 
-        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
         logsDiv.textContent = "Initializing Dry Run...\nCalling Strategy for Watchlist: " + currentWatchlists.credit_spreads.join(', ');
 
         try {
@@ -437,7 +484,9 @@
     }
 
     function closeDryRunModal() {
-        document.getElementById('dry-run-modal').style.display = 'none';
+        const modal = document.getElementById('dry-run-modal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
     }
 
     // Poll every 3 seconds

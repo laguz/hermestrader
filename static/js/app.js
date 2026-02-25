@@ -63,26 +63,61 @@ function initBacktester(form) {
                 return;
             }
 
-            const trace = {
-                x: result.dates,
-                y: result.values,
-                type: 'scatter',
-                mode: 'lines+markers',
-                marker: { color: '#3b82f6' },
-                line: { shape: 'spline' }
-            };
+            chartContainer.innerHTML = '';
+            
+            const chart = LightweightCharts.createChart(chartContainer, {
+                layout: {
+                    background: { type: 'solid', color: 'transparent' },
+                    textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563',
+                },
+                grid: {
+                    vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                    horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                },
+                rightPriceScale: {
+                    borderVisible: false,
+                },
+                timeScale: {
+                    borderVisible: false,
+                    timeVisible: true,
+                },
+            });
 
-            const layout = {
-                title: `Backtest Result: ${data.symbol} (${data.strategy})`,
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#94a3b8' },
-                xaxis: { gridcolor: '#334155', title: 'Date' },
-                yaxis: { gridcolor: '#334155', title: 'Portfolio Value ($)' },
-                autosize: true
-            };
+            const lineSeries = chart.addLineSeries({
+                color: '#3b82f6',
+                lineWidth: 2,
+            });
 
-            Plotly.newPlot('chart-container', [trace], layout, { responsive: true });
+            const chartData = [];
+            result.dates.forEach((dateStr, index) => {
+                let tStr = String(dateStr);
+                if (tStr.length === 10 && tStr.includes('-')) {
+                    chartData.push({ time: tStr, value: result.values[index] });
+                } else {
+                    chartData.push({ time: Math.floor(new Date(dateStr).getTime() / 1000), value: result.values[index] });
+                }
+            });
+
+            chartData.sort((a, b) => {
+                let timeA = typeof a.time === 'string' ? new Date(a.time).getTime() : a.time;
+                let timeB = typeof b.time === 'string' ? new Date(b.time).getTime() : b.time;
+                return timeA - timeB;
+            });
+
+            const uniqueChartData = chartData.filter((item, pos, ary) => {
+                return !pos || item.time != ary[pos - 1].time;
+            });
+
+            if (uniqueChartData.length > 0) {
+                lineSeries.setData(uniqueChartData);
+                chart.timeScale().fitContent();
+            }
+
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== chartContainer) { return; }
+                const newRect = entries[0].contentRect;
+                chart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(chartContainer);
 
             metricsContainer.innerHTML = `
                 <div class="metrics-grid">

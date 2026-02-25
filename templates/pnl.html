@@ -2,57 +2,54 @@
 
 {% block title %}P&L Tracker{% endblock %}
 
-{% block content %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+{% block main_class %}space-y-6{% endblock %}
 
-<!-- Top Row: P&L Tracker (20%), Total P&L (20%), Pie Graph (60%) -->
-<div style="display: grid; grid-template-columns: 20fr 20fr 60fr; gap: 24px; margin-bottom: 24px;">
+{% block content %}
+<!-- Top Row: P&L Tracker Control Panel & Total P&L -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
 
     <!-- 1. P&L Tracker Control Panel -->
-    <div class="md-card"
-        style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-        <h1 class="md-card__headline" style="margin-bottom: 16px; font-size: 24px;">P&L Tracker</h1>
-        <button id="sync-btn" class="md-button md-button--filled">
-            <span class="material-symbols-outlined" style="font-size: 18px;">sync</span>
+    <div
+        class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 flex flex-col justify-center items-center text-center h-full">
+        <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-4">P&L Tracker</h1>
+        <button id="sync-btn"
+            class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 flex items-center dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800 transition-colors">
+            <span class="material-symbols-outlined text-[18px] mr-2">sync</span>
             Sync
         </button>
     </div>
 
     <!-- 2. Total P&L -->
-    <div class="md-card"
-        style="display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;">
-        <h2
-            style="font-size: 14px; color: var(--md-sys-color-secondary); margin: 0; text-transform: uppercase; letter-spacing: 1px;">
-            Total P&L</h2>
-        <div id="total-pnl" style="font-size: 32px; font-weight: 700; margin-top: 8px;">$0.00</div>
+    <div
+        class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 flex flex-col justify-center items-center text-center h-full">
+        <h2 class="text-sm font-medium text-gray-500 uppercase tracking-widest dark:text-gray-400 m-0">Total Closed P&L
+        </h2>
+        <div id="total-pnl" class="text-4xl font-bold mt-2 text-gray-900 dark:text-white">$0.00</div>
     </div>
-
-    <!-- 3. Closed Positions Count (Optional Placeholder or Removal) -->
-    <!-- Removed Pie Chart as per request -->
 </div>
 
 <!-- Charts Row (History) -->
-<div class="md-card col-span-full" style="margin-bottom: 24px;">
-    <h2 class="md-card__headline">Realized P&L History</h2>
-    <div style="height: 300px;">
-        <canvas id="pnlHistoryChart"></canvas>
-    </div>
+<div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+    <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Realized P&L History</h2>
+    <!-- TradingView Chart Container -->
+    <div id="pnlHistoryChart" class="w-full h-[400px]"></div>
 </div>
 
 <!-- Positions Section -->
-<div class="md-card col-span-full">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 class="md-card__headline" id="table-title" style="margin: 0;">Closed Positions</h2>
+<div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+    <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white" id="table-title">Closed Positions</h2>
     </div>
 
-    <div class="md-table-container">
-        <table id="positions-table">
-            <thead id="table-head">
+    <div class="relative overflow-x-auto rounded-lg">
+        <table id="positions-table" class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+            <thead id="table-head"
+                class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
                 <!-- Headers injected via JS -->
             </thead>
             <tbody id="table-body">
                 <tr>
-                    <td colspan="10" style="text-align: center;">Loading...</td>
+                    <td colspan="10" class="px-6 py-8 text-center text-gray-500">Loading...</td>
                 </tr>
             </tbody>
         </table>
@@ -63,17 +60,13 @@
 
 {% block scripts %}
 <script>
-    let allocationChart = null;
-    let historyChart = null;
+    let pnlChart = null;
+    let pnlSeries = null;
 
     document.addEventListener('DOMContentLoaded', () => {
         const syncBtn = document.getElementById('sync-btn');
-
-        // State
         let rawData = { open: [], closed: [] };
-        let currentView = 'open'; // 'open', 'closed'
 
-        // Load P&L Data
         async function loadPnL() {
             try {
                 const res = await fetch(`/api/pnl?t=${Date.now()}`);
@@ -90,23 +83,14 @@
             } catch (err) {
                 console.error("Load PnL Error:", err);
                 const tbody = document.getElementById('table-body');
-                if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="text-danger">Error loading data: ${err.message}</td></tr>`;
+                if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="text-center text-red-500 px-6 py-4">Error loading data: ${err.message}</td></tr>`;
             }
         }
 
-        // View Switching REMOVED
-
         function renderApp() {
             renderTable();
-            // Update Summary just for Total PnL (Closed) or Combined? 
-            // The card says "Total PnL". Usually implies Realized + Unrealized?
-            // If user wants Open Positions gone from UI, maybe they only care about Realized here?
-            // "Remove Open Positions from Pnl" implies showing Realized PnL.
-            // Let's summing ONLY closed positions for consistency with the table.
-
-            const closedPnL = (rawData.closed || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
-            updateSummary(0, rawData.closed); // 0 open pnl
-            renderCharts(null, rawData.closed);
+            updateSummary(0, rawData.closed);
+            renderCharts(rawData.closed);
         }
 
         function renderTable() {
@@ -119,10 +103,8 @@
 
             const list = rawData.closed;
 
-            // Sort
             if (list) {
                 list.sort((a, b) => {
-                    // Sort by update/exit date
                     const dateA = new Date(a.exit_date || a.last_updated || 0);
                     const dateB = new Date(b.exit_date || b.last_updated || 0);
                     return dateB - dateA;
@@ -130,15 +112,13 @@
             }
 
             if (!list || list.length === 0) {
-                thead.innerHTML = `<tr><th>Status</th></tr>`;
-                tbody.innerHTML = `<tr><td style="text-align: center; padding: 20px;">No closed positions found.</td></tr>`;
+                thead.innerHTML = `<tr><th class="px-6 py-3">Status</th></tr>`;
+                tbody.innerHTML = `<tr><td class="px-6 py-8 text-center" colspan="9">No closed positions found.</td></tr>`;
                 return;
             }
 
-            // Define Columns (Closed Only)
             let columns = [
                 { header: 'Symbol', key: 'symbol' },
-                { header: 'Type', key: 'type' },
                 { header: 'Qty', key: 'quantity' },
                 { header: 'Entry', key: 'entry_price', format: 'currency' },
                 { header: 'Exit Price', key: 'exit_price', format: 'currency' },
@@ -148,46 +128,49 @@
                 { header: 'Exit Date', key: 'exit_date', format: 'date' }
             ];
 
-            // Render Header
             const headerRow = document.createElement('tr');
             columns.forEach(col => {
                 const th = document.createElement('th');
+                th.className = `px-6 py-3 font-medium text-gray-900 dark:text-white ${['quantity', 'entry_price', 'exit_price', 'cost_basis', 'pnl', 'pnl_pct'].includes(col.key) ? 'text-right' : ''}`;
                 th.textContent = col.header;
                 headerRow.appendChild(th);
             });
             thead.appendChild(headerRow);
 
-            // Render Body
             list.forEach(p => {
                 const tr = document.createElement('tr');
+                tr.className = "bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600";
 
                 columns.forEach(col => {
                     const td = document.createElement('td');
                     let val = p[col.key];
 
-                    // Formatting
                     if (col.format === 'currency') val = formatCurrency(val);
                     if (col.format === 'pct') val = formatPct(val);
                     if (col.format === 'date') val = formatDate(val);
 
-                    // Styling
-                    if (col.key === 'symbol') td.style.fontWeight = '600';
-                    if (col.key === 'type') {
-                        td.innerHTML = `<span class="badge ${val === 'Stock' ? 'bg-primary' : 'bg-info'}">${val}</span>`;
+                    td.className = "px-6 py-4 whitespace-nowrap";
+
+                    if (['quantity', 'entry_price', 'exit_price', 'cost_basis', 'pnl', 'pnl_pct'].includes(col.key)) {
+                        td.classList.add('text-right');
+                    }
+
+                    if (col.key === 'symbol') {
+                        td.classList.add('font-semibold', 'text-gray-900', 'dark:text-white');
                     } else if (col.color) {
                         const num = parseFloat(p[col.key]);
-                        td.className = num >= 0 ? 'text-success fw-bold' : 'text-danger fw-bold';
-                        td.textContent = val;
-                    } else {
-                        td.textContent = val;
+                        if (num > 0) td.classList.add('text-green-500', 'font-bold');
+                        else if (num < 0) td.classList.add('text-red-500', 'font-bold');
+                        else td.classList.add('text-gray-900', 'dark:text-gray-300');
                     }
+
+                    td.textContent = val;
                     tr.appendChild(td);
                 });
                 tbody.appendChild(tr);
             });
         }
 
-        // Utilities
         function formatCurrency(num) {
             if (num === undefined || num === null || num === '') return '-';
             return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
@@ -203,11 +186,11 @@
             return new Date(dateStr).toLocaleDateString() + ' ' + new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
 
-        // Sync Button Logic
         if (syncBtn) {
             syncBtn.addEventListener('click', async () => {
                 syncBtn.disabled = true;
-                syncBtn.innerHTML = '<span class="material-symbols-outlined fa-spin" style="font-size:16px;">refresh</span> Syncing...';
+                const origHtml = syncBtn.innerHTML;
+                syncBtn.innerHTML = '<span class="material-symbols-outlined text-[18px] mr-2 animate-spin">refresh</span> Syncing...';
                 try {
                     const res = await fetch('/api/bot/sync_positions', { method: 'POST' });
                     const data = await res.json();
@@ -221,89 +204,96 @@
                     alert("Network Error");
                 } finally {
                     syncBtn.disabled = false;
-                    syncBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:18px;">sync</span> Sync';
+                    syncBtn.innerHTML = origHtml;
                 }
             });
         }
 
-        // Initial Load
         loadPnL();
 
-
-        // --- Chart Logic ---
-
-        function renderCharts(openPos, closedPos) {
-            if (typeof Chart === 'undefined') {
-                console.warn("Chart.js not loaded.");
+        function renderCharts(closedPos) {
+            const chartContainer = document.getElementById('pnlHistoryChart');
+            if (!chartContainer) return;
+            if (typeof LightweightCharts === 'undefined') {
+                console.error("LightweightCharts is not loaded. Ensure the CDN script is included.");
+                chartContainer.innerHTML = '<div class="text-red-500 flex items-center justify-center w-full h-full">Error loading charting library.</div>';
                 return;
             }
 
-            // 1. Allocation Pie Chart REMOVED
+            if (pnlChart) {
+                pnlChart.remove();
+                pnlChart = null;
+            }
 
-            // 2. History Chart (Closed Positions)
-            const histCanvas = document.getElementById('pnlHistoryChart');
-            if (histCanvas) {
-                const histCtx = histCanvas.getContext('2d');
-                const sortedClosed = (closedPos || []).sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
-                const historyLabels = [];
-                const historyData = [];
-                let runningTotal = 0;
-
-                sortedClosed.forEach(p => {
-                    runningTotal += (p.pnl || 0);
-                    historyLabels.push(new Date(p.exit_date).toLocaleDateString());
-                    historyData.push(runningTotal);
-                });
-
-                if (historyChart) historyChart.destroy();
-                historyChart = new Chart(histCtx, {
-                    type: 'line',
-                    data: {
-                        labels: historyLabels,
-                        datasets: [{
-                            label: 'Cumulative P&L',
-                            data: historyData,
-                            fill: true,
-                            borderColor: '#a8c7fa',
-                            backgroundColor: 'rgba(168, 199, 250, 0.1)',
-                            tension: 0.3,
-                            pointRadius: 3,
-                            pointBackgroundColor: '#a8c7fa'
-                        }]
+            pnlChart = LightweightCharts.createChart(chartContainer, {
+                layout: {
+                    background: { type: 'solid', color: 'transparent' },
+                    textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563',
+                },
+                grid: {
+                    vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                    horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                },
+                rightPriceScale: {
+                    borderVisible: false,
+                    scaleMargins: {
+                        top: 0.1,
+                        bottom: 0.1,
                     },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: { display: true, grid: { display: false, color: '#444' }, ticks: { color: '#888' } },
-                            y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#888' } }
-                        },
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    label: function (context) {
-                                        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.raw);
-                                    }
-                                }
-                            }
-                        }
+                },
+                timeScale: {
+                    borderVisible: false,
+                    timeVisible: true,
+                },
+            });
+
+            pnlSeries = pnlChart.addAreaSeries({
+                lineColor: '#3b82f6',
+                topColor: 'rgba(59, 130, 246, 0.4)',
+                bottomColor: 'rgba(59, 130, 246, 0.0)',
+                lineWidth: 2,
+            });
+
+            const sortedClosed = (closedPos || []).sort((a, b) => new Date(a.exit_date) - new Date(b.exit_date));
+            const chartData = [];
+            let runningTotal = 0;
+
+            sortedClosed.forEach(p => {
+                if (p.exit_date) {
+                    runningTotal += (p.pnl || 0);
+                    const timestamp = Math.floor(new Date(p.exit_date).getTime() / 1000);
+
+                    if (chartData.length > 0 && chartData[chartData.length - 1].time === timestamp) {
+                        chartData[chartData.length - 1].value = runningTotal;
+                    } else {
+                        chartData.push({ time: timestamp, value: runningTotal });
                     }
-                });
+                }
+            });
+
+            if (chartData.length > 0) {
+                pnlSeries.setData(chartData);
+                pnlChart.timeScale().fitContent();
+            }
+
+            new ResizeObserver(entries => {
+                if (entries.length === 0 || entries[0].target !== chartContainer) { return; }
+                const newRect = entries[0].contentRect;
+                pnlChart.applyOptions({ height: newRect.height, width: newRect.width });
+            }).observe(chartContainer);
+        }
+
+        function updateSummary(openPos, closedPos) {
+            const openPnL = (openPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+            const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
+            const totalPnL = openPnL + closedPnL;
+
+            const pnlEl = document.getElementById('total-pnl');
+            if (pnlEl) {
+                pnlEl.innerText = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalPnL);
+                pnlEl.className = `text-4xl font-bold mt-2 ${totalPnL >= 0 ? 'text-green-500' : 'text-red-500'}`;
             }
         }
     });
-
-    function updateSummary(openPos, closedPos) {
-        const openPnL = (openPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
-        const closedPnL = (closedPos || []).reduce((acc, p) => acc + (p.pnl || 0), 0);
-        const totalPnL = openPnL + closedPnL;
-
-        const pnlEl = document.getElementById('total-pnl');
-        if (pnlEl) {
-            pnlEl.innerText = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalPnL);
-            pnlEl.className = `fw-bold ${totalPnL >= 0 ? 'text-success' : 'text-danger'}`;
-        }
-    }
 </script>
 {% endblock %}

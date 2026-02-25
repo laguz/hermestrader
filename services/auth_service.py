@@ -74,7 +74,7 @@ class AuthService:
 
         user_doc = {
             "username": username,
-            "password_hash": generate_password_hash(password),
+            "password_hash": generate_password_hash(password, method='pbkdf2:sha256'),
             "vault": {
                 "version": 2, # DEK architecture
                 "encrypted_tradier_key": enc_tradier_key,

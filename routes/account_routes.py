@@ -18,7 +18,13 @@ def get_account_overview():
             
         balances = tradier.get_account_balances()
         if not balances:
-            return jsonify({"error": "Failed to fetch account balances"}), 500
+            return jsonify({
+                "total_equity": 0.0,
+                "option_buying_power": 0.0,
+                "stock_buying_power": 0.0,
+                "cash": 0.0,
+                "error": "Failed to fetch account balances. Check API credentials."
+            }), 200
         return jsonify(balances)
     except Exception as e:
         print(f"Account API Error: {e}")

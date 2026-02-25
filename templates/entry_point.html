@@ -3,75 +3,86 @@
 {% block main_class %}full-width-layout{% endblock %}
 
 {% block content %}
-<div class="md-grid" style="grid-template-columns: repeat(12, 1fr); gap: 24px;">
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
     <!-- Control Panel -->
-    <div class="md-card col-span-12">
-        <h2 class="md-card__headline">Algorithmic Entry Point Analysis</h2>
-        <div style="display: flex; gap: 16px; align-items: center; margin-top: 16px;">
-            <div class="md-text-field-container" style="max-width: 200px; margin-bottom: 0;">
-                <input type="text" id="symbol" class="md-text-field" value="TSLA" placeholder="Symbol">
-                <label class="md-text-field-label">Symbol</label>
+    <div
+        class="col-span-1 lg:col-span-12 p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-6">Algorithmic Entry Point Analysis</h2>
+        <div class="flex flex-col md:flex-row gap-4 items-end">
+            <div class="w-full md:w-64">
+                <label for="symbol" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Symbol</label>
+                <input type="text" id="symbol" name="symbol"
+                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                    value="TSLA" placeholder="SYMBOL">
             </div>
-            <button id="btn-analyze" class="md-button md-button--filled">Analyze</button>
+            <button id="btn-analyze"
+                class="w-full md:w-auto text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800">Analyze</button>
         </div>
     </div>
 
     <!-- Key Levels Panel -->
-    <div class="md-card col-span-12 hidden" id="levels-card">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
-            <h3 class="md-card__headline" style="margin:0;">Key Levels</h3>
+    <div class="col-span-1 lg:col-span-12 hidden p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700"
+        id="levels-card">
+        <div class="flex justify-between items-center flex-wrap gap-4 mb-6">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white m-0">Key Levels</h3>
 
             <!-- Period Selector -->
-            <div class="md-segmented-button" style="display: flex; gap: 8px;">
-                <button class="md-button md-button--tonal period-btn" data-period="3m">3 Months</button>
-                <button class="md-button md-button--filled period-btn" data-period="6m">6 Months</button>
-                <button class="md-button md-button--tonal period-btn" data-period="1y">1 Year</button>
+            <div class="inline-flex rounded-md shadow-sm" role="group">
+                <button type="button"
+                    class="period-btn px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-s-lg hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-2 focus:ring-primary-700 focus:text-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500 dark:focus:text-white"
+                    data-period="3m">
+                    3 Months
+                </button>
+                <button type="button"
+                    class="period-btn px-4 py-2 text-sm font-medium text-white bg-primary-700 border border-primary-700 hover:bg-primary-800 focus:z-10 focus:ring-2 focus:ring-primary-700 focus:text-white dark:bg-primary-600 dark:border-primary-600 dark:text-white dark:hover:text-white dark:hover:bg-primary-700 dark:focus:ring-primary-500 dark:focus:text-white"
+                    data-period="6m">
+                    6 Months
+                </button>
+                <button type="button"
+                    class="period-btn px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-e-lg hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-2 focus:ring-primary-700 focus:text-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500 dark:focus:text-white"
+                    data-period="1y">
+                    1 Year
+                </button>
             </div>
         </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 16px;">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <!-- Support -->
             <div>
-                <div class="md-subhead" style="color: var(--md-sys-color-primary); margin-bottom: 8px;">Support Levels
-                </div>
-                <div id="list-support" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                <div class="text-sm font-medium text-green-500 mb-2">Support Levels</div>
+                <div id="list-support" class="flex flex-wrap gap-2">
                     <!-- Tags will go here -->
                 </div>
             </div>
             <!-- Resistance -->
             <div>
-                <div class="md-subhead" style="color: var(--md-sys-color-error); margin-bottom: 8px;">Resistance Levels
-                </div>
-                <div id="list-resistance" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                <div class="text-sm font-medium text-red-500 mb-2">Resistance Levels</div>
+                <div id="list-resistance" class="flex flex-wrap gap-2">
                     <!-- Tags will go here -->
                 </div>
             </div>
         </div>
 
         <!-- Entry Points (Calculated) -->
-        <!-- Entry Points (Calculated) -->
-        <div style="margin-top: 24px; border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: 16px;">
-            <div class="md-subhead" style="color: var(--md-sys-color-primary); margin-bottom: 8px;">Calculated Entry
-                Points (Rounded)</div>
+        <div class="pt-6 border-t border-gray-200 dark:border-gray-700">
+            <h4 class="text-sm font-medium text-primary-500 mb-4">Calculated Entry Points (Rounded)</h4>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px;">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <!-- Put Entry Points (Support) -->
                 <div>
-                    <div
-                        style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: #4ade80;">
-                        Put Entry (Support)</div>
-                    <div id="list-put-entries" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <div class="text-xs uppercase tracking-wider font-semibold text-green-400 mb-2">Put Entry (Support)
+                    </div>
+                    <div id="list-put-entries" class="flex flex-wrap gap-2">
                         <!-- Tags -->
                     </div>
                 </div>
 
                 <!-- Call Entry Points (Resistance) -->
                 <div>
-                    <div
-                        style="font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; color: #ef4444;">
-                        Call Entry (Resistance)</div>
-                    <div id="list-call-entries" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                    <div class="text-xs uppercase tracking-wider font-semibold text-red-400 mb-2">Call Entry
+                        (Resistance)</div>
+                    <div id="list-call-entries" class="flex flex-wrap gap-2">
                         <!-- Tags -->
                     </div>
                 </div>
@@ -80,101 +91,108 @@
     </div>
 
     <!-- AI Prediction & Price -->
-    <div id="prediction-card" class="md-card col-span-12 hidden">
-        <div style="display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; gap: 20px;">
-            <div style="text-align: center;">
-                <div class="md-subhead" style="color: var(--md-sys-color-on-surface-variant);">Current Price</div>
-                <div id="disp-current-price" style="font-size: 1.8rem; font-weight: 700;">--</div>
+    <div id="prediction-card"
+        class="col-span-1 lg:col-span-12 hidden p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <div class="flex flex-col md:flex-row justify-around items-center gap-6">
+            <div class="text-center">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Current Price</div>
+                <div id="disp-current-price" class="text-4xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
-            <div style="width: 1px; height: 50px; background: var(--md-sys-color-outline-variant);"></div>
-            <div style="text-align: center;">
-                <div class="md-subhead" style="color: var(--md-sys-color-on-surface-variant);">AI Prediction (Next Day)
-                </div>
-                <div style="display: flex; gap: 10px; align-items: baseline;">
-                    <span id="disp-pred-price" style="font-size: 1.8rem; font-weight: 700;">--</span>
-                    <span id="disp-pred-change" style="font-size: 1rem; font-weight: 500;">--</span>
+            <div class="hidden md:block w-px h-16 bg-gray-200 dark:bg-gray-700"></div>
+            <div class="text-center">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">AI Prediction (Next Day)</div>
+                <div class="flex items-baseline justify-center gap-3">
+                    <span id="disp-pred-price" class="text-4xl font-bold text-gray-900 dark:text-white">--</span>
+                    <span id="disp-pred-change" class="text-xl font-medium">--</span>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Sell Put (Bullish) Strategy -->
-    <div id="sp-card" class="md-card col-span-6 hidden" style="border-top: 4px solid var(--md-sys-color-primary);">
-        <h3 class="md-card__headline" style="color: var(--md-sys-color-primary);">Sell Put Entry (Bullish)</h3>
-        <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
+    <div id="sp-card"
+        class="col-span-1 lg:col-span-6 hidden p-6 bg-white rounded-lg border-t-4 border-t-primary-500 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="text-xl font-bold text-primary-600 dark:text-primary-500 mb-4">Sell Put Entry (Bullish)</h3>
+        <div class="flex items-center justify-between mb-4">
             <div>
-                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Confidence</span>
-                <div id="sp-confidence" style="font-size: 1.5rem; font-weight: 700;">--</div>
+                <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</span>
+                <div id="sp-confidence" class="text-2xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
-            <div style="text-align: right;">
-                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Score</span>
-                <div id="sp-score" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            <div class="text-right">
+                <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Score</span>
+                <div id="sp-score" class="text-2xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
         </div>
-        <div class="md-divider" style="margin: 16px 0;"></div>
-        <h4 class="md-subhead">Reasons</h4>
-        <ul id="sp-reasons" style="margin-top: 8px; padding-left: 20px; color: var(--md-sys-color-on-surface-variant);">
+        <hr class="h-px my-4 bg-gray-200 border-0 dark:bg-gray-700">
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-2">Reasons</h4>
+        <ul id="sp-reasons" class="space-y-1 list-disc list-inside text-sm text-gray-500 dark:text-gray-400">
         </ul>
     </div>
 
     <!-- Sell Call (Bearish) Strategy -->
-    <div id="sc-card" class="md-card col-span-6 hidden" style="border-top: 4px solid var(--md-sys-color-error);">
-        <h3 class="md-card__headline" style="color: var(--md-sys-color-error);">Sell Call Entry (Bearish)</h3>
-        <div style="margin-top: 16px; display: flex; align-items: center; justify-content: space-between;">
+    <div id="sc-card"
+        class="col-span-1 lg:col-span-6 hidden p-6 bg-white rounded-lg border-t-4 border-t-red-500 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="text-xl font-bold text-red-600 dark:text-red-500 mb-4">Sell Call Entry (Bearish)</h3>
+        <div class="flex items-center justify-between mb-4">
             <div>
-                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Confidence</span>
-                <div id="sc-confidence" style="font-size: 1.5rem; font-weight: 700;">--</div>
+                <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</span>
+                <div id="sc-confidence" class="text-2xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
-            <div style="text-align: right;">
-                <span style="font-size: 0.9rem; color: var(--md-sys-color-on-surface-variant);">Score</span>
-                <div id="sc-score" style="font-size: 1.5rem; font-weight: 700;">--</div>
+            <div class="text-right">
+                <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Score</span>
+                <div id="sc-score" class="text-2xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
         </div>
-        <div class="md-divider" style="margin: 16px 0;"></div>
-        <h4 class="md-subhead">Reasons</h4>
-        <ul id="sc-reasons" style="margin-top: 8px; padding-left: 20px; color: var(--md-sys-color-on-surface-variant);">
+        <hr class="h-px my-4 bg-gray-200 border-0 dark:bg-gray-700">
+        <h4 class="text-sm font-medium text-gray-900 dark:text-white mb-2">Reasons</h4>
+        <ul id="sc-reasons" class="space-y-1 list-disc list-inside text-sm text-gray-500 dark:text-gray-400">
         </ul>
     </div>
 
     <!-- Indicators Grid -->
-    <div id="indicators-card" class="md-card col-span-12 hidden">
-        <h3 class="md-card__headline">Technical Indicators</h3>
-        <div
-            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 16px; text-align: center;">
+    <div id="indicators-card"
+        class="col-span-1 lg:col-span-12 hidden p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-6">Technical Indicators</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 text-center">
             <div>
-                <div class="md-subhead">RSI (14)</div>
-                <div id="ind-rsi" style="font-size: 1.2rem; font-weight: 600;">--</div>
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">RSI (14)</div>
+                <div id="ind-rsi" class="text-xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
             <div>
-                <div class="md-subhead">MACD</div>
-                <div id="ind-macd" style="font-size: 1.2rem; font-weight: 600;">--</div>
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">MACD</div>
+                <div id="ind-macd" class="text-xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
             <div>
-                <div class="md-subhead">Support</div>
-                <div id="ind-support" style="font-size: 1.2rem; font-weight: 600; color: var(--md-sys-color-primary);">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">SMA 200</div>
+                <div id="ind-sma200" class="text-xl font-bold text-gray-900 dark:text-white">--</div>
+            </div>
+            <div>
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Support</div>
+                <div id="ind-support" class="text-xl font-bold text-primary-600 dark:text-primary-500">
                     --</div>
             </div>
             <div>
-                <div class="md-subhead">Resistance</div>
-                <div id="ind-resistance" style="font-size: 1.2rem; font-weight: 600; color: var(--md-sys-color-error);">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Resistance</div>
+                <div id="ind-resistance" class="text-xl font-bold text-red-600 dark:text-red-500">
                     --</div>
             </div>
             <div>
-                <div class="md-subhead">Implied Vol (IV)</div>
-                <div id="ind-iv" style="font-size: 1.2rem; font-weight: 600; color: #facc15;">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Implied Vol (IV)</div>
+                <div id="ind-iv" class="text-xl font-bold text-yellow-400">
                     --</div>
             </div>
         </div>
     </div>
 
     <!-- Chart -->
-    <div id="chart-container" class="md-card col-span-12 hidden" style="height: 500px;">
-        <div id="analysis-chart" style="width: 100%; height: 100%;"></div>
+    <div id="chart-container"
+        class="col-span-1 lg:col-span-12 hidden p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 h-[500px]">
+        <div id="analysis-chart" class="w-full h-full"></div>
     </div>
 
 </div>
 
-<script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+
 <script>
     document.addEventListener('DOMContentLoaded', () => {
         const btnAnalyze = document.getElementById('btn-analyze');
@@ -190,14 +208,17 @@
         const periodBtns = document.querySelectorAll('.period-btn');
         let currentPeriod = '6m';
 
+        const activeClasses = ['text-white', 'bg-primary-700', 'border-primary-700', 'hover:bg-primary-800', 'focus:text-white', 'dark:bg-primary-600', 'dark:border-primary-600', 'dark:hover:bg-primary-700'];
+        const inactiveClasses = ['text-gray-900', 'bg-white', 'border-gray-200', 'hover:bg-gray-100', 'hover:text-primary-700', 'focus:text-primary-700', 'dark:bg-gray-700', 'dark:border-gray-600', 'dark:hover:bg-gray-600'];
+
         const updatePeriodUI = (period) => {
             periodBtns.forEach(btn => {
                 if (btn.dataset.period === period) {
-                    btn.classList.remove('md-button--tonal');
-                    btn.classList.add('md-button--filled');
+                    btn.classList.remove(...inactiveClasses);
+                    btn.classList.add(...activeClasses);
                 } else {
-                    btn.classList.remove('md-button--filled');
-                    btn.classList.add('md-button--tonal');
+                    btn.classList.remove(...activeClasses);
+                    btn.classList.add(...inactiveClasses);
                 }
             });
             currentPeriod = period;
@@ -364,7 +385,7 @@
                         listCall.appendChild(createEntryTag(ep, 'call'));
                     });
                 } else {
-                listCall.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None</span>';
+                    listCall.innerHTML = '<span style="color:var(--md-sys-color-on-surface-variant)">None</span>';
                 }
 
 
@@ -398,41 +419,100 @@
                 else rsiEl.style.color = 'inherit';
 
                 document.getElementById('ind-macd').textContent = data.indicators.macd;
+                document.getElementById('ind-sma200').textContent = data.indicators.sma_200 ? `$${data.indicators.sma_200.toFixed(2)}` : 'N/A';
                 document.getElementById('ind-support').textContent = `$${data.indicators.support}`;
                 document.getElementById('ind-resistance').textContent = `$${data.indicators.resistance}`;
                 document.getElementById('ind-iv').textContent = data.indicators.implied_volatility ? `${data.indicators.implied_volatility}%` : 'N/A';
 
                 // --- Chart ---
-                const dates = data.chart_data.dates;
-                const tracePrice = {
-                    x: dates, y: data.chart_data.close, type: 'scatter', mode: 'lines', name: 'Price',
-                    line: { color: '#a8c7fa', width: 2 }
-                };
-                const traceSupport = {
-                    x: dates, y: data.chart_data.support, type: 'scatter', mode: 'lines', name: 'Support',
-                    line: { color: '#4ade80', width: 1, dash: 'dash' }
-                };
-                const traceResistance = {
-                    x: dates, y: data.chart_data.resistance, type: 'scatter', mode: 'lines', name: 'Resistance',
-                    line: { color: '#ef4444', width: 1, dash: 'dash' }
-                };
-
-                const layout = {
-                    title: `${symbol.toUpperCase()} Analysis (${currentPeriod.toUpperCase()})`,
-                    autosize: true,
-                    paper_bgcolor: 'rgba(0,0,0,0)',
-                    plot_bgcolor: 'rgba(0,0,0,0)',
-                    font: { color: '#94a3b8' },
-                    xaxis: { gridcolor: '#334155', range: [dates[0], dates[dates.length - 1]] },
-                    yaxis: { gridcolor: '#334155' },
-                    margin: { t: 40, b: 40, l: 40, r: 20 },
-                    legend: { orientation: 'h', y: -0.1 }
-                };
-
-                Plotly.newPlot('analysis-chart', [tracePrice, traceSupport, traceResistance], layout, { responsive: true });
-
-                // Reveal
+                // Reveal containers BEFORE rendering chart so width/height are calculated correctly
                 [predictionCard, spCard, scCard, indicatorsCard, chartContainer, levelsCard].forEach(el => el.classList.remove('hidden'));
+
+                const dates = data.chart_data.dates;
+                const chartContainerDiv = document.getElementById('analysis-chart');
+                chartContainerDiv.innerHTML = '';
+
+                // Force layout reflow so clientWidth is available
+                void chartContainerDiv.offsetWidth;
+
+                const chart = LightweightCharts.createChart(chartContainerDiv, {
+                    width: chartContainerDiv.clientWidth,
+                    height: chartContainerDiv.clientHeight || 500,
+                    layout: {
+                        background: { type: 'solid', color: 'transparent' },
+                        textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563',
+                    },
+                    grid: {
+                        vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                        horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                    },
+                    rightPriceScale: {
+                        borderVisible: false,
+                    },
+                    timeScale: {
+                        borderVisible: false,
+                        timeVisible: true,
+                    },
+                });
+
+                const priceSeries = chart.addLineSeries({
+                    color: '#a8c7fa',
+                    lineWidth: 2,
+                });
+
+                const supportSeries = chart.addLineSeries({
+                    color: '#4ade80',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle ? LightweightCharts.LineStyle.Dashed : 2,
+                });
+
+                const resistanceSeries = chart.addLineSeries({
+                    color: '#ef4444',
+                    lineWidth: 1,
+                    lineStyle: LightweightCharts.LineStyle ? LightweightCharts.LineStyle.Dashed : 2,
+                });
+
+                const priceData = [];
+                const supportData = [];
+                const resistanceData = [];
+
+                dates.forEach((dateStr, index) => {
+                    let time;
+                    let tStr = String(dateStr);
+                    if (tStr.length === 10 && tStr.includes('-')) {
+                        time = tStr;
+                    } else {
+                        time = Math.floor(new Date(dateStr).getTime() / 1000);
+                    }
+                    priceData.push({ time: time, value: data.chart_data.close[index] });
+                    supportData.push({ time: time, value: data.chart_data.support[index] });
+                    resistanceData.push({ time: time, value: data.chart_data.resistance[index] });
+                });
+
+                const sortData = (a, b) => {
+                    let tA = typeof a.time === 'string' ? new Date(a.time).getTime() : a.time;
+                    let tB = typeof b.time === 'string' ? new Date(b.time).getTime() : b.time;
+                    return tA - tB;
+                };
+
+                priceData.sort(sortData);
+                supportData.sort(sortData);
+                resistanceData.sort(sortData);
+
+                if (priceData.length > 0) {
+                    priceSeries.setData(priceData);
+                    supportSeries.setData(supportData);
+                    resistanceSeries.setData(resistanceData);
+                    // Use a slight timeout so layout shift doesn't break zoom state
+                    setTimeout(() => chart.timeScale().fitContent(), 100);
+                }
+
+                new ResizeObserver(entries => {
+                    if (entries.length === 0 || entries[0].target !== chartContainerDiv) { return; }
+                    const newRect = entries[0].contentRect;
+                    chart.applyOptions({ height: newRect.height, width: newRect.width });
+                }).observe(chartContainerDiv);
+
 
             } catch (e) {
                 console.error(e);

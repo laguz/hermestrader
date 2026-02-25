@@ -173,7 +173,10 @@ class TradierService:
                 "cash": float(total_cash) if total_cash is not None else 0.0
             }
         except requests.RequestException as e:
-            logger.error(f"Error fetching account balances: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                logger.error(f"Error fetching account balances: {e} - Response: {e.response.text}")
+            else:
+                logger.error(f"Error fetching account balances: {e}")
             return None
 
     def get_positions(self) -> list:

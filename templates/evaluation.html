@@ -3,26 +3,28 @@
 {% block main_class %}full-width-layout{% endblock %}
 
 {% block content %}
-<div id="history-panel" class="md-card hidden col-span-full">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <h3 class="md-card__headline" style="margin:0;">Prediction History</h3>
-            <button id="btn-refresh-history" class="md-button md-button--text" style="padding: 0 8px; min-width: auto;">
+<div id="history-panel"
+    class="hidden col-span-1 lg:col-span-3 p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+    <div class="flex justify-between items-center mb-6">
+        <div class="flex items-center gap-3">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white m-0">Prediction History</h3>
+            <button id="btn-refresh-history"
+                class="py-2.5 px-3 text-sm font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
                 Refresh Data
             </button>
         </div>
-        <span id="history-mae" style="font-size: 0.9em; color: var(--md-sys-color-on-surface-variant);"></span>
+        <span id="history-mae" class="text-sm text-gray-500 dark:text-gray-400"></span>
     </div>
-    <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
-        <table class="md-table" style="width: 100%; border-collapse: collapse;">
-            <thead>
-                <tr style="border-bottom: 1px solid var(--md-sys-color-outline-variant);">
-                    <th style="padding: 12px; text-align: left;">Symbol</th>
-                    <th style="padding: 12px; text-align: left;">Date</th>
-                    <th style="padding: 12px; text-align: right;">Predicted</th>
-                    <th style="padding: 12px; text-align: right;">Actual</th>
-                    <th style="padding: 12px; text-align: right;">Diff</th>
-                    <th style="padding: 12px; text-align: center;">Model</th>
+    <div class="overflow-x-auto max-h-[400px]">
+        <table class="w-full text-sm text-left rtl:text-right text-gray-500 dark:text-gray-400">
+            <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400 sticky top-0">
+                <tr>
+                    <th scope="col" class="px-6 py-3">Symbol</th>
+                    <th scope="col" class="px-6 py-3">Date</th>
+                    <th scope="col" class="px-6 py-3 text-right">Predicted</th>
+                    <th scope="col" class="px-6 py-3 text-right">Actual</th>
+                    <th scope="col" class="px-6 py-3 text-right">Diff</th>
+                    <th scope="col" class="px-6 py-3 text-center">Model</th>
                 </tr>
             </thead>
             <tbody id="history-table-body">
@@ -31,58 +33,77 @@
     </div>
 </div>
 
-<div class="md-card col-span-full">
-    <h2 class="md-card__headline">AI Model Evaluation (Backtest)</h2>
-    <p style="color: var(--md-sys-color-on-surface-variant); margin-bottom: 2rem;">
+<div
+    class="col-span-1 lg:col-span-3 p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 mt-6 lg:mt-0">
+    <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">AI Model Evaluation (Backtest)</h2>
+    <p class="mb-6 text-sm text-gray-500 dark:text-gray-400">
         Evaluate the latest trained model performance against the last 60 days of actual data.
         This is a "fit analysis" to see how well the model predicts price movement on unseen data (if using a test set
         logic) or generally tracking logic.
     </p>
 
-    <div class="md-text-field-container" style="max-width: 300px;">
-        <input type="text" id="symbol" name="symbol" class="md-text-field" value="TSLA" placeholder=" " required>
-        <label for="symbol" class="md-text-field-label">Symbol</label>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 max-w-2xl">
+        <div>
+            <label for="symbol" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Symbol</label>
+            <input type="text" id="symbol" name="symbol"
+                class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                value="TSLA" placeholder="SYMBOL" required>
+        </div>
+        <div>
+            <label for="model-type" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Model
+                Architecture</label>
+            <select id="model-type"
+                class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
+                <option value="rf">Random Forest</option>
+                <option value="lstm">LSTM (TensorFlow)</option>
+                <option value="ensemble">Hybrid (Ensemble)</option>
+            </select>
+        </div>
     </div>
 
-    <div class="md-text-field-container" style="max-width: 300px;">
-        <select id="model-type" class="md-text-field" style="padding: 12px 16px;">
-            <option value="rf">Random Forest</option>
-            <option value="lstm">LSTM (TensorFlow)</option>
-            <option value="ensemble">Hybrid (Ensemble)</option>
-        </select>
-        <label for="model-type" class="md-text-field-label">Model Architecture</label>
-    </div>
+    <button id="btn-evaluate"
+        class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800">Run
+        Evaluation</button>
 
-    <button id="btn-evaluate" class="md-button md-button--filled">Run Evaluation</button>
-    <div id="eval-loading" class="hidden" style="margin-top: 1rem;">Running evaluation...</div>
+    <div id="eval-loading" class="hidden mt-4 text-sm text-gray-500 dark:text-gray-400 flex items-center">
+        <svg aria-hidden="true" class="w-4 h-4 text-gray-200 animate-spin dark:text-gray-600 fill-primary-600 mr-2"
+            viewBox="0 0 100 101" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path
+                d="M100 50.5908C100 78.2051 77.6142 100.591 50 100.591C22.3858 100.591 0 78.2051 0 50.5908C0 22.9766 22.3858 0.59082 50 0.59082C77.6142 0.59082 100 22.9766 100 50.5908ZM9.08144 50.5908C9.08144 73.1895 27.4013 91.5094 50 91.5094C72.5987 91.5094 90.9186 73.1895 90.9186 50.5908C90.9186 28.0021 72.5987 9.68225 50 9.68225C27.4013 9.68225 9.08144 28.0021 9.08144 50.5908Z"
+                fill="currentColor" />
+            <path
+                d="M93.9676 39.0409C96.393 38.4038 97.8624 35.9116 97.0079 33.5539C95.2932 28.8227 92.871 24.3692 89.8167 20.348C85.8452 15.1192 80.8826 10.7238 75.2124 7.41289C69.5422 4.10194 63.2754 1.94025 56.7698 1.05124C51.7666 0.367541 46.6976 0.446843 41.7345 1.27873C39.2613 1.69328 37.813 4.19778 38.4501 6.62326C39.0873 9.04874 41.5694 10.4717 44.0505 10.1071C47.8511 9.54855 51.7191 9.52689 55.5402 10.0491C60.8642 10.7766 65.9928 12.5457 70.6331 15.2552C75.2735 17.9648 79.3347 21.5619 82.5849 25.841C84.9175 28.9121 86.7997 32.2913 88.1811 35.8758C89.083 38.2158 91.5421 39.6781 93.9676 39.0409Z"
+                fill="currentFill" />
+        </svg>
+        Running evaluation...
+    </div>
 </div>
 
-<div id="eval-results" class="col-span-full hidden">
+<div id="eval-results" class="col-span-1 lg:col-span-3 hidden mt-6">
     <!-- Metrics Grid -->
-    <div class="metrics-grid" style="margin-bottom: 24px;">
-        <div class="metric-card">
-            <h3>MSE (Mean Squared Error)</h3>
-            <p id="metric-mse">-</p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">MSE (Mean Squared Error)</h3>
+            <p id="metric-mse" class="text-2xl font-bold text-gray-900 dark:text-white">-</p>
         </div>
-        <div class="metric-card">
-            <h3>MAE (Mean Absolute Error)</h3>
-            <p id="metric-mae">-</p>
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">MAE (Mean Absolute Error)</h3>
+            <p id="metric-mae" class="text-2xl font-bold text-gray-900 dark:text-white">-</p>
         </div>
-        <div class="metric-card">
-            <h3>Directional Accuracy</h3>
-            <p id="metric-accuracy">-</p>
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Directional Accuracy</h3>
+            <p id="metric-accuracy" class="text-2xl font-bold text-gray-900 dark:text-white">-</p>
         </div>
     </div>
-
-</div>
 </div>
 
 
 
-<div id="eval-chart-container" class="col-span-full hidden" style="margin-top: 1rem;">
+<div id="eval-chart-container" class="col-span-1 lg:col-span-3 hidden mt-6">
     <!-- Chart -->
-    <div class="md-card chart-card">
-        <div id="eval-chart" style="height: 100%; width: 100%;"></div>
+    <div
+        class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700 h-[600px]">
+        <div id="eval-chart" class="w-full h-full"></div>
     </div>
 </div>
 
@@ -113,7 +134,7 @@
                     historyPanel.classList.remove('hidden');
                 } else {
                     historyPanel.classList.remove('hidden');
-                    historyTableBody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px;">No history data found.</td></tr>';
+                    historyTableBody.innerHTML = '<tr><td colspan="6" class="px-6 py-4 text-center text-gray-500">No history data found.</td></tr>';
                 }
 
                 // Calculate History MAE
@@ -122,7 +143,6 @@
 
                 history.forEach(row => {
                     const tr = document.createElement('tr');
-                    tr.style.borderBottom = '1px solid var(--md-sys-color-outline-variant)';
 
                     const actualObj = row.actual_close_price ? `$${row.actual_close_price.toFixed(2)}` : '-';
                     let diff = '-';
@@ -131,19 +151,25 @@
                     if (row.actual_close_price) {
                         const error = row.actual_close_price - row.predicted_price;
                         diff = error.toFixed(2);
-                        diffColor = error >= 0 ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-error)';
+                        diffColor = error >= 0 ? 'text-green-500' : 'text-red-500';
 
                         totalError += Math.abs(error);
                         errorCount++;
                     }
 
+                    tr.className = 'bg-white border-b dark:bg-gray-800 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600';
+
                     tr.innerHTML = `
-                        <td style="padding: 12px;">${row.symbol}</td>
-                        <td style="padding: 12px;">${row.prediction_date}</td>
-                        <td style="padding: 12px; text-align: right;">$${row.predicted_price.toFixed(2)}</td>
-                        <td style="padding: 12px; text-align: right;">${actualObj}</td>
-                        <td style="padding: 12px; text-align: right; color: ${diffColor}">${diff}</td>
-                        <td style="padding: 12px; text-align: center;">${row.model_type}</td>
+                        <th scope="row" class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap dark:text-white">${row.symbol}</th>
+                        <td class="px-6 py-4">${row.prediction_date}</td>
+                        <td class="px-6 py-4 text-right font-mono">$${row.predicted_price.toFixed(2)}</td>
+                        <td class="px-6 py-4 text-right font-mono">${actualObj}</td>
+                        <td class="px-6 py-4 text-right font-mono font-bold ${diffColor}">${diff}</td>
+                        <td class="px-6 py-4 text-center">
+                             <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
+                                ${row.model_type}
+                             </span>
+                        </td>
                     `;
                     historyTableBody.appendChild(tr);
                 });
@@ -156,7 +182,7 @@
                 }
             } catch (e) {
                 console.error("Error fetching history:", e);
-                historyTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--md-sys-color-error)">Error: ${e.message}</td></tr>`;
+                historyTableBody.innerHTML = `<tr><td colspan="6" class="px-6 py-4 text-center text-red-500">Error: ${e.message}</td></tr>`;
             }
         };
 
@@ -221,33 +247,68 @@
                 document.getElementById('metric-accuracy').textContent = data.accuracy + '%';
 
                 // Render Chart
-                const dates = data.predictions.map(r => r.date);
-                const actuals = data.predictions.map(r => r.actual);
-                const predicteds = data.predictions.map(r => r.predicted);
-
-                const traceActual = {
-                    x: dates, y: actuals, type: 'scatter', mode: 'lines', name: 'Actual',
-                    line: { color: '#a8c7fa', width: 2 }
-                };
-                const tracePredicted = {
-                    x: dates, y: predicteds, type: 'scatter', mode: 'lines', name: 'Predicted',
-                    line: { color: '#ef4444', width: 2, dash: 'dot' }
-                };
-
-                const layout = {
-                    title: `Model Fit Analysis (${modelType.toUpperCase()})`,
-                    autosize: true,
-                    margin: { l: 50, r: 20, t: 50, b: 50 }, // Tight margins
-                    paper_bgcolor: 'rgba(0,0,0,0)',
-                    plot_bgcolor: 'rgba(0,0,0,0)',
-                    font: { color: '#94a3b8' },
-                    xaxis: { gridcolor: '#334155' },
-                    yaxis: { gridcolor: '#334155' },
-                    legend: { orientation: 'h', y: -0.2 }
-                };
-
                 if (chartContainer) chartContainer.classList.remove('hidden');
-                Plotly.newPlot('eval-chart', [traceActual, tracePredicted], layout, { responsive: true });
+
+                const evalChartDiv = document.getElementById('eval-chart');
+                evalChartDiv.innerHTML = '';
+
+                const chart = LightweightCharts.createChart(evalChartDiv, {
+                    layout: {
+                        background: { type: 'solid', color: 'transparent' },
+                        textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563',
+                    },
+                    grid: {
+                        vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                        horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' },
+                    },
+                    rightPriceScale: {
+                        borderVisible: false,
+                    },
+                    timeScale: {
+                        borderVisible: false,
+                        timeVisible: true,
+                    },
+                });
+
+                const actualSeries = chart.addLineSeries({
+                    color: '#a8c7fa',
+                    lineWidth: 2,
+                });
+                const predictedSeries = chart.addLineSeries({
+                    color: '#ef4444',
+                    lineWidth: 2,
+                    lineStyle: LightweightCharts.LineStyle ? LightweightCharts.LineStyle.Dotted : 1, // Fallback if enum not recognized
+                });
+
+                const actualData = [];
+                const predictedData = [];
+
+                data.predictions.forEach(r => {
+                    let tStr = String(r.date);
+                    let time;
+                    if (tStr.length === 10 && tStr.includes('-')) {
+                        time = tStr;
+                    } else {
+                        time = Math.floor(new Date(r.date).getTime() / 1000);
+                    }
+                    actualData.push({ time: time, value: r.actual });
+                    predictedData.push({ time: time, value: r.predicted });
+                });
+
+                actualData.sort((a, b) => (typeof a.time === 'string' ? new Date(a.time).getTime() : a.time) - (typeof b.time === 'string' ? new Date(b.time).getTime() : b.time));
+                predictedData.sort((a, b) => (typeof a.time === 'string' ? new Date(a.time).getTime() : a.time) - (typeof b.time === 'string' ? new Date(b.time).getTime() : b.time));
+
+                if (actualData.length > 0) {
+                    actualSeries.setData(actualData);
+                    predictedSeries.setData(predictedData);
+                    chart.timeScale().fitContent();
+                }
+
+                new ResizeObserver(entries => {
+                    if (entries.length === 0 || entries[0].target !== evalChartDiv) { return; }
+                    const newRect = entries[0].contentRect;
+                    chart.applyOptions({ height: newRect.height, width: newRect.width });
+                }).observe(evalChartDiv);
 
                 resultsPanel.classList.remove('hidden');
                 fetchHistory(); // Update history again (which shows all, not just evaluated symbol, but stays fresh)

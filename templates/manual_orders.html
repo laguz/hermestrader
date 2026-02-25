@@ -3,179 +3,223 @@
 {% block main_class %}full-width-layout{% endblock %}
 
 {% block content %}
-<div class="md-grid" style="grid-template-columns: repeat(12, 1fr); gap: 24px; max-width: 800px; margin: 0 auto;">
+<div class="max-w-4xl mx-auto">
 
     <!-- Order Form Card -->
-    <div class="md-card col-span-12">
-        <h2 class="md-card__headline">Manual Order Entry</h2>
+    <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+        <h2 class="text-2xl font-bold text-gray-900 dark:text-white mb-6">Manual Order Entry</h2>
 
-        <form id="order-form" style="margin-top: 16px;">
+        <form id="order-form">
 
             <!-- Class Selection -->
-            <div style="margin-bottom: 24px;">
-                <label class="md-text-field-label" style="position:static; display:block; margin-bottom:8px;">Asset
-                    Class</label>
-                <div class="md-segmented-button">
-                    <button type="button" class="md-button md-button--filled class-btn" data-value="equity">Equity
-                        (Stock)</button>
-                    <button type="button" class="md-button md-button--tonal class-btn"
-                        data-value="option">Option</button>
+            <div class="mb-6">
+                <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Asset Class</label>
+                <div class="inline-flex rounded-md shadow-sm" role="group">
+                    <button type="button"
+                        class="class-btn px-4 py-2 text-sm font-medium text-primary-700 bg-white border border-gray-200 rounded-s-lg hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-2 focus:ring-primary-700 focus:text-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500 dark:focus:text-white"
+                        data-value="equity">
+                        Equity (Stock)
+                    </button>
+                    <button type="button"
+                        class="class-btn px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-e-lg hover:bg-gray-100 hover:text-primary-700 focus:z-10 focus:ring-2 focus:ring-primary-700 focus:text-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500 dark:focus:text-white"
+                        data-value="option">
+                        Option
+                    </button>
                 </div>
                 <input type="hidden" id="order_class" value="equity">
             </div>
 
             <!-- Strategy Selection (Hidden for Equity) -->
-            <div id="strategy-container" class="hidden" style="margin-bottom: 24px;">
-                <label class="md-text-field-label"
-                    style="position:static; display:block; margin-bottom:8px;">Strategy</label>
-                <div class="md-segmented-button">
-                    <button type="button" class="md-button md-button--filled strategy-btn"
-                        data-value="single">Single</button>
-                    <button type="button" class="md-button md-button--tonal strategy-btn"
-                        data-value="credit_spread">Credit Spread</button>
-                    <button type="button" class="md-button md-button--tonal strategy-btn" data-value="iron_condor">Iron
-                        Condor</button>
+            <div id="strategy-container" class="hidden mb-6">
+                <label class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Strategy</label>
+                <div class="inline-flex rounded-md shadow-sm" role="group">
+                    <button type="button"
+                        class="strategy-btn px-4 py-2 text-sm font-medium text-primary-700 bg-white border border-gray-200 rounded-s-lg hover:bg-gray-100 focus:z-10 focus:ring-2 focus:ring-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500"
+                        data-value="single">
+                        Single
+                    </button>
+                    <button type="button"
+                        class="strategy-btn px-4 py-2 text-sm font-medium text-gray-900 bg-white border-t border-b border-gray-200 hover:bg-gray-100 focus:z-10 focus:ring-2 focus:ring-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500"
+                        data-value="credit_spread">
+                        Credit Spread
+                    </button>
+                    <button type="button"
+                        class="strategy-btn px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-e-lg hover:bg-gray-100 focus:z-10 focus:ring-2 focus:ring-primary-700 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:bg-gray-600 dark:focus:ring-primary-500"
+                        data-value="iron_condor">
+                        Iron Condor
+                    </button>
                 </div>
                 <input type="hidden" id="strategy" value="single">
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
 
                 <!-- Symbol -->
-                <div class="md-text-field-container">
-                    <input type="text" id="symbol" class="md-text-field" placeholder="Symbol (e.g. TSLA)" required>
-                    <label class="md-text-field-label">Underlying Symbol</label>
+                <div>
+                    <label for="symbol" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Underlying
+                        Symbol</label>
+                    <input type="text" id="symbol"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="e.g. TSLA" required>
                 </div>
 
                 <!-- Price Display -->
-                <div class="md-text-field-container">
-                    <input type="text" id="current-price" class="md-text-field" placeholder="-" disabled
-                        style="color:white;">
-                    <label class="md-text-field-label">Current Price</label>
+                <div>
+                    <label for="current-price"
+                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Current Price</label>
+                    <input type="text" id="current-price"
+                        class="bg-gray-100 border border-gray-300 text-gray-900 text-sm rounded-lg block w-full p-2.5 cursor-not-allowed dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-gray-400"
+                        placeholder="-" disabled>
                 </div>
             </div>
 
             <!-- Option Chain Section -->
-            <div id="option-chain-container" class="hidden" style="margin-top:16px;">
+            <div id="option-chain-container"
+                class="hidden space-y-6 mb-6 p-4 bg-gray-50 rounded-lg dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700">
 
                 <!-- Expiration -->
-                <div class="md-text-field-container" style="margin-bottom:16px;">
-                    <select id="expiration" class="md-text-field" style="background:transparent; color:white;">
+                <div>
+                    <label for="expiration"
+                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Expiration</label>
+                    <select id="expiration"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
                         <option value="" disabled selected>Select Expiration</option>
                     </select>
-                    <label class="md-text-field-label">Expiration</label>
                 </div>
 
                 <!-- SINGLE / CREDIT SPREAD: Type Selector -->
-                <div id="type-selector-container" class="md-text-field-container" style="margin-bottom:16px;">
-                    <select id="option_type" class="md-text-field" style="background:transparent; color:white;"
+                <div id="type-selector-container">
+                    <label for="option_type" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Option
+                        Type</label>
+                    <select id="option_type"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
                         disabled>
                         <option value="" disabled selected>Select Type</option>
-                        <option value="call" style="color:black;">Call</option>
-                        <option value="put" style="color:black;">Put</option>
+                        <option value="call">Call</option>
+                        <option value="put">Put</option>
                     </select>
-                    <label class="md-text-field-label">Option Type</label>
                 </div>
 
                 <!-- SINGLE / CREDIT SPREAD: Strike Selector -->
-                <div id="strike-selector-container" class="md-text-field-container" style="margin-bottom:16px;">
-                    <select id="option_strike" class="md-text-field" style="background:transparent; color:white;"
+                <div id="strike-selector-container">
+                    <label id="lbl-strike-select" for="option_strike"
+                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Strike</label>
+                    <select id="option_strike"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
                         disabled>
                         <option value="" disabled selected>Select Strike</option>
                     </select>
-                    <label id="lbl-strike-select" class="md-text-field-label">Strike</label>
                 </div>
 
                 <!-- IRON CONDOR: Put Strike & Call Strike -->
-                <div id="condor-inputs" class="hidden"
-                    style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom:16px;">
-                    <div class="md-text-field-container">
-                        <select id="short_put_strike" class="md-text-field" style="background:transparent; color:white;"
+                <div id="condor-inputs" class="hidden grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label for="short_put_strike"
+                            class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Short Put</label>
+                        <select id="short_put_strike"
+                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
                             disabled>
                             <option value="" disabled selected>Short Put</option>
                         </select>
-                        <label class="md-text-field-label">Short Put</label>
                     </div>
-                    <div class="md-text-field-container">
-                        <select id="short_call_strike" class="md-text-field"
-                            style="background:transparent; color:white;" disabled>
+                    <div>
+                        <label for="short_call_strike"
+                            class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Short Call</label>
+                        <select id="short_call_strike"
+                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                            disabled>
                             <option value="" disabled selected>Short Call</option>
                         </select>
-                        <label class="md-text-field-label">Short Call</label>
                     </div>
                 </div>
 
                 <!-- Multileg Legs Display -->
-                <div id="legs-display" class="hidden"
-                    style="padding: 12px; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 16px;">
-                    <div style="font-size: 0.9em; opacity: 0.8; margin-bottom: 8px;">Selected Legs:</div>
-                    <div id="legs-list" style="font-family: monospace;"></div>
+                <div id="legs-display"
+                    class="hidden p-4 mb-4 text-sm text-primary-800 rounded-lg bg-primary-50 dark:bg-gray-800 dark:text-primary-400"
+                    role="alert">
+                    <span class="font-medium">Selected Legs:</span>
+                    <ul id="legs-list" class="mt-1.5 list-disc list-inside space-y-1 font-mono text-xs"></ul>
                 </div>
 
                 <!-- Hidden Option Symbol (Single) -->
                 <input type="hidden" id="option_symbol">
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <!-- Side -->
-                <div class="md-text-field-container">
-                    <select id="side" class="md-text-field" style="background:transparent; color:white;">
+                <div>
+                    <label for="side" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Side</label>
+                    <select id="side"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
                         <!-- Dynamic Options -->
                     </select>
-                    <label class="md-text-field-label">Side</label>
                 </div>
 
                 <!-- Quantity -->
-                <div class="md-text-field-container">
-                    <input type="number" id="quantity" class="md-text-field" placeholder="Quantity" min="1" value="1"
-                        required>
-                    <label class="md-text-field-label">Quantity</label>
+                <div>
+                    <label for="quantity"
+                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Quantity</label>
+                    <input type="number" id="quantity"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="Quantity" min="1" value="1" required>
                 </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <!-- Type -->
-                <div class="md-text-field-container">
-                    <select id="type" class="md-text-field" style="background:transparent; color:white;">
-                        <option value="market" style="color:black;">Market</option>
-                        <option value="limit" style="color:black;">Limit</option>
-                        <option value="stop" style="color:black;">Stop</option>
-                        <option value="stop_limit" style="color:black;">Stop Limit</option>
+                <div>
+                    <label for="type" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Order
+                        Type</label>
+                    <select id="type"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
+                        <option value="market">Market</option>
+                        <option value="limit">Limit</option>
+                        <option value="stop">Stop</option>
+                        <option value="stop_limit">Stop Limit</option>
                     </select>
-                    <label class="md-text-field-label">Order Type</label>
                 </div>
 
                 <!-- Duration -->
-                <div class="md-text-field-container">
-                    <select id="duration" class="md-text-field" style="background:transparent; color:white;">
-                        <option value="day" style="color:black;">Day</option>
-                        <option value="gtc" style="color:black;">GTC</option>
-                        <option value="pre" style="color:black;">Pre-Market</option>
-                        <option value="post" style="color:black;">Post-Market</option>
+                <div>
+                    <label for="duration"
+                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Duration</label>
+                    <select id="duration"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
+                        <option value="day">Day</option>
+                        <option value="gtc">GTC</option>
+                        <option value="pre">Pre-Market</option>
+                        <option value="post">Post-Market</option>
                     </select>
-                    <label class="md-text-field-label">Duration</label>
                 </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px;">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                 <!-- Price (Hidden for Market) -->
-                <div class="md-text-field-container hidden" id="price-container">
-                    <input type="number" id="price" class="md-text-field" placeholder="Limit Price" step="0.01">
-                    <label class="md-text-field-label">Limit Price</label>
+                <div id="price-container" class="hidden">
+                    <label for="price" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Limit
+                        Price</label>
+                    <input type="number" id="price"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0.00" step="0.01">
                 </div>
 
                 <!-- Stop Price (Hidden for non-Stop) -->
-                <div class="md-text-field-container hidden" id="stop-container">
-                    <input type="number" id="stop" class="md-text-field" placeholder="Stop Price" step="0.01">
-                    <label class="md-text-field-label">Stop Price</label>
+                <div id="stop-container" class="hidden">
+                    <label for="stop" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Stop
+                        Price</label>
+                    <input type="number" id="stop"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0.00" step="0.01">
                 </div>
             </div>
 
             <!-- Submit -->
-            <div style="margin-top: 24px; text-align: right;">
-                <div id="status-message" style="margin-bottom: 16px; font-weight: 500;"></div>
-                <button type="submit" id="btn-submit" class="md-button md-button--filled"
-                    style="width: 100%; padding: 12px;">Place Order</button>
+            <div class="mt-8 flex flex-col items-end">
+                <div id="status-message" class="mb-4 text-sm font-medium"></div>
+                <button type="submit" id="btn-submit"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:outline-none focus:ring-primary-300 font-medium rounded-lg text-sm w-full sm:w-auto px-5 py-2.5 text-center dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800">
+                    Place Order
+                </button>
             </div>
 
         </form>
@@ -245,20 +289,32 @@
             const assetClass = orderClassInput.value;
             const strategy = strategyInput.value;
 
-            // Asset Class Toggle
+            // Asset Class Toggle Look
             classBtns.forEach(b => {
                 const isActive = b.dataset.value === assetClass;
-                b.className = `md-button class-btn ${isActive ? 'md-button--filled' : 'md-button--tonal'}`;
+                if (isActive) {
+                    b.classList.add('text-primary-700', 'dark:text-white', 'bg-gray-100', 'dark:bg-gray-600');
+                    b.classList.remove('text-gray-900');
+                } else {
+                    b.classList.remove('text-primary-700', 'dark:text-white', 'bg-gray-100', 'dark:bg-gray-600');
+                    b.classList.add('text-gray-900');
+                }
             });
 
             if (assetClass === 'option') {
                 optionChainContainer.classList.remove('hidden');
                 strategyContainer.classList.remove('hidden');
 
-                // Strategy Toggle
+                // Strategy Toggle Look
                 strategyBtns.forEach(b => {
                     const isActive = b.dataset.value === strategy;
-                    b.className = `md-button strategy-btn ${isActive ? 'md-button--filled' : 'md-button--tonal'}`;
+                    if (isActive) {
+                        b.classList.add('text-primary-700', 'dark:text-white', 'bg-gray-100', 'dark:bg-gray-600');
+                        b.classList.remove('text-gray-900');
+                    } else {
+                        b.classList.remove('text-primary-700', 'dark:text-white', 'bg-gray-100', 'dark:bg-gray-600');
+                        b.classList.add('text-gray-900');
+                    }
                 });
 
                 // Inputs Visibility based on Strategy
@@ -297,7 +353,6 @@
                 const opt = document.createElement('option');
                 opt.value = s.value;
                 opt.textContent = s.text;
-                opt.style.color = 'black';
                 sideSelect.appendChild(opt);
             });
             // Default to Sell to Open for Spreads/Condors if convenient?
@@ -342,7 +397,6 @@
                 data.expirations.forEach(date => {
                     const opt = document.createElement('option');
                     opt.value = date;
-                    opt.style.color = 'black';
                     opt.textContent = date;
                     expirationSelect.appendChild(opt);
                 });
@@ -441,7 +495,6 @@
                 el.value = opt.symbol;
                 el.dataset.strike = opt.strike;
                 el.dataset.price = opt.last || opt.bid || 0;
-                el.style.color = 'black';
 
                 let delta = opt.greeks?.delta || opt.delta || 0;
                 delta = Number(delta).toFixed(2);
@@ -567,8 +620,8 @@
 
             // Render Legs
             legsList.innerHTML = legs.map(l => {
-                const color = l.description.includes('Warning') ? 'red' : 'inherit';
-                return `<div style="color:${color}">${l.description}</div>`;
+                const isWarning = l.description.includes('Warning');
+                return `<li class="${isWarning ? 'text-red-500 font-bold' : ''}">${l.description}</li>`;
             }).join('');
 
             // Store for submit
@@ -598,7 +651,7 @@
             e.preventDefault();
             btnSubmit.disabled = true;
             statusMessage.textContent = 'Submitting order...';
-            statusMessage.style.color = 'var(--md-sys-color-on-surface)';
+            statusMessage.className = 'mb-4 text-sm font-medium text-gray-500';
 
             const strategy = strategyInput.value;
             const assetClass = orderClassInput.value;
@@ -621,7 +674,7 @@
                     payload.class = 'multileg';
                     if (!window.currentLegs || window.currentLegs.length === 0) {
                         statusMessage.textContent = "Error: Incomplete legs";
-                        statusMessage.style.color = 'red';
+                        statusMessage.className = 'mb-4 text-sm font-medium text-red-500';
                         btnSubmit.disabled = false;
                         return;
                     }
@@ -659,12 +712,12 @@
                 if (!res.ok) throw new Error(data.error || 'Failed to place order');
 
                 statusMessage.textContent = `Success! Order ID: ${data.order.id} (${data.order.status})`;
-                statusMessage.style.color = 'var(--md-sys-color-primary)';
+                statusMessage.className = 'mb-4 text-sm font-medium text-green-500';
 
             } catch (err) {
                 console.error(err);
                 statusMessage.textContent = `Error: ${err.message}`;
-                statusMessage.style.color = 'var(--md-sys-color-error)';
+                statusMessage.className = 'mb-4 text-sm font-medium text-red-500';
             } finally {
                 btnSubmit.disabled = false;
             }

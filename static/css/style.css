@@ -154,15 +154,6 @@ body {
 
 /* --- Layout: Main --- */
 main {
-    padding: 32px 24px;
-    max-width: 1400px;
-    /* Wider canvas */
-    margin: 0 auto;
-    width: 100%;
-    box-sizing: border-box;
-    display: grid;
-    grid-template-columns: 320px 1fr;
-    gap: 24px;
     animation: fadeIn 0.6s ease-out;
 }
 
