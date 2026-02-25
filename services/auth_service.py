@@ -162,6 +162,8 @@ class AuthService:
         """
         Verify NIP-98/Auth event and return vault metadata if available.
         """
+        if self.db is None: return None, None
+        
         # TODO: Verify Signature using nostr sdk (Verified in routes for now)
         pubkey = event.get('pubkey')
         

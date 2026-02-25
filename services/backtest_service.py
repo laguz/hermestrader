@@ -1,10 +1,11 @@
 import re
 import logging
 import uuid
-
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
+from scipy import stats
+import math
+import traceback
 
 from datetime import datetime, timedelta
 
@@ -421,22 +422,51 @@ class BacktestService:
         return history
 
     def run_backtest(self, symbol, strategy_type, start_date, end_date,
-                     commission=None, iv_multiplier=None, risk_free_rate=None):
+                     commission=None, iv_multiplier=None, risk_free_rate=None, slippage_per_leg=0.01, risk_per_trade_pct=0.02):
         logger.info(f"Starting Backtest for {symbol} ({strategy_type}) {start_date} → {end_date}")
 
         # Apply configurable parameters
         commission_per = commission if commission is not None else self.COMMISSION_PER_CONTRACT
         iv_mult = iv_multiplier if iv_multiplier is not None else self.IV_HV_MULTIPLIER
+        slippage_rate = slippage_per_leg
+        risk_pct = risk_per_trade_pct
         
-        # 1. Fetch History (use real Tradier service stored from __init__)
+        # 1. Fetch History
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         warmup_start = (start_dt - timedelta(days=90)).strftime('%Y-%m-%d')
         
         history = None
-        try:
-            history = self.real_tradier.get_historical_pricing(symbol, warmup_start, end_date)
-        except Exception as e:
-            logger.warning(f"Failed to fetch history from Tradier: {e}")
+        from services.container import Container
+        db = Container.get_db()
+
+        # Try MongoDB cache first
+        if db is not None:
+            try:
+                cache_col = db['historical_prices']
+                cached_doc = cache_col.find_one({"symbol": symbol, "start_date": warmup_start, "end_date": end_date})
+                if cached_doc:
+                    logger.info(f"Loaded historical data for {symbol} from MongoDB cache.")
+                    history = cached_doc.get("data")
+            except Exception as e:
+                logger.warning(f"Failed to read from MongoDB cache: {e}")
+
+        # If cache miss, fetch from API and cache it
+        if not history:
+            try:
+                history = self.real_tradier.get_historical_pricing(symbol, warmup_start, end_date)
+                if history and db is not None:
+                    try:
+                        cache_col = db['historical_prices']
+                        cache_col.update_one(
+                            {"symbol": symbol, "start_date": warmup_start, "end_date": end_date},
+                            {"$set": {"data": history}},
+                            upsert=True
+                        )
+                        logger.info(f"Saved historical data for {symbol} to MongoDB cache.")
+                    except Exception as e:
+                        logger.warning(f"Failed to write to MongoDB cache: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch history from Tradier: {e}")
             
         if not history:
             logger.warning(f"No Tradier data for {symbol}. Generating synthetic data.")
@@ -448,35 +478,64 @@ class BacktestService:
         df = pd.DataFrame(history)
         df['date'] = pd.to_datetime(df['date'])
         
+        # --- Pre-compute Vectorized Indicators ---
+        logger.info("Pre-computing vectorized indicators for backtest speedup...")
+        
+        from utils.indicators import calculate_rsi
+        df['rsi'] = calculate_rsi(df['close'])
+        df['sma_200'] = df['close'].rolling(window=200, min_periods=1).mean()
+        
+        # Historical Volatility (20-day rolling std dev of log returns, annualized)
+        df['log_return'] = np.log(df['close'] / df['close'].shift(1))
+        df['hv'] = df['log_return'].rolling(window=20).std() * np.sqrt(252)
+        
+        # Create a rolling HV rank (percentile within last 252 days)
+        # Using a rank function: % of days in the lookback window where HV was lower than today's HV
+        df['hv_rank'] = df['hv'].rolling(window=252, min_periods=20).apply(
+            lambda x: (x < x.iloc[-1]).sum() / len(x) * 100 if len(x) > 0 else 50, raw=False
+        )
+        
+        # Basic forward-fill and defaults for early rows
+        df['hv'] = df['hv'].fillna(0.5)
+        df['hv_rank'] = df['hv_rank'].fillna(50.0)
+        df['rsi'] = df['rsi'].fillna(50.0)
+        
+        # Key Level Caching Mechanism
+        # K-Means clustering is CPU intensive. Rather than calculating 
+        # Support/Resistance every single simulated day, we'll recalculate every 5 trading days.
+        cached_key_levels = []
+        days_since_last_level_calc = 999
+        from utils.indicators import find_key_levels
+        # -----------------------------------------
+        
         # 2. Setup Mocks
         mock_tradier = MockTradierService()
         mock_analysis = MockAnalysisService()
         mock_db = MockDB()
         
-        # 3. Setup Strategy
-        if strategy_type == "credit_spread":
-            strategy = CreditSpreadStrategy(
-                tradier_service=mock_tradier, 
-                db=mock_db, 
-                dry_run=False,
-                analysis_service=mock_analysis
-            )
-        elif strategy_type == "wheel":
-            strategy = WheelStrategy(
-                tradier_service=mock_tradier,
-                db=mock_db,
-                dry_run=False,
-                analysis_service=mock_analysis
-            )
-        elif strategy_type == "credit_spread_rulebase":
-            strategy = CreditSpreadRulebaseStrategy(
-                tradier_service=mock_tradier,
-                db=mock_db,
-                dry_run=False,
-                analysis_service=mock_analysis
-            )
-        else:
-            return {"error": f"Strategy {strategy_type} not supported."}
+        # 3. Setup Strategy (Dynamic Injection)
+        strategy = None
+        # Use lazy instantiation mapping instead of hardcoded if/elif block
+        from bot.strategies.credit_spreads import CreditSpreadStrategy
+        from bot.strategies.wheel import WheelStrategy
+        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
+        
+        strategy_registry = {
+            "credit_spread": CreditSpreadStrategy,
+            "wheel": WheelStrategy,
+            "credit_spread_rulebase": CreditSpreadRulebaseStrategy
+        }
+        
+        strategy_class = strategy_registry.get(strategy_type)
+        if not strategy_class:
+            return {"error": f"Strategy '{strategy_type}' not supported in Backtester."}
+            
+        strategy = strategy_class(
+            tradier_service=mock_tradier, 
+            db=mock_db, 
+            dry_run=False,
+            analysis_service=mock_analysis
+        )
         
         # Results containers
         portfolio_values = []
@@ -506,50 +565,39 @@ class BacktestService:
                 benchmark_start_price = price
             benchmark_values.append(starting_cash * (price / benchmark_start_price))
             
-            # 1. Calculate Indicators (windowed)
-            window_df = df.iloc[max(0, index-90):index+1]
-            if len(window_df) < 30:
-                continue 
-            
-            # Historical Volatility
-            volatility = calculate_historical_volatility(window_df['close'])
-            if pd.isna(volatility):
-                volatility = 0.5
-            
-            # IV Proxy (configurable multiplier)
+            # 1. Fetch Vectorized Indicators
+            # Lookups are near-instantaneous
+            price = row['close']
+            volatility = row['hv'] if not pd.isna(row['hv']) else 0.5
             implied_vol = volatility * iv_mult
-            
-            # Key Levels
-            key_levels = find_key_levels(
-                window_df['close'], 
-                window_df['volume'],
-                n_clusters=6
-            )
-            
-            # RSI
-            rsi = calculate_rsi(window_df['close']).iloc[-1]
+            rsi = row['rsi']
+            sma_200 = row['sma_200']
+            hv_rank = row['hv_rank']
 
-            # SMA-200 (use available data, may be less than 200 if window is shorter)
-            sma_200 = window_df['close'].rolling(min(200, len(window_df))).mean().iloc[-1]
-
-            # HV Rank: percentile of current HV within its own 90-day range
-            hv_series = window_df['close'].pct_change().rolling(20).std() * np.sqrt(252)
-            hv_series = hv_series.dropna()
-            if len(hv_series) > 1:
-                current_hv = hv_series.iloc[-1]
-                hv_rank = (hv_series < current_hv).sum() / len(hv_series) * 100
+            # 2. Key Level Caching
+            # Recalculate support/resistance nodes every 5 trading days
+            if days_since_last_level_calc >= 5:
+                # We still need a window of data for the clustering
+                window_df = df.iloc[max(0, index-90):index+1]
+                if len(window_df) >= 30:
+                    cached_key_levels = find_key_levels(
+                        window_df['close'], 
+                        window_df['volume'],
+                        n_clusters=6
+                    )
+                days_since_last_level_calc = 0
             else:
-                hv_rank = 50  # default mid-range
+                days_since_last_level_calc += 1
             
-            # 2. Update Mock Context
+            # 3. Update Mock Context
             mock_tradier.cash = cash
             mock_tradier.set_context(current_date_str, price, implied_vol)
-            mock_analysis.set_context(price, key_levels, rsi, implied_vol, sma_200=sma_200, hv_rank=hv_rank)
+            mock_analysis.set_context(price, cached_key_levels, rsi, implied_vol, sma_200=sma_200, hv_rank=hv_rank)
             
             # Debug: Log first few days and periodic updates
             if len(dates) < 3 or len(dates) % 20 == 0:
-                support_levels = [l for l in key_levels if l.get('type') == 'support']
-                resist_levels = [l for l in key_levels if l.get('type') == 'resistance']
+                support_levels = [l for l in cached_key_levels if l.get('type') == 'support']
+                resist_levels = [l for l in cached_key_levels if l.get('type') == 'resistance']
                 logger.debug(
                     f"[BT {current_date_str}] Price={price:.2f} IV={implied_vol:.3f} RSI={rsi:.1f} "
                     f"Supports={len(support_levels)} Resists={len(resist_levels)} "
@@ -599,7 +647,7 @@ class BacktestService:
                     
                     # Slippage (Debit = paying more)
                     num_legs = len(order.get('legs') or []) or 1
-                    slippage = 0.01 * num_legs
+                    slippage = slippage_rate * num_legs
                     final_price = fill_price + slippage
                     
                     qty = abs(order['quantity'])
@@ -661,11 +709,35 @@ class BacktestService:
                     
                     # Slippage on Entry (Credit = receive less)
                     num_legs = len(order.get('legs') or []) or 1
-                    slippage = 0.01 * num_legs
+                    slippage = slippage_rate * num_legs
                     fill_price = max(0, requested_price - slippage)
                     
                     qty = order['quantity']
                     multiplier = 1 if order.get('class') == 'equity' else 100
+                    
+                    if risk_pct > 0:
+                        current_pv = portfolio_values[-1] if portfolio_values else starting_cash
+                        risk_amount = current_pv * risk_pct
+                        
+                        trade_risk = 0
+                        if order.get('class') == 'multileg' and order.get('legs'):
+                            strikes = []
+                            for leg in order['legs']:
+                                details = mock_tradier._parse_option_symbol(leg['option_symbol'])
+                                if details: strikes.append(details['strike'])
+                            if len(strikes) >= 2:
+                                width = abs(strikes[0] - strikes[-1])
+                                trade_risk = max(0.01, (width - fill_price) * 100)
+                        else:
+                            pos_sym = order.get('option_symbol') or ''
+                            details = mock_tradier._parse_option_symbol(pos_sym)
+                            if details:
+                                trade_risk = max(0.01, (details['strike'] - fill_price) * 100)
+                            else:
+                                trade_risk = max(0.01, fill_price * multiplier)
+                                
+                        if trade_risk > 0:
+                            qty = max(1, int(risk_amount / trade_risk))
                     
                     # Commission
                     commission_cost = commission_per * qty * num_legs
@@ -864,6 +936,30 @@ class BacktestService:
         running_max = np.maximum.accumulate(pv)
         drawdowns = (pv - running_max) / running_max
         max_drawdown = float(np.min(drawdowns))
+        
+        # --- Drawdown Series for Charting ---
+        drawdown_series = []
+        for i, date_str in enumerate(dates):
+            drawdown_series.append({"time": date_str, "value": round(float(drawdowns[i] * 100), 2)})
+
+        # --- Monthly Returns for Heatmap ---
+        monthly_returns = {}
+        month_groups = {}
+        # Group portfolio values by YYYY-MM
+        for i, date_str in enumerate(dates):
+            ym = date_str[:7]
+            if ym not in month_groups:
+                month_groups[ym] = []
+            month_groups[ym].append(pv[i])
+            
+        for ym, vals in month_groups.items():
+            start_val = vals[0]
+            end_val = vals[-1]
+            ret = (end_val - start_val) / start_val * 100
+            year, month = ym.split("-")
+            if year not in monthly_returns:
+                monthly_returns[year] = {}
+            monthly_returns[year][month] = round(ret, 2)
 
         # --- Daily Returns & Sharpe Ratio ---
         daily_returns = np.diff(pv) / pv[:-1] if len(pv) > 1 else np.array([0.0])
@@ -895,6 +991,14 @@ class BacktestService:
             else:
                 current_streak = 0
 
+        # --- Advanced Metrics ---
+        loss_rate = 100.0 - win_rate
+        expectancy = ((win_rate / 100) * avg_win) + ((loss_rate / 100) * avg_loss)
+        
+        calmar_ratio = 0.0
+        if max_drawdown < 0:
+            calmar_ratio = annualized_return / abs(max_drawdown)
+
         return {
             "total_return": f"{total_return * 100:.2f}%",
             "annualized_return": f"{annualized_return * 100:.2f}%",
@@ -902,6 +1006,8 @@ class BacktestService:
             "benchmark_return": f"{benchmark_return * 100:.2f}%",
             "max_drawdown": f"{max_drawdown * 100:.2f}%",
             "sharpe_ratio": round(float(sharpe_ratio), 2),
+            "calmar_ratio": round(float(calmar_ratio), 2),
+            "expectancy": f"${expectancy:.2f}",
             "trade_count": len(trades_log),
             "closed_trades": total_trades,
             "win_rate": f"{win_rate:.1f}%",
@@ -909,5 +1015,7 @@ class BacktestService:
             "avg_loss": f"${avg_loss:.2f}",
             "profit_factor": round(float(profit_factor), 2) if profit_factor != float('inf') else "∞",
             "max_consecutive_losses": max_consec_losses,
-            "total_commissions": f"${total_commissions:.2f}"
+            "total_commissions": f"${total_commissions:.2f}",
+            "drawdown_series": drawdown_series,
+            "monthly_returns": monthly_returns
         }

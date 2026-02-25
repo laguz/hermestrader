@@ -64,7 +64,7 @@ function initBacktester(form) {
             }
 
             chartContainer.innerHTML = '';
-            
+
             const chart = LightweightCharts.createChart(chartContainer, {
                 layout: {
                     background: { type: 'solid', color: 'transparent' },
@@ -133,8 +133,89 @@ function initBacktester(form) {
                         <h3>Total Trades</h3>
                         <p>${result.metrics.trade_count}</p>
                     </div>
+                    <div class="metric-card">
+                        <h3>Win Rate</h3>
+                        <p>${result.metrics.win_rate}</p>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Expectancy</h3>
+                        <p style="color: ${result.metrics.expectancy.includes('-') ? '#ef4444' : '#4ade80'}">${result.metrics.expectancy}</p>
+                    </div>
+                    <div class="metric-card">
+                        <h3>Calmar Ratio</h3>
+                        <p>${result.metrics.calmar_ratio}</p>
+                    </div>
                 </div>
             `;
+
+            // Render Drawdown Chart
+            const drawdownContainer = document.getElementById('drawdown-container');
+            if (drawdownContainer && result.metrics.drawdown_series) {
+                drawdownContainer.innerHTML = '<h3>Underwater Drawdown</h3>';
+                const ddWrap = document.createElement('div');
+                ddWrap.style.height = 'calc(100% - 30px)';
+                drawdownContainer.appendChild(ddWrap);
+
+                const drawdownChart = LightweightCharts.createChart(ddWrap, {
+                    layout: { background: { type: 'solid', color: 'transparent' }, textColor: document.documentElement.classList.contains('dark') ? '#9ca3af' : '#4b5563' },
+                    grid: { vertLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' }, horzLines: { color: document.documentElement.classList.contains('dark') ? '#374151' : '#f3f4f6' } },
+                    rightPriceScale: { borderVisible: false },
+                    timeScale: { borderVisible: false, timeVisible: true }
+                });
+
+                const ddSeries = drawdownChart.addAreaSeries({
+                    topColor: 'rgba(239, 68, 68, 0.56)',
+                    bottomColor: 'rgba(239, 68, 68, 0.04)',
+                    lineColor: 'rgba(239, 68, 68, 1)',
+                    lineWidth: 2,
+                });
+
+                let formattedDD = result.metrics.drawdown_series.map(item => ({
+                    time: item.time.length === 10 ? item.time : Math.floor(new Date(item.time).getTime() / 1000),
+                    value: item.value
+                }));
+
+                ddSeries.setData(formattedDD);
+                drawdownChart.timeScale().fitContent();
+
+                new ResizeObserver(entries => {
+                    if (entries.length === 0 || entries[0].target !== ddWrap) { return; }
+                    const newRect = entries[0].contentRect;
+                    drawdownChart.applyOptions({ height: newRect.height, width: newRect.width });
+                }).observe(ddWrap);
+            }
+
+            // Render Monthly Heatmap
+            const heatmapContainer = document.getElementById('heatmap-container');
+            if (heatmapContainer && result.metrics.monthly_returns) {
+                heatmapContainer.innerHTML = '<h3 style="margin-bottom: 8px;">Monthly Returns (%)</h3>';
+                let heatmapHtml = '<div style="display: grid; grid-template-columns: 60px repeat(12, 1fr); gap: 4px; overflow-x: auto; font-size: 0.85rem; text-align: center; border-radius: 8px;">';
+
+                heatmapHtml += '<div style="font-weight: bold; padding: 8px;">Year</div>';
+                const months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12'];
+                const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                monthLabels.forEach(m => heatmapHtml += `<div style="font-weight: bold; padding: 8px;">${m}</div>`);
+
+                const years = Object.keys(result.metrics.monthly_returns).sort((a, b) => b - a);
+                years.forEach(year => {
+                    heatmapHtml += `<div style="font-weight: bold; padding: 8px; display: flex; align-items: center; justify-content: center;">${year}</div>`;
+                    months.forEach(month => {
+                        let val = result.metrics.monthly_returns[year][month];
+                        if (val !== undefined) {
+                            let absVal = Math.abs(parseFloat(val));
+                            let opacity = Math.max(0.2, Math.min(absVal / 15, 1));
+                            let bg = val > 0 ? `rgba(74, 222, 128, ${opacity})` : val < 0 ? `rgba(239, 68, 68, ${opacity})` : 'transparent';
+                            let display = val > 0 ? `+${val}` : val;
+                            heatmapHtml += `<div style="background-color: ${bg}; padding: 8px; border-radius: 4px; border: 1px solid rgba(128,128,128,0.2); display: flex; align-items: center; justify-content: center; font-weight: 500;">${display}</div>`;
+                        } else {
+                            heatmapHtml += `<div style="background-color: rgba(128,128,128,0.05); padding: 8px; border-radius: 4px; border: 1px solid rgba(128,128,128,0.1);"></div>`;
+                        }
+                    });
+                });
+
+                heatmapHtml += '</div>';
+                heatmapContainer.innerHTML += heatmapHtml;
+            }
 
             // Render Trades Table
             const tradesContainer = document.getElementById('trades-container');
