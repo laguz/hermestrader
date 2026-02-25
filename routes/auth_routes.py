@@ -81,11 +81,14 @@ def unlock_vault():
 @auth_bp.route('/register', methods=['GET', 'POST'])
 def register():
     # Only allow registration if no users exist (Personal App Mode)
-    # OR if authenticated admin allows it (not implemented).
-    # For now: Check DB count.
+    auth_service = Container.get_auth_service()
     
-
-    
+    if auth_service.db is not None:
+        user_count = auth_service.db['users'].count_documents({})
+        if user_count > 0:
+            flash('Registration is disabled. Only one account may exist.', 'error')
+            return redirect(url_for('auth.login'))
+            
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
