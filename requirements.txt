@@ -20,7 +20,7 @@ python-dateutil==2.9.0
 
 # ML / Data
 scikit-learn==1.5.2
-tensorflow==2.18.0
+tensorflow==2.20.0
 
 # Data Sources
 yfinance==0.2.48
