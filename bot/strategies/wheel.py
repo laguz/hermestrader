@@ -74,10 +74,12 @@ class WheelStrategy(AbstractStrategy):
         if shares_held >= 100:
             open_call_contracts = abs(sum(o['quantity'] for o in short_calls))
             free_shares = shares_held - (open_call_contracts * 100)
+            coverable_lots = free_shares // 100
             
-            if free_shares >= 100:
-                self._log(f"🟢 {symbol}: {shares_held} Shares held. {free_shares} Unencumbered. Evaluating Call Sale...")
-                self._entry_sell_call(symbol, current_price, analysis, max_lots=max_lots)
+            if coverable_lots >= 1:
+                call_lots_to_open = min(int(coverable_lots), max(0, max_lots - open_call_contracts))
+                self._log(f"🟢 {symbol}: {shares_held} Shares held. {free_shares} Unencumbered. Opening {call_lots_to_open} call(s)...")
+                self._entry_sell_call(symbol, current_price, analysis, max_lots=max_lots, quantity=call_lots_to_open)
             else:
                 self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
         
@@ -86,8 +88,9 @@ class WheelStrategy(AbstractStrategy):
         if open_put_contracts >= max_lots:
             self._log(f"ℹ️ {symbol}: Max put contracts reached ({open_put_contracts}/{max_lots}). Skipping new entry.")
         else:
-            self._log(f"🟢 {symbol}: Put slot available ({open_put_contracts}/{max_lots}). Evaluating Put Sale...")
-            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots)
+            lots_to_open = max_lots - open_put_contracts
+            self._log(f"🟢 {symbol}: Put slot available ({open_put_contracts}/{max_lots}). Opening {lots_to_open} lot(s)...")
+            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots, quantity=lots_to_open)
 
     def execute_single_leg(self, symbol, leg_type, min_credit=None):
         """
@@ -108,7 +111,7 @@ class WheelStrategy(AbstractStrategy):
         else:
             self._log(f"Unknown leg type: {leg_type}")
 
-    def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None, max_lots=1):
+    def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None, max_lots=1, quantity=1):
         """
         Priority A: Technical Entry (S/R Based)
         Priority B: Greeks Fallback (Delta Based)
@@ -159,11 +162,11 @@ class WheelStrategy(AbstractStrategy):
                 self._log(f"🎯 Found Delta Entry: Strike {target_strike} (Delta {delta})")
         
         if target_strike:
-            self._execute_order(symbol, target_expiry, target_strike, 'put', 'sell_to_open', target_reason, min_credit)
+            self._execute_order(symbol, target_expiry, target_strike, 'put', 'sell_to_open', target_reason, min_credit, quantity=quantity)
         else:
             self._log(f"🚫 No valid Put Entry found for {symbol} (checked S/R & Delta).")
 
-    def _entry_sell_call(self, symbol, current_price, analysis, min_credit=None, max_lots=1):
+    def _entry_sell_call(self, symbol, current_price, analysis, min_credit=None, max_lots=1, quantity=1):
         """
         Priority A: Technical (Resistance)
         Priority B: Greeks Fallback
@@ -207,7 +210,7 @@ class WheelStrategy(AbstractStrategy):
                 self._log(f"🎯 Found Delta Entry: Strike {target_strike} (Delta {delta})")
 
         if target_strike:
-            self._execute_order(symbol, target_expiry, target_strike, 'call', 'sell_to_open', target_reason)
+            self._execute_order(symbol, target_expiry, target_strike, 'call', 'sell_to_open', target_reason, quantity=quantity)
         else:
             self._log(f"🚫 No valid Call Entry found for {symbol} (checked S/R & Delta).")
 
@@ -428,7 +431,7 @@ class WheelStrategy(AbstractStrategy):
                 self._log(f"❌ Error managing {symbol}: {e}")
                 traceback.print_exc()
 
-    def _execute_order(self, symbol, expiry, strike, option_type, side, reason, min_credit=None):
+    def _execute_order(self, symbol, expiry, strike, option_type, side, reason, min_credit=None, quantity=1):
         """Find the specific option symbol and execute single leg order."""
         chain = self.tradier.get_option_chains(symbol, expiry)
         option = next((o for o in chain if o['strike'] == strike and o['option_type'] == option_type), None)
@@ -455,19 +458,19 @@ class WheelStrategy(AbstractStrategy):
         
         self._log(f"🚀 Executing {side} {symbol} {strike} {option_type}. Exp: {expiry}. Reason: {reason}. Price: {price}")
         
-        requirement = (strike * 100) if option_type == 'put' and 'sell' in side else 0
+        requirement = (strike * 100 * quantity) if option_type == 'put' and 'sell' in side else 0
         if not self._is_bp_sufficient(requirement):
             return
 
         if self.dry_run:
-            self._log(f"[DRY RUN] Order: {side} {option['symbol']} @ {price}")
+            self._log(f"[DRY RUN] Order: {side} {option['symbol']} x{quantity} @ {price}")
             self._record_trade(symbol, f"Wheel {side}", price, {'id': 'dry_run_id'}, {'option_symbol': option['symbol']})
         else:
             res = self.tradier.place_order(
                 account_id=self.tradier.account_id,
                 symbol=symbol,
                 side=side,
-                quantity=1,
+                quantity=int(quantity),
                 order_type='limit',
                 duration='day',
                 price=price,
