@@ -9,13 +9,17 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    cmake \
+    swig \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container
 COPY requirements.txt .
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install packages with extended timeout to handle large ML wheels
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
 
 # Copy the rest of the application code into the container
 COPY . .

@@ -368,7 +368,7 @@ class MLService:
     def train_model(self, symbol, model_type='rf', express=False, pre_prepared_df=None):
         symbol = symbol.upper()
         if model_type == 'ensemble':
-            logger.info(f"Starting ENSEMBLE training for {symbol} (RF + LSTM)...")
+            logger.info(f"Starting ENSEMBLE training for {symbol} (RL + LSTM)...")
             
             # Step 1: Prepare data once for BOTH models
             # This is the "Data Reuse" optimization
@@ -381,17 +381,17 @@ class MLService:
             
             # Parallel Training Optimization
             with ThreadPoolExecutor(max_workers=2) as executor:
-                future_rf = executor.submit(self.train_model, symbol, model_type='rf', express=express, pre_prepared_df=df)
+                future_rl = executor.submit(self.train_model, symbol, model_type='rl', express=express, pre_prepared_df=df)
                 future_lstm = executor.submit(self.train_model, symbol, model_type='lstm', express=express, pre_prepared_df=df)
                 
-                res_rf = future_rf.result()
+                res_rl = future_rl.result()
                 res_lstm = future_lstm.result()
                 
             return {
                 "status": "trained",
                 "symbol": symbol,
                 "type": "ensemble",
-                "rf_mse": res_rf['mse'],
+                "rl_mse": res_rl['mse'],
                 "lstm_mse": res_lstm['mse']
             }
 
@@ -599,22 +599,22 @@ class MLService:
         
         if model_type == 'ensemble':
             # recursive calls
-            pred_rf = self.predict_next_day(symbol, model_type='rf')
+            pred_rl = self.predict_next_day(symbol, model_type='rl')
             pred_lstm = self.predict_next_day(symbol, model_type='lstm')
             
-            p_rf = pred_rf['predicted_price']
+            p_rl = pred_rl['predicted_price']
             p_lstm = pred_lstm['predicted_price']
             
             # Simple Average
-            prediction = (p_rf + p_lstm) / 2
+            prediction = (p_rl + p_lstm) / 2
             
             # Use strict features from one (doesn't matter much for display)
-            features = pred_rf['used_features']
+            features = pred_rl.get('used_features', [])
             
-            change = prediction - pred_rf['last_close']
-            percent_change = (change / pred_rf['last_close']) * 100
+            change = prediction - pred_rl['last_close']
+            percent_change = (change / pred_rl['last_close']) * 100
             
-            prediction_date = pred_rf['prediction_date']
+            prediction_date = pred_rl['prediction_date']
             
              # Save Ensemble Prediction
             try:
@@ -627,7 +627,7 @@ class MLService:
                     "bias_correction": 0.0,
                     "actual_close_price": None,
                     "created_at": datetime.now(),
-                    "components": {"rf": round(float(p_rf), 2), "lstm": round(float(p_lstm), 2)}
+                    "components": {"rl": round(float(p_rl), 2), "lstm": round(float(p_lstm), 2)}
                 }
                 self.db['predictions'].update_one(
                     {"symbol": symbol, "model_type": 'ensemble', "prediction_date": prediction_date},
@@ -641,11 +641,12 @@ class MLService:
                 "symbol": symbol,
                 "model": "ensemble",
                 "predicted_price": round(float(prediction), 2),
-                "last_close": round(float(pred_rf['last_close']), 2),
+                "last_close": round(float(pred_rl['last_close']), 2),
                 "change": round(float(change), 2),
                 "percent_change_str": f"{percent_change:.2f}%",
                 "prediction_date": prediction_date,
-                "components": {"rf": round(p_rf, 2), "lstm": round(p_lstm, 2)}
+                "components": {"rl": round(p_rl, 2), "lstm": round(p_lstm, 2)},
+                "used_features": features
             }
 
         if model_type == 'lstm':
@@ -1142,7 +1143,7 @@ class MLService:
         Run predict_next_day for each symbol across all model types.
         Skips models that aren't trained yet. Returns summary dict.
         """
-        model_types = ['rf', 'lstm', 'ensemble', 'rl']
+        model_types = ['lstm', 'ensemble', 'rl']
         results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
 
         # Refresh actuals first (backfill any missing close prices)
@@ -1174,7 +1175,7 @@ class MLService:
         Uses express mode by default for speed (skips walk-forward validation).
         Returns summary dict.
         """
-        model_types = ['rf', 'lstm', 'ensemble', 'rl']
+        model_types = ['lstm', 'ensemble', 'rl']
         results = {"success": 0, "errors": 0, "details": []}
 
         for symbol in symbols:
@@ -1184,7 +1185,7 @@ class MLService:
                     result = self.train_model(symbol, model_type=mt, express=express)
                     results["success"] += 1
                     if mt == 'ensemble':
-                        logger.info(f"✅ {symbol} ensemble: RF MSE={result.get('rf_mse')}, LSTM MSE={result.get('lstm_mse')}")
+                        logger.info(f"✅ {symbol} ensemble: RL MSE={result.get('rl_mse')}, LSTM MSE={result.get('lstm_mse')}")
                     else:
                         logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
                 except Exception as e:

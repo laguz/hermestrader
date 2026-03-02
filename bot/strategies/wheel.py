@@ -92,24 +92,6 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"🟢 {symbol}: Put slot available ({open_put_contracts}/{max_lots}). Opening {lots_to_open} lot(s)...")
             self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots, quantity=lots_to_open)
 
-    def execute_single_leg(self, symbol, leg_type, min_credit=None):
-        """
-        Direct execution entry point for Money Manager.
-        """
-        analysis_service = Container.get_analysis_service()
-        analysis = analysis_service.analyze_symbol(symbol, period='6m')
-        if not analysis or 'error' in analysis:
-            self._log(f"Skipping {symbol}: Analysis failed.")
-            return
-
-        current_price = analysis.get('current_price')
-        
-        if leg_type == 'put':
-            self._entry_sell_put(symbol, current_price, analysis, min_credit)
-        elif leg_type == 'call':
-            self._entry_sell_call(symbol, current_price, analysis, min_credit)
-        else:
-            self._log(f"Unknown leg type: {leg_type}")
 
     def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None, max_lots=1, quantity=1):
         """

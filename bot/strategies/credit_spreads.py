@@ -81,25 +81,6 @@ class CreditSpreadStrategy(AbstractStrategy):
         
         return self.execution_logs
         
-    def execute_spread(self, symbol, spread_type, min_credit=None):
-        """
-        Direct execution entry point for Money Manager.
-        """
-        # analysis_service is now self.analysis_service
-        analysis = self.analysis_service.analyze_symbol(symbol)
-        
-        if not analysis or 'error' in analysis:
-            self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
-            return
-
-        current_price = analysis.get('current_price')
-
-        if spread_type == 'put':
-            self._place_credit_put_spread(symbol, current_price, analysis, min_credit)
-        elif spread_type == 'call':
-            self._place_credit_call_spread(symbol, current_price, analysis, min_credit)
-        else:
-            self._log(f"Unknown spread type: {spread_type}")
 
     def manage_positions(self, simulation_mode=False):
         """
