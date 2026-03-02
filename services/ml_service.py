@@ -210,7 +210,7 @@ class MLService:
         model.compile(optimizer='adam', loss='mean_squared_error')
         return model
 
-    def perform_walk_forward_validation(self, df, top_features, model_type='rf', min_train_size=200, test_size=20):
+    def perform_walk_forward_validation(self, df, top_features, model_type='lstm', min_train_size=200, test_size=20):
         """
         Perform Walk-Forward Validation:
         Train on expanding window [0..t], predict on [t..t+test_size].
@@ -340,7 +340,7 @@ class MLService:
         df.dropna(inplace=True)
         return df
 
-    def train_model(self, symbol, model_type='rf', express=False, pre_prepared_df=None):
+    def train_model(self, symbol, model_type='lstm', express=False, pre_prepared_df=None):
         symbol = symbol.upper()
         
         logger.info(f"Starting {model_type.upper()} training for {symbol}...")
