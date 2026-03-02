@@ -432,16 +432,54 @@ class MLService:
             joblib.dump(target_scaler, f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl")
             
         elif model_type == 'rl':
-            # RL training – uses the same dataframe and selected features
-            from services.rl_price_predictor import RLPricePredictor
+            # RL training - Run in a separate process to avoid memory/library conflicts (SIGSEGV)
+            import subprocess
+            import sys
             
-            # RL algorithm requires clean data (no NaNs or infs)
-            train_df = df.dropna(subset=top_features + ['close']).copy()
+            # Prepare a small script to run the training
+            train_script = f"""
+import pandas as pd
+import joblib
+import os
+from services.rl_price_predictor import RLPricePredictor
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('rl_train_subprocess')
+
+try:
+    # Load data from a temp file (we'll save it before calling this)
+    df = joblib.load('ml_tmp_df.pkl')
+    top_features = joblib.load('ml_tmp_features.pkl')
+    
+    predictor = RLPricePredictor('{symbol}', df, top_features, '{self.model_dir}')
+    predictor.train(timesteps=10_000)
+    logger.info("RL model training subprocess completed successfully")
+except Exception as e:
+    logger.error(f"RL training subprocess failed: {{e}}")
+    exit(1)
+"""
+            # Save temporary data for the subprocess
+            import joblib
+            joblib.dump(df.dropna(subset=top_features + ['close']), 'ml_tmp_df.pkl')
+            joblib.dump(top_features, 'ml_tmp_features.pkl')
             
-            predictor = RLPricePredictor(symbol, train_df, top_features, self.model_dir)
-            predictor.train(timesteps=10_000)
-            logger.info(f"RL model trained for {symbol} (timesteps=10_000)")
-            mse = 0.0
+            with open('rl_train_worker.py', 'w') as f:
+                f.write(train_script)
+            
+            try:
+                # Run the subprocess
+                result = subprocess.run([sys.executable, 'rl_train_worker.py'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    logger.error(f"RL Subprocess failed: {result.stderr}")
+                    raise AppError(f"RL Training failed in subprocess: {result.stderr}", 500)
+                
+                logger.info("RL model trained via subprocess")
+                mse = 0.0
+            finally:
+                # Cleanup
+                for f in ['ml_tmp_df.pkl', 'ml_tmp_features.pkl', 'rl_train_worker.py']:
+                    if os.path.exists(f): os.remove(f)
             
         else:
             raise ValueError(f"Unknown model_type: {model_type}")
