@@ -441,8 +441,13 @@ class MLService:
 import pandas as pd
 import joblib
 import os
-from services.rl_price_predictor import RLPricePredictor
+import sys
 import logging
+
+# Ensure project root is in path
+sys.path.append(os.getcwd())
+
+from services.rl_price_predictor import RLPricePredictor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('rl_train_subprocess')
@@ -604,9 +609,14 @@ except Exception as e:
 import pandas as pd
 import joblib
 import os
+import sys
 import json
-from services.rl_price_predictor import RLPricePredictor
 import logging
+
+# Ensure project root is in path
+sys.path.append(os.getcwd())
+
+from services.rl_price_predictor import RLPricePredictor
 
 logging.basicConfig(level=logging.ERROR)
 
