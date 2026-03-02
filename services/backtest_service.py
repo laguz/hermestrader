@@ -124,10 +124,10 @@ class MockTradierService:
         
         chain = []
         
-        # Strikes: +/- 20% in $1 or $5 increments
+        # Strikes: +/- 20% in $1 increments universally to support dynamic algorithm width logic
         low = self.current_price * 0.8
         high = self.current_price * 1.2
-        step = 5 if self.current_price > 200 else 1
+        step = 1
         
         start_strike = round(low / step) * step
         end_strike = round(high / step) * step
@@ -694,9 +694,11 @@ class BacktestService:
             if strategy_type == "credit_spread":
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             elif strategy_type == "credit_spread_rulebase":
+                print(f"[DEBUG BACKTEST] Exectuting Rulebase for {symbol} | Price: {price} | RSI: {rsi} | VIX (IV): {implied_vol*100} | Date: {current_date_str}")
                 strategy.execute([symbol], config={
                     'max_credit_spread_rulebase_lots': 5,
-                    'min_credit_pct': 0.10  # 10% of width (relaxed for synthetic pricing)
+                    'min_credit_pct': 0.10,  # 10% of width (relaxed for synthetic pricing)
+                    'max_capital_per_symbol': 2500
                 })
             # Wheel entries already captured in wheel_entry_orders from step 3
             

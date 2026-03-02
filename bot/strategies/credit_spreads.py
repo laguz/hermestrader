@@ -1,6 +1,8 @@
 import logging
 import traceback
 import re
+import math
+import pytz
 from datetime import datetime
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors, is_match, get_op_type, get_expiry_str, get_underlying
@@ -55,25 +57,35 @@ class CreditSpreadStrategy(AbstractStrategy):
                 # 3. Execution Logic
                 current_price = analysis.get('current_price')
                 
-                max_lots = config.get('max_credit_spreads_per_symbol', 5) if config else 5
+                # Retrieve directional trend (added for Upgrade 1: Trend Filter)
+                trend = analysis.get('trend', 'neutral')
                 
-                # Global Limit Check
+                # Upgrade 4: Capital-Based Limits 
+                # Let's target roughly $500 risk per symbol as a base constraint before checking dynamic width
+                # But we'll refine this inside the individual spread generator where width is known.
+                # For now, we still calculate 'current_total' lots, but we don't strictly reject on it yet
+                # We'll pass `config` down and evaluate true BP risk.
+                max_lots_baseline = config.get('max_credit_spreads_per_symbol', 5) if config else 5
                 current_total = self._count_total_spreads(symbol)
-                if current_total >= max_lots:
-                    self._log(f"⚠️ Max Spreads ({max_lots}) reached for {symbol} (Current: {current_total}). Skipping.")
-                    continue
                 
                 orders_placed_this_run = 0
 
                 # Attempt Bull Put Spread (if support exists below price)
-                # Check capacity before attempt
-                if (current_total + orders_placed_this_run) < max_lots:
-                    if self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots, config=config):
-                        orders_placed_this_run += 1
+                # Trend Filter: Only execute if trend is NOT strongly bearish
+                if trend != 'bearish':
+                    if (current_total + orders_placed_this_run) < max_lots_baseline:
+                        if self._place_credit_put_spread(symbol, current_price, analysis, max_lots=max_lots_baseline, config=config):
+                            orders_placed_this_run += 1
+                else:
+                    self._log(f"📉 Trend is Bearish for {symbol}, skipping Bull Put Spread.")
                 
                 # Attempt Bear Call Spread (if resistance exists above price)
-                if (current_total + orders_placed_this_run) < max_lots:
-                    self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots, config=config)
+                # Trend Filter: Only execute if trend is NOT strongly bullish
+                if trend != 'bullish':
+                    if (current_total + orders_placed_this_run) < max_lots_baseline:
+                        self._place_credit_call_spread(symbol, current_price, analysis, max_lots=max_lots_baseline, config=config)
+                else:
+                    self._log(f"📈 Trend is Bullish for {symbol}, skipping Bear Call Spread.")
                     
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
@@ -91,19 +103,17 @@ class CreditSpreadStrategy(AbstractStrategy):
         if simulation_mode:
             self.execution_logs = []
             
-        # 1. Check Time (Only run after 3:00 PM EST)
-        # Explicitly check for EST time to ensure 3 PM is 3 PM ET.
+        # 1. Check Time (Only run after 10:30 AM EST to avoid opening slippage)
         if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
              now_est = self.tradier.current_date
         else:
-             import pytz
              est = pytz.timezone('America/New_York')
              now_est = datetime.now(est)
         
-        # 3 PM EST = 15:00
-        # If simulation_mode is True, ignore time check
-        if not simulation_mode and now_est.hour < 15: 
-            return # Too early, wait for 3 PM EST
+        # 10:30 AM EST 
+        if not simulation_mode:
+            if now_est.hour < 10 or (now_est.hour == 10 and now_est.minute < 30): 
+                return # Too early, wait for 10:30 AM EST
             
         now = now_est # Use EST time for logging/checks
 
@@ -137,7 +147,10 @@ class CreditSpreadStrategy(AbstractStrategy):
                 
             # Check Check Frequency (Once per day)
             last_check = trade.get('last_check_date')
-            today_str = now.strftime('%Y-%m-%d')
+            try:
+                today_str = now.strftime('%Y-%m-%d')
+            except AttributeError:
+                today_str = str(now.date()) if hasattr(now, 'date') else str(now)[:10]
             
             # If we already checked today, check if we need to Execute Close
             if last_check == today_str and not simulation_mode:
@@ -149,10 +162,10 @@ class CreditSpreadStrategy(AbstractStrategy):
             # Start of New Daily Check
             
             # 0. Check for Pending Close from Previous Day (HARD CLOSE)
-            # Logic: If ITM for 2 consecutive days, we schedule a close for the NEXT trading day at 3 PM EST.
-            # This is a strict rule. Even if it goes OTM today, the decision was made yesterday.
+            # Legacy Logic: If ITM for 2 consecutive days, we schedule a close for the NEXT trading day.
+            # Upgraded: Still support legacy fallback flag, but primary management is strictly Limit-Based Stop Loss below
             if trade.get('close_on_next_day', False):
-                 self._log(f"🚨 HARD CLOSE: Executing scheduled close for {symbol} (ITM > 2 days).")
+                 self._log(f"🚨 LEGACY CLOSE: Executing scheduled close for {symbol} (ITM > 2 days).")
                  self._execute_close(trade, simulation_mode=simulation_mode)
                  continue
 
@@ -204,12 +217,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                 updates['days_itm'] = new_days
                 self._log(f"Trade {symbol} {short_leg} is ITM ({current_price} vs {strike}). Days ITM: {new_days}")
                 
-                if new_days >= 2:
-                    updates['close_on_next_day'] = True
-                    self._log(f"🚨 Trade {symbol} ITM for 2 days. Scheduled for close next session.")
             else:
-                # Reset if OTM?
-                # "Two days straight" implies consecutive. So yes, reset.
+                # Reset if OTM
                 if trade.get('days_itm', 0) > 0:
                     self._log(f"Trade {symbol} back OTM. Resetting counter.")
                 updates['days_itm'] = 0
@@ -223,9 +232,6 @@ class CreditSpreadStrategy(AbstractStrategy):
                 )
             else:
                 self._log(f"[SIMULATION] Would update trade state: {updates}")
-            
-            # If we just flagged it, we DO NOT close today. "Close on the NEXT trading day".
-            # So we wait. (Unless trigger below causes immediate close?)
 
             # --- NEW PROFIT TAKING LOGIC ---
             # Parse Expiry from Short Leg
@@ -270,18 +276,25 @@ class CreditSpreadStrategy(AbstractStrategy):
                                  # (Buy back Short at Ask, Sell Long at Bid)
                                  curr_debit = (sq.get('ask', 0) - lq.get('bid', 0))
                                  
+                                 # --- UPGRADE 3: HARD STOP LOSS ---
+                                 # If Current Debit >= 2.5x Entry Credit, KILL TRADE immediately
+                                 if entry_credit > 0 and curr_debit >= (entry_credit * 2.5):
+                                     limit_price = round(curr_debit * 1.05, 2)
+                                     self._log(f"🛑 STOP LOSS TRIGGERED: {symbol} Debit ({curr_debit:.2f}) >= 2.5x Credit ({entry_credit}). Closing at Limit {limit_price}.")
+                                     self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
+                                     continue # Done
+                                 
                                  # Profit = Entry Credit - Current Debit
                                  profit_val = entry_credit - curr_debit
-                                 profit_pct = (profit_val / entry_credit)
+                                 # Standard definition of Profit % = (Entry - Close) / Entry
+                                 profit_pct = (profit_val / entry_credit) if entry_credit > 0 else 0
                                  
-                                 self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}% (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
+                                 self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}%, (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
 
                                  should_close, reason, target_pct = CreditSpreadStrategy.should_close_early(dte, profit_pct)
                                      
                                  if should_close:
                                      # Calculate Strict Limit Price based on user formula
-                                     # Limit = Entry Credit * Target Pct (e.g. 1.00 * 0.50 = 0.50)
-                                     # Round DOWN to 2 decimals
                                      import math
                                      target_debit = entry_credit * target_pct
                                      limit_price = math.floor(target_debit * 100) / 100.0
@@ -360,10 +373,10 @@ class CreditSpreadStrategy(AbstractStrategy):
                 
                 short_ask = short_q.get('ask', 0)
                 long_bid = long_q.get('bid', 0)
-                natural_debit = short_ask - long_bid
-                if natural_debit < 0: natural_debit = 0
+                natural_debit = float(short_ask) - float(long_bid)
+                if natural_debit < 0: natural_debit = 0.0
                 
-                limit_price = round(natural_debit * 1.05, 2)
+                limit_price = float(math.floor((natural_debit * 1.05) * 100) / 100.0)
                 self._log(f"📉 Calculated Safe Limit for Close: {limit_price} (Natural: {natural_debit:.2f})")
              except Exception as e:
                 self._log(f"Error calculating default limit: {e}. Using 0 (Market Risk).")
@@ -470,14 +483,21 @@ class CreditSpreadStrategy(AbstractStrategy):
             exp_dates = []
             for e in expirations:
                 if exclude_dates and e in exclude_dates: continue
-                exp_dates.append(datetime.strptime(e, "%Y-%m-%d").date())
+                try:
+                    exp_dates.append(datetime.strptime(e, "%Y-%m-%d").date())
+                except:
+                    continue
         else:
              # handle date objects if already parsed
             exp_dates = []
             for e in expirations:
-                 d_str = e.strftime("%Y-%m-%d")
-                 if exclude_dates and d_str in exclude_dates: continue
-                 exp_dates.append(e)
+                 if hasattr(e, 'strftime'):
+                     d_str = e.strftime("%Y-%m-%d")
+                     if exclude_dates and d_str in exclude_dates: continue
+                     if hasattr(e, 'date'):
+                         exp_dates.append(e.date())
+                     else:
+                         exp_dates.append(e)
 
         if not exp_dates:
              self._log(f"No valid expirations found (Excluded: {exclude_dates})")
@@ -718,7 +738,12 @@ class CreditSpreadStrategy(AbstractStrategy):
              self._log(f"🔸 No expiry found for {symbol}")
              return
 
-        width = 1.0 if current_price < 100 else 5.0
+        # UPGRADE 2: DYNAMIC SPREAD WIDTHS
+        # Base width on roughly 1.5% of the underlying price to handle large caps vs small caps appropriately
+        import math
+        dynamic_width = current_price * 0.015
+        width = float(max(1.0, math.ceil(dynamic_width)))
+
         short_put_strike = target_strike
         long_put_strike = short_put_strike - width
 
@@ -756,26 +781,42 @@ class CreditSpreadStrategy(AbstractStrategy):
                 self._log(f"Credit too low ({net_credit}) for risk (Min {threshold:.2f}).")
                 return False
 
-        # BP Check
-        requirement = abs(short_put_strike - long_put_strike) * 100
-        if not self._is_bp_sufficient(requirement, config):
-            return
+        # BP Check & Lot Sizing
+        requirement_per_lot = abs(short_put_strike - long_put_strike) * 100
+        
+        # UPGRADE 4: CAPITAL-BASED LIMITS
+        # Look for max_capital setting, default to e.g. $500 max per symbol if missing
+        max_capital = config.get('max_capital_per_symbol', 500) if config else 500
+        
+        # Calculate how many lots we can afford
+        dynamic_lots = int(max_capital // requirement_per_lot)
+        if dynamic_lots < 1:
+            self._log(f"Spread requirement (${requirement_per_lot}) exceeds Max Capital limit (${max_capital}). Skipping.")
+            return False
+            
+        # Hard cap the dynamic lots if user manually set max_credit_spreads_per_symbol
+        dynamic_lots = min(dynamic_lots, max_lots)
 
         # Place Order
         legs = [
-            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': 1},
-            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': 1}
+            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': dynamic_lots},
+            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': dynamic_lots}
         ]
         
+        # Final BP sanity check for the Total Requirement before sending order
+        total_requirement = requirement_per_lot * dynamic_lots
+        if not self._is_bp_sufficient(total_requirement, config):
+            return False
+        
         if self.dry_run:
-            self._log(f"[DRY RUN] Simulating Bull Put Spread Order for {symbol} @ {net_credit}")
+            self._log(f"[DRY RUN] Simulating Bull Put Spread Order for {symbol} ({dynamic_lots} lots) @ {net_credit}")
             response = {'id': 'mock_order_id', 'status': 'ok', 'partner_id': 'mock'}
         else:
             response = self.tradier.place_order(
                 account_id=self.tradier.account_id,
                 symbol=symbol,
                 side='sell', # Not used for multileg but required arg
-                quantity=1,
+                quantity=1, # Multileg uses leg-level quantity
                 order_type='credit',
                 duration='day',
                 price=net_credit,
@@ -851,7 +892,11 @@ class CreditSpreadStrategy(AbstractStrategy):
              self._log(f"🔸 No expiry found for {symbol}")
              return
 
-        width = 1.0 if current_price < 100 else 5.0
+        # UPGRADE 2: DYNAMIC SPREAD WIDTHS
+        import math
+        dynamic_width = current_price * 0.015
+        width = float(max(1.0, math.ceil(dynamic_width)))
+
         short_call_strike = target_strike
         long_call_strike = short_call_strike + width
         if not expiry:
@@ -885,20 +930,33 @@ class CreditSpreadStrategy(AbstractStrategy):
                 self._log(f"Credit too low ({net_credit}) for risk (Min {threshold:.2f}).")
                 return False
 
-        # BP Check
-        requirement = abs(short_call_strike - long_call_strike) * 100
-        if not self._is_bp_sufficient(requirement, config):
+        # BP Check & Lot Sizing
+        requirement_per_lot = abs(short_call_strike - long_call_strike) * 100
+        
+        # UPGRADE 4: CAPITAL-BASED LIMITS
+        max_capital = config.get('max_capital_per_symbol', 500) if config else 500
+        
+        dynamic_lots = int(max_capital // requirement_per_lot)
+        if dynamic_lots < 1:
+            self._log(f"Spread requirement (${requirement_per_lot}) exceeds Max Capital limit (${max_capital}). Skipping.")
             return False
-
-        self._log(f"Placing Bear Call Spread on {symbol} Exp: {expiry} Short: {short_call_strike} Long: {long_call_strike}")
+            
+        dynamic_lots = min(dynamic_lots, max_lots)
 
         legs = [
-            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': 1},
-            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': 1}
+            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': dynamic_lots},
+            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': dynamic_lots}
         ]
+
+        # Final BP sanction
+        total_requirement = requirement_per_lot * dynamic_lots
+        if not self._is_bp_sufficient(total_requirement, config):
+            return False
+
+        self._log(f"Placing Bear Call Spread on {symbol} Exp: {expiry} Short: {short_call_strike} Long: {long_call_strike} (Lots: {dynamic_lots})")
         
         if self.dry_run:
-            self._log(f"[DRY RUN] Simulating Bear Call Spread Order for {symbol} @ {net_credit}")
+            self._log(f"[DRY RUN] Simulating Bear Call Spread Order for {symbol} ({dynamic_lots} lots) @ {net_credit}")
             response = {'id': 'mock_order_id', 'status': 'ok', 'partner_id': 'mock'}
         else:
             response = self.tradier.place_order(

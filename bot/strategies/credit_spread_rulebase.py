@@ -2,7 +2,13 @@ import logging
 import traceback
 import re
 import math
+import pytz
 from datetime import datetime, timedelta
+import sys
+import os
+# Ensure project root is in path for absolute imports if run standalone
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors, is_match, get_op_type, get_expiry_str, get_underlying
 
@@ -55,23 +61,20 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
                 is_bullish = False
                 if (sma_200 and current_price > sma_200) or rsi < 30:
                     is_bullish = True
-                    self._log(f"Bullish signal for {symbol} (Price > SMA200 or RSI < 30)")
+                    self._log(f"Bullish technical signal for {symbol} (Price > SMA200 or RSI < 30)")
                 
-                # NOTE: The user only explicitly asked for rules for Bull Put in the description, 
-                # but "tastytrade-style" usually implies both. I'll focus on Bull Put as per example.
-                # If RSI > 70 or Price < SMA 200 (with some ands), could be Bear Call.
-                # For now, let's implement the Bull Put as described.
+                # UPGRADE 1: TREND FILTERING
+                trend = analysis.get('trend', 'neutral')
                 
                 if is_bullish:
-                    # Check Lots
-                    max_lots = config.get('max_credit_spread_rulebase_lots', 5)
-                    if not self._check_lots_sufficient(symbol, max_lots):
-                        self._log(f"Skipping {symbol}: Max lots ({max_lots}) reached.")
+                    if trend == 'bearish':
+                        self._log(f"Skipping {symbol}: Technicals Bullish, but overall Trend is Bearish.")
                         continue
                         
+                    # Target Strategy: Bull Put Spread
                     self._place_credit_spread(symbol, current_price, analysis, is_put=True, config=config)
                 else:
-                    self._log(f"No directional bias for {symbol}")
+                    self._log(f"No bullish bias for {symbol}")
 
             except Exception as e:
                 self._log(f"Error processing {symbol}: {e}")
@@ -86,7 +89,18 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
         """
         self._log(f"{Colors.HEADER}--- Managing Rule-Based Credit Spread Positions ---{Colors.ENDC}")
         
-        now = self._get_current_datetime()
+        # UPGRADE 5: EXECUTION TIMING (10:30 AM EST)
+        if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
+             now_est = self.tradier.current_date
+        else:
+             est = pytz.timezone('America/New_York')
+             now_est = datetime.now(est)
+             
+        now = now_est
+        
+        if not simulation_mode:
+            if now.hour < 10 or (now.hour == 10 and now.minute < 30): 
+                return # Too early, wait for 10:30 AM EST
 
         # Fetch open trades from DB
         query = {"status": "OPEN", "strategy": {"$regex": "Rule-Based"}}
@@ -151,14 +165,12 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
                         self._execute_close(trade, limit_price=round(entry_credit * 0.50, 2), simulation_mode=simulation_mode)
                         continue
 
-                    # Rule: 2x Credit Loss (Stop Loss)
-                    # If entry was 1.50, stop loss is at 3.00 debit (loss = 1.50 = 1x credit? or loss = 3.00 = 2x credit?)
-                    # "loss hits 2x credit" usually means loss = 2 * entry_credit.
-                    # Current Loss = Curr Debit - Entry Credit
-                    current_loss = curr_debit - entry_credit
-                    if current_loss >= 2 * entry_credit:
-                        self._log(f"🛑 STOP LOSS: 2x credit loss hit for {symbol} (Loss: {current_loss:.2f} >= {2*entry_credit:.2f}).")
-                        self._execute_close(trade, simulation_mode=simulation_mode)
+                    # UPGRADE 3: HARD STOP LOSS (2.5x Initial Credit)
+                    # We compare the current required debit against the absolute 2.5 multiplier
+                    if curr_debit >= 2.5 * entry_credit:
+                        limit_price = round(curr_debit * 1.05, 2)
+                        self._log(f"🛑 STOP LOSS: Debit ({curr_debit:.2f}) >= 2.5x Credit ({entry_credit:.2f}). Triggering Limit Close at {limit_price}")
+                        self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
                         continue
                     
                     # Rule: Technical Breach (below short strike by 50%)
@@ -202,9 +214,9 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
             self._log(f"Could not find 16-30 delta {target_side} for {symbol}")
             return
 
-        # Width $5-$10
-        # If stock > 200, use 10. If < 200, use 5. (Simple heuristic)
-        width = 10.0 if current_price > 200 else 5.0
+        # UPGRADE 2: DYNAMIC SPREAD WIDTHS
+        dynamic_width = current_price * 0.015
+        width = float(max(1.0, math.ceil(dynamic_width)))
         long_strike = short_strike - width if is_put else short_strike + width
 
         # Calculate Credit Target: configurable, defaults to 1/3 of width
@@ -228,17 +240,35 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
             self._log(f"Skipping {symbol}: Credit {net_credit} < Target {target_credit} ({min_credit_pct:.0%} width)")
             return
 
-        # BP Check
-        requirement = width * 100
-        if not self._is_bp_sufficient(requirement, config):
-            return
+        # UPGRADE 4: CAPITAL-BASED LIMITS 
+        requirement_per_lot = width * 100
+        max_capital = config.get('max_capital_per_symbol', 500) if config else 500
+        dynamic_lots = int(max_capital // requirement_per_lot)
+        
+        if dynamic_lots < 1:
+            self._log(f"Spread requirement (${requirement_per_lot}) exceeds Max Capital limit (${max_capital}). Skipping.")
+            return False
+            
+        # Hard cap the dynamic lots based on standard rulebase limit constraint
+        baseline_max = config.get('max_credit_spread_rulebase_lots', 5)
+        # Verify lot sufficiency for total aggregated positions to block entries if already running multiple positions of this asset early
+        if not self._check_lots_sufficient(symbol, baseline_max):
+             self._log(f"Skipping {symbol}: Max rulebase concurrent spread instances ({baseline_max}) reached.")
+             return False
+        
+        dynamic_lots = min(dynamic_lots, baseline_max)
 
-        self._log(f"✅ Executing Rule-Based Bull Put on {symbol}: {short_strike}/{long_strike} Exp: {expiry} Credit: {net_credit}")
+        # Final BP Check
+        total_requirement = requirement_per_lot * dynamic_lots
+        if not self._is_bp_sufficient(total_requirement, config):
+            return False
+
+        self._log(f"✅ Executing Rule-Based Bull Put on {symbol}: {short_strike}/{long_strike} Exp: {expiry} Credit: {net_credit} Lots: {dynamic_lots}")
         
         # Place Order
         legs = [
-            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': 1},
-            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': 1}
+            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': dynamic_lots},
+            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': dynamic_lots}
         ]
         
         strategy_name = "Rule-Based Bull Put Spread" if is_put else "Rule-Based Bear Call Spread"
