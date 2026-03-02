@@ -2,7 +2,6 @@ import logging
 import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
@@ -159,27 +158,21 @@ class MLService:
 
     def select_top_features(self, df, target_col='target', n_top=10):
         """
-        Select top N features using Random Forest.
+        Select top N features using correlation with the target.
         """
         # Exclude non-feature columns
-        # Also exclude calculated targets (leakage)
         exclude = ['date', 'symbol', 'target', 'target_return', 'log_return']
         potential_features = [c for c in df.columns if c not in exclude]
         
-        X = df[potential_features]
-        y = df[target_col]
+        # Calculate correlation with target
+        # Use target_col if it exists in DF, else fallback to 'close'
+        actual_target = target_col if target_col in df.columns else 'close'
+        correlations = df[potential_features].corrwith(df[actual_target]).abs()
         
-        # Train a quick RF to get importances
-        model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-        model.fit(X, y)
+        # Sort and take top N
+        top_features = correlations.sort_values(ascending=False).head(n_top).index.tolist()
         
-        importances = model.feature_importances_
-        indices = np.argsort(importances)[::-1]
-        
-        top_indices = indices[:n_top]
-        top_features = [potential_features[i] for i in top_indices]
-        
-        logger.info(f"Top {n_top} Features selected: {top_features}")
+        logger.info(f"Top {n_top} Features selected via correlation: {top_features}")
         return top_features
 
     def _prepare_lstm_data(self, df, features, fit_scaler=False, scaler=None):
@@ -460,7 +453,6 @@ except Exception as e:
     exit(1)
 """
             # Save temporary data for the subprocess
-            import joblib
             joblib.dump(df.dropna(subset=top_features + ['close']), 'ml_tmp_df.pkl')
             joblib.dump(top_features, 'ml_tmp_features.pkl')
             
@@ -498,7 +490,7 @@ except Exception as e:
             "features": top_features
         }
 
-    def predict_next_day(self, symbol, model_type='rf'):
+    def predict_next_day(self, symbol, model_type='lstm'):
         symbol = symbol.upper()
         if self.db is None:
             raise ExternalServiceError("Database not available")
@@ -592,20 +584,57 @@ except Exception as e:
             prediction = last_row['close'] * np.exp(pred_log_return)
             
         elif model_type == 'rl':
-            # --- RL Prediction Path ---
-            from services.rl_price_predictor import RLPricePredictor
+            # --- RL Prediction Path (Isolated Subprocess to avoid SIGSEGV) ---
+            import subprocess
+            import sys
             
-            # Predict requires a valid non-NaN feature vector for observation space
-            recent_df = df.dropna(subset=features + ['close']).copy()
-            if recent_df.empty:
-                raise ValidationError("Not enough clean data for RL prediction.")
-                
-            predictor = RLPricePredictor(symbol, recent_df, features, self.model_dir)
+            # Prepare a small script to run the prediction
+            predict_script = f"""
+import pandas as pd
+import joblib
+import os
+import json
+from services.rl_price_predictor import RLPricePredictor
+import logging
+
+logging.basicConfig(level=logging.ERROR)
+
+try:
+    df = joblib.load('predict_tmp_df.pkl')
+    features = joblib.load('predict_tmp_features.pkl')
+    
+    predictor = RLPricePredictor('{symbol}', df, features, '{self.model_dir}')
+    prediction = predictor.predict(df)
+    # Output only the prediction value
+    print(prediction)
+except Exception as e:
+    # Print error but only to stderr
+    import sys
+    print(str(e), file=sys.stderr)
+    exit(1)
+"""
+            # Save temporary data for the subprocess
+            joblib.dump(df.dropna(subset=features + ['close']), 'predict_tmp_df.pkl')
+            joblib.dump(features, 'predict_tmp_features.pkl')
+            
+            with open('rl_predict_worker.py', 'w') as f:
+                f.write(predict_script)
+            
             try:
-                prediction = predictor.predict(recent_df)
-            except Exception as e:
-                logger.error(f"RL prediction failed: {e}")
-                raise
+                # Run the subprocess
+                result = subprocess.run([sys.executable, 'rl_predict_worker.py'], capture_output=True, text=True)
+                if result.returncode != 0:
+                    error_msg = result.stderr.strip()
+                    if "not found" in error_msg.lower():
+                        raise ResourceNotFoundError(f"RL model for {symbol} not found.")
+                    logger.error(f"RL Predict Subprocess failed: {error_msg}")
+                    raise AppError(f"RL Prediction failed in subprocess: {error_msg}", 500)
+                
+                prediction = float(result.stdout.strip())
+            finally:
+                # Cleanup
+                for f in ['predict_tmp_df.pkl', 'predict_tmp_features.pkl', 'rl_predict_worker.py']:
+                    if os.path.exists(f): os.remove(f)
             
         else:
             raise ValueError(f"Unknown model_type: {model_type}")
@@ -1050,7 +1079,7 @@ except Exception as e:
         Skips models that aren't trained yet. Returns summary dict.
         """
         model_types = ['lstm', 'rl']
-        results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
+        batch_results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
 
         # Refresh actuals first (backfill any missing close prices)
         try:
@@ -1062,18 +1091,18 @@ except Exception as e:
             for mt in model_types:
                 try:
                     result = self.predict_next_day(symbol, model_type=mt)
-                    results["success"] += 1
+                    batch_results["success"] += 1
                     logger.info(f"✅ Prediction {mt.upper()} for {symbol}: ${result['predicted_price']}")
                 except ResourceNotFoundError:
                     # Model not trained yet — skip silently
-                    results["skipped"] += 1
+                    batch_results["skipped"] += 1
                 except Exception as e:
-                    results["errors"] += 1
+                    batch_results["errors"] += 1
                     logger.error(f"❌ Prediction {mt.upper()} for {symbol} failed: {e}")
-                    results["details"].append(f"{symbol}/{mt}: {str(e)[:80]}")
+                    batch_results["details"].append(f"{symbol}/{mt}: {str(e)[:80]}")
 
-        logger.info(f"📊 Batch Predictions Complete: {results['success']} OK, {results['skipped']} skipped, {results['errors']} errors")
-        return results
+        logger.info(f"📊 Batch Predictions Complete: {batch_results['success']} OK, {batch_results['skipped']} skipped, {batch_results['errors']} errors")
+        return batch_results
 
     def run_batch_training(self, symbols, express=True):
         """
@@ -1082,19 +1111,19 @@ except Exception as e:
         Returns summary dict.
         """
         model_types = ['lstm', 'rl']
-        results = {"success": 0, "errors": 0, "details": []}
+        batch_results = {"success": 0, "errors": 0, "details": []}
 
         for symbol in symbols:
             for mt in model_types:
                 try:
                     logger.info(f"🔄 Training {mt.upper()} for {symbol}...")
                     result = self.train_model(symbol, model_type=mt, express=express)
-                    results["success"] += 1
+                    batch_results["success"] += 1
                     logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
                 except Exception as e:
-                    results["errors"] += 1
+                    batch_results["errors"] += 1
                     logger.error(f"❌ Training {mt.upper()} failed for {symbol}: {e}")
-                    results["details"].append(f"{symbol}/{mt}: {str(e)[:100]}")
+                    batch_results["details"].append(f"{symbol}/{mt}: {str(e)[:100]}")
 
-        logger.info(f"🎓 Batch Training Complete: {results['success']} OK, {results['errors']} errors")
-        return results
+        logger.info(f"🎓 Batch Training Complete: {batch_results['success']} OK, {batch_results['errors']} errors")
+        return batch_results

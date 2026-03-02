@@ -269,7 +269,7 @@ function initAI() {
         if (!symbol) return alert('Please enter a symbol');
 
         aiLoading.classList.remove('hidden');
-        aiLoading.innerText = `Training Random Forest for ${symbol}...`;
+        aiLoading.innerText = `Training AI Model (LSTM) for ${symbol}...`;
         aiResult.classList.add('hidden');
 
         try {
