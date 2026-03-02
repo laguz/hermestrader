@@ -8,7 +8,7 @@
         class="col-span-1 p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
         <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">AI Price Prediction</h2>
         <p class="mb-6 text-sm text-gray-500 dark:text-gray-400">
-            Train a Random Forest model on historical data to predict the next day's closing price.
+            Train an AI model on historical data to predict the next day's closing price.
             Features include Price, RSI, Bollinger Bands, MACD, ATR, SMA, and Volume.
         </p>
 
@@ -24,9 +24,7 @@
                 Architecture</label>
             <select id="model-type"
                 class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500">
-                <option value="rf">Random Forest</option>
                 <option value="lstm">LSTM (TensorFlow)</option>
-                <option value="ensemble">Hybrid (Ensemble)</option>
                 <option value="rl">Reinforcement Learning (PPO)</option>
             </select>
         </div>

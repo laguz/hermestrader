@@ -14,7 +14,7 @@ def train_model():
         raise ValidationError("Invalid JSON or missing body")
         
     symbol = data.get('symbol', 'TSLA')
-    model_type = data.get('model_type', 'rf')
+    model_type = data.get('model_type', 'lstm')
     express = data.get('express', False)
     
     tradier = Container.get_tradier_service()
@@ -43,7 +43,7 @@ def predict_price():
         raise ValidationError("Invalid JSON or missing body")
 
     symbol = data.get('symbol', 'TSLA')
-    model_type = data.get('model_type', 'rf')
+    model_type = data.get('model_type', 'lstm')
     
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)
@@ -59,7 +59,7 @@ def evaluate_model():
         raise ValidationError("Invalid JSON or missing body")
 
     symbol = data.get('symbol', 'TSLA')
-    model_type = data.get('model_type', 'rf')
+    model_type = data.get('model_type', 'lstm')
     
     tradier = Container.get_tradier_service()
     ml_service = MLService(tradier)

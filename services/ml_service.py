@@ -292,26 +292,8 @@ class MLService:
                 acc_fold = correct / len(actual_log_ret)
                 accuracies.append(acc_fold)
                 
-            else: # RF
-                # RF Training
-                X_train = train_df[top_features]
-                y_train = train_df['target_return']
-                
-                model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-                model.fit(X_train, y_train)
-                
-                # RF Prediction
-                X_test = test_df[top_features]
-                y_test = test_df['target_return']
-                
-                pred_ret = model.predict(X_test)
-                
-                mse_fold = mean_squared_error(y_test, pred_ret)
-                errors.append(mse_fold)
-                
-                correct = np.sum(np.sign(pred_ret) == np.sign(y_test))
-                acc_fold = correct / len(y_test)
-                accuracies.append(acc_fold)
+            else:
+                raise ValueError(f"Walk-forward validation not supported for {model_type}")
                 
         avg_mse = np.mean(errors) if errors else 0
         avg_acc = np.mean(accuracies) if accuracies else 0
@@ -367,34 +349,7 @@ class MLService:
 
     def train_model(self, symbol, model_type='rf', express=False, pre_prepared_df=None):
         symbol = symbol.upper()
-        if model_type == 'ensemble':
-            logger.info(f"Starting ENSEMBLE training for {symbol} (RL + LSTM)...")
-            
-            # Step 1: Prepare data once for BOTH models
-            # This is the "Data Reuse" optimization
-            if pre_prepared_df is not None:
-                df = pre_prepared_df
-            else:
-                df = self._fetch_and_prepare_training_data(symbol)
-            
-            from concurrent.futures import ThreadPoolExecutor
-            
-            # Parallel Training Optimization
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_rl = executor.submit(self.train_model, symbol, model_type='rl', express=express, pre_prepared_df=df)
-                future_lstm = executor.submit(self.train_model, symbol, model_type='lstm', express=express, pre_prepared_df=df)
-                
-                res_rl = future_rl.result()
-                res_lstm = future_lstm.result()
-                
-            return {
-                "status": "trained",
-                "symbol": symbol,
-                "type": "ensemble",
-                "rl_mse": res_rl['mse'],
-                "lstm_mse": res_lstm['mse']
-            }
-
+        
         logger.info(f"Starting {model_type.upper()} training for {symbol}...")
         
         # Use pre-prepared data if available
@@ -414,10 +369,10 @@ class MLService:
             json.dump(top_features, f)
             
         # 4. Walk-Forward Validation (Before final training)
-        if not express:
+        if not express and model_type != 'rl':
             validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
         else:
-            logger.info("Express mode enabled: Skipping Walk-Forward Validation.")
+            logger.info(f"Skipping Walk-Forward Validation for {model_type} (express={express}).")
             validation_results = {}
         
         mse = 0
@@ -488,42 +443,8 @@ class MLService:
             logger.info(f"RL model trained for {symbol} (timesteps=10_000)")
             mse = 0.0
             
-        else: # Random Forest
-            # For RF, we predict the Daily Return (change) rather than raw price
-            # because RF cannot extrapolate beyond training range.
-            
-            # Target = Return for NEXT day
-            # current close -> next close
-            # return = (next_close - close) / close
-            
-            # RF Target is already set up in 'target_return'
-            # df['target_return'] = df['close'].shift(-1) / df['close'] - 1
-            
-            # We must drop the last row which has NaN target
-            train_df = df.dropna(subset=['target_return'])
-            
-            X = train_df[top_features]
-            y = train_df['target_return']
-            
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
-            
-            model = RandomForestRegressor(n_estimators=100, random_state=42)
-            model.fit(X_train, y_train)
-            
-            predictions_return = model.predict(X_test)
-            
-            # Calculate MSE on Price (reconstructed) to be comparable
-            # actual_price = current_close * (1 + actual_return)
-            # pred_price = current_close * (1 + pred_return)
-            # getting current close from X_test? 
-            # X_test has 'close' feature
-            
-            test_closes = X_test['close'].values
-            pred_prices = test_closes * (1 + predictions_return)
-            actual_prices = test_closes * (1 + y_test.values)
-            
-            mse = mean_squared_error(actual_prices, pred_prices)
-            joblib.dump(model, f"{self.model_dir}/{symbol}_rf.pkl")
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
         
         logger.info(f"Model ({model_type}) MSE: {mse}")
         
@@ -597,58 +518,6 @@ class MLService:
 
         prediction = 0
         
-        if model_type == 'ensemble':
-            # recursive calls
-            pred_rl = self.predict_next_day(symbol, model_type='rl')
-            pred_lstm = self.predict_next_day(symbol, model_type='lstm')
-            
-            p_rl = pred_rl['predicted_price']
-            p_lstm = pred_lstm['predicted_price']
-            
-            # Simple Average
-            prediction = (p_rl + p_lstm) / 2
-            
-            # Use strict features from one (doesn't matter much for display)
-            features = pred_rl.get('used_features', [])
-            
-            change = prediction - pred_rl['last_close']
-            percent_change = (change / pred_rl['last_close']) * 100
-            
-            prediction_date = pred_rl['prediction_date']
-            
-             # Save Ensemble Prediction
-            try:
-                pred_doc = {
-                    "symbol": symbol,
-                    "model_type": 'ensemble',
-                    "prediction_date": prediction_date,
-                    "predicted_price": round(float(prediction), 2),
-                    "raw_prediction": float(prediction),
-                    "bias_correction": 0.0,
-                    "actual_close_price": None,
-                    "created_at": datetime.now(),
-                    "components": {"rl": round(float(p_rl), 2), "lstm": round(float(p_lstm), 2)}
-                }
-                self.db['predictions'].update_one(
-                    {"symbol": symbol, "model_type": 'ensemble', "prediction_date": prediction_date},
-                    {"$set": pred_doc},
-                    upsert=True
-                )
-            except Exception as e:
-                logger.error(f"Error saving ensemble prediction: {e}")
-                
-            return {
-                "symbol": symbol,
-                "model": "ensemble",
-                "predicted_price": round(float(prediction), 2),
-                "last_close": round(float(pred_rl['last_close']), 2),
-                "change": round(float(change), 2),
-                "percent_change_str": f"{percent_change:.2f}%",
-                "prediction_date": prediction_date,
-                "components": {"rl": round(p_rl, 2), "lstm": round(p_lstm, 2)},
-                "used_features": features
-            }
-
         if model_type == 'lstm':
             if not HAS_TENSORFLOW:
                 raise AppError("LSTM prediction requires TensorFlow, but it is not installed.", 501)
@@ -700,18 +569,8 @@ class MLService:
                 logger.error(f"RL prediction failed: {e}")
                 raise
             
-        else: # RF
-            model_path = f"{self.model_dir}/{symbol}_rf.pkl"
-            if not os.path.exists(model_path):
-                raise ResourceNotFoundError("RF Model not found.")
-            model = joblib.load(model_path)
-            
-            features_df = pd.DataFrame([last_row[features]])
-            pred_return = model.predict(features_df)[0]
-            
-            # Reconstruct Price: Close * (1 + return)
-            last_close_val = last_row['close']
-            prediction = last_close_val * (1 + pred_return)
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
             
         last_close = last_row['close']
         
@@ -940,7 +799,7 @@ class MLService:
             "updated_count": updated_count
         }
 
-    def evaluate_model(self, symbol, days=60, model_type='rf'):
+    def evaluate_model(self, symbol, days=60, model_type='lstm'):
         symbol = symbol.upper()
         if self.db is None: raise ExternalServiceError("DB Unavailable")
 
@@ -1076,26 +935,35 @@ class MLService:
                 dates.append(current_date)
                 close_list.append(basis_close)
             
+        elif model_type == 'rl':
+            from services.rl_price_predictor import RLPricePredictor
+            recent_df = df.dropna(subset=features + ['close']).copy()
+            if recent_df.empty: raise ValidationError("Not enough clean data for RL evaluation.")
+            
+            predictor = RLPricePredictor(symbol, recent_df, features, self.model_dir)
+            predictions = []
+            actuals = []
+            dates = []
+            close_list = []
+            
+            # Predict each day in the test set
+            eval_start_idx = len(recent_df) - days
+            for i in range(max(0, eval_start_idx), len(recent_df)):
+                basis_df = recent_df.iloc[:i+1] # up to current day T
+                try:
+                    pred_price = predictor.predict(basis_df)
+                except Exception:
+                    continue
+                
+                predictions.append(pred_price)
+                # target is the close of the day after
+                # if row is T, actual target is df['actual_future_price']
+                actuals.append(recent_df.iloc[i].get('actual_future_price', recent_df.iloc[i]['close']))
+                dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
+                close_list.append(recent_df.iloc[i]['close'])
+                
         else:
-            model_path = f"{self.model_dir}/{symbol}_rf.pkl"
-            if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
-            model = joblib.load(model_path)
-            
-            eval_df = df.tail(days)
-            X = eval_df[features]
-            
-            # Predict Returns
-            pred_returns = model.predict(X)
-            
-            # Reconstruct Price
-            # close * (1 + pred_return)
-            closes = eval_df['close'].values
-            predictions = closes * (1 + pred_returns)
-            predictions = predictions.tolist()
-            
-            dates = eval_df['date'].dt.strftime('%Y-%m-%d').tolist()
-            actuals = eval_df['target'].tolist()
-            close_list = eval_df['close'].tolist()
+            raise ValueError(f"Unknown model_type for evaluation: {model_type}")
 
         results = []
         squared_errors = []
@@ -1143,7 +1011,7 @@ class MLService:
         Run predict_next_day for each symbol across all model types.
         Skips models that aren't trained yet. Returns summary dict.
         """
-        model_types = ['lstm', 'ensemble', 'rl']
+        model_types = ['lstm', 'rl']
         results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
 
         # Refresh actuals first (backfill any missing close prices)
@@ -1175,7 +1043,7 @@ class MLService:
         Uses express mode by default for speed (skips walk-forward validation).
         Returns summary dict.
         """
-        model_types = ['lstm', 'ensemble', 'rl']
+        model_types = ['lstm', 'rl']
         results = {"success": 0, "errors": 0, "details": []}
 
         for symbol in symbols:
@@ -1184,10 +1052,7 @@ class MLService:
                     logger.info(f"🔄 Training {mt.upper()} for {symbol}...")
                     result = self.train_model(symbol, model_type=mt, express=express)
                     results["success"] += 1
-                    if mt == 'ensemble':
-                        logger.info(f"✅ {symbol} ensemble: RL MSE={result.get('rl_mse')}, LSTM MSE={result.get('lstm_mse')}")
-                    else:
-                        logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
+                    logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
                 except Exception as e:
                     results["errors"] += 1
                     logger.error(f"❌ Training {mt.upper()} failed for {symbol}: {e}")
