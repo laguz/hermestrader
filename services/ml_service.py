@@ -13,6 +13,7 @@ import pandas as pd
 from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday, nearest_workday, \
     USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay, USThanksgivingDay, GoodFriday
 from pandas.tseries.offsets import CustomBusinessDay
+import tempfile
 
 try:
     import tensorflow as tf
@@ -428,8 +429,14 @@ class MLService:
             # RL training - Run in a separate process to avoid memory/library conflicts (SIGSEGV)
             import subprocess
             import sys
+            import tempfile
             
             # Prepare a small script to run the training
+            tmp_dir = tempfile.gettempdir()
+            df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}.pkl')
+            features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}.pkl')
+            worker_path = os.path.join(tmp_dir, f'rl_train_worker_{symbol}.py')
+
             train_script = f"""
 import pandas as pd
 import joblib
@@ -441,9 +448,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('rl_train_subprocess')
 
 try:
-    # Load data from a temp file (we'll save it before calling this)
-    df = joblib.load('ml_tmp_df.pkl')
-    top_features = joblib.load('ml_tmp_features.pkl')
+    df = joblib.load(r'{df_path}')
+    top_features = joblib.load(r'{features_path}')
     
     predictor = RLPricePredictor('{symbol}', df, top_features, '{self.model_dir}')
     predictor.train(timesteps=10_000)
@@ -453,15 +459,15 @@ except Exception as e:
     exit(1)
 """
             # Save temporary data for the subprocess
-            joblib.dump(df.dropna(subset=top_features + ['close']), 'ml_tmp_df.pkl')
-            joblib.dump(top_features, 'ml_tmp_features.pkl')
+            joblib.dump(df.dropna(subset=top_features + ['close']), df_path)
+            joblib.dump(top_features, features_path)
             
-            with open('rl_train_worker.py', 'w') as f:
+            with open(worker_path, 'w') as f:
                 f.write(train_script)
             
             try:
                 # Run the subprocess
-                result = subprocess.run([sys.executable, 'rl_train_worker.py'], capture_output=True, text=True)
+                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
                 if result.returncode != 0:
                     logger.error(f"RL Subprocess failed: {result.stderr}")
                     raise AppError(f"RL Training failed in subprocess: {result.stderr}", 500)
@@ -470,7 +476,7 @@ except Exception as e:
                 mse = 0.0
             finally:
                 # Cleanup
-                for f in ['ml_tmp_df.pkl', 'ml_tmp_features.pkl', 'rl_train_worker.py']:
+                for f in [df_path, features_path, worker_path]:
                     if os.path.exists(f): os.remove(f)
             
         else:
@@ -584,11 +590,16 @@ except Exception as e:
             prediction = last_row['close'] * np.exp(pred_log_return)
             
         elif model_type == 'rl':
-            # --- RL Prediction Path (Isolated Subprocess to avoid SIGSEGV) ---
             import subprocess
             import sys
+            import tempfile
             
             # Prepare a small script to run the prediction
+            tmp_dir = tempfile.gettempdir()
+            df_path = os.path.join(tmp_dir, f'predict_tmp_df_{symbol}.pkl')
+            features_path = os.path.join(tmp_dir, f'predict_tmp_features_{symbol}.pkl')
+            worker_path = os.path.join(tmp_dir, f'rl_predict_worker_{symbol}.py')
+
             predict_script = f"""
 import pandas as pd
 import joblib
@@ -600,8 +611,8 @@ import logging
 logging.basicConfig(level=logging.ERROR)
 
 try:
-    df = joblib.load('predict_tmp_df.pkl')
-    features = joblib.load('predict_tmp_features.pkl')
+    df = joblib.load(r'{df_path}')
+    features = joblib.load(r'{features_path}')
     
     predictor = RLPricePredictor('{symbol}', df, features, '{self.model_dir}')
     prediction = predictor.predict(df)
@@ -614,15 +625,15 @@ except Exception as e:
     exit(1)
 """
             # Save temporary data for the subprocess
-            joblib.dump(df.dropna(subset=features + ['close']), 'predict_tmp_df.pkl')
-            joblib.dump(features, 'predict_tmp_features.pkl')
+            joblib.dump(df.dropna(subset=features + ['close']), df_path)
+            joblib.dump(features, features_path)
             
-            with open('rl_predict_worker.py', 'w') as f:
+            with open(worker_path, 'w') as f:
                 f.write(predict_script)
             
             try:
                 # Run the subprocess
-                result = subprocess.run([sys.executable, 'rl_predict_worker.py'], capture_output=True, text=True)
+                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
                     if "not found" in error_msg.lower():
@@ -633,7 +644,7 @@ except Exception as e:
                 prediction = float(result.stdout.strip())
             finally:
                 # Cleanup
-                for f in ['predict_tmp_df.pkl', 'predict_tmp_features.pkl', 'rl_predict_worker.py']:
+                for f in [df_path, features_path, worker_path]:
                     if os.path.exists(f): os.remove(f)
             
         else:
@@ -1079,7 +1090,11 @@ except Exception as e:
         Skips models that aren't trained yet. Returns summary dict.
         """
         model_types = ['lstm', 'rl']
-        batch_results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
+        
+        success_count = 0
+        skipped_count = 0
+        error_count = 0
+        details = []
 
         # Refresh actuals first (backfill any missing close prices)
         try:
@@ -1091,17 +1106,22 @@ except Exception as e:
             for mt in model_types:
                 try:
                     result = self.predict_next_day(symbol, model_type=mt)
-                    batch_results["success"] += 1
+                    success_count += 1
                     logger.info(f"✅ Prediction {mt.upper()} for {symbol}: ${result['predicted_price']}")
                 except ResourceNotFoundError:
-                    # Model not trained yet — skip silently
-                    batch_results["skipped"] += 1
+                    skipped_count += 1
                 except Exception as e:
-                    batch_results["errors"] += 1
+                    error_count += 1
                     logger.error(f"❌ Prediction {mt.upper()} for {symbol} failed: {e}")
-                    batch_results["details"].append(f"{symbol}/{mt}: {str(e)[:80]}")
+                    details.append(f"{symbol}/{mt}: {str(e)[:80]}")
 
-        logger.info(f"📊 Batch Predictions Complete: {batch_results['success']} OK, {batch_results['skipped']} skipped, {batch_results['errors']} errors")
+        batch_results = {
+            "success": success_count,
+            "skipped": skipped_count,
+            "errors": error_count,
+            "details": details
+        }
+        logger.info(f"📊 Batch Predictions Complete: {success_count} OK, {skipped_count} skipped, {error_count} errors")
         return batch_results
 
     def run_batch_training(self, symbols, express=True):
@@ -1111,19 +1131,27 @@ except Exception as e:
         Returns summary dict.
         """
         model_types = ['lstm', 'rl']
-        batch_results = {"success": 0, "errors": 0, "details": []}
+        
+        success_count = 0
+        error_count = 0
+        details = []
 
         for symbol in symbols:
             for mt in model_types:
                 try:
                     logger.info(f"🔄 Training {mt.upper()} for {symbol}...")
                     result = self.train_model(symbol, model_type=mt, express=express)
-                    batch_results["success"] += 1
+                    success_count += 1
                     logger.info(f"✅ {symbol} {mt.upper()}: MSE={result.get('mse')}")
                 except Exception as e:
-                    batch_results["errors"] += 1
+                    error_count += 1
                     logger.error(f"❌ Training {mt.upper()} failed for {symbol}: {e}")
-                    batch_results["details"].append(f"{symbol}/{mt}: {str(e)[:100]}")
+                    details.append(f"{symbol}/{mt}: {str(e)[:100]}")
 
-        logger.info(f"🎓 Batch Training Complete: {batch_results['success']} OK, {batch_results['errors']} errors")
+        batch_results = {
+            "success": success_count,
+            "errors": error_count,
+            "details": details
+        }
+        logger.info(f"🎓 Batch Training Complete: {success_count} OK, {error_count} errors")
         return batch_results

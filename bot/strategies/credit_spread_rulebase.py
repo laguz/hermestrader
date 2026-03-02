@@ -217,18 +217,32 @@ class CreditSpreadRulebaseStrategy(AbstractStrategy):
         # UPGRADE 2: DYNAMIC SPREAD WIDTHS
         dynamic_width = current_price * 0.015
         width = float(max(1.0, math.ceil(dynamic_width)))
-        long_strike = short_strike - width if is_put else short_strike + width
+        # Robust Long Strike Selection: Find nearest available strike in the right direction
+        if is_put:
+            target_long = short_strike - width
+            long_candidates = [o for o in chain if o['option_type'] == target_side and o['strike'] <= target_long]
+            long_leg = max(long_candidates, key=lambda x: x['strike']) if long_candidates else None
+        else:
+            target_long = short_strike + width
+            long_candidates = [o for o in chain if o['option_type'] == target_side and o['strike'] >= target_long]
+            long_leg = min(long_candidates, key=lambda x: x['strike']) if long_candidates else None
+
+        if not long_leg:
+            self._log(f"Could not find available long leg for {symbol} near strike {target_long}")
+            return
+
+        long_strike = long_leg['strike']
+        width = abs(short_strike - long_strike)
 
         # Calculate Credit Target: configurable, defaults to 1/3 of width
         min_credit_pct = config.get('min_credit_pct', 1/3) if config else 1/3
         target_credit = round(width * min_credit_pct, 2)
         
-        # Get actual prices
+        # Get short leg object (should exist since short_strike came from chain)
         short_leg = next((o for o in chain if o['strike'] == short_strike and o['option_type'] == target_side), None)
-        long_leg = next((o for o in chain if o['strike'] == long_strike and o['option_type'] == target_side), None)
         
-        if not short_leg or not long_leg:
-            self._log(f"Missing legs for {symbol} {short_strike}/{long_strike}")
+        if not short_leg:
+            self._log(f"Unexpected: Short leg {short_strike} not found in chain for {symbol}")
             return
 
         # Mid-price credit
