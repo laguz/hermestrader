@@ -1,1 +1,1 @@
-["close", "high", "open", "low", "obv", "close_lag_2", "close_lag_1", "vwap", "mid_bb", "close_lag_3"]
+["close", "high", "open", "low", "close_lag_1", "close_lag_2", "vwap", "obv", "mid_bb", "close_lag_3"]

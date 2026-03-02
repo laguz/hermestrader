@@ -5,7 +5,7 @@ Algorithmic trading platform built with Flask, integrating Tradier brokerage API
 ## Features
 
 - **Automated Options Trading** — Credit spreads, wheel strategy, and rule-based spread strategies with configurable watchlists and risk limits
-- **ML Price Prediction** — Random Forest and LSTM models with walk-forward validation, bias correction, and ensemble predictions
+- **ML Price Prediction** — Random Forest, LSTM, and Reinforcement Learning (PPO) models with walk-forward validation, bias correction, and ensemble predictions
 - **SEC EDGAR Integration** — Fundamental analysis via Rule #1 "Sticker Price" calculator with CAGR, ROIC, and financial data parsing
 - **Technical Analysis** — RSI, MACD, Bollinger Bands, ATR, ADX, OBV, VWAP, and more
 - **Backtesting** — Full backtesting engine with mock services to simulate strategy performance

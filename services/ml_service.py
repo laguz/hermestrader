@@ -476,6 +476,18 @@ class MLService:
             joblib.dump(scaler, f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
             joblib.dump(target_scaler, f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl")
             
+        elif model_type == 'rl':
+            # RL training – uses the same dataframe and selected features
+            from services.rl_price_predictor import RLPricePredictor
+            
+            # RL algorithm requires clean data (no NaNs or infs)
+            train_df = df.dropna(subset=top_features + ['close']).copy()
+            
+            predictor = RLPricePredictor(symbol, train_df, top_features, self.model_dir)
+            predictor.train(timesteps=10_000)
+            logger.info(f"RL model trained for {symbol} (timesteps=10_000)")
+            mse = 0.0
+            
         else: # Random Forest
             # For RF, we predict the Daily Return (change) rather than raw price
             # because RF cannot extrapolate beyond training range.
@@ -670,6 +682,22 @@ class MLService:
             # Reconstruct Price
             # Price = Last Close * exp(Log Return)
             prediction = last_row['close'] * np.exp(pred_log_return)
+            
+        elif model_type == 'rl':
+            # --- RL Prediction Path ---
+            from services.rl_price_predictor import RLPricePredictor
+            
+            # Predict requires a valid non-NaN feature vector for observation space
+            recent_df = df.dropna(subset=features + ['close']).copy()
+            if recent_df.empty:
+                raise ValidationError("Not enough clean data for RL prediction.")
+                
+            predictor = RLPricePredictor(symbol, recent_df, features, self.model_dir)
+            try:
+                prediction = predictor.predict(recent_df)
+            except Exception as e:
+                logger.error(f"RL prediction failed: {e}")
+                raise
             
         else: # RF
             model_path = f"{self.model_dir}/{symbol}_rf.pkl"
@@ -1114,7 +1142,7 @@ class MLService:
         Run predict_next_day for each symbol across all model types.
         Skips models that aren't trained yet. Returns summary dict.
         """
-        model_types = ['rf', 'lstm', 'ensemble']
+        model_types = ['rf', 'lstm', 'ensemble', 'rl']
         results = {"success": 0, "skipped": 0, "errors": 0, "details": []}
 
         # Refresh actuals first (backfill any missing close prices)
@@ -1146,7 +1174,7 @@ class MLService:
         Uses express mode by default for speed (skips walk-forward validation).
         Returns summary dict.
         """
-        model_types = ['rf', 'lstm', 'ensemble']
+        model_types = ['rf', 'lstm', 'ensemble', 'rl']
         results = {"success": 0, "errors": 0, "details": []}
 
         for symbol in symbols:
