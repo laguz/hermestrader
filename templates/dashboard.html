@@ -200,7 +200,7 @@
 
                 data.forEach(pos => {
                     const fmtMoney = (val) => val != null ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val) : '-';
-                    const fmtPct = (val) => val != null ? val.toFixed(2) + '%' : '-';
+                    const fmtPct = (val) => val != null && !isNaN(val) ? Number(val).toFixed(2) + '%' : '-';
 
                     const isOption = pos.expiration_date !== undefined;
                     let displaySymbol = `
@@ -241,7 +241,7 @@
             })
             .catch(error => {
                 loading.classList.add('hidden');
-                document.getElementById('positions-error').textContent = 'Error loading positions.';
+                document.getElementById('positions-error').textContent = 'Error loading positions: ' + error.message;
                 document.getElementById('positions-error').classList.remove('hidden');
             });
     }

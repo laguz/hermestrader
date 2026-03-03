@@ -62,7 +62,12 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
-            return (data.get('quotes') or {}).get('quote', {})
+            if not isinstance(data, dict):
+                return {}
+            quotes = data.get('quotes', {})
+            if isinstance(quotes, dict):
+                return quotes.get('quote', {})
+            return {}
         except requests.RequestException as e:
             logger.error(f"Error fetching quote for {symbol}: {e}")
             return None
@@ -77,10 +82,16 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
-            exps = (data.get('expirations') or {}).get('date', [])
-            if isinstance(exps, str):
-                return [exps]
-            return exps
+            if not isinstance(data, dict):
+                return []
+            exp_data = data.get('expirations', {})
+            if isinstance(exp_data, dict):
+                exps = exp_data.get('date', [])
+                if isinstance(exps, str):
+                    return [exps]
+                if isinstance(exps, list):
+                    return exps
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching expirations for {symbol}: {e}")
             return []
@@ -95,7 +106,12 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
-            return (data.get('options') or {}).get('option', [])
+            if not isinstance(data, dict):
+                return []
+            options_data = data.get('options', {})
+            if isinstance(options_data, dict):
+                return options_data.get('option', [])
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching option chains for {symbol} on {expiration}: {e}")
             return None
@@ -116,7 +132,12 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
-            return (data.get('history') or {}).get('day', [])
+            if not isinstance(data, dict):
+                return []
+            history_data = data.get('history', {})
+            if isinstance(history_data, dict):
+                return history_data.get('day', [])
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching history for {symbol}: {e}")
             return None
@@ -148,6 +169,8 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return None
             balances = data.get('balances', {})
             
             # Buying power can be nested under 'pdt', 'margin', or 'cash'
@@ -191,6 +214,8 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return []
             positions_data = data.get('positions', {})
             if positions_data == 'null' or positions_data is None:
                 return []
@@ -198,7 +223,9 @@ class TradierService:
             position_entry = positions_data.get('position', [])
             if isinstance(position_entry, dict):
                 return [position_entry]
-            return position_entry
+            if isinstance(position_entry, list):
+                return position_entry
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching positions: {e}")
             return []
@@ -217,6 +244,8 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return []
             orders_data = data.get('orders', {})
             if orders_data == 'null' or orders_data is None:
                 return []
@@ -224,7 +253,9 @@ class TradierService:
             order_entry = orders_data.get('order', [])
             if isinstance(order_entry, dict):
                 return [order_entry]
-            return order_entry
+            if isinstance(order_entry, list):
+                return order_entry
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching orders: {e}")
             return []
@@ -311,6 +342,8 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return {}
             return data.get('clock', {})
         except requests.RequestException as e:
             logger.error(f"Error fetching market clock: {e}")
@@ -346,6 +379,8 @@ class TradierService:
                                     timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                return []
             gl_data = data.get('gainloss', {})
             if gl_data is None or not isinstance(gl_data, dict):
                 return []
@@ -353,7 +388,9 @@ class TradierService:
             positions = gl_data.get('closed_position', [])
             if isinstance(positions, dict):
                 return [positions]
-            return positions
+            if isinstance(positions, list):
+                return positions
+            return []
         except requests.RequestException as e:
             logger.error(f"Error fetching gainloss: {e}")
             return []
