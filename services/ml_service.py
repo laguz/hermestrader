@@ -926,12 +926,12 @@ except Exception as e:
             
             # Prepare data (Need Log Return logic similar to training)
             # Ensure target is set correctly for prepare_lstm_data
-            df['log_return'] = np.log(df['close'].shift(-1) / df['close'])
+            df['log_return'] = np.log(df['target'] / df['close'])
             df['target_for_lstm'] = df['log_return']
             
             # Save original target price for validation
             # We want actual future price (Close T+1) to compare with predicted price
-            df['actual_future_price'] = df['close'].shift(-1)
+            df['actual_future_price'] = df['target']
             
             # Swap target for prep
             df['target'] = df['target_for_lstm']
@@ -1024,32 +1024,85 @@ except Exception as e:
                 close_list.append(basis_close)
             
         elif model_type == 'rl':
-            from services.rl_price_predictor import RLPricePredictor
+            import subprocess
+            import sys
+            import tempfile
+            
             recent_df = df.dropna(subset=features + ['close']).copy()
             if recent_df.empty: raise ValidationError("Not enough clean data for RL evaluation.")
             
-            predictor = RLPricePredictor(symbol, recent_df, features, self.model_dir)
-            predictions = []
-            actuals = []
-            dates = []
-            close_list = []
+            if 'actual_future_price' not in recent_df.columns:
+                recent_df['actual_future_price'] = recent_df['target']
+                
+            tmp_dir = tempfile.gettempdir()
+            df_path = os.path.join(tmp_dir, f'eval_tmp_df_{symbol}.pkl')
+            features_path = os.path.join(tmp_dir, f'eval_tmp_features_{symbol}.pkl')
+            worker_path = os.path.join(tmp_dir, f'rl_eval_worker_{symbol}.py')
+
+            eval_script = f"""
+import pandas as pd
+import joblib
+import os
+import sys
+import json
+import logging
+
+sys.path.append(os.getcwd())
+from services.rl_price_predictor import RLPricePredictor
+
+try:
+    recent_df = joblib.load(r'{df_path}')
+    features = joblib.load(r'{features_path}')
+    
+    predictor = RLPricePredictor('{symbol}', recent_df, features, '{self.model_dir}')
+    
+    predictions = []
+    actuals = []
+    dates = []
+    close_list = []
+    
+    eval_start_idx = len(recent_df) - {days}
+    for i in range(max(0, eval_start_idx), len(recent_df)):
+        basis_df = recent_df.iloc[:i+1]
+        try:
+            pred_price = predictor.predict(basis_df)
+        except Exception:
+            continue
             
-            # Predict each day in the test set
-            eval_start_idx = len(recent_df) - days
-            for i in range(max(0, eval_start_idx), len(recent_df)):
-                basis_df = recent_df.iloc[:i+1] # up to current day T
-                try:
-                    pred_price = predictor.predict(basis_df)
-                except Exception:
-                    continue
+        predictions.append(pred_price)
+        actual_price = recent_df.iloc[i].get('actual_future_price')
+        if pd.isna(actual_price):
+             actual_price = recent_df.iloc[i]['close']
+        actuals.append(float(actual_price))
+        dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
+        close_list.append(float(recent_df.iloc[i]['close']))
+        
+    print(json.dumps({{"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}}))
+except Exception as e:
+    print(str(e), file=sys.stderr)
+    exit(1)
+"""
+            joblib.dump(recent_df, df_path)
+            joblib.dump(features, features_path)
+            
+            with open(worker_path, 'w') as f:
+                f.write(eval_script)
                 
-                predictions.append(pred_price)
-                # target is the close of the day after
-                # if row is T, actual target is df['actual_future_price']
-                actuals.append(recent_df.iloc[i].get('actual_future_price', recent_df.iloc[i]['close']))
-                dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
-                close_list.append(recent_df.iloc[i]['close'])
+            try:
+                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
+                if result.returncode != 0:
+                    error_msg = result.stderr.strip()
+                    raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
                 
+                output = json.loads(result.stdout.strip())
+                predictions = output['predictions']
+                actuals = output['actuals']
+                dates = output['dates']
+                close_list = output['close_list']
+            finally:
+                for f in [df_path, features_path, worker_path]:
+                    if os.path.exists(f): os.remove(f)
+                    
         else:
             raise ValueError(f"Unknown model_type for evaluation: {model_type}")
 
