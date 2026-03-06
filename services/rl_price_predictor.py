@@ -28,8 +28,8 @@ class MarketEnv(Env):
         self.current_idx = 0
         # Observation space: normalized feature vector (no explicit bounds)
         self.observation_space = Box(low=-1e5, high=1e5, shape=(len(feature_cols),), dtype=np.float32)
-        # Action space: predicted price (positive)
-        self.action_space = Box(low=0, high=1e5, shape=(1,), dtype=np.float32)
+        # Action space: predicted return fraction (e.g. bounded approx +/- 100%)
+        self.action_space = Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -37,14 +37,20 @@ class MarketEnv(Env):
         return self._get_obs(), {}
 
     def step(self, action):
+        # Current day price
+        current_price = self.df.loc[self.current_idx, self.target_col]
         # True next‑day price
         true_price = self.df.loc[self.current_idx + 1, self.target_col]
-        # Reward is negative MSE (higher is better)
-        reward = -((action[0] - true_price) ** 2)
+        
+        # Calculate true return (percentage change)
+        true_return = (true_price - current_price) / current_price if current_price else 0.0
+        
+        # Reward is negative MSE on the predicted return (scaled up)
+        reward = -(((action[0] - true_return) * 100) ** 2)
+        
         self.current_idx += 1
         done = bool(self.current_idx >= len(self.df) - 1)
         obs = self._get_obs() if not done else np.zeros(self.observation_space.shape, dtype=np.float32)
-        # return obs, reward, terminated, truncated, info
         return obs, float(reward), done, False, {}
 
     def _get_obs(self):
@@ -85,4 +91,8 @@ class RLPricePredictor:
             self.load()
         obs = recent_df[self.feature_cols].iloc[-1].values.astype(np.float32)
         action, _ = self.model.predict(obs.reshape(1, -1), deterministic=True)
-        return float(action[0])
+        pred_return = float(action[0])
+        # Reconstruct price
+        last_price = recent_df['close'].iloc[-1]
+        pred_price = last_price * (1 + pred_return)
+        return float(pred_price)

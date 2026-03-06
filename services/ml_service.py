@@ -421,7 +421,7 @@ class MLService:
             mse = mean_squared_error(actual_log_returns, pred_log_returns)
             
             # Save
-            model.save(f"{self.model_dir}/{symbol}_lstm.keras")
+            model.save(f"{self.model_dir}/{symbol}_lstm.h5")
             joblib.dump(scaler, f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
             joblib.dump(target_scaler, f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl")
             
@@ -562,7 +562,7 @@ except Exception as e:
         if model_type == 'lstm':
             if not HAS_TENSORFLOW:
                 raise AppError("LSTM prediction requires TensorFlow, but it is not installed.", 501)
-            model_path = f"{self.model_dir}/{symbol}_lstm.keras"
+            model_path = f"{self.model_dir}/{symbol}_lstm.h5"
             scaler_path = f"{self.model_dir}/{symbol}_lstm_scaler.pkl"
             target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
             
@@ -599,11 +599,11 @@ except Exception as e:
             import sys
             import tempfile
             
-            # Prepare a small script to run the prediction
             tmp_dir = tempfile.gettempdir()
             df_path = os.path.join(tmp_dir, f'predict_tmp_df_{symbol}.pkl')
             features_path = os.path.join(tmp_dir, f'predict_tmp_features_{symbol}.pkl')
             worker_path = os.path.join(tmp_dir, f'rl_predict_worker_{symbol}.py')
+            result_path = os.path.join(tmp_dir, f'rl_predict_result_{symbol}.json')
 
             predict_script = f"""
 import pandas as pd
@@ -613,9 +613,7 @@ import sys
 import json
 import logging
 
-# Ensure project root is in path
 sys.path.append(os.getcwd())
-
 from services.rl_price_predictor import RLPricePredictor
 
 logging.basicConfig(level=logging.ERROR)
@@ -626,23 +624,18 @@ try:
     
     predictor = RLPricePredictor('{symbol}', df, features, '{self.model_dir}')
     prediction = predictor.predict(df)
-    # Output only the prediction value
-    print(prediction)
+    
+    with open(r'{result_path}', 'w') as fh:
+        json.dump({{"prediction": prediction}}, fh)
 except Exception as e:
-    # Print error but only to stderr
     import sys
     print(str(e), file=sys.stderr)
     exit(1)
 """
-            # Save temporary data for the subprocess
-            joblib.dump(df.dropna(subset=features + ['close']), df_path)
-            joblib.dump(features, features_path)
-            
             with open(worker_path, 'w') as f:
                 f.write(predict_script)
             
             try:
-                # Run the subprocess
                 result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
@@ -651,10 +644,11 @@ except Exception as e:
                     logger.error(f"RL Predict Subprocess failed: {error_msg}")
                     raise AppError(f"RL Prediction failed in subprocess: {error_msg}", 500)
                 
-                prediction = float(result.stdout.strip())
+                with open(result_path, 'r') as fh:
+                    output = json.load(fh)
+                prediction = float(output['prediction'])
             finally:
-                # Cleanup
-                for f in [df_path, features_path, worker_path]:
+                for f in [df_path, features_path, worker_path, result_path]:
                     if os.path.exists(f): os.remove(f)
             
         else:
@@ -916,10 +910,14 @@ except Exception as e:
         else:
             features = [f for f in self.default_features if f in df.columns]
 
+        # Safety: Ensure no target leakage columns are in features list
+        forbidden = ['target', 'target_return', 'log_return', 'date', 'symbol']
+        features = [f for f in features if f not in forbidden]
+
         if model_type == 'lstm':
             if not HAS_TENSORFLOW:
                 raise AppError("LSTM evaluation requires TensorFlow, but it is not installed.", 501)
-            model_path = f"{self.model_dir}/{symbol}_lstm.keras"
+            model_path = f"{self.model_dir}/{symbol}_lstm.h5"
             if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
             model = load_model(model_path)
             scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
@@ -1038,6 +1036,7 @@ except Exception as e:
             df_path = os.path.join(tmp_dir, f'eval_tmp_df_{symbol}.pkl')
             features_path = os.path.join(tmp_dir, f'eval_tmp_features_{symbol}.pkl')
             worker_path = os.path.join(tmp_dir, f'rl_eval_worker_{symbol}.py')
+            result_path = os.path.join(tmp_dir, f'rl_eval_result_{symbol}.json')
 
             eval_script = f"""
 import pandas as pd
@@ -1066,18 +1065,24 @@ try:
         basis_df = recent_df.iloc[:i+1]
         try:
             pred_price = predictor.predict(basis_df)
-        except Exception:
+        except Exception as pred_e:
+            import logging
+            logging.error("Prediction failed for index " + str(i) + ": " + str(pred_e))
             continue
             
         predictions.append(pred_price)
-        actual_price = recent_df.iloc[i].get('actual_future_price')
+        actual_price = recent_df.iloc[i]['actual_future_price']
         if pd.isna(actual_price):
              actual_price = recent_df.iloc[i]['close']
         actuals.append(float(actual_price))
         dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
         close_list.append(float(recent_df.iloc[i]['close']))
         
-    print(json.dumps({{"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}}))
+    if not predictions:
+        raise ValueError("RL Predictor failed to generate any predictions. Check observation space shapes.")
+        
+    with open(r'{result_path}', 'w') as fh:
+        json.dump({{"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}}, fh)
 except Exception as e:
     print(str(e), file=sys.stderr)
     exit(1)
@@ -1094,13 +1099,14 @@ except Exception as e:
                     error_msg = result.stderr.strip()
                     raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
                 
-                output = json.loads(result.stdout.strip())
+                with open(result_path, 'r') as fh:
+                    output = json.load(fh)
                 predictions = output['predictions']
                 actuals = output['actuals']
                 dates = output['dates']
                 close_list = output['close_list']
             finally:
-                for f in [df_path, features_path, worker_path]:
+                for f in [df_path, features_path, worker_path, result_path]:
                     if os.path.exists(f): os.remove(f)
                     
         else:
@@ -1131,9 +1137,9 @@ except Exception as e:
                 "error": round(err, 2)
             })
 
-        mse = np.mean(squared_errors)
-        mae = np.mean(np.abs([p['actual'] - p['predicted'] for p in results]))
-        acc = (correct_direction / len(predictions) * 100)
+        mse = np.mean(squared_errors) if squared_errors else 0.0
+        mae = np.mean(np.abs([p['actual'] - p['predicted'] for p in results])) if results else 0.0
+        acc = (correct_direction / len(predictions) * 100) if predictions else 0.0
         
         return {
             "symbol": symbol,
