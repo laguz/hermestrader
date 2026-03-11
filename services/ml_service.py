@@ -431,8 +431,10 @@ class MLService:
             import sys
             import tempfile
             
-            # Prepare a small script to run the training
-            tmp_dir = tempfile.gettempdir()
+            # Use explicit local tmp directory to prevent cross-environment path resolution issues
+            tmp_dir = os.path.join(os.getcwd(), 'tmp')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
             df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}.pkl')
             features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}.pkl')
             worker_path = os.path.join(tmp_dir, f'rl_train_worker_{symbol}.py')
@@ -599,7 +601,10 @@ except Exception as e:
             import sys
             import tempfile
             
-            tmp_dir = tempfile.gettempdir()
+            # Use explicit local tmp directory
+            tmp_dir = os.path.join(os.getcwd(), 'tmp')
+            os.makedirs(tmp_dir, exist_ok=True)
+            
             df_path = os.path.join(tmp_dir, f'predict_tmp_df_{symbol}.pkl')
             features_path = os.path.join(tmp_dir, f'predict_tmp_features_{symbol}.pkl')
             worker_path = os.path.join(tmp_dir, f'rl_predict_worker_{symbol}.py')
@@ -632,6 +637,9 @@ except Exception as e:
     print(str(e), file=sys.stderr)
     exit(1)
 """
+            # Need to actually dump the data into the pkl files for the subprocess BEFORE running it!
+            joblib.dump(df.dropna(subset=features + ['close']), df_path)
+            joblib.dump(features, features_path)
             with open(worker_path, 'w') as f:
                 f.write(predict_script)
             
