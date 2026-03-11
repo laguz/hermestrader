@@ -361,6 +361,7 @@ class BotService:
             self._log(f"Running Rule-Based Credit Spread Strategy on {len(wl_rulebase)} symbols...")
             self.credit_spread_rulebase_strategy.manage_positions()
             self.credit_spread_rulebase_strategy.execute(wl_rulebase, config)
+    def _run_ml_scheduler(self, config):
         """
         Run daily predictions and biweekly training for all watchlist symbols.
         Called from _run_loop after strategy execution.
