@@ -326,23 +326,25 @@ class WheelStrategy(AbstractStrategy):
                 if not current_option: continue
 
                 close_price = current_option['ask']
-                new_expiry = self._find_expiry(underlying, target_dte=42, min_dte=42, max_dte=63)
+                
+                # Find the first expiration > 42 DTE (min_dte=43)
+                new_expiry = self._find_expiry(underlying, target_dte=43, min_dte=43, max_dte=120, method='min')
                 if not new_expiry: continue
 
                 new_chain = self.tradier.get_option_chains(underlying, new_expiry)
                 
-                # Get strike using same >80% POP Delta fallback mechanism as main entry
-                # For puts, we want it to go down, for calls, up, but delta handles the abstract targeting
-                target_strike, delta = self._find_delta_strike(new_chain, option_type, self.DELTA_MIN, self.DELTA_MAX)
-                
-                if target_strike is None:
-                    self._log(f"⚠️ Could not find valid Delta({self.DELTA_MIN}-{self.DELTA_MAX}) roll strike for {underlying}. Aborting roll.")
-                    continue
+                # User rules: > 42 DTE and $1 less for Puts (relative to current Strike)
+                # For calls, the equivalent directional adjustment is $1 more.
+                target_strike_ideal = strike - 1 if option_type == 'put' else strike + 1
                     
-                new_option = next((o for o in new_chain if o['strike'] == target_strike and o['option_type'] == option_type), None)
-                if not new_option:
-                    self._log(f"⚠️ Target strike {target_strike} not found in chain. Aborting roll.")
-                    continue
+                candidates = [o for o in new_chain if o['option_type'] == option_type]
+                if not candidates: continue
+                
+                new_option = min(candidates, key=lambda x: abs(x['strike'] - target_strike_ideal))
+                target_strike = new_option['strike']
+                
+                if abs(target_strike - target_strike_ideal) > 0.5:
+                    self._log(f"⚠️ Ideal target strike {target_strike_ideal} not perfectly matched, snapping to {target_strike}.")
 
                 open_price = round(new_option['bid'] - 0.01, 2)
                 net_credit = open_price - close_price

@@ -100,6 +100,11 @@
             </div>
             <div class="hidden md:block w-px h-16 bg-gray-200 dark:bg-gray-700"></div>
             <div class="text-center">
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">ATR (14)</div>
+                <div id="disp-atr" class="text-4xl font-bold text-blue-600 dark:text-blue-500">--</div>
+            </div>
+            <div class="hidden md:block w-px h-16 bg-gray-200 dark:bg-gray-700"></div>
+            <div class="text-center">
                 <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">AI Prediction (Next Day)</div>
                 <div class="flex items-baseline justify-center gap-3">
                     <span id="disp-pred-price" class="text-4xl font-bold text-gray-900 dark:text-white">--</span>
@@ -259,6 +264,13 @@
 
                 // --- Prediction & Price ---
                 document.getElementById('disp-current-price').textContent = `$${data.current_price.toFixed(2)}`;
+                
+                if (data.indicators.atr) {
+                    document.getElementById('disp-atr').textContent = data.indicators.atr.toFixed(2);
+                } else {
+                    document.getElementById('disp-atr').textContent = "N/A";
+                }
+
                 if (data.prediction.price) {
                     document.getElementById('disp-pred-price').textContent = `$${data.prediction.price.toFixed(2)}`;
                     const change = data.prediction.change_pct;

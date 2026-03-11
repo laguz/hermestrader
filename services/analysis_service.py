@@ -15,7 +15,8 @@ from utils.indicators import (
     find_key_levels,
     calculate_historical_volatility,
     calculate_prob_it_expires_otm,
-    calculate_prob_of_touch
+    calculate_prob_of_touch,
+    calculate_atr
 )
 
 class AnalysisService:
@@ -76,6 +77,9 @@ class AnalysisService:
 
         # ADX (14)
         df['adx'] = calculate_adx(df['high'], df['low'], df['close'], period=14)
+
+        # ATR (14)
+        df['atr'] = calculate_atr(df['high'], df['low'], df['close'], window=14)
 
         # HV Rank (Percentile of 30-day Vol over last year)
         hv_rank = calculate_hv_rank(df['close'], window=30, lookback=252)
@@ -430,6 +434,7 @@ class AnalysisService:
                 "bb_lower": round(latest['bb_lower'], 2),
                 "sma_200": round(latest['sma_200'], 2) if not np.isnan(latest['sma_200']) else None,
                 "adx": round(latest['adx'], 2),
+                "atr": round(latest['atr'], 2) if not np.isnan(latest['atr']) else None,
                 "hv_rank": round(hv_rank, 1),
                 "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
                 "volatility": round(volatility * 100, 1),
