@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.wheel import WheelStrategy
-from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
 from utils.indicators import (
     calculate_rsi, 
     find_key_levels, 
@@ -148,12 +147,10 @@ class BacktestService:
         # Use lazy instantiation mapping instead of hardcoded if/elif block
         from bot.strategies.credit_spreads import CreditSpreadStrategy
         from bot.strategies.wheel import WheelStrategy
-        from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
-        
+
         strategy_registry = {
             "credit_spread": CreditSpreadStrategy,
             "wheel": WheelStrategy,
-            "credit_spread_rulebase": CreditSpreadRulebaseStrategy
         }
         
         strategy_class = strategy_registry.get(strategy_type)
@@ -235,7 +232,7 @@ class BacktestService:
                 )
 
             # 3. Run Strategy: Manage Positions (Exits/Rolls)
-            if strategy_type in ["credit_spread", "credit_spread_rulebase"]:
+            if strategy_type == "credit_spread":
                 strategy.manage_positions()
             elif strategy_type == "wheel":
                 # Wheel handles management inside execute(), but we also
@@ -323,13 +320,6 @@ class BacktestService:
             # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
             if strategy_type == "credit_spread":
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
-            elif strategy_type == "credit_spread_rulebase":
-                print(f"[DEBUG BACKTEST] Exectuting Rulebase for {symbol} | Price: {price} | RSI: {rsi} | VIX (IV): {implied_vol*100} | Date: {current_date_str}")
-                strategy.execute([symbol], config={
-                    'max_credit_spread_rulebase_lots': 5,
-                    'min_credit_pct': 0.10,  # 10% of width (relaxed for synthetic pricing)
-                    'max_capital_per_symbol': 2500
-                })
             # Wheel entries already captured in wheel_entry_orders from step 3
             
             # 5. Process New Orders → Create Positions (Entries)

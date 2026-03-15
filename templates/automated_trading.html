@@ -67,13 +67,6 @@
                         placeholder="0" min="1" max="20" required>
                 </div>
                 <div>
-                    <label for="cfg-rb-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
-                        Rule-Based Lots</label>
-                    <input type="number" id="cfg-rb-lots"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
-                        placeholder="0" min="1" max="20" required>
-                </div>
-                <div>
                     <label for="cfg-wheel-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
                         Wheel Contracts</label>
                     <input type="number" id="cfg-wheel-lots"
@@ -131,24 +124,6 @@
             </div>
         </div>
 
-        <!-- Rule-Based Watchlist -->
-        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
-            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Rule-Based CS Watchlist</h3>
-            <div id="chips-credit_spread_rulebase" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
-                <!-- Chips -->
-            </div>
-            <div class="flex gap-3">
-                <div class="flex-grow">
-                    <label for="input-credit_spread_rulebase" class="sr-only">Add Symbol</label>
-                    <input type="text" id="input-credit_spread_rulebase"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
-                        placeholder="ADD SYMBOL">
-                </div>
-                <button type="button"
-                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
-                    onclick="addSymbol('credit_spread_rulebase')">Add</button>
-            </div>
-        </div>
 
     </div>
 </div>
@@ -205,8 +180,7 @@
     // Store both watchlists
     let currentWatchlists = {
         credit_spreads: [],
-        wheel: [],
-        credit_spread_rulebase: []
+        wheel: []
     };
 
     // Store last known settings to prevent overwriting user edits
@@ -239,7 +213,6 @@
         if (status.settings) {
             currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
             currentWatchlists.wheel = status.settings.watchlist_wheel || [];
-            currentWatchlists.credit_spread_rulebase = status.settings.watchlist_credit_spread_rulebase || [];
 
             // Backwards compatibility or migration display (optional)
             if (status.settings.watchlist && currentWatchlists.credit_spreads.length === 0) {
@@ -248,7 +221,6 @@
 
             renderWatchlist('credit_spreads');
             renderWatchlist('wheel');
-            renderWatchlist('credit_spread_rulebase');
         }
 
         // Update Logs
@@ -264,7 +236,6 @@
         if (status.settings) {
             const s = status.settings;
             updateInputIfSafe('cfg-cs-lots', s.max_credit_spreads_per_symbol || 5);
-            updateInputIfSafe('cfg-rb-lots', s.max_credit_spread_rulebase_lots || 5);
             updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
 
             lastSettings = s;
@@ -289,7 +260,6 @@
         // We map ID to the settings key for comparison
         let oldDbValue = null;
         if (id === 'cfg-cs-lots') oldDbValue = lastSettings.max_credit_spreads_per_symbol || 5;
-        if (id === 'cfg-rb-lots') oldDbValue = lastSettings.max_credit_spread_rulebase_lots || 5;
         if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
 
         // Loose comparison (string vs number)
@@ -301,7 +271,6 @@
 
     async function saveSettings() {
         const csLots = parseInt(document.getElementById('cfg-cs-lots').value) || 5;
-        const rbLots = parseInt(document.getElementById('cfg-rb-lots').value) || 5;
         const wheelLots = parseInt(document.getElementById('cfg-wheel-lots').value) || 1;
 
         try {
@@ -310,7 +279,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     max_credit_spreads_per_symbol: csLots,
-                    max_credit_spread_rulebase_lots: rbLots,
                     max_wheel_contracts_per_symbol: wheelLots
                 })
             });
@@ -460,8 +428,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     credit_spreads_watchlist: currentWatchlists.credit_spreads,
-                    wheel_watchlist: currentWatchlists.wheel,
-                    credit_spread_rulebase_watchlist: currentWatchlists.credit_spread_rulebase
+                    wheel_watchlist: currentWatchlists.wheel
                 })
             });
             const data = await res.json();

@@ -9,7 +9,6 @@ from services.container import Container
 # Strategy imports needed for type hinting / proper resolving
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.wheel import WheelStrategy
-from bot.strategies.credit_spread_rulebase import CreditSpreadRulebaseStrategy
 from bot.portfolio_manager import PortfolioManager
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,6 @@ class BotService:
         # Initialize Strategies
         self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
         self.wheel_strategy = WheelStrategy(self.tradier, self.db)
-        self.credit_spread_rulebase_strategy = CreditSpreadRulebaseStrategy(self.tradier, self.db)
         self.portfolio_manager = PortfolioManager(self.tradier, self.db)
         
         self._init_db_config()
@@ -69,11 +67,9 @@ class BotService:
                  "settings": {
                      "watchlist_credit_spreads": [], # Start empty, user adds via UI
                      "watchlist_wheel": [],         # Start empty, user adds via UI
-                     "watchlist_credit_spread_rulebase": ["TSLA", "NVDA", "SPY"], # Rule-based defaults
                      "max_drawdown": 500,
                      "max_position_size": 1000,
                      "max_credit_spreads_per_symbol": 5,
-                     "max_credit_spread_rulebase_lots": 5,
                      "max_total_credit_spreads": 10,
                      "max_wheel_contracts_per_symbol": 1
                  }
@@ -89,12 +85,8 @@ class BotService:
                      updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_wheel' not in settings:
                     updates['settings.watchlist_wheel'] = []
-                 if 'watchlist_credit_spread_rulebase' not in settings:
-                    updates['settings.watchlist_credit_spread_rulebase'] = ["TSLA", "NVDA", "SPY"]
                  if 'max_wheel_contracts_per_symbol' not in settings:
                      updates['settings.max_wheel_contracts_per_symbol'] = 1
-                 if 'max_credit_spread_rulebase_lots' not in settings:
-                     updates['settings.max_credit_spread_rulebase_lots'] = 5
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -150,7 +142,7 @@ class BotService:
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
         # Safety check to only allow specific keys
-        if list_type not in ['credit_spreads', 'wheel', 'credit_spread_rulebase']:
+        if list_type not in ['credit_spreads', 'wheel']:
             self._log(f"Error: Invalid watchlist type {list_type}")
             return None
 
@@ -168,10 +160,9 @@ class BotService:
         
         # Whitelist allowed keys to prevent overwriting critical internal state
         allowed_keys = [
-            'max_drawdown', 
-            'max_position_size', 
-            'max_credit_spreads_per_symbol', 
-            'max_credit_spread_rulebase_lots',
+            'max_drawdown',
+            'max_position_size',
+            'max_credit_spreads_per_symbol',
             'max_total_credit_spreads',
             'max_wheel_contracts_per_symbol'
         ]
@@ -346,21 +337,15 @@ class BotService:
         """Executes all active trading strategies."""
         wl_spreads = config.get('watchlist_credit_spreads', [])
         wl_wheel = config.get('watchlist_wheel', [])
-        wl_rulebase = config.get('watchlist_credit_spread_rulebase', [])
 
         if wl_spreads:
             self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
             self.credit_spread_strategy.manage_positions()
             self.credit_spread_strategy.execute(wl_spreads, config)
-            
+
         if wl_wheel:
             self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
             self.wheel_strategy.execute(wl_wheel, config)
-
-        if wl_rulebase:
-            self._log(f"Running Rule-Based Credit Spread Strategy on {len(wl_rulebase)} symbols...")
-            self.credit_spread_rulebase_strategy.manage_positions()
-            self.credit_spread_rulebase_strategy.execute(wl_rulebase, config)
     def _run_ml_scheduler(self, config):
         """
         Run daily predictions and biweekly training for all watchlist symbols.
@@ -372,7 +357,6 @@ class BotService:
         all_symbols = set()
         all_symbols.update(config.get('watchlist_credit_spreads', []))
         all_symbols.update(config.get('watchlist_wheel', []))
-        all_symbols.update(config.get('watchlist_credit_spread_rulebase', []))
         all_symbols = sorted(all_symbols)
 
         if not all_symbols:
@@ -460,12 +444,8 @@ class BotService:
             'wheel_watchlist', 'watchlist_wheel',
             ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
         )
-        rb_watchlist = _resolve_watchlist(
-            'credit_spread_rulebase_watchlist', 'watchlist_credit_spread_rulebase',
-            ['TSLA', 'NVDA', 'SPY']
-        )
 
-        logger.debug(f"Dry-run watchlists — CS: {cs_watchlist}, Wheel: {wheel_watchlist}, RB: {rb_watchlist}")
+        logger.debug(f"Dry-run watchlists — CS: {cs_watchlist}, Wheel: {wheel_watchlist}")
 
         # Fetch config
         bot_config = (db.bot_config.find_one({"_id": "main_bot"}) or {}).get('settings', {})
@@ -502,18 +482,5 @@ class BotService:
         except Exception as e:
             logger.error(f"Wheel dry-run failed: {e}", exc_info=True)
             all_logs.append(f"❌ Wheel Strategy Failed: {e}")
-
-        # --- Rule-Based Credit Spreads ---
-        all_logs.append("\n--- Rule-Based Credit Spread Strategy ---")
-        try:
-            strategy_rb = CreditSpreadRulebaseStrategy(tradier_service, db, dry_run=True)
-            rb_m_logs = strategy_rb.manage_positions(simulation_mode=True)
-            if rb_m_logs:
-                all_logs.extend(rb_m_logs)
-            strategy_rb.execute(rb_watchlist, bot_config)
-            all_logs.extend(strategy_rb.execution_logs)
-        except Exception as e:
-            logger.error(f"Rule-Based dry-run failed: {e}", exc_info=True)
-            all_logs.append(f"❌ Rule-Based Strategy Failed: {e}")
 
         return {'status': 'success', 'logs': all_logs}

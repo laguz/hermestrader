@@ -48,7 +48,7 @@ class CreditSpreadStrategy(AbstractStrategy):
                     print(f"\n{Colors.HEADER}📦 Analyzing {symbol}...{Colors.ENDC}")
                 else:
                     self._log(f"Analyzing {symbol}...")
-                analysis = self.analysis_service.analyze_symbol(symbol)
+                analysis = self.analysis_service.analyze_symbol(symbol, period='3m')
                 
                 if not analysis or 'error' in analysis:
                     self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
@@ -92,34 +92,29 @@ class CreditSpreadStrategy(AbstractStrategy):
                 traceback.print_exc()
         
         return self.execution_logs
-        
-
     def manage_positions(self, simulation_mode=False):
         """
         Check open positions for exit conditions.
-        Condition: If ITM for 2 days straight, close on next day at 3:00 PM EST.
+        Close when DTE < 3 AND (short leg is ITM OR debit >= 2.5x entry credit).
         """
-        # Clear logs for this run if simulation
         if simulation_mode:
             self.execution_logs = []
-            
-        # 1. Check Time (Only run after 10:30 AM EST to avoid opening slippage)
+
+        # 1. Check Time (Only run after 10:30 AM EST)
         if hasattr(self.tradier, 'current_date') and self.tradier.current_date:
-             now_est = self.tradier.current_date
+            now_est = self.tradier.current_date
         else:
-             est = pytz.timezone('America/New_York')
-             now_est = datetime.now(est)
-        
-        # 10:30 AM EST 
+            est = pytz.timezone('America/New_York')
+            now_est = datetime.now(est)
+
         if not simulation_mode:
-            if now_est.hour < 10 or (now_est.hour == 10 and now_est.minute < 30): 
-                return # Too early, wait for 10:30 AM EST
-            
-        now = now_est # Use EST time for logging/checks
+            if now_est.hour < 10 or (now_est.hour == 10 and now_est.minute < 30):
+                return
 
         # 2. Get Open Trades from DB
         open_trades = list(self.db['auto_trades'].find({"status": "OPEN"}))
-        if not open_trades: return self.execution_logs if simulation_mode else None
+        if not open_trades:
+            return self.execution_logs if simulation_mode else None
 
         # 3. Verify with Tradier (Source of Truth)
         try:
@@ -127,218 +122,99 @@ class CreditSpreadStrategy(AbstractStrategy):
         except Exception as e:
             self._log(f"Error fetching positions for management: {e}")
             return self.execution_logs if simulation_mode else None
-            
-        # Map of Option Symbol -> Position
+
         active_option_symbols = {p['symbol']: p for p in positions}
 
         for trade in open_trades:
             symbol = trade['symbol']
-            # Check if this trade is still active in Tradier
-            # We track by Short Leg mostly (risk leg)
             short_leg = trade.get('short_leg')
             long_leg = trade.get('long_leg')
-            
-            if not short_leg or short_leg not in active_option_symbols:
-                # Position might be closed manually or expired
-                # Mark as CLOSED in DB? Or just skip logic?
-                # Safer to maybe mark closed if missing, but let's just log and skip for now
-                self._log(f"⚠️ Trade {trade.get('symbol')} ({short_leg}) not found in active positions. Ignoring.")
-                continue
-                
-            # Check Check Frequency (Once per day)
-            last_check = trade.get('last_check_date')
-            try:
-                today_str = now.strftime('%Y-%m-%d')
-            except AttributeError:
-                today_str = str(now.date()) if hasattr(now, 'date') else str(now)[:10]
-            
-            # If we already checked today, check if we need to Execute Close
-            if last_check == today_str and not simulation_mode:
-                if trade.get('close_on_next_day', False):
-                    # It's D-Day (Day 3 or later) and we are past 3 PM.
-                    self._execute_close(trade, simulation_mode=simulation_mode)
-                continue
-                
-            # Start of New Daily Check
-            
-            # 0. Check for Pending Close from Previous Day (HARD CLOSE)
-            # Legacy Logic: If ITM for 2 consecutive days, we schedule a close for the NEXT trading day.
-            # Upgraded: Still support legacy fallback flag, but primary management is strictly Limit-Based Stop Loss below
-            if trade.get('close_on_next_day', False):
-                 self._log(f"🚨 LEGACY CLOSE: Executing scheduled close for {symbol} (ITM > 2 days).")
-                 self._execute_close(trade, simulation_mode=simulation_mode)
-                 continue
 
-            # Check ITM Status
-            # We need quote for underlying to check ITM? Or quote for Option?
-            # ITM is defined by Underlying Price vs Strike.
-            # Get Underlying Quote
-            symbol = trade['symbol']
+            if not short_leg or short_leg not in active_option_symbols:
+                self._log(f"⚠️ Trade {symbol} ({short_leg}) not found in active positions. Ignoring.")
+                continue
+
+            # --- Parse DTE from short_leg (format: ROOTyyMMdd[P|C]...) ---
+            match = re.search(r'[A-Z]+(\d{6})[PC]', short_leg)
+            if not match:
+                self._log(f"Could not parse expiry from {short_leg}")
+                continue
+            try:
+                expiry_date = datetime.strptime(match.group(1), '%y%m%d')
+                dte = (expiry_date.date() - self._get_current_date()).days
+            except ValueError:
+                self._log(f"Could not parse date from {short_leg}")
+                continue
+
+            # --- Primary Gate: only evaluate close when DTE < 3 ---
+            if dte >= 3:
+                self._log(f"⏳ {symbol} ({short_leg}) DTE: {dte} — holding.")
+                continue
+
+            self._log(f"⚠️ {symbol} ({short_leg}) DTE: {dte} < 3 — evaluating close conditions.")
+
+            # --- Get underlying quote for ITM check ---
             try:
                 quote = self.tradier.get_quote(symbol)
                 current_price = quote.get('last')
-            except:
-                self._log(f"Could not get quote for {symbol}")
+            except Exception as e:
+                self._log(f"Could not get quote for {symbol}: {e}")
                 continue
-                
-            # Determine Strike from DB or Parse Symbol
-            # We didn't store Strike explicitly in _record_trade separate fields, but it is in order_details sometimes.
-            # BUT we can parse it from option symbol or look at 'order_details'.
-            # Tradier Option Symbol: SYMBOLyyMMdd[P|C]00000000
-            # Let's rely on stored "short_leg" symbol to parse logic or assume we calculate it?
-            # Parsing is safer.
-            
-            # Helper to parse strike from symbol?
-            # Or just check if Tradier says it is ITM? Tradier positions endpoint usually doesn't say ITM.
-            # Let's parse.
-            # e.g., TSLA230120P00100000
-            # Strike is last 8 digits / 1000.
+
+            # --- Parse strike and option type ---
             try:
-                strike_part = short_leg[-8:]
-                strike = int(strike_part) / 1000.0
+                strike = int(short_leg[-8:]) / 1000.0
                 option_type = 'put' if 'P' in short_leg else 'call'
-            except:
+            except Exception:
                 self._log(f"Error parsing leg {short_leg}")
                 continue
-            
-            is_itm = False
-            if option_type == 'put':
-                 if current_price < strike: is_itm = True
-            else:
-                 if current_price > strike: is_itm = True
-            
-            # Update Logic
-            updates = {
-                "last_check_date": today_str
-            }
-            
-            if is_itm:
-                new_days = trade.get('days_itm', 0) + 1
-                updates['days_itm'] = new_days
-                self._log(f"Trade {symbol} {short_leg} is ITM ({current_price} vs {strike}). Days ITM: {new_days}")
-                
-            else:
-                # Reset if OTM
-                if trade.get('days_itm', 0) > 0:
-                    self._log(f"Trade {symbol} back OTM. Resetting counter.")
-                updates['days_itm'] = 0
-                updates['close_on_next_day'] = False
-            
-            # Save state
-            if not simulation_mode:
-                self.db['auto_trades'].update_one(
-                    {"_id": trade['_id']},
-                    {"$set": updates}
-                )
-            else:
-                self._log(f"[SIMULATION] Would update trade state: {updates}")
 
-            # --- NEW PROFIT TAKING LOGIC ---
-            # Parse Expiry from Short Leg
-            # Symbol Format: ROOTyyMMdd[P|C]... e.g. TSLA230120P...
-            import re
-            match = re.search(r'[A-Z]+(\d{6})[PC]', short_leg)
-            if match:
-                date_str = match.group(1) # yyMMdd
+            is_itm = (option_type == 'put' and current_price < strike) or \
+                     (option_type == 'call' and current_price > strike)
+
+            # --- Check 2.5x debit stop loss ---
+            should_stop = False
+            curr_debit = 0.0
+            entry_credit = trade.get('price', 0)
+
+            if entry_credit > 0 and long_leg:
                 try:
-                    expiry_date = datetime.strptime(date_str, '%y%m%d')
-                    # Calculate DTE
-                    dte = (expiry_date.date() - datetime.now().date()).days
-                    
-                    # Calculate Profit %
-                    # Entry Price (Credit)
-                    entry_credit = trade.get('price', 0)
-                    
-                    # Current Price (Debit to Close)
-                    # We need quotes for short and long leg to estimate debit
-                    
-                    # Only check if we haven't already marked for close
-                    if not trade.get('close_on_next_day', False) and entry_credit > 0:
-                        try:
-                             # Re-fetch quotes just for profit check
-                             # Use get_quote(symbol) which handles single or comma-list
-                             legs_list = [short_leg, long_leg]
-                             legs_str = ",".join(legs_list)
-                             try:
-                                 q_data = self.tradier.get_quote(legs_str)
-                                 # Standardize to list
-                                 if isinstance(q_data, dict): legs_quotes = [q_data]
-                                 elif isinstance(q_data, list): legs_quotes = q_data
-                                 else: legs_quotes = []
-                             except:
-                                 legs_quotes = []
+                    legs_str = f"{short_leg},{long_leg}"
+                    q_data = self.tradier.get_quote(legs_str)
+                    if isinstance(q_data, dict):
+                        legs_quotes = [q_data]
+                    elif isinstance(q_data, list):
+                        legs_quotes = q_data
+                    else:
+                        legs_quotes = []
 
-                             sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
-                             lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
-                             
-                             if sq and lq:
-                                 # Debit to Close = Short Ask - Long Bid
-                                 # (Buy back Short at Ask, Sell Long at Bid)
-                                 curr_debit = (sq.get('ask', 0) - lq.get('bid', 0))
-                                 
-                                 # --- UPGRADE 3: HARD STOP LOSS ---
-                                 # If Current Debit >= 2.5x Entry Credit, KILL TRADE immediately
-                                 if entry_credit > 0 and curr_debit >= (entry_credit * 2.5):
-                                     limit_price = round(curr_debit * 1.05, 2)
-                                     self._log(f"🛑 STOP LOSS TRIGGERED: {symbol} Debit ({curr_debit:.2f}) >= 2.5x Credit ({entry_credit}). Closing at Limit {limit_price}.")
-                                     self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
-                                     continue # Done
-                                 
-                                 # Profit = Entry Credit - Current Debit
-                                 profit_val = entry_credit - curr_debit
-                                 # Standard definition of Profit % = (Entry - Close) / Entry
-                                 profit_pct = (profit_val / entry_credit) if entry_credit > 0 else 0
-                                 
-                                 self._log(f"📊 Trade {symbol} ({short_leg}) DTE: {dte}, Profit: {profit_pct*100:.1f}%, (Entry: {entry_credit}, Curr: {curr_debit:.2f})")
+                    sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
+                    lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
 
-                                 should_close, reason, target_pct = CreditSpreadStrategy.should_close_early(dte, profit_pct)
-                                     
-                                 if should_close:
-                                     # Calculate Strict Limit Price based on user formula
-                                     import math
-                                     target_debit = entry_credit * target_pct
-                                     limit_price = math.floor(target_debit * 100) / 100.0
-                                     
-                                     self._log(f"💰 PROFIT TAKING: {reason}. Closing {symbol} at Limit {limit_price}.")
-                                     self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
-                                     continue # Done with this trade
+                    if sq and lq:
+                        curr_debit = float(sq.get('ask', 0)) - float(lq.get('bid', 0))
+                        if curr_debit >= entry_credit * 2.5:
+                            should_stop = True
+                            self._log(f"🛑 Stop loss: debit {curr_debit:.2f} >= {entry_credit * 2.5:.2f} (2.5× credit)")
+                except Exception as e:
+                    self._log(f"Error checking debit for {short_leg}: {e}")
 
-                        except Exception as e:
-                            self._log(f"Error checking profit for {short_leg}: {e}")
+            # --- Close if ITM or stop loss triggered ---
+            if is_itm or should_stop:
+                reason_parts = []
+                if is_itm:
+                    reason_parts.append(f"ITM ({current_price} vs strike {strike})")
+                if should_stop:
+                    reason_parts.append(f"2.5× stop (debit {curr_debit:.2f})")
+                self._log(f"🚨 Closing {symbol} — DTE {dte} < 3 + {' + '.join(reason_parts)}")
+                limit_price = round(curr_debit * 1.05, 2) if curr_debit > 0 else None
+                self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
+            else:
+                self._log(f"✅ {symbol} ({short_leg}) DTE {dte} < 3, OTM, debit OK — monitoring.")
 
-                except ValueError:
-                    self._log(f"Could not parse date from {short_leg}")
+        return self.execution_logs if simulation_mode else None
 
-    @staticmethod
-    def should_close_early(dte, profit_pct):
-        """
-        Determine if the trade should be closed early based on DTE and Profit %.
-        Returns (bool, reason_string, target_pct)
-        User Targets:
-        - DTE > 13: 50% Profit (Target Debit = Entry * 0.50)
-        - 6 < DTE <= 13: 60% Profit (Target Debit = Entry * 0.40)
-        - DTE <= 6: 70% Profit (Target Debit = Entry * 0.30)
-        """
-        target_pct = None
-        
-        if dte > 13:
-            # Target: Pay 50% of credit
-            if profit_pct >= 0.50:
-                return True, f"Target Met: DTE {dte} > 13, Profit {profit_pct*100:.1f}% >= 50%", 0.50
-                
-        elif 6 < dte <= 13:
-             # Target: Pay 40% of credit
-             if profit_pct >= 0.60:
-                return True, f"Target Met: 6 < DTE {dte} <= 13, Profit {profit_pct*100:.1f}% >= 60%", 0.40
-        
-        elif dte <= 6:
-             # Target: Pay 30% of credit
-             if profit_pct >= 0.70:
-                return True, f"Target Met: DTE {dte} <= 6, Profit {profit_pct*100:.1f}% >= 70%", 0.30
-            
-        return False, "", None
-            
-        return False, "", None
+
             
     def _execute_close(self, trade, limit_price=None, simulation_mode=False):
         """Close the spread position using a LIMIT order."""
@@ -466,7 +342,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         best = min(candidates, key=lambda x: abs(x[1] - 0.30))
         return best[0]['strike']
 
-    def _find_expiry(self, symbol, target_dte=21, min_dte=16, max_dte=22, exclude_dates=None):
+    def _find_expiry(self, symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=None):
         """
         Find available expiry strictly within min_dte and max_dte.
         Range: [min_dte, max_dte] inclusive.
@@ -679,14 +555,27 @@ class CreditSpreadStrategy(AbstractStrategy):
         return count
 
 
+    def _get_spread_width(self, current_price):
+        """
+        Price-tiered spread width:
+          < $50   → $0.50 wide
+          $50–$150 → $1.00 wide
+          > $150   → $2.50 wide (caller falls back to $5.00 if long leg not in chain)
+        """
+        if current_price < 50:
+            return 0.50
+        elif current_price <= 150:
+            return 1.00
+        else:
+            return 2.50
+
     def _place_credit_put_spread(self, symbol, current_price, analysis, min_credit=None, max_lots=5, config=None):
         """
         Sell Put at Support, Buy Put lower (defined risk).
         """
         # 1. Early Constraint Check
         exclusions = self._check_expiry_constraints(symbol, is_put=True, max_lots=max_lots)
-        # Note: target_dte here is just for sorting preference within the strict min/max range (16-22)
-        expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+        expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
         if not expiry: 
              self._log(f"🔸 No expiry found for {symbol}")
              return
@@ -695,22 +584,19 @@ class CreditSpreadStrategy(AbstractStrategy):
         # AnalysisService returns flattened keys now
         entry_points = analysis.get('put_entry_points', [])
         
-        # Find Support Levels LOWER than current price AND with 55 <= POP <= 70
-        # entry_points are sorted by price ascending.
-        # We want the HIGHEST support level that is strictly LOWER than current price.
-        all_points_count = len(entry_points)
+        # First support level below price with POP > 75%
         valid_points = [
-            ep for ep in entry_points 
-            if ep['price'] < current_price and 55 <= ep.get('pop', 0) <= 70
+            ep for ep in entry_points
+            if ep['price'] < current_price and ep.get('pop', 0) > 75
         ]
-        
+
         if not valid_points:
             # Fallback to Delta 0.30-0.37
             self._log(f"🔹 No valid support levels found for {symbol}. Checking Delta 0.30-0.37...")
             
             # Check Constraints (Is Put = True)
             exclusions = self._check_expiry_constraints(symbol, is_put=True, max_lots=max_lots)
-            expiry = self._find_expiry(symbol, target_dte=30, exclude_dates=exclusions)
+            expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
@@ -727,9 +613,9 @@ class CreditSpreadStrategy(AbstractStrategy):
                  return
 
         else:
-             # Target = The closest support below price (Last item in sorted list < price)
-             target_strike = valid_points[-1]['price']
-             pop = valid_points[-1].get('pop', 'N/A')
+             # Use first qualifying level (lowest support below price, highest POP safety margin)
+             target_strike = valid_points[0]['price']
+             pop = valid_points[0].get('pop', 'N/A')
              
              # Expiry already found above
 
@@ -738,12 +624,8 @@ class CreditSpreadStrategy(AbstractStrategy):
              self._log(f"🔸 No expiry found for {symbol}")
              return
 
-        # UPGRADE 2: DYNAMIC SPREAD WIDTHS
-        # Base width on roughly 1.5% of the underlying price to handle large caps vs small caps appropriately
-        import math
-        dynamic_width = current_price * 0.015
-        width = float(max(1.0, math.ceil(dynamic_width)))
-
+        # Price-tiered spread width
+        width = self._get_spread_width(current_price)
         short_put_strike = target_strike
         long_put_strike = short_put_strike - width
 
@@ -756,7 +638,15 @@ class CreditSpreadStrategy(AbstractStrategy):
         
         short_leg = next((o for o in chain if o['strike'] == short_put_strike and o['option_type'] == 'put'), None)
         long_leg = next((o for o in chain if o['strike'] == long_put_strike and o['option_type'] == 'put'), None)
-        
+
+        # For >$150 stocks: fall back from $2.50 to $5.00 wide if long leg not in chain
+        if short_leg and not long_leg and current_price > 150 and width == 2.50:
+            long_put_strike = short_put_strike - 5.00
+            long_leg = next((o for o in chain if o['strike'] == long_put_strike and o['option_type'] == 'put'), None)
+            if long_leg:
+                width = 5.00
+                self._log(f"📌 {symbol}: $2.50 long leg unavailable, using $5.00 wide spread.")
+
         if not short_leg or not long_leg:
             self._log("Could not find option legs.")
             return False
@@ -842,7 +732,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         # Similar logic for Bear Call Spread
         # 1. Early Constraint Check
         exclusions = self._check_expiry_constraints(symbol, is_put=False, max_lots=max_lots)
-        expiry = self._find_expiry(symbol, target_dte=21, exclude_dates=exclusions)
+        expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
         if not expiry:
              self._log(f"🔸 No expiry found for {symbol}")
              return
@@ -853,22 +743,19 @@ class CreditSpreadStrategy(AbstractStrategy):
 
         self._log(f"DEBUG: {symbol} Call Entry Points: {entry_points} | Current Price: {current_price}")
 
-        # Find Resistance Levels HIGHER than current price AND with 55 <= POP <= 70
-        # entry_points are sorted by price ascending.
-        # We want the LOWEST resistance level that is strictly HIGHER than current price.
-        all_points_count = len(entry_points)
+        # First resistance level above price with POP > 75%
         valid_points = [
-            ep for ep in entry_points 
-            if ep['price'] > current_price and 55 <= ep.get('pop', 0) <= 70
+            ep for ep in entry_points
+            if ep['price'] > current_price and ep.get('pop', 0) > 75
         ]
-        
+
         if not valid_points:
              # Fallback to Delta 0.30-0.37
             self._log(f"🔹 No valid resistance levels found for {symbol}. Checking Delta 0.30-0.37...")
             
             # Check Constraints (Is Put = False)
             exclusions = self._check_expiry_constraints(symbol, is_put=False, max_lots=max_lots)
-            expiry = self._find_expiry(symbol, target_dte=30, exclude_dates=exclusions)
+            expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
@@ -892,11 +779,8 @@ class CreditSpreadStrategy(AbstractStrategy):
              self._log(f"🔸 No expiry found for {symbol}")
              return
 
-        # UPGRADE 2: DYNAMIC SPREAD WIDTHS
-        import math
-        dynamic_width = current_price * 0.015
-        width = float(max(1.0, math.ceil(dynamic_width)))
-
+        # Price-tiered spread width
+        width = self._get_spread_width(current_price)
         short_call_strike = target_strike
         long_call_strike = short_call_strike + width
         if not expiry:
@@ -909,7 +793,15 @@ class CreditSpreadStrategy(AbstractStrategy):
         
         short_leg = next((o for o in chain if o['strike'] == short_call_strike and o['option_type'] == 'call'), None)
         long_leg = next((o for o in chain if o['strike'] == long_call_strike and o['option_type'] == 'call'), None)
-        
+
+        # For >$150 stocks: fall back from $2.50 to $5.00 wide if long leg not in chain
+        if short_leg and not long_leg and current_price > 150 and width == 2.50:
+            long_call_strike = short_call_strike + 5.00
+            long_leg = next((o for o in chain if o['strike'] == long_call_strike and o['option_type'] == 'call'), None)
+            if long_leg:
+                width = 5.00
+                self._log(f"📌 {symbol}: $2.50 long leg unavailable, using $5.00 wide spread.")
+
         if not short_leg or not long_leg:
             self._log(f"Could not find option legs for Call Spread (Short: {short_call_strike}, Long: {long_call_strike})")
             return False
