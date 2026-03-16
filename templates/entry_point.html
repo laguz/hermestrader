@@ -251,12 +251,15 @@
 
                 if (!res.ok) {
                     const text = await res.text();
+                    let errorMessage = `Server Error: ${res.status}`;
                     try {
                         const json = JSON.parse(text);
-                        throw new Error(json.error || `Server Error: ${res.status}`);
+                        if (json.error) errorMessage = json.error;
+                        else if (json.Error) errorMessage = json.Error;
                     } catch (e) {
-                        throw new Error(`Server Error: ${res.status} - ${text.substring(0, 100)}`);
+                        errorMessage = `Server Error: ${res.status} - ${text.substring(0, 100)}`;
                     }
+                    throw new Error(errorMessage);
                 }
 
                 const data = await res.json();
