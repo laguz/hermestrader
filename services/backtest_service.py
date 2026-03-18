@@ -22,7 +22,14 @@ from utils.indicators import (
 logger = logging.getLogger(__name__)
 
 
-from tests.mocks.backtest_mocks import MockTradierService, MockAnalysisService, MockDB
+try:
+    from tests.mocks.backtest_mocks import MockTradierService, MockAnalysisService, MockDB
+except (ImportError, ModuleNotFoundError):
+    # Fallback to local import if tests is shadowed or not in path
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from tests.mocks.backtest_mocks import MockTradierService, MockAnalysisService, MockDB
 from utils.data_generator import generate_synthetic_history
 
 # ---------------------------------------------------------------------------
@@ -322,39 +329,30 @@ class BacktestService:
                 strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             # Wheel entries already captured in wheel_entry_orders from step 3
             
-            # 5. Process New Orders → Create Positions (Entries)
-            entry_orders = list(mock_tradier.new_orders) + wheel_entry_orders
-            mock_tradier.new_orders = []
-            for order in entry_orders:
-                if order['side'] == 'sell_to_open' or (order['class'] == 'multileg'):
-                    requested_price = order['price']
-                    
-                    # Slippage on Entry (Credit = receive less)
-                    num_legs = len(order.get('legs') or []) or 1
-                    slippage = slippage_rate * num_legs
-                    fill_price = max(0, requested_price - slippage)
-                    
-                    qty = order['quantity']
-                    multiplier = 1 if order.get('class') == 'equity' else 100
-                    
-                    if risk_pct > 0:
-                        current_pv = portfolio_values[-1] if portfolio_values else starting_cash
-                        risk_amount = current_pv * risk_pct
-                        
             # 5. Process New Orders (Assume filled at current mid-prices with slippage)
             try:
                 # Combine new orders from strategy with any wheel-specific entry orders
                 all_entry_orders = list(mock_tradier.new_orders) + wheel_entry_orders
                 mock_tradier.new_orders = [] # Clear new orders after processing
                 
-                # Pass total_commissions by reference or return it
+                # Update cash and commissions
                 cash, total_commissions = self._process_open_orders(
-                    mock_tradier, current_date_str, risk_pct, slippage_rate, 
-                    commission_per, trades_log, open_trade_credits, all_entry_orders,
-                    cash, total_commissions, portfolio_values, starting_cash
+                    mock_tradier=mock_tradier, 
+                    current_date_str=current_date_str, 
+                    risk_pct=risk_pct, 
+                    # Removed num_legs as it is calculated per order
+                    slippage_rate=slippage_rate, 
+                    commission_per=commission_per, 
+                    trades_log=trades_log, 
+                    open_trade_credits=open_trade_credits,
+                    entry_orders=all_entry_orders,
+                    cash=cash,
+                    total_commissions=total_commissions,
+                    portfolio_values=portfolio_values,
+                    starting_cash=starting_cash
                 )
             except Exception as e:
-                print(f"{current_date_str} - {strategy_type} Strategy Exception: {e}")
+                logger.error(f"{current_date_str} - {strategy_type} Strategy Exception: {e}", exc_info=True)
                             
             # 6. Mark to Market Portfolio Value
             total_val = self._mark_to_market(mock_tradier, cash)
@@ -383,37 +381,38 @@ class BacktestService:
             "metrics": metrics
         }
 
-    def _process_open_orders(self, mock_tradier, current_date_str, risk_pct, num_legs, slippage_rate, 
-                             commission_per, trades_log, open_trade_credits):
+    def _process_open_orders(self, mock_tradier, current_date_str, risk_pct, slippage_rate, 
+                             commission_per, trades_log, open_trade_credits, entry_orders, cash, total_commissions, portfolio_values, starting_cash):
         """Processes new orders, applying slippage, calculating position sizing, and deducting commissions."""
-        if not mock_tradier.new_orders:
-            return
+        if not entry_orders:
+            return cash, total_commissions
             
-        total_val = mock_tradier.cash + sum([p.get('cost_basis', 0) for p in mock_tradier.positions]) # Rough approx for sizing
+        current_pv = portfolio_values[-1] if portfolio_values else starting_cash
             
-        for order in mock_tradier.new_orders:
+        for order in entry_orders:
             # Calculate fill price with slippage
-            fill_price = order['price']
-            if 'sell' in order['side']:
+            fill_price = order.get('price', 0)
+            if 'sell' in order.get('side', ''):
                 fill_price -= slippage_rate  # Worse fill on sell
             else:
                 fill_price += slippage_rate  # Worse fill on buy
                 
-            slippage = slippage_rate * num_legs
+            num_legs_order = len(order.get('legs') or []) or 1
+            slippage = slippage_rate * num_legs_order
             
             # Position Sizing
             qty = order.get('quantity', 1)
             multiplier = 100 if order.get('legs') or order.get('option_symbol') else 1
             
             # Very basic risk sizing approximation for credit spreads
-            if 'credit' in order.get('action', '').lower():
-                risk_amount = total_val * risk_pct
+            if 'credit' in order.get('action', '').lower() or order.get('class') == 'multileg':
+                risk_amount = current_pv * risk_pct
                 trade_risk = 0
                 if order.get('legs') and len(order['legs']) >= 2:
-                    short_strike = order['legs'][0]['option_symbol']
-                    long_strike = order['legs'][1]['option_symbol']
-                    s_det = mock_tradier._parse_option_symbol(short_strike)
-                    l_det = mock_tradier._parse_option_symbol(long_strike)
+                    short_strike_sym = order['legs'][0]['option_symbol']
+                    long_strike_sym = order['legs'][1]['option_symbol']
+                    s_det = mock_tradier._parse_option_symbol(short_strike_sym)
+                    l_det = mock_tradier._parse_option_symbol(long_strike_sym)
                     if s_det and l_det:
                         width = abs(s_det['strike'] - l_det['strike'])
                         trade_risk = (width - fill_price) * 100
@@ -422,7 +421,7 @@ class BacktestService:
                     pos_sym = order.get('option_symbol') or order['symbol']
                     details = mock_tradier._parse_option_symbol(pos_sym)
                     if details:
-                        trade_risk = max(0.01, (details['strike'] - fill_price) * 100)
+                        trade_risk = max(0.01, abs(details['strike'] - fill_price) * 100)
                     else:
                         trade_risk = max(0.01, fill_price * multiplier)
                         
@@ -430,9 +429,10 @@ class BacktestService:
                     qty = max(1, int(risk_amount / trade_risk))
             
             # Commission
-            commission_cost = commission_per * qty * num_legs
+            commission_cost = commission_per * qty * num_legs_order
+            total_commissions += commission_cost
             
-            mock_tradier.cash += (fill_price * qty * multiplier) - commission_cost
+            cash += (fill_price * qty * multiplier) - commission_cost
 
             # Track entry credit for P&L calculation on close
             open_trade_credits[order['symbol']] = {
@@ -464,10 +464,12 @@ class BacktestService:
                 pos_symbol = order.get('option_symbol') or order['symbol']
                 mock_tradier.positions.append({
                     'symbol': pos_symbol,
-                    'quantity': -qty if 'sell' in order['side'] else qty,
+                    'quantity': -qty if 'sell' in order.get('side', '') else qty,
                     'cost_basis': fill_price,
                     'date_acquired': current_date_str
                 })
+        
+        return cash, total_commissions
 
     def _mark_to_market(self, mock_tradier, cash):
         """Calculates the Net Liquidation Value (NLV) of the portfolio."""
