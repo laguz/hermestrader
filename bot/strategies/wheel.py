@@ -283,7 +283,7 @@ class WheelStrategy(AbstractStrategy):
                                     price=round(ask_price, 2),
                                     option_symbol=symbol,
                                     order_class='option',
-                                    tag="WHEEL_TP"
+                                    tag="WHEELTP"
                                 )
                                 if 'error' in btc_res:
                                     self._log(f"❌ Take Profit BTC Error: {btc_res['error']}")
