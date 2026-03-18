@@ -261,7 +261,8 @@ class PortfolioManager:
             for p in open_pos:
                 sym = p['symbol']
                 qty = p['quantity']
-                cost_basis = p.get('cost_basis', 0.0)
+                cost_basis = p.get('cost_basis')
+                if cost_basis is None: cost_basis = 0.0
                 quote = quotes_map.get(sym, {})
                 current_price = quote.get('last') or quote.get('close') or 0.0
                 close_price = quote.get('prevclose') or quote.get('close') or 0.0
@@ -292,8 +293,10 @@ class PortfolioManager:
         for p in closed_pos:
             sym = p['symbol']
             qty = p['quantity']
-            cost_basis = p.get('cost_basis', 0.0)
-            realized_pnl = p.get('realized_pnl', 0.0)
+            cost_basis = p.get('cost_basis')
+            if cost_basis is None: cost_basis = 0.0
+            realized_pnl = p.get('realized_pnl')
+            if realized_pnl is None: realized_pnl = 0.0
             
             pnl_pct = 0.0
             if cost_basis != 0:
@@ -308,13 +311,19 @@ class PortfolioManager:
                 "entry_price": p.get('entry_price', 0),
                 "exit_price": p.get('exit_price', 0),
                 "cost_basis": cost_basis,
-                "realized_pnl": realized_pnl,
+                "pnl": realized_pnl,
                 "pnl_pct": pnl_pct,
                 "date_acquired": p.get('date_acquired'),
                 "exit_date": p.get('exit_date')
             })
 
+        def safe_date_sort(x):
+            d = x.get('exit_date')
+            if isinstance(d, datetime):
+                return d.isoformat()
+            return str(d or '')
+
         return {
             'open': open_results,
-            'closed': sorted(closed_results, key=lambda x: x.get('exit_date', ''), reverse=True)
+            'closed': sorted(closed_results, key=safe_date_sort, reverse=True)
         }
