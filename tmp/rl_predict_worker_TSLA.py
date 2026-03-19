@@ -12,13 +12,13 @@ from services.rl_price_predictor import RLPricePredictor
 logging.basicConfig(level=logging.ERROR)
 
 try:
-    df = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/predict_tmp_df_NFLX.pkl')
-    features = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/predict_tmp_features_NFLX.pkl')
+    df = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/predict_tmp_df_TSLA.pkl')
+    features = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/predict_tmp_features_TSLA.pkl')
     
-    predictor = RLPricePredictor('NFLX', df, features, 'models')
+    predictor = RLPricePredictor('TSLA', df, features, 'models')
     prediction = predictor.predict(df)
     
-    with open(r'/Users/laguz/Git/LaguzTechInvestment/tmp/rl_predict_result_NFLX.json', 'w') as fh:
+    with open(r'/Users/laguz/Git/LaguzTechInvestment/tmp/rl_predict_result_TSLA.json', 'w') as fh:
         json.dump({"prediction": prediction}, fh)
 except Exception as e:
     import sys
