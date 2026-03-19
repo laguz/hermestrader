@@ -377,8 +377,7 @@ class MLService:
             import tempfile
             import joblib
             
-            tmp_dir = os.path.join(os.getcwd(), 'tmp')
-            os.makedirs(tmp_dir, exist_ok=True)
+            tmp_dir = tempfile.gettempdir()
             
             df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}_{model_type}.pkl')
             features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}_{model_type}.pkl')
@@ -644,8 +643,7 @@ except Exception as e:
             import tempfile
             
             # Use explicit local tmp directory
-            tmp_dir = os.path.join(os.getcwd(), 'tmp')
-            os.makedirs(tmp_dir, exist_ok=True)
+            tmp_dir = tempfile.gettempdir()
             
             df_path = os.path.join(tmp_dir, f'predict_tmp_df_{symbol}.pkl')
             features_path = os.path.join(tmp_dir, f'predict_tmp_features_{symbol}.pkl')
