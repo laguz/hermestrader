@@ -1,13 +1,13 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import logging
 from flask import Flask, jsonify, request
-from dotenv import load_dotenv
 from flask_login import LoginManager
 from werkzeug.exceptions import HTTPException
 from services.container import Container
 from exceptions import AppError
-
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(

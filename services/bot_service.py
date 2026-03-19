@@ -40,6 +40,7 @@ class BotService:
         self._init_db_config()
         # Reset state on startup to avoid phantom running state
         self._update_status("STOPPED")
+        self.ml_training_in_progress = False
         self.initialized = True
         
         # Resurrect state on app start? 
@@ -330,7 +331,12 @@ class BotService:
                 return False
             return True
         else:
-            self._log("⚠️ Could not fetch balances. Skipping strategy cycle for safety.")
+            acct_id = self.tradier._get_account_id()
+            if not acct_id:
+                self._log("⚠️ Could not fetch balances: TRADIER_ACCOUNT_ID is missing.")
+            else:
+                # If ID exists but still no balances, it's likely an API/Auth error
+                self._log("⚠️ Could not fetch balances. Check API credentials and connectivity.")
             return False
             
     def _execute_strategies(self, config):
@@ -398,21 +404,46 @@ class BotService:
                 should_train = True  # Invalid date, retrain
 
         if should_train:
+            # Check persistent status in DB
+            if scheduler.get('status') == "TRAINING":
+                last_attempt = scheduler.get('last_attempt_date', '')
+                if last_attempt == today_str:
+                    self._log("⚠️ ML Training already in progress or attempted today. Skipping trigger.")
+                    return
+
             self._log(f"🎓 Starting biweekly ML training for {len(all_symbols)} symbols (background thread)...")
+            
+            # Mark as TRAINING in DB BEFORE spawning
+            self.db['bot_config'].update_one(
+                {"_id": "main_bot"},
+                {"$set": {
+                    "ml_scheduler.status": "TRAINING",
+                    "ml_scheduler.last_attempt_date": today_str
+                }}
+            )
+            
             def _train_worker():
                 try:
                     ml = self._get_ml_service()
                     results = ml.run_batch_training(all_symbols, express=True)
                     self._log(f"🎓 Training done: {results['success']} OK, {results['errors']} errors")
 
-                    # Mark as done
+                    # Mark as READY and set last_training_date
                     self.db['bot_config'].update_one(
                         {"_id": "main_bot"},
-                        {"$set": {"ml_scheduler.last_training_date": today_str}}
+                        {"$set": {
+                            "ml_scheduler.status": "READY",
+                            "ml_scheduler.last_training_date": today_str
+                        }}
                     )
                 except Exception as e:
                     logger.error(f"ML Training scheduler error: {e}", exc_info=True)
                     self._log(f"❌ ML Training failed: {e}")
+                    # Mark as FAILED to prevent immediate retry
+                    self.db['bot_config'].update_one(
+                        {"_id": "main_bot"},
+                        {"$set": {"ml_scheduler.status": "FAILED"}}
+                    )
 
             train_thread = threading.Thread(target=_train_worker, daemon=True)
             train_thread.start()

@@ -36,14 +36,8 @@ class TradierService:
             pass
             
         if not auth_token:
-            try:
-                from services.container import Container
-                auth = Container.get_auth_service()
-                if auth.get_api_key():
-                    auth_token = auth.get_api_key()
-            except Exception:
-                pass
-                
+            auth_token = os.getenv('TRADIER_ACCESS_TOKEN')
+            
         if not auth_token:
             logger.warning("Tradier access_token is missing. Unauthorized error likely.")
             
@@ -196,10 +190,16 @@ class TradierService:
                 "cash": float(total_cash) if total_cash is not None else 0.0
             }
         except requests.RequestException as e:
+            error_details = ""
             if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Error fetching account balances: {e} - Response: {e.response.text}")
+                error_details = f" - Response: {e.response.text}"
+                logger.error(f"Error fetching account balances: {e}{error_details}")
             else:
                 logger.error(f"Error fetching account balances: {e}")
+            
+            # Re-raise or return None? TradierService usually returns None on error.
+            # But we can attach the error to the object for BotService to see if we wanted.
+            # For now, let's just make sure the error is logged clearly.
             return None
 
     def get_positions(self) -> list:

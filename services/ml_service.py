@@ -370,124 +370,166 @@ class MLService:
             validation_results = {}
         
         mse = 0
-        final_model_stats = {}
-        
-        if model_type == 'lstm':
-            if not HAS_TENSORFLOW:
-                raise AppError("LSTM training requires TensorFlow, but it is not installed.", 501)
-                
-            # Use 'log_return' as target for LSTM
-            df_lstm = df.copy()
-            df_lstm['target'] = df_lstm['log_return']
-            
-            X, y, scaler = self._prepare_lstm_data(df_lstm, top_features, fit_scaler=True)
-            
-            # Scale Target
-            y = y.reshape(-1, 1)
-            target_scaler = MinMaxScaler(feature_range=(0, 1))
-            y_scaled = target_scaler.fit_transform(y)
-            
-            # Split
-            split = int(len(X) * 0.8)
-            X_train, X_test = X[:split], X[split:]
-            y_train, y_test = y_scaled[:split], y_scaled[split:]
-            
-            model = self._build_lstm_model(input_shape=(X_train.shape[1], X_train.shape[2]))
-            
-            # Early Stopping
-            early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
-            
-            # Increased batch_size to 64 and reduced epochs to 10 for speed
-            model.fit(X_train, y_train, batch_size=64, epochs=10, validation_data=(X_test, y_test), 
-                      callbacks=[early_stopping], verbose=1)
-            
-            # Eval on test set (inverse transform)
-            pred_scaled = model.predict(X_test)
-            pred_log_returns = target_scaler.inverse_transform(pred_scaled)
-            actual_log_returns = target_scaler.inverse_transform(y_test)
-            
-            # Reconstruct Prices for MSE Calculation
-            # We need the 'close' price at the step BEFORE prediction.
-            # X_test indices start at split. 
-            # The corresponding original DF index is split + sequence_length.
-            # But the 'close' price needed for reconstruction is at index (split + sequence_length + i) 
-            # where i is the test sample index.
-            
-            # It's safer to calculate MSE on the log returns themselves for model separation,
-            # OR roughly approximate.
-            # Let's stick to MSE on Log Returns for training metric to avoid complex reconstruction here,
-            # but rely on 'evaluate_model' for full price verification.
-            
-            mse = mean_squared_error(actual_log_returns, pred_log_returns)
-            
-            # Save
-            model.save(f"{self.model_dir}/{symbol}_lstm.h5")
-            joblib.dump(scaler, f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
-            joblib.dump(target_scaler, f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl")
-            
-        elif model_type == 'rl':
-            # RL training - Run in a separate process to avoid memory/library conflicts (SIGSEGV)
+        if model_type in ['lstm', 'rl']:
+            # Training for both LSTM and RL is now isolated in subprocesses for safety
             import subprocess
             import sys
             import tempfile
+            import joblib
             
-            # Use explicit local tmp directory to prevent cross-environment path resolution issues
             tmp_dir = os.path.join(os.getcwd(), 'tmp')
             os.makedirs(tmp_dir, exist_ok=True)
             
-            df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}.pkl')
-            features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}.pkl')
-            worker_path = os.path.join(tmp_dir, f'rl_train_worker_{symbol}.py')
-
-            train_script = f"""
-import pandas as pd
-import joblib
+            df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}_{model_type}.pkl')
+            features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}_{model_type}.pkl')
+            worker_path = os.path.join(tmp_dir, f'ml_train_worker_{symbol}_{model_type}.py')
+            
+            try:
+                if model_type == 'lstm':
+                    train_script = f"""
 import os
 import sys
+import pandas as pd
+import numpy as np
+import joblib
 import logging
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
 
-# Ensure project root is in path
+# Setup simple logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("LSTM_Worker")
+
+# Add project root to path for imports if needed
 sys.path.append(os.getcwd())
 
-from services.rl_price_predictor import RLPricePredictor
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('rl_train_subprocess')
-
 try:
+    symbol = '{symbol}'
+    model_dir = '{self.model_dir}'
+    
+    # Load data
     df = joblib.load(r'{df_path}')
     top_features = joblib.load(r'{features_path}')
     
-    predictor = RLPricePredictor('{symbol}', df, top_features, '{self.model_dir}')
+    # LSTM Prep
+    df_lstm = df.copy()
+    df_lstm['target'] = df_lstm['log_return']
+    
+    # Minimal version of _prepare_lstm_data logic
+    seq_len = 60
+    scaled_data = MinMaxScaler(feature_range=(0,1)).fit_transform(df_lstm[top_features])
+    scaler = MinMaxScaler(feature_range=(0,1))
+    scaled_data = scaler.fit_transform(df_lstm[top_features])
+    
+    X, y = [], []
+    target = df_lstm['target'].values
+    for i in range(seq_len, len(scaled_data)):
+        X.append(scaled_data[i-seq_len:i])
+        y.append(target[i])
+    X, y = np.array(X), np.array(y)
+    
+    # Scale Target
+    y = y.reshape(-1, 1)
+    target_scaler = MinMaxScaler(feature_range=(0, 1))
+    y_scaled = target_scaler.fit_transform(y)
+    
+    # Split
+    split = int(len(X) * 0.8)
+    X_train, X_test = X[:split], X[split:]
+    y_train, y_test = y_scaled[:split], y_scaled[split:]
+    
+    # Build
+    model = Sequential([
+        LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])),
+        Dropout(0.2),
+        LSTM(units=50, return_sequences=False),
+        Dropout(0.2),
+        Dense(units=1)
+    ])
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    
+    early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+    model.fit(X_train, y_train, batch_size=64, epochs=10, validation_data=(X_test, y_test), 
+              callbacks=[early_stopping], verbose=0)
+    
+    # Save
+    os.makedirs(model_dir, exist_ok=True)
+    model.save(f"{{model_dir}}/{{symbol}}_lstm.h5")
+    joblib.dump(scaler, f"{{model_dir}}/{{symbol}}_lstm_scaler.pkl")
+    joblib.dump(target_scaler, f"{{model_dir}}/{{symbol}}_lstm_target_scaler.pkl")
+    
+    logger.info(f"LSTM training for {{symbol}} completed successfully")
+except Exception as e:
+    logger.error(f"LSTM training failed: {{e}}")
+    sys.exit(1)
+"""
+                elif model_type == 'rl':
+                    train_script = f"""
+import os
+import sys
+import pandas as pd
+import joblib
+import logging
+
+# Setup simple logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("RL_Worker")
+
+# Add project root to path
+sys.path.append(os.getcwd())
+from services.rl_price_predictor import RLPricePredictor
+
+try:
+    symbol = '{symbol}'
+    model_dir = '{self.model_dir}'
+    
+    # Load data
+    df = joblib.load(r'{df_path}')
+    top_features = joblib.load(r'{features_path}')
+    
+    predictor = RLPricePredictor(symbol, df, top_features, model_dir)
     predictor.train(timesteps=10_000)
-    logger.info("RL model training subprocess completed successfully")
+    logger.info(f"RL model training for {{symbol}} completed successfully")
 except Exception as e:
     logger.error(f"RL training subprocess failed: {{e}}")
-    exit(1)
+    sys.exit(1)
 """
-            # Save temporary data for the subprocess
-            joblib.dump(df.dropna(subset=top_features + ['close']), df_path)
-            joblib.dump(top_features, features_path)
-            
-            with open(worker_path, 'w') as f:
-                f.write(train_script)
-            
-            try:
-                # Run the subprocess
-                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
-                if result.returncode != 0:
-                    logger.error(f"RL Subprocess failed: {result.stderr}")
-                    raise AppError(f"RL Training failed in subprocess: {result.stderr}", 500)
+                else:
+                    raise ValueError(f"Unknown model_type for subprocess: {model_type}")
+
+                # Save temporary data and script
+                joblib.dump(df.dropna(subset=top_features + ['close']), df_path)
+                joblib.dump(top_features, features_path)
                 
-                logger.info("RL model trained via subprocess")
-                mse = 0.0
-            finally:
-                # Cleanup
-                for f in [df_path, features_path, worker_path]:
-                    if os.path.exists(f): os.remove(f)
-            
-        else:
-            raise ValueError(f"Unknown model_type: {model_type}")
+                with open(worker_path, 'w') as f:
+                    f.write(train_script)
+                
+                try:
+                    # Run the subprocess with a 30-minute timeout for safety
+                    result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True, timeout=1800)
+                    if result.returncode != 0:
+                        logger.error(f"{model_type.upper()} Subprocess failed: {result.stderr}")
+                        raise AppError(f"{model_type.upper()} Training failed in subprocess: {result.stderr}", 500)
+                    
+                    logger.info(f"{model_type.upper()} model trained via subprocess")
+                    mse = 0.0
+                except subprocess.TimeoutExpired:
+                    logger.error(f"{model_type.upper()} Training subprocess for {symbol} timed out after 30 minutes.")
+                    raise AppError(f"{model_type.upper()} Training for {symbol} timed out", 504)
+                finally:
+                    # Cleanup
+                    for f in [df_path, features_path, worker_path]:
+                        if os.path.exists(f): os.remove(f)
+                
+            except Exception as e:
+                if not isinstance(e, AppError):
+                    logger.error(f"Error orchestrating {model_type} training: {e}", exc_info=True)
+                    raise AppError(f"Training orchestration error: {e}", 500)
+                raise e
         
         logger.info(f"Model ({model_type}) MSE: {mse}")
         
