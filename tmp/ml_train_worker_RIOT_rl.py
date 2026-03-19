@@ -14,12 +14,12 @@ sys.path.append(os.getcwd())
 from services.rl_price_predictor import RLPricePredictor
 
 try:
-    symbol = 'NFLX'
+    symbol = 'RIOT'
     model_dir = 'models'
     
     # Load data
-    df = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/ml_tmp_df_NFLX_rl.pkl')
-    top_features = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/ml_tmp_features_NFLX_rl.pkl')
+    df = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/ml_tmp_df_RIOT_rl.pkl')
+    top_features = joblib.load(r'/Users/laguz/Git/LaguzTechInvestment/tmp/ml_tmp_features_RIOT_rl.pkl')
     
     predictor = RLPricePredictor(symbol, df, top_features, model_dir)
     predictor.train(timesteps=10_000)
