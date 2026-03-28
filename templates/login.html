@@ -30,84 +30,13 @@
             {% endif %}
             {% endwith %}
 
-            <form method="POST" action="{{ url_for('auth.login') }}" class="space-y-6">
-                <div>
-                    <label for="username"
-                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Username</label>
-                    <input type="text" id="username" name="username"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
-                        placeholder="Username" required autofocus>
-                </div>
-
-                <div>
-                    <label for="password"
-                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Password</label>
-                    <input type="password" id="password" name="password"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
-                        placeholder="••••••••" required>
-                </div>
-
-                <button type="submit"
-                    class="w-full text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:outline-none focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-primary-600 dark:hover:bg-primary-700 dark:focus:ring-primary-800 flex items-center justify-center gap-2 transition-colors">
-                    <span class="material-symbols-outlined text-[18px]">key</span>
-                    Unlock with Password
-                </button>
-            </form>
-
-            <div class="inline-flex items-center justify-center w-full relative py-6">
-                <hr class="w-full h-px border-0 bg-gray-200 dark:bg-gray-700">
-                <span
-                    class="absolute px-3 text-sm text-gray-500 font-medium tracking-wider uppercase -translate-x-1/2 bg-transparent left-1/2 dark:text-gray-400">OR</span>
-            </div>
-
-            <div class="space-y-3">
+            <div class="space-y-3 pt-2">
                 <button id="btn-nostr"
-                    class="w-full text-gray-900 bg-white border border-gray-200 hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-gray-100 font-medium rounded-lg text-sm px-5 py-2.5 text-center inline-flex items-center justify-center dark:focus:ring-gray-600 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:hover:bg-gray-700 gap-2 transition-colors"
+                    class="w-full text-white bg-indigo-600 hover:bg-indigo-700 focus:ring-4 focus:outline-none focus:ring-indigo-300 font-medium rounded-lg text-sm px-5 py-3 text-center inline-flex items-center justify-center dark:bg-indigo-600 dark:hover:bg-indigo-700 dark:focus:ring-indigo-800 gap-2 transition-colors shadow-lg shadow-indigo-500/30"
                     onclick="loginWithNostr()">
                     <img src="https://nostr.com/favicon.ico" alt="Nostr" class="w-5 h-5 rounded-full">
                     Login with Nostr (NIP-07)
                 </button>
-
-                <button id="btn-sqrl"
-                    class="w-full text-gray-900 bg-white border border-gray-200 hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-gray-100 font-medium rounded-lg text-sm px-5 py-2.5 text-center inline-flex items-center justify-center dark:focus:ring-gray-600 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:hover:bg-gray-700 gap-2 transition-colors"
-                    onclick="loginWithSQRL()">
-                    <span class="material-symbols-outlined text-[18px]">qr_code_scanner</span>
-                    Login with SQRL
-                </button>
-            </div>
-
-            <div id="sqrl-qr-container" class="hidden text-center mt-6">
-                <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">Scan with SQRL App</p>
-                <div id="sqrl-qr-code" class="flex justify-center p-4 bg-white rounded-lg inline-block"></div>
-                <a id="sqrl-link" href="#"
-                    class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-500 mt-3 block">Click
-                    to launch App</a>
-            </div>
-
-            <div class="inline-flex items-center justify-center w-full relative pt-8 pb-4">
-                <hr class="w-full h-px border-0 bg-gray-200 dark:bg-gray-700">
-                <span
-                    class="absolute px-3 text-xs text-gray-500 font-medium tracking-wider uppercase -translate-x-1/2 bg-transparent left-1/2 dark:text-gray-400 whitespace-nowrap">Nostr
-                    Connect (NIP-46)</span>
-            </div>
-
-            <div class="space-y-4">
-                <div>
-                    <label for="nostr-remote-address"
-                        class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">NIP-05 or Bunker
-                        URI</label>
-                    <input type="text" id="nostr-remote-address"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
-                        placeholder="laguz@nostr.me" value="laguz@nostr.me">
-                </div>
-
-                <button id="btn-nip46"
-                    class="w-full text-gray-900 bg-white border border-gray-200 hover:bg-gray-100 focus:ring-4 focus:outline-none focus:ring-gray-100 font-medium rounded-lg text-sm px-5 py-2.5 text-center inline-flex items-center justify-center dark:focus:ring-gray-600 dark:bg-gray-800 dark:border-gray-700 dark:text-white dark:hover:bg-gray-700 gap-2 transition-colors"
-                    onclick="loginWithNip46()">
-                    <span class="material-symbols-outlined text-[18px]">settings_remote</span>
-                    Login with Remote Signer
-                </button>
-                <div id="nip46-status" class="text-sm text-center text-gray-500 dark:text-gray-400 mt-2"></div>
             </div>
         </div>
 

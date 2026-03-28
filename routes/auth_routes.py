@@ -10,19 +10,7 @@ def login():
         return redirect(url_for('main.dashboard'))
         
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        
-        auth_service = Container.get_auth_service()
-        user = auth_service.login(username, password)
-        
-        if user:
-            login_user(user)
-            # Check if bot needs to be notified or started?
-            # Ideally the bot service picks up the key from TradierService which was updated by AuthService.
-            return redirect(url_for('main.dashboard'))
-        else:
-            flash('Login failed. Check username and password.', 'error')
+        flash('Password login is temporarily disabled. Please use Nostr (NIP-07).', 'error')
             
     return render_template('login.html')
 
@@ -156,72 +144,4 @@ def logout():
     logout_user()
     return redirect(url_for('auth.login'))
 
-# --- SQRL ROUTES ---
-
-@auth_bp.route('/login/sqrl/nut', methods=['GET'])
-def sqrl_get_nut():
-    """Generate a Nut and return it + SQRL URL for QR code."""
-    sqrl_service = Container.get_sqrl_service()
-    
-    # Construct SQRL URL
-    # format: sqrl://<domain>/sqrl?nut=<nut>
-    domain = request.host
-    # If dev/local, might need adjustment if behind proxy?
-    # request.host includes port if any.
-    
-    # Note: SQRL requires 'sqrl://' scheme.
-    # Client converts to 'https://' or 'http://' to post.
-    # If we are on http, client posts to http. 
-    # Valid schemes: sqrl:// (for SSL) and qrl:// (for non-SSL, discouraged but okay for dev)
-    
-    scheme = "qrl" if "localhost" in domain or "127.0.0.1" in domain else "sqrl"
-    
-    nut = sqrl_service.generate_nut(request.remote_addr)
-    url = f"{scheme}://{domain}/sqrl?nut={nut}"
-    
-    return {
-        'nut': nut,
-        'url': url
-    }
-
-@auth_bp.route('/login/sqrl/poll', methods=['POST'])
-def sqrl_poll():
-    """Frontend polls this to check if user authenticated via SQRL."""
-    data = request.json
-    nut = data.get('nut')
-    
-    sqrl_service = Container.get_sqrl_service()
-    session = sqrl_service.check_session(nut)
-    
-    if session and session.get('status') == 'authenticated':
-        # Log the user in!
-        user_id = session.get('user_id')
-        auth_service = Container.get_auth_service()
-        user = auth_service.load_user(user_id)
-        
-        if user:
-            login_user(user)
-            return {'success': True}
-            
-    return {'success': False}
-
-@auth_bp.route('/sqrl', methods=['POST'])
-def sqrl_handler():
-    """
-    The Endpoint the SQRL Client POSTs to.
-    Expects: client, server, ids, pds, urs (optional) parameters (base64url encoded).
-    """
-    client = request.form.get('client')
-    server = request.form.get('server')
-    ids = request.form.get('ids')
-    pds = request.form.get('pds')
-    urs = request.form.get('urs')
-    
-    if not client or not server or not ids:
-        return "Error: Missing Params", 400
-        
-    sqrl_service = Container.get_sqrl_service()
-    response_body = sqrl_service.handle_request(client, server, ids, pds, urs)
-    
-    # Return Base64 encoded response
-    return response_body, 200, {'Content-Type': 'application/x-www-form-urlencoded'}
+# SQRL ROUTES DISABLED
