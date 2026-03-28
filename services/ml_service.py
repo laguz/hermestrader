@@ -343,6 +343,9 @@ class MLService:
 
     def train_model(self, symbol, model_type='lstm', express=False, pre_prepared_df=None):
         symbol = symbol.upper()
+        import re
+        if not re.match(r'^[A-Z0-9\-\.]+$', symbol):
+            raise ValidationError(f"Invalid symbol format: {symbol}")
         
         logger.info(f"Starting {model_type.upper()} training for {symbol}...")
         
@@ -385,7 +388,7 @@ class MLService:
             
             try:
                 if model_type == 'lstm':
-                    train_script = f"""
+                    train_script = """
 import os
 import sys
 import pandas as pd
@@ -407,12 +410,14 @@ logger = logging.getLogger("LSTM_Worker")
 sys.path.append(os.getcwd())
 
 try:
-    symbol = '{symbol}'
-    model_dir = '{self.model_dir}'
+    symbol = sys.argv[1]
+    model_dir = sys.argv[2]
+    df_path = sys.argv[3]
+    features_path = sys.argv[4]
     
     # Load data
-    df = joblib.load(r'{df_path}')
-    top_features = joblib.load(r'{features_path}')
+    df = joblib.load(df_path)
+    top_features = joblib.load(features_path)
     
     # LSTM Prep
     df_lstm = df.copy()
@@ -457,17 +462,17 @@ try:
     
     # Save
     os.makedirs(model_dir, exist_ok=True)
-    model.save(f"{{model_dir}}/{{symbol}}_lstm.h5")
-    joblib.dump(scaler, f"{{model_dir}}/{{symbol}}_lstm_scaler.pkl")
-    joblib.dump(target_scaler, f"{{model_dir}}/{{symbol}}_lstm_target_scaler.pkl")
+    model.save(os.path.join(model_dir, f"{symbol}_lstm.h5"))
+    joblib.dump(scaler, os.path.join(model_dir, f"{symbol}_lstm_scaler.pkl"))
+    joblib.dump(target_scaler, os.path.join(model_dir, f"{symbol}_lstm_target_scaler.pkl"))
     
-    logger.info(f"LSTM training for {{symbol}} completed successfully")
+    logger.info(f"LSTM training for {symbol} completed successfully")
 except Exception as e:
-    logger.error(f"LSTM training failed: {{e}}")
+    logger.error(f"LSTM training failed: {e}")
     sys.exit(1)
 """
                 elif model_type == 'rl':
-                    train_script = f"""
+                    train_script = """
 import os
 import sys
 import pandas as pd
@@ -483,18 +488,20 @@ sys.path.append(os.getcwd())
 from services.rl_price_predictor import RLPricePredictor
 
 try:
-    symbol = '{symbol}'
-    model_dir = '{self.model_dir}'
+    symbol = sys.argv[1]
+    model_dir = sys.argv[2]
+    df_path = sys.argv[3]
+    features_path = sys.argv[4]
     
     # Load data
-    df = joblib.load(r'{df_path}')
-    top_features = joblib.load(r'{features_path}')
+    df = joblib.load(df_path)
+    top_features = joblib.load(features_path)
     
     predictor = RLPricePredictor(symbol, df, top_features, model_dir)
     predictor.train(timesteps=10_000)
-    logger.info(f"RL model training for {{symbol}} completed successfully")
+    logger.info(f"RL model training for {symbol} completed successfully")
 except Exception as e:
-    logger.error(f"RL training subprocess failed: {{e}}")
+    logger.error(f"RL training subprocess failed: {e}")
     sys.exit(1)
 """
                 else:
@@ -509,7 +516,10 @@ except Exception as e:
                 
                 try:
                     # Run the subprocess with a 30-minute timeout for safety
-                    result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True, timeout=1800)
+                    result = subprocess.run(
+                        [sys.executable, worker_path, symbol, self.model_dir, df_path, features_path], 
+                        capture_output=True, text=True, timeout=1800
+                    )
                     if result.returncode != 0:
                         logger.error(f"{model_type.upper()} Subprocess failed: {result.stderr}")
                         raise AppError(f"{model_type.upper()} Training failed in subprocess: {result.stderr}", 500)
@@ -546,6 +556,10 @@ except Exception as e:
 
     def predict_next_day(self, symbol, model_type='lstm'):
         symbol = symbol.upper()
+        import re
+        if not re.match(r'^[A-Z0-9\-\.]+$', symbol):
+            raise ValidationError(f"Invalid symbol format: {symbol}")
+            
         if self.db is None:
             raise ExternalServiceError("Database not available")
 
@@ -650,7 +664,7 @@ except Exception as e:
             worker_path = os.path.join(tmp_dir, f'rl_predict_worker_{symbol}.py')
             result_path = os.path.join(tmp_dir, f'rl_predict_result_{symbol}.json')
 
-            predict_script = f"""
+            predict_script = """
 import pandas as pd
 import joblib
 import os
@@ -664,14 +678,20 @@ from services.rl_price_predictor import RLPricePredictor
 logging.basicConfig(level=logging.ERROR)
 
 try:
-    df = joblib.load(r'{df_path}')
-    features = joblib.load(r'{features_path}')
+    symbol = sys.argv[1]
+    model_dir = sys.argv[2]
+    df_path = sys.argv[3]
+    features_path = sys.argv[4]
+    result_path = sys.argv[5]
+
+    df = joblib.load(df_path)
+    features = joblib.load(features_path)
     
-    predictor = RLPricePredictor('{symbol}', df, features, '{self.model_dir}')
+    predictor = RLPricePredictor(symbol, df, features, model_dir)
     prediction = predictor.predict(df)
     
-    with open(r'{result_path}', 'w') as fh:
-        json.dump({{"prediction": prediction}}, fh)
+    with open(result_path, 'w') as fh:
+        json.dump({"prediction": prediction}, fh)
 except Exception as e:
     import sys
     print(str(e), file=sys.stderr)
@@ -684,7 +704,7 @@ except Exception as e:
                 f.write(predict_script)
             
             try:
-                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
+                result = subprocess.run([sys.executable, worker_path, symbol, self.model_dir, df_path, features_path, result_path], capture_output=True, text=True)
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
                     if "not found" in error_msg.lower():
