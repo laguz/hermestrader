@@ -1,4 +1,5 @@
 from flask import Blueprint, render_template, request
+from flask_login import login_required
 import logging
 import yfinance as yf
 from logic.edgar_client import get_company_facts
@@ -9,15 +10,19 @@ rule1_bp = Blueprint('rule1', __name__, url_prefix='/rule1')
 logger = logging.getLogger(__name__)
 
 @rule1_bp.route('/', methods=['GET', 'POST'])
+@login_required
 def index():
     result = None
     error = None
     ticker = ""
     
     if request.method == 'POST':
-        ticker = request.form.get('ticker', '').strip().upper()
+        raw_ticker = request.form.get('ticker', '').strip().upper()
+        import re
+        ticker = re.sub(r'[^A-Z]', '', raw_ticker)
+        
         if not ticker:
-            error = "Please enter a stock symbol."
+            error = "Please enter a valid stock symbol (A-Z only)."
         else:
             try:
                 # 1. Fetch Financials

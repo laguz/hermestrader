@@ -1,5 +1,6 @@
 import logging
 from flask import Blueprint, jsonify, request
+from flask_login import login_required
 from services.container import Container
 from services.backtest_service import BacktestService
 from datetime import datetime
@@ -8,6 +9,7 @@ logger = logging.getLogger(__name__)
 backtest_bp = Blueprint('backtest', __name__)
 
 @backtest_bp.route('/api/status')
+@login_required
 def status():
     service = Container.get_tradier_service()
     connected = service.check_connection()
@@ -17,6 +19,7 @@ def status():
     })
 
 @backtest_bp.route('/api/backtest', methods=['POST'])
+@login_required
 def run_backtest():
     data = request.json
     logger.debug(f"Received backtest request: {data}")

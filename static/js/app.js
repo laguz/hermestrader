@@ -14,6 +14,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
 });
 
+function escapeHTML(str) {
+    if (!str) return '';
+    return String(str).replace(/[&<>'"]/g, 
+        tag => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            "'": '&#39;',
+            '"': '&quot;'
+        }[tag]));
+}
+
 function initBacktester(form) {
     const loading = document.getElementById('loading');
     const chartContainer = document.getElementById('chart-container');
@@ -251,7 +263,7 @@ function initBacktester(form) {
 
         } catch (error) {
             console.error('Error:', error);
-            metricsContainer.innerHTML = `<p style="color: #ef4444">Error: ${error.message}</p>`;
+            metricsContainer.innerHTML = `<p style="color: #ef4444">Error: ${escapeHTML(error.message)}</p>`;
         } finally {
             loading.classList.add('hidden');
         }
