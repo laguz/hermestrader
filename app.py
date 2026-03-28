@@ -92,4 +92,5 @@ def _register_error_handlers(app):
 app = create_app()
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    is_dev = os.getenv('FLASK_ENV') == 'development'
+    app.run(debug=is_dev, host='0.0.0.0', port=8080)

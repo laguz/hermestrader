@@ -29,9 +29,13 @@ class TradierService:
         auth_token = self.access_token
         
         try:
-            from flask import session, has_request_context
-            if has_request_context() and session.get('tradier_key'):
-                auth_token = session['tradier_key']
+            from flask import has_request_context
+            from services.container import Container
+            if has_request_context():
+                auth_svc = Container.get_auth_service()
+                session_key = auth_svc.get_api_key()
+                if session_key:
+                    auth_token = session_key
         except ImportError:
             pass
             
@@ -139,9 +143,13 @@ class TradierService:
     def _get_account_id(self) -> Optional[str]:
         acct_id = self.account_id
         try:
-            from flask import session, has_request_context
-            if has_request_context() and session.get('account_id'):
-                acct_id = session['account_id']
+            from flask import has_request_context
+            from services.container import Container
+            if has_request_context():
+                auth_svc = Container.get_auth_service()
+                session_acct = auth_svc.get_account_id()
+                if session_acct:
+                    acct_id = session_acct
         except ImportError:
             pass
             

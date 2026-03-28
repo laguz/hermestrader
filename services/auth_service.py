@@ -10,6 +10,10 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from services.container import Container
 
+# Ephemeral in-memory key generated strictly once per application boot.
+_EPHEMERAL_KEY = Fernet.generate_key()
+_F_EPHEMERAL = Fernet(_EPHEMERAL_KEY)
+
 class User(UserMixin):
     def __init__(self, user_doc):
         self.id = str(user_doc.get('_id', ''))
@@ -56,6 +60,14 @@ class AuthService:
     def create_user(self, username, password, tradier_key, account_id):
         """Create a new user with Multi-Key Vault architecture (DEK)."""
         if self.db is None: return None
+        
+        from pymongo.errors import DuplicateKeyError
+        try:
+            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": username})
+        except DuplicateKeyError:
+            logger.warning("Registration locked natively: single user lock already exists.")
+            return None
+            
         if self.db['users'].find_one({"username": username}): return None
 
         # 1. Generate DEK (Data Encryption Key)
@@ -98,6 +110,14 @@ class AuthService:
     def create_user_with_nostr(self, username, nostr_pubkey, tradier_key, account_id):
         """Create a new user with Nostr DEK manager."""
         if self.db is None: return None
+        
+        from pymongo.errors import DuplicateKeyError
+        try:
+            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": username})
+        except DuplicateKeyError:
+            logger.warning("Registration locked natively: single user lock already exists.")
+            return None
+            
         if self.db['users'].find_one({"username": username}): return None
         if self.db['users'].find_one({"nostr_pubkey": nostr_pubkey}): return None
 
@@ -256,9 +276,11 @@ class AuthService:
     def _unlock_session(self, key, account_id):
         from flask import session, has_request_context
         if has_request_context():
-            session['tradier_key'] = key
+            enc_key = _F_EPHEMERAL.encrypt(key.encode()).decode('utf-8')
+            session['tradier_key'] = enc_key
             if account_id:
-                session['account_id'] = account_id
+                enc_acct = _F_EPHEMERAL.encrypt(account_id.encode()).decode('utf-8')
+                session['account_id'] = enc_acct
         
         # We still update the tradier service, but the tradier service itself 
         # needs to be modified to pull from session instead of storing it on tracking instances.
@@ -303,5 +325,23 @@ class AuthService:
     def get_api_key(self):
         from flask import session, has_request_context
         if has_request_context():
-            return session.get('tradier_key')
+            enc_key = session.get('tradier_key')
+            if enc_key:
+                try:
+                    return _F_EPHEMERAL.decrypt(enc_key.encode()).decode('utf-8')
+                except Exception as e:
+                    logger.error("Failed to decrypt ephemeral session key.")
+                    return None
+        return None
+
+    def get_account_id(self):
+        from flask import session, has_request_context
+        if has_request_context():
+            enc_acct = session.get('account_id')
+            if enc_acct:
+                try:
+                    return _F_EPHEMERAL.decrypt(enc_acct.encode()).decode('utf-8')
+                except Exception as e:
+                    logger.error("Failed to decrypt ephemeral account id.")
+                    return None
         return None
