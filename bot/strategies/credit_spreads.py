@@ -308,7 +308,7 @@ class CreditSpreadStrategy(AbstractStrategy):
                     }}
                 )
 
-    def _find_delta_strike(self, chain, option_type, min_delta=0.30, max_delta=0.37):
+    def _find_delta_strike(self, chain, option_type, min_delta=0.20, max_delta=0.25):
         """Find strike with delta closest to min_delta within range."""
         if not chain: return None
         
@@ -334,19 +334,17 @@ class CreditSpreadStrategy(AbstractStrategy):
             return None
             
         # Sort by distance to ideal delta (let's say we prefer higher premium so strictly higher delta? 
-        # User said "delta .30 to .37". 
-        # Let's pick the one closest to 0.30 to be safer (further OTM) or 0.37 for more premium?
-        # Usually "sell 30 delta" means around 0.30.
-        # Let's pick closest to 0.30 (lower risk)
+        # User said "delta .20 to .25". 
+        # Attempting to sell the safest structure available in that premium pocket.
         
-        best = min(candidates, key=lambda x: abs(x[1] - 0.30))
+        best = min(candidates, key=lambda x: abs(x[1] - min_delta))
         return best[0]['strike']
 
-    def _find_expiry(self, symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=None):
+    def _find_expiry(self, symbol, min_dte=0, max_dte=14, exclude_dates=None):
         """
         Find available expiry strictly within min_dte and max_dte.
         Range: [min_dte, max_dte] inclusive.
-        User Constraint: Strict 3 Weeks (16-22 Days).
+        User Constraint: First option chain available that is less than 15 DTE.
         """
         if exclude_dates is None: exclude_dates = []
         
@@ -392,12 +390,10 @@ class CreditSpreadStrategy(AbstractStrategy):
             self._log(f"No expirations found in DTE range [{min_dte}, {max_dte}] for {symbol}.")
             return None
 
-        # Sort by proximity to target_dte
-        # Target 21 days (3 weeks)
-        target_date = today + timedelta(days=target_dte)
-        closest_date = min(candidates, key=lambda d: abs((d - today).days - target_dte))
+        # Sort chronologically to find the FIRST available chain
+        first_date = min(candidates)
         
-        return closest_date.strftime("%Y-%m-%d")
+        return first_date.strftime("%Y-%m-%d")
 
     def _check_expiry_constraints(self, symbol, is_put, max_lots=5):
         """
@@ -575,7 +571,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         """
         # 1. Early Constraint Check
         exclusions = self._check_expiry_constraints(symbol, is_put=True, max_lots=max_lots)
-        expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
+        expiry = self._find_expiry(symbol, min_dte=0, max_dte=14, exclude_dates=exclusions)
         if not expiry: 
              self._log(f"🔸 No expiry found for {symbol}")
              return
@@ -591,16 +587,16 @@ class CreditSpreadStrategy(AbstractStrategy):
         ]
 
         if not valid_points:
-            # Fallback to Delta 0.30-0.37
-            self._log(f"🔹 No valid support levels found for {symbol}. Checking Delta 0.30-0.37...")
+            # Fallback to Delta 0.20-0.25
+            self._log(f"🔹 No valid support levels found for {symbol}. Checking Delta 0.20-0.25...")
             
             # Check Constraints (Is Put = True)
             exclusions = self._check_expiry_constraints(symbol, is_put=True, max_lots=max_lots)
-            expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
+            expiry = self._find_expiry(symbol, min_dte=0, max_dte=14, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
-            delta_strike = self._find_delta_strike(chain, 'put', min_delta=0.30, max_delta=0.37)
+            delta_strike = self._find_delta_strike(chain, 'put', min_delta=0.20, max_delta=0.25)
             
             if delta_strike:
                  self._log(f"🔹 Found Delta Strike for Put: {delta_strike}")
@@ -731,7 +727,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         # Similar logic for Bear Call Spread
         # 1. Early Constraint Check
         exclusions = self._check_expiry_constraints(symbol, is_put=False, max_lots=max_lots)
-        expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
+        expiry = self._find_expiry(symbol, min_dte=0, max_dte=14, exclude_dates=exclusions)
         if not expiry:
              self._log(f"🔸 No expiry found for {symbol}")
              return
@@ -749,16 +745,16 @@ class CreditSpreadStrategy(AbstractStrategy):
         ]
 
         if not valid_points:
-             # Fallback to Delta 0.30-0.37
-            self._log(f"🔹 No valid resistance levels found for {symbol}. Checking Delta 0.30-0.37...")
+             # Fallback to Delta 0.20-0.25
+            self._log(f"🔹 No valid resistance levels found for {symbol}. Checking Delta 0.20-0.25...")
             
             # Check Constraints (Is Put = False)
             exclusions = self._check_expiry_constraints(symbol, is_put=False, max_lots=max_lots)
-            expiry = self._find_expiry(symbol, target_dte=11, min_dte=7, max_dte=15, exclude_dates=exclusions)
+            expiry = self._find_expiry(symbol, min_dte=0, max_dte=14, exclude_dates=exclusions)
             if not expiry: return
 
             chain = self.tradier.get_option_chains(symbol, expiry)
-            delta_strike = self._find_delta_strike(chain, 'call', min_delta=0.30, max_delta=0.37)
+            delta_strike = self._find_delta_strike(chain, 'call', min_delta=0.20, max_delta=0.25)
             
             if delta_strike:
                  self._log(f"🔹 Found Delta Strike for Call: {delta_strike}")
