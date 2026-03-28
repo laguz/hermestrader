@@ -137,8 +137,14 @@ class BotService:
         if not isinstance(watchlist, list):
             return False
         
-        # Upper case and dedup, then sort
-        clean_list = sorted(list(set([str(s).upper().strip() for s in watchlist if s])))
+        # Upper case and dedup, maintaining original order
+        raw_list = [str(s).upper().strip() for s in watchlist if s]
+        seen = set()
+        clean_list = []
+        for s in raw_list:
+            if s not in seen:
+                clean_list.append(s)
+                seen.add(s)
         
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
@@ -317,7 +323,7 @@ class BotService:
     def _check_circuit_breaker(self, config):
         """Returns True if trading is allowed, False if buying power is too low."""
         balances = self.tradier.get_account_balances()
-        min_reserve = config.get('min_obp_reserve', 1000)
+        min_reserve = config.get('global_min_obp_reserve', 400) # Floor set to lowest requirement
         
         if balances:
             obp = balances.get('option_buying_power', 0)
@@ -344,14 +350,20 @@ class BotService:
         wl_spreads = config.get('watchlist_credit_spreads', [])
         wl_wheel = config.get('watchlist_wheel', [])
 
+        # Priority 1: Wheel Strategy
+        if wl_wheel:
+            self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
+            wheel_config = config.copy()
+            wheel_config['min_obp_reserve'] = 3000
+            self.wheel_strategy.execute(wl_wheel, wheel_config)
+
+        # Priority 2: Credit Spread Strategy
         if wl_spreads:
             self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
             self.credit_spread_strategy.manage_positions()
-            self.credit_spread_strategy.execute(wl_spreads, config)
-
-        if wl_wheel:
-            self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
-            self.wheel_strategy.execute(wl_wheel, config)
+            cs_config = config.copy()
+            cs_config['min_obp_reserve'] = 400
+            self.credit_spread_strategy.execute(wl_spreads, cs_config)
     def _run_ml_scheduler(self, config):
         """
         Run daily predictions and biweekly training for all watchlist symbols.

@@ -674,14 +674,13 @@ class CreditSpreadStrategy(AbstractStrategy):
         # BP Check & Lot Sizing
         requirement_per_lot = abs(short_put_strike - long_put_strike) * 100
         
-        # UPGRADE 4: CAPITAL-BASED LIMITS
-        # Look for max_capital setting, default to e.g. $500 max per symbol if missing
-        max_capital = config.get('max_capital_per_symbol', 500) if config else 500
+        # DYNAMIC BP-BASED SCALING
+        available_bp = self._get_available_bp(config)
         
-        # Calculate how many lots we can afford
-        dynamic_lots = int(max_capital // requirement_per_lot)
+        # Calculate how many lots we can afford with remaining BP
+        dynamic_lots = int(available_bp // requirement_per_lot)
         if dynamic_lots < 1:
-            self._log(f"Spread requirement (${requirement_per_lot}) exceeds Max Capital limit (${max_capital}). Skipping.")
+            self._log(f"Spread requirement (${requirement_per_lot:,.2f}) exceeds available BP (${available_bp:,.2f}). Skipping.")
             return False
             
         # Hard cap the dynamic lots if user manually set max_credit_spreads_per_symbol
@@ -825,12 +824,12 @@ class CreditSpreadStrategy(AbstractStrategy):
         # BP Check & Lot Sizing
         requirement_per_lot = abs(short_call_strike - long_call_strike) * 100
         
-        # UPGRADE 4: CAPITAL-BASED LIMITS
-        max_capital = config.get('max_capital_per_symbol', 500) if config else 500
+        # DYNAMIC BP-BASED SCALING
+        available_bp = self._get_available_bp(config)
         
-        dynamic_lots = int(max_capital // requirement_per_lot)
+        dynamic_lots = int(available_bp // requirement_per_lot)
         if dynamic_lots < 1:
-            self._log(f"Spread requirement (${requirement_per_lot}) exceeds Max Capital limit (${max_capital}). Skipping.")
+            self._log(f"Spread requirement (${requirement_per_lot:,.2f}) exceeds available BP (${available_bp:,.2f}). Skipping.")
             return False
             
         dynamic_lots = min(dynamic_lots, max_lots)

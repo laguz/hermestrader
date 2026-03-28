@@ -81,6 +81,19 @@ class AbstractStrategy(ABC):
              return self.tradier.current_date
         return datetime.now()
 
+    def _get_available_bp(self, config=None):
+        """Returns the True Available Option Buying Power (OBP - min_obp_reserve)."""
+        if config is None:
+             config = getattr(self, 'config', {}) or {}
+        min_reserve = config.get('min_obp_reserve', 1000)
+        
+        balances = self.tradier.get_account_balances()
+        if not balances:
+             return 0
+             
+        obp = balances.get('option_buying_power', 0)
+        return max(0, obp - min_reserve)
+
     def _is_bp_sufficient(self, requirement, config=None):
         """Check if Option Buying Power is sufficient after reserve."""
         if config is None:

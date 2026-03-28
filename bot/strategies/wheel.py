@@ -11,12 +11,12 @@ class WheelStrategy(AbstractStrategy):
         super().__init__(tradier_service, db, dry_run, analysis_service)
         # Constants
         self.TARGET_DTE = 42 # 6 Weeks
-        self.MIN_POP = 80
+        self.MIN_POP = 70
         self.MAX_POP = 100
         self.ROLL_TRIGGER_DTE = 7
         self.ROLL_MAX_DEBIT = 0.90
-        self.DELTA_MIN = 0.10
-        self.DELTA_MAX = 0.20
+        self.DELTA_MIN = 0.20
+        self.DELTA_MAX = 0.25
 
     def _log(self, message):
         super()._log(message, strategy_name="WHEEL")
@@ -101,7 +101,7 @@ class WheelStrategy(AbstractStrategy):
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
-        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=38, min_dte=38, max_dte=120, exclude_dates=exclusions, method='min')
         if not target_expiry:
             self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
@@ -138,7 +138,7 @@ class WheelStrategy(AbstractStrategy):
                 self._log(f"❌ Failed to fetch option chain for {target_expiry}")
                 return
 
-            target_strike, delta = self._find_delta_strike(chain, 'put', self.DELTA_MIN, self.DELTA_MAX)
+            target_strike, delta = self._find_delta_strike(chain, 'put', self.DELTA_MIN, self.DELTA_MAX, target_d=0.20)
             if target_strike:
                 target_reason = f"Delta Fallback ({delta:.2f})"
                 self._log(f"🎯 Found Delta Entry: Strike {target_strike} (Delta {delta})")
@@ -156,7 +156,7 @@ class WheelStrategy(AbstractStrategy):
         # Check Constraints
         exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
-        target_expiry = self._find_expiry(symbol, target_dte=42, min_dte=37, max_dte=43, exclude_dates=exclusions)
+        target_expiry = self._find_expiry(symbol, target_dte=38, min_dte=38, max_dte=120, exclude_dates=exclusions, method='min')
         if not target_expiry: return
 
         target_strike = None
@@ -186,7 +186,7 @@ class WheelStrategy(AbstractStrategy):
                 self._log(f"❌ Failed to fetch option chain for {target_expiry}")
                 return
 
-            target_strike, delta = self._find_delta_strike(chain, 'call', self.DELTA_MIN, self.DELTA_MAX)
+            target_strike, delta = self._find_delta_strike(chain, 'call', self.DELTA_MIN, self.DELTA_MAX, target_d=0.20)
             if target_strike:
                 target_reason = f"Delta Fallback ({delta:.2f})"
                 self._log(f"🎯 Found Delta Entry: Strike {target_strike} (Delta {delta})")
@@ -327,8 +327,8 @@ class WheelStrategy(AbstractStrategy):
 
                 close_price = current_option['ask']
                 
-                # Find the first expiration > 42 DTE (min_dte=43)
-                new_expiry = self._find_expiry(underlying, target_dte=43, min_dte=43, max_dte=120, method='min')
+                # Find the first expiration > 43 DTE (min_dte=44)
+                new_expiry = self._find_expiry(underlying, target_dte=44, min_dte=44, max_dte=120, method='min')
                 if not new_expiry: continue
 
                 new_chain = self.tradier.get_option_chains(underlying, new_expiry)
@@ -340,11 +340,12 @@ class WheelStrategy(AbstractStrategy):
                 candidates = [o for o in new_chain if o['option_type'] == option_type]
                 if not candidates: continue
                 
-                new_option = min(candidates, key=lambda x: abs(x['strike'] - target_strike_ideal))
-                target_strike = new_option['strike']
+                new_option = next((o for o in candidates if o['strike'] == target_strike_ideal), None)
+                if not new_option:
+                    self._log(f"⚠️ Exact strike {target_strike_ideal} not found in {new_expiry} chain. Letting {symbol} expire ITM.")
+                    continue
                 
-                if abs(target_strike - target_strike_ideal) > 0.5:
-                    self._log(f"⚠️ Ideal target strike {target_strike_ideal} not perfectly matched, snapping to {target_strike}.")
+                target_strike = new_option['strike']
 
                 open_price = round(new_option['bid'] - 0.01, 2)
                 net_credit = open_price - close_price
@@ -443,7 +444,20 @@ class WheelStrategy(AbstractStrategy):
         self._log(f"🚀 Executing {side} {symbol} {strike} {option_type}. Exp: {expiry}. Reason: {reason}. Price: {price}")
         
         requirement = (strike * 100 * quantity) if option_type == 'put' and 'sell' in side else 0
-        if not self._is_bp_sufficient(requirement):
+        
+        # Dynamic Lot Scaling
+        if requirement > 0:
+            available_bp = self._get_available_bp(self.config)
+            if requirement > available_bp:
+                max_qty = int(available_bp // (strike * 100))
+                if max_qty <= 0:
+                    self._log(f"🚫 Insufficient BP (${available_bp:,.2f} avail) to open even 1 contract (Req: ${strike*100:,.2f}).")
+                    return
+                self._log(f"⚠️ BP scaling order from {quantity} to {max_qty} contracts.")
+                quantity = max_qty
+                requirement = strike * 100 * quantity
+
+        if not self._is_bp_sufficient(requirement, self.config):
             return
 
         if self.dry_run:
