@@ -323,7 +323,7 @@ class BotService:
     def _check_circuit_breaker(self, config):
         """Returns True if trading is allowed, False if buying power is too low."""
         balances = self.tradier.get_account_balances()
-        min_reserve = config.get('global_min_obp_reserve', 400) # Floor set to lowest requirement
+        min_reserve = config.get('global_min_obp_reserve', 0) # Floor set to lowest requirement
         
         if balances:
             obp = balances.get('option_buying_power', 0)
@@ -354,7 +354,7 @@ class BotService:
         if wl_wheel:
             self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
             wheel_config = config.copy()
-            wheel_config['min_obp_reserve'] = 3000
+            wheel_config['min_obp_reserve'] = 26000
             self.wheel_strategy.execute(wl_wheel, wheel_config)
 
         # Priority 2: Credit Spread Strategy
@@ -362,7 +362,7 @@ class BotService:
             self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
             self.credit_spread_strategy.manage_positions()
             cs_config = config.copy()
-            cs_config['min_obp_reserve'] = 400
+            cs_config['min_obp_reserve'] = 0
             self.credit_spread_strategy.execute(wl_spreads, cs_config)
     def _run_ml_scheduler(self, config):
         """
