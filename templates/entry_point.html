@@ -429,7 +429,18 @@
                 // --- Indicators ---
                 const emaEl = document.getElementById('ind-ema50');
                 emaEl.textContent = data.indicators.ema_50 ? `$${data.indicators.ema_50.toFixed(2)}` : 'N/A';
-                emaEl.style.color = 'inherit';
+                
+                if (data.indicators.ema_50 && data.current_price) {
+                    if (data.current_price > data.indicators.ema_50) {
+                        emaEl.style.color = '#4ade80'; // Green
+                    } else if (data.current_price < data.indicators.ema_50) {
+                        emaEl.style.color = '#ef4444'; // Red
+                    } else {
+                        emaEl.style.color = 'inherit';
+                    }
+                } else {
+                    emaEl.style.color = 'inherit';
+                }
 
                 document.getElementById('ind-macd').textContent = data.indicators.macd;
                 document.getElementById('ind-sma200').textContent = data.indicators.sma_200 ? `$${data.indicators.sma_200.toFixed(2)}` : 'N/A';
