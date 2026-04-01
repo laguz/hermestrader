@@ -40,6 +40,10 @@ def calculate_sma(series, window=50):
     """Calculate Simple Moving Average."""
     return series.rolling(window=window).mean()
 
+def calculate_ema(series, span=50):
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=span, adjust=False).mean()
+
 def calculate_macd(series, fast=12, slow=26, signal=9):
     """
     Calculate MACD.

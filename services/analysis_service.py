@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 import numpy as np
 from datetime import datetime, timedelta
 from utils.indicators import (
-    calculate_rsi, 
+    calculate_rsi, calculate_ema,
     calculate_macd, 
     calculate_support_resistance, 
     calculate_sma, 
@@ -65,6 +65,9 @@ class AnalysisService:
         # 2. Calculate Indicators
         # RSI
         df['rsi'] = calculate_rsi(df['close'], period=14)
+        
+        # EMA 50
+        df['ema_50'] = calculate_ema(df['close'], span=50)
         
         # MACD
         df['macd'], df['signal'], df['hist'] = calculate_macd(df['close'])
@@ -425,7 +428,7 @@ class AnalysisService:
                 "reasons": sc_reasons
             },
             "indicators": {
-                "rsi": round(latest['rsi'], 2),
+                "ema_50": round(latest['ema_50'], 2),
                 "macd": round(latest['macd'], 2),
                 "support": round(latest['support'], 2),
                 "resistance": round(latest['resistance'], 2),

@@ -160,8 +160,8 @@
         <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-6">Technical Indicators</h3>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 text-center">
             <div>
-                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">RSI (14)</div>
-                <div id="ind-rsi" class="text-xl font-bold text-gray-900 dark:text-white">--</div>
+                <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">EMA 50 Days</div>
+                <div id="ind-ema50" class="text-xl font-bold text-gray-900 dark:text-white">--</div>
             </div>
             <div>
                 <div class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">MACD</div>
@@ -427,11 +427,9 @@
                 });
 
                 // --- Indicators ---
-                const rsiEl = document.getElementById('ind-rsi');
-                rsiEl.textContent = data.indicators.rsi;
-                if (data.indicators.rsi > 70) rsiEl.style.color = 'var(--md-sys-color-error)';
-                else if (data.indicators.rsi < 30) rsiEl.style.color = 'var(--md-sys-color-primary)';
-                else rsiEl.style.color = 'inherit';
+                const emaEl = document.getElementById('ind-ema50');
+                emaEl.textContent = data.indicators.ema_50 ? `$${data.indicators.ema_50.toFixed(2)}` : 'N/A';
+                emaEl.style.color = 'inherit';
 
                 document.getElementById('ind-macd').textContent = data.indicators.macd;
                 document.getElementById('ind-sma200').textContent = data.indicators.sma_200 ? `$${data.indicators.sma_200.toFixed(2)}` : 'N/A';
