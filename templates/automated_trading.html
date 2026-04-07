@@ -58,7 +58,7 @@
         <!-- Configuration Card -->
         <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
             <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Settings</h3>
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
                 <div>
                     <label for="cfg-cs-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
                         Credit Spread Lots</label>
@@ -77,6 +77,13 @@
                     <label for="cfg-cs75-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
                         45DTE CS Lots</label>
                     <input type="number" id="cfg-cs75-lots"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0" min="1" max="20" required>
+                </div>
+                <div>
+                    <label for="cfg-tt45-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
+                        TastyTrade45 Lots</label>
+                    <input type="number" id="cfg-tt45-lots"
                         class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
                         placeholder="0" min="1" max="20" required>
                 </div>
@@ -157,6 +164,25 @@
             </div>
         </div>
 
+        <!-- TastyTrade45 Watchlist -->
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">TastyTrade45 Watchlist</h3>
+            <div id="chips-tastytrade45" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
+                <!-- Chips -->
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-grow">
+                    <label for="input-tastytrade45" class="sr-only">Add Symbol</label>
+                    <input type="text" id="input-tastytrade45"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="ADD SYMBOL">
+                </div>
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="addSymbol('tastytrade45')">Add</button>
+            </div>
+        </div>
+
         <!-- Wheel Watchlist -->
         <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
             <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Wheel Watchlist</h3>
@@ -234,6 +260,7 @@
         credit_spreads: [],
         credit_spreads_7: [],
         credit_spreads_75: [],
+        tastytrade45: [],
         wheel: []
     };
 
@@ -268,6 +295,7 @@
             currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
             currentWatchlists.credit_spreads_7 = status.settings.watchlist_credit_spreads_7 || [];
             currentWatchlists.credit_spreads_75 = status.settings.watchlist_credit_spreads_75 || [];
+            currentWatchlists.tastytrade45 = status.settings.watchlist_tastytrade45 || [];
             currentWatchlists.wheel = status.settings.watchlist_wheel || [];
 
             // Backwards compatibility or migration display (optional)
@@ -278,6 +306,7 @@
             renderWatchlist('credit_spreads');
             renderWatchlist('credit_spreads_7');
             renderWatchlist('credit_spreads_75');
+            renderWatchlist('tastytrade45');
             renderWatchlist('wheel');
         }
 
@@ -296,6 +325,7 @@
             updateInputIfSafe('cfg-cs-lots', s.max_credit_spreads_per_symbol || 5);
             updateInputIfSafe('cfg-cs7-lots', s.max_credit_spreads_7_per_symbol || 5);
             updateInputIfSafe('cfg-cs75-lots', s.max_credit_spreads_75_per_symbol || 5);
+            updateInputIfSafe('cfg-tt45-lots', s.max_tastytrade45_per_symbol || 5);
             updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
 
             lastSettings = s;
@@ -322,6 +352,7 @@
         if (id === 'cfg-cs-lots') oldDbValue = lastSettings.max_credit_spreads_per_symbol || 5;
         if (id === 'cfg-cs7-lots') oldDbValue = lastSettings.max_credit_spreads_7_per_symbol || 5;
         if (id === 'cfg-cs75-lots') oldDbValue = lastSettings.max_credit_spreads_75_per_symbol || 5;
+        if (id === 'cfg-tt45-lots') oldDbValue = lastSettings.max_tastytrade45_per_symbol || 5;
         if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
 
         // Loose comparison (string vs number)
@@ -335,6 +366,7 @@
         const csLots = parseInt(document.getElementById('cfg-cs-lots').value) || 5;
         const cs7Lots = parseInt(document.getElementById('cfg-cs7-lots').value) || 5;
         const cs75Lots = parseInt(document.getElementById('cfg-cs75-lots').value) || 5;
+        const tt45Lots = parseInt(document.getElementById('cfg-tt45-lots').value) || 5;
         const wheelLots = parseInt(document.getElementById('cfg-wheel-lots').value) || 1;
 
         try {
@@ -345,6 +377,7 @@
                     max_credit_spreads_per_symbol: csLots,
                     max_credit_spreads_7_per_symbol: cs7Lots,
                     max_credit_spreads_75_per_symbol: cs75Lots,
+                    max_tastytrade45_per_symbol: tt45Lots,
                     max_wheel_contracts_per_symbol: wheelLots
                 })
             });
@@ -496,6 +529,7 @@
                     credit_spreads_watchlist: currentWatchlists.credit_spreads,
                     credit_spreads_7_watchlist: currentWatchlists.credit_spreads_7,
                     credit_spreads_75_watchlist: currentWatchlists.credit_spreads_75,
+                    tastytrade45_watchlist: currentWatchlists.tastytrade45,
                     wheel_watchlist: currentWatchlists.wheel
                 })
             });
