@@ -58,11 +58,18 @@
         <!-- Configuration Card -->
         <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
             <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Settings</h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                 <div>
                     <label for="cfg-cs-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
                         Credit Spread Lots</label>
                     <input type="number" id="cfg-cs-lots"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
+                        placeholder="0" min="1" max="20" required>
+                </div>
+                <div>
+                    <label for="cfg-cs7-lots" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Max
+                        7DTE CS Lots</label>
+                    <input type="number" id="cfg-cs7-lots"
                         class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-600 focus:border-primary-600 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500"
                         placeholder="0" min="1" max="20" required>
                 </div>
@@ -102,6 +109,25 @@
                 <button type="button"
                     class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
                     onclick="addSymbol('credit_spreads')">Add</button>
+            </div>
+        </div>
+
+        <!-- 7DTE Credit Spreads Watchlist -->
+        <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
+            <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">7DTE Credit Spreads Watchlist</h3>
+            <div id="chips-credit_spreads_7" class="flex flex-wrap gap-2 mb-4 min-h-[40px]">
+                <!-- Chips -->
+            </div>
+            <div class="flex gap-3">
+                <div class="flex-grow">
+                    <label for="input-credit_spreads_7" class="sr-only">Add Symbol</label>
+                    <input type="text" id="input-credit_spreads_7"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white dark:focus:ring-primary-500 dark:focus:border-primary-500 uppercase"
+                        placeholder="ADD SYMBOL">
+                </div>
+                <button type="button"
+                    class="text-white bg-primary-700 hover:bg-primary-800 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-5 py-2.5 dark:bg-primary-600 dark:hover:bg-primary-700 focus:outline-none dark:focus:ring-primary-800"
+                    onclick="addSymbol('credit_spreads_7')">Add</button>
             </div>
         </div>
 
@@ -180,6 +206,7 @@
     // Store both watchlists
     let currentWatchlists = {
         credit_spreads: [],
+        credit_spreads_7: [],
         wheel: []
     };
 
@@ -212,6 +239,7 @@
         // Update Watchlists
         if (status.settings) {
             currentWatchlists.credit_spreads = status.settings.watchlist_credit_spreads || [];
+            currentWatchlists.credit_spreads_7 = status.settings.watchlist_credit_spreads_7 || [];
             currentWatchlists.wheel = status.settings.watchlist_wheel || [];
 
             // Backwards compatibility or migration display (optional)
@@ -220,6 +248,7 @@
             }
 
             renderWatchlist('credit_spreads');
+            renderWatchlist('credit_spreads_7');
             renderWatchlist('wheel');
         }
 
@@ -236,6 +265,7 @@
         if (status.settings) {
             const s = status.settings;
             updateInputIfSafe('cfg-cs-lots', s.max_credit_spreads_per_symbol || 5);
+            updateInputIfSafe('cfg-cs7-lots', s.max_credit_spreads_7_per_symbol || 5);
             updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
 
             lastSettings = s;
@@ -260,6 +290,7 @@
         // We map ID to the settings key for comparison
         let oldDbValue = null;
         if (id === 'cfg-cs-lots') oldDbValue = lastSettings.max_credit_spreads_per_symbol || 5;
+        if (id === 'cfg-cs7-lots') oldDbValue = lastSettings.max_credit_spreads_7_per_symbol || 5;
         if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
 
         // Loose comparison (string vs number)
@@ -271,6 +302,7 @@
 
     async function saveSettings() {
         const csLots = parseInt(document.getElementById('cfg-cs-lots').value) || 5;
+        const cs7Lots = parseInt(document.getElementById('cfg-cs7-lots').value) || 5;
         const wheelLots = parseInt(document.getElementById('cfg-wheel-lots').value) || 1;
 
         try {
@@ -279,6 +311,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     max_credit_spreads_per_symbol: csLots,
+                    max_credit_spreads_7_per_symbol: cs7Lots,
                     max_wheel_contracts_per_symbol: wheelLots
                 })
             });
@@ -428,6 +461,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     credit_spreads_watchlist: currentWatchlists.credit_spreads,
+                    credit_spreads_7_watchlist: currentWatchlists.credit_spreads_7,
                     wheel_watchlist: currentWatchlists.wheel
                 })
             });
