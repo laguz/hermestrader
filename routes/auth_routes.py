@@ -143,5 +143,3 @@ def register_nostr():
 def logout():
     logout_user()
     return redirect(url_for('auth.login'))
-
-# SQRL ROUTES DISABLED

@@ -9,7 +9,7 @@ Algorithmic trading platform built with Flask, integrating Tradier brokerage API
 - **SEC EDGAR Integration** — Fundamental analysis via Rule #1 "Sticker Price" calculator with CAGR, ROIC, and financial data parsing
 - **Technical Analysis** — RSI, MACD, Bollinger Bands, ATR, ADX, OBV, VWAP, and more
 - **Backtesting** — Full backtesting engine with mock services to simulate strategy performance
-- **Authentication** — Password-based, Nostr, and SQRL (Secure QR Login) with encrypted vault storage
+- **Authentication** — Password-based and Nostr (NIP-07/NIP-46) with encrypted vault storage
 - **Position Tracking** — Real-time P&L monitoring, position sync, and trade history
 
 ## Requirements
@@ -51,7 +51,7 @@ The app will be available at `http://localhost:8080`.
 | `TRADIER_ACCOUNT_ID` | Tradier account ID | Yes |
 | `TRADIER_ENDPOINT` | API endpoint (defaults to sandbox) | No |
 | `SEC_USER_AGENT` | User-Agent for SEC EDGAR requests | No |
-| `SECRET_KEY` | SQRL authentication key | No |
+| `SECRET_KEY` | Flask session and encrypted cookie key | Yes |
 
 ## Project Structure
 

@@ -1,6 +1,6 @@
 /**
  * auth.js
- * Handles Client-Side Authentication Logic for Nostr (NIP-07) and SQRL.
+ * Handles Client-Side Authentication Logic for Nostr (NIP-07 and NIP-46).
  */
 
 async function loginWithNostr() {
@@ -81,64 +81,7 @@ async function loginWithNostr() {
     }
 }
 
-async function loginWithSQRL() {
-    const container = document.getElementById('sqrl-qr-container');
-    const qrDiv = document.getElementById('sqrl-qr-code');
-    const link = document.getElementById('sqrl-link');
 
-    container.classList.remove('hidden');
-    qrDiv.innerHTML = ''; // Clear previous
-    // Show loading?
-
-    try {
-        // 1. Get Nut and URL
-        const response = await fetch('/login/sqrl/nut');
-        const data = await response.json();
-
-        if (!data.nut || !data.url) {
-            alert('Failed to initialize SQRL.');
-            return;
-        }
-
-        // 2. Render QR
-        new QRCode(qrDiv, {
-            text: data.url,
-            width: 200,
-            height: 200
-        });
-
-        // 3. Set formatted link (optional, for mobile same-device login)
-        // Render as sqrl://...
-        link.href = data.url;
-        link.innerText = "Tap here to open SQRL App";
-
-        // 4. Start Polling
-        const pollInterval = setInterval(async () => {
-            try {
-                const pollRes = await fetch('/login/sqrl/poll', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ nut: data.nut })
-                });
-                const pollData = await pollRes.json();
-
-                if (pollData.success) {
-                    clearInterval(pollInterval);
-                    window.location.href = '/';
-                }
-            } catch (e) {
-                // Ignore poll errors (e.g. network blip)
-            }
-        }, 2000); // Poll every 2s
-
-        // Stop polling after 5 minutes?
-        setTimeout(() => clearInterval(pollInterval), 300000);
-
-    } catch (error) {
-        console.error("SQRL Error:", error);
-        container.innerHTML = '<p class="text-error">Error initiating SQRL.</p>';
-    }
-}
 
 async function registerWithNostr() {
     if (!window.nostr) {

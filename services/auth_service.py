@@ -21,7 +21,6 @@ class User(UserMixin):
         self.password_hash = user_doc.get('password_hash', '')
         self.vault = user_doc.get('vault', {})
         self.nostr_pubkey = user_doc.get('nostr_pubkey', '')
-        self.sqrl_idk = user_doc.get('sqrl_idk', '')
 
     def get_id(self):
         return self.id

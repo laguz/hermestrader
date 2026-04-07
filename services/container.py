@@ -11,7 +11,6 @@ class Container:
     _mongo_client = None
     _db = None
     _auth_service = None
-    _sqrl_service = None
     _ml_service = None
     _analysis_service = None
     _bot_service = None
@@ -53,13 +52,6 @@ class Container:
             from services.auth_service import AuthService
             cls._auth_service = AuthService()
         return cls._auth_service
-
-    @classmethod
-    def get_sqrl_service(cls):
-        if not cls._sqrl_service:
-            from services.sqrl_service import SQRLService
-            cls._sqrl_service = SQRLService()
-        return cls._sqrl_service
 
     @classmethod
     def get_ml_service(cls):
