@@ -1,0 +1,358 @@
+import re
+import math
+import traceback
+import pytz
+from datetime import datetime, timedelta, date
+from bot.strategies.base_strategy import AbstractStrategy
+from bot.utils import Colors, get_expiry_str, get_underlying
+
+class CreditSpreads75Strategy(AbstractStrategy):
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
+        super().__init__(tradier_service, db, dry_run, analysis_service)
+
+    def _log(self, message):
+        super()._log(message, strategy_name="CREDIT_SPREADS_75")
+
+    def execute(self, watchlist, config=None):
+        for symbol in watchlist:
+            try:
+                if self.dry_run:
+                    print(f"\n{Colors.HEADER}📦 Analyzing {symbol}...{Colors.ENDC}")
+                else:
+                    self._log(f"Analyzing {symbol}...")
+                
+                # 1. Analyze 6m data
+                analysis = self.analysis_service.analyze_symbol(symbol, period='6m')
+                if not analysis or 'error' in analysis:
+                    self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
+                    continue
+                
+                current_price = analysis.get('current_price')
+                if not current_price:
+                    self._log(f"⚠️  Missing current price for {symbol}")
+                    continue
+
+                # 2. Get exact 45DTE expiry
+                expiry = self._find_exact_dte_expiry(symbol, target_dte=45)
+                if not expiry:
+                    continue
+                
+                # Process Put Spreads and Call Spreads Independently
+                self._process_side(symbol, current_price, analysis, expiry, is_put=True, config=config)
+                self._process_side(symbol, current_price, analysis, expiry, is_put=False, config=config)
+                
+            except Exception as e:
+                self._log(f"❌ Error processing {symbol}: {e}")
+                traceback.print_exc()
+        
+        return self.execution_logs
+
+    def _find_exact_dte_expiry(self, symbol, target_dte):
+        expirations = self.tradier.get_option_expirations(symbol)
+        if not expirations:
+            self._log(f"No expirations found for {symbol}.")
+            return None
+        
+        today = self._get_current_date()
+        target_date = today + timedelta(days=target_dte)
+        
+        for e in expirations:
+            if isinstance(e, str):
+                try:
+                    d = datetime.strptime(e, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+            else:
+                d = e.date() if hasattr(e, 'date') else e
+            
+            if d == target_date:
+                return target_date.strftime("%Y-%m-%d")
+                
+        self._log(f"Skipping {symbol}: Exact {target_dte}DTE ({target_date}) not available.")
+        return None
+
+    def _process_side(self, symbol, current_price, analysis, expiry, is_put, config=None):
+        side_name = "Put" if is_put else "Call"
+        entry_key = 'put_entry_points' if is_put else 'call_entry_points'
+        entry_points = analysis.get(entry_key, [])
+        
+        # Strict > 75% POP filter
+        valid_points = []
+        for ep in entry_points:
+            pop = ep.get('pop', 0)
+            price = ep.get('price')
+            
+            if pop > 75:
+                # Ensure the entry point is OTM conceptually
+                if is_put and price < current_price:
+                    valid_points.append(ep)
+                elif not is_put and price > current_price:
+                    valid_points.append(ep)
+                    
+        if not valid_points:
+            self._log(f"Skipping {symbol} {side_name}: No support/resistance levels with strict POP > 75%.")
+            return
+            
+        # Find closest to 75%
+        target_ep = min(valid_points, key=lambda x: abs(x['pop'] - 75))
+        short_strike = target_ep['price']
+        pop = target_ep['pop']
+        
+        self._log(f"Targeting {symbol} {side_name} | Strike: {short_strike} | POP: {pop:.2f}% | Nearest to 75% limit.")
+
+        chain = self.tradier.get_option_chains(symbol, expiry)
+        if not chain:
+            self._log(f"Skipping {symbol}: Failed to fetch option chain for {expiry}.")
+            return
+            
+        opt_type = 'put' if is_put else 'call'
+        options = [o for o in chain if o['option_type'] == opt_type]
+        if not options:
+            self._log(f"Skipping {symbol}: No {opt_type}s available in chain for {expiry}.")
+            return
+
+        # Short strike check
+        short_leg = next((o for o in options if abs(o['strike'] - short_strike) < 0.01), None)
+        if not short_leg:
+            self._log(f"Skipping {symbol} {side_name}: Target short strike {short_strike} is not available in the chain.")
+            return
+
+        # 3. Fixed Width 5.0 and Long Leg Check
+        target_width = 5.00
+        current_width = target_width
+        long_leg = None
+        
+        strikes = sorted(set([o['strike'] for o in options]))
+        
+        while True:
+            expected_long_strike = short_strike - current_width if is_put else short_strike + current_width
+            expected_long_strike = round(expected_long_strike, 2)
+            
+            long_leg = next((o for o in options if abs(o['strike'] - expected_long_strike) < 0.01), None)
+            
+            if not long_leg:
+                # Expand up to next strike if mathematically missing in chain (safety net)
+                if strikes:
+                    try:
+                        if is_put:
+                            candidates = [s for s in strikes if s < expected_long_strike]
+                            if not candidates: raise ValueError()
+                            next_strike = max(candidates)
+                            current_width = round(short_strike - next_strike, 2)
+                        else:
+                            candidates = [s for s in strikes if s > expected_long_strike]
+                            if not candidates: raise ValueError()
+                            next_strike = min(candidates)
+                            current_width = round(next_strike - short_strike, 2)
+                    except ValueError:
+                        self._log(f"Skipping {symbol} {side_name}: Chain exhausted looking for long strike.")
+                        return
+                    
+                if current_width >= target_width * 3:
+                     self._log(f"Skipping {symbol} {side_name}: Failed to resolve a reasonable spread width.")
+                     return
+                continue
+                
+            short_price = round((short_leg['bid'] + short_leg['ask']) / 2, 2)
+            long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
+            
+            if short_leg['bid'] == 0 and short_leg['ask'] == 0:
+                self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
+                return
+                
+            net_credit = round(short_price - long_price, 2)
+            
+            # The 25% Rule: Min Credit = Width * 0.25 (which is 1.25 for 5 wide)
+            min_required_credit = round(current_width * 0.25, 2)
+            
+            if net_credit < min_required_credit:
+                self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 25% limit ({min_required_credit}) for width {current_width}.")
+                return
+            else:
+                break
+                
+        # 4. BP and Allocation Check
+        requirement_per_lot = current_width * 100
+        available_bp = self._get_available_bp(config)
+        max_lots_config = config.get('max_credit_spreads_75_per_symbol', config.get('max_credit_spreads_per_symbol', 5))
+        
+        dynamic_lots = int(available_bp // requirement_per_lot)
+        if dynamic_lots < 1:
+            self._log(f"Skipping {symbol}: Spread req (${requirement_per_lot:,.2f}) > BP (${available_bp:,.2f}).")
+            return
+            
+        dynamic_lots = min(dynamic_lots, max_lots_config)
+        total_requirement = requirement_per_lot * dynamic_lots
+        if not self._is_bp_sufficient(total_requirement, config):
+            self._log(f"Skipping {symbol}: BP insufficient for {dynamic_lots} lots.")
+            return
+            
+        self._log(f"✅ Placing {symbol} {side_name} Spread | Short: {short_strike} | Long: {long_leg['strike']} | Lots: {dynamic_lots} | Credit: {net_credit} (Req: {min_required_credit})")
+        
+        legs = [
+            {'option_symbol': short_leg['symbol'], 'side': 'sell_to_open', 'quantity': dynamic_lots},
+            {'option_symbol': long_leg['symbol'], 'side': 'buy_to_open', 'quantity': dynamic_lots}
+        ]
+        
+        if self.dry_run:
+            self._log(f"[DRY RUN] Simulating {side_name} Spread Order for {symbol}")
+            response = {'id': 'mock_order_id', 'status': 'ok'}
+        else:
+            response = self.tradier.place_order(
+                account_id=self.tradier.account_id,
+                symbol=symbol,
+                side='sell',
+                quantity=1,
+                order_type='credit',
+                duration='day',
+                price=net_credit,
+                order_class='multileg',
+                legs=legs,
+                tag="CREDSPRD_75"
+            )
+            
+        if 'error' in response:
+             self._log(f"Order failed: {response['error']}")
+        else:
+             self._log(f"Order placed: {response}")
+             legs_info = {
+                 'short_leg': short_leg['symbol'],
+                 'long_leg': long_leg['symbol']
+             }
+             self._record_trade(symbol, f"Credit Spreads 75 {side_name}", net_credit, response, legs_info)
+
+    def manage_positions(self, simulation_mode=False):
+        """
+        Check open positions for exit conditions.
+        """
+        if simulation_mode:
+            self.execution_logs = []
+
+        if self.db is None: return
+
+        # 1. Fetch OPEN trades specific to this strategy
+        open_trades = list(self.db['auto_trades'].find({
+            "status": "OPEN",
+            "strategy": {"$regex": "Credit Spreads 75", "$options": "i"}
+        }))
+
+        if not open_trades:
+            return self.execution_logs if simulation_mode else None
+
+        active_option_symbols = {}
+        if not simulation_mode:
+            try:
+                positions = self.tradier.get_positions()
+                active_option_symbols = {p['symbol']: p for p in positions}
+            except Exception as e:
+                self._log(f"Error fetching positions for management: {e}")
+                return self.execution_logs if simulation_mode else None
+
+        for trade in open_trades:
+            symbol = trade['symbol']
+            short_leg = trade.get('short_leg')
+            long_leg = trade.get('long_leg')
+            entry_credit = float(trade.get('price', 0))
+
+            if not simulation_mode and (not short_leg or short_leg not in active_option_symbols):
+                 self._log(f"⚠️ Trade {symbol} ({short_leg}) not found in active positions. Ignoring.")
+                 continue
+
+            # Parse expiration
+            match = re.search(r'[A-Z]+(\d{6})[PC]', short_leg)
+            if not match:
+                 continue
+                 
+            try:
+                expiry_date = datetime.strptime(match.group(1), '%y%m%d').date()
+                dte = (expiry_date - self._get_current_date()).days
+            except ValueError:
+                continue
+
+            # Get natural debit
+            should_close = False
+            close_reason = ""
+            current_debit = 0.0
+
+            try:
+                if long_leg:
+                    legs_str = f"{short_leg},{long_leg}"
+                    q_data = self.tradier.get_quote(legs_str)
+                    if isinstance(q_data, dict): legs_quotes = [q_data]
+                    elif isinstance(q_data, list): legs_quotes = q_data
+                    else: legs_quotes = []
+
+                    sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
+                    lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
+
+                    if sq and lq:
+                        sq_ask = float(sq.get('ask', 0))
+                        lq_bid = float(lq.get('bid', 0))
+                        
+                        current_debit = round(sq_ask - lq_bid, 2)
+                        
+                        # Take Profit (<= 25% of entry credit = 75% profit)
+                        if current_debit <= (entry_credit * 0.25):
+                            should_close = True
+                            close_reason = f"Take Profit (Debit ${current_debit:.2f} <= 25% of entry ${entry_credit:.2f})"
+                            
+                        # Stop Loss (>= 2.5x entry credit)
+                        elif current_debit >= (entry_credit * 2.5):
+                            should_close = True
+                            close_reason = f"Stop Loss (Debit ${current_debit:.2f} >= 2.5x of entry ${entry_credit:.2f})"
+            except Exception as e:
+                self._log(f"Error quoting {short_leg}: {e}")
+
+            # Time Exit check overrides 
+            if not should_close and dte <= 8:
+                should_close = True
+                close_reason = f"Time Exit (DTE {dte} <= 8)"
+
+            if should_close:
+                self._log(f"🚨 Closing {symbol} Spread ({short_leg}) — Reason: {close_reason}")
+                limit_price = round(current_debit * 1.05, 2) if current_debit > 0 else 0.05
+                self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
+
+        return self.execution_logs if simulation_mode else None
+
+    def _execute_close(self, trade, limit_price=None, simulation_mode=False):
+        short_leg = trade['short_leg']
+        long_leg = trade['long_leg']
+        legs = [
+            {'option_symbol': short_leg, 'side': 'buy_to_close', 'quantity': 1},
+            {'option_symbol': long_leg, 'side': 'sell_to_close', 'quantity': 1}
+        ]
+
+        if self.dry_run or simulation_mode:
+            self._log(f"[DRY RUN/SIM] Closing {trade['symbol']} spread. Limit: {limit_price}")
+            if not simulation_mode:
+                self.db['auto_trades'].update_one(
+                    {"_id": trade['_id']},
+                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
+                )
+        else:
+            response = self.tradier.place_order(
+                account_id=self.tradier.account_id,
+                symbol=trade['symbol'],
+                side='buy',
+                quantity=1,
+                order_type='debit',
+                duration='day',
+                price=limit_price,
+                order_class='multileg',
+                legs=legs,
+                tag="CREDSPRD_75_CLOSE"
+            )
+            if 'error' in response:
+                self._log(f"Close Output Failed: {response['error']}")
+            else:
+                self._log(f"Close Ordered: {response.get('id')}")
+                self.db['auto_trades'].update_one(
+                    {"_id": trade['_id']},
+                    {"$set": {
+                        "status": "CLOSED", 
+                        "close_date": datetime.now(), 
+                        "close_order_id": response.get('id'),
+                        "exit_price": limit_price
+                    }}
+                )

@@ -9,6 +9,7 @@ from services.container import Container
 # Strategy imports needed for type hinting / proper resolving
 from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.credit_spreads_7 import CreditSpreads7Strategy
+from bot.strategies.credit_spreads_75 import CreditSpreads75Strategy
 from bot.strategies.wheel import WheelStrategy
 from bot.portfolio_manager import PortfolioManager
 
@@ -36,6 +37,7 @@ class BotService:
         # Initialize Strategies
         self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
         self.credit_spread_7_strategy = CreditSpreads7Strategy(self.tradier, self.db)
+        self.credit_spread_75_strategy = CreditSpreads75Strategy(self.tradier, self.db)
         self.wheel_strategy = WheelStrategy(self.tradier, self.db)
         self.portfolio_manager = PortfolioManager(self.tradier, self.db)
         
@@ -70,11 +72,13 @@ class BotService:
                  "settings": {
                      "watchlist_credit_spreads": [], # Start empty, user adds via UI
                      "watchlist_credit_spreads_7": [],
+                     "watchlist_credit_spreads_75": [],
                      "watchlist_wheel": [],         # Start empty, user adds via UI
                      "max_drawdown": 500,
                      "max_position_size": 1000,
                      "max_credit_spreads_per_symbol": 5,
                      "max_credit_spreads_7_per_symbol": 5,
+                     "max_credit_spreads_75_per_symbol": 5,
                      "max_total_credit_spreads": 10,
                      "max_wheel_contracts_per_symbol": 1
                  }
@@ -90,12 +94,16 @@ class BotService:
                      updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_credit_spreads_7' not in settings:
                      updates['settings.watchlist_credit_spreads_7'] = []
+                 if 'watchlist_credit_spreads_75' not in settings:
+                     updates['settings.watchlist_credit_spreads_75'] = []
                  if 'watchlist_wheel' not in settings:
                     updates['settings.watchlist_wheel'] = []
                  if 'max_wheel_contracts_per_symbol' not in settings:
                      updates['settings.max_wheel_contracts_per_symbol'] = 1
                  if 'max_credit_spreads_7_per_symbol' not in settings:
                      updates['settings.max_credit_spreads_7_per_symbol'] = 5
+                 if 'max_credit_spreads_75_per_symbol' not in settings:
+                     updates['settings.max_credit_spreads_75_per_symbol'] = 5
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -157,7 +165,7 @@ class BotService:
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
         # Safety check to only allow specific keys
-        if list_type not in ['credit_spreads', 'wheel', 'credit_spreads_7']:
+        if list_type not in ['credit_spreads', 'wheel', 'credit_spreads_7', 'credit_spreads_75']:
             self._log(f"Error: Invalid watchlist type {list_type}")
             return None
 
@@ -179,6 +187,7 @@ class BotService:
             'max_position_size',
             'max_credit_spreads_per_symbol',
             'max_credit_spreads_7_per_symbol',
+            'max_credit_spreads_75_per_symbol',
             'max_total_credit_spreads',
             'max_wheel_contracts_per_symbol'
         ]
@@ -305,6 +314,7 @@ class BotService:
                 config = self.get_status().get('settings', {})
                 wl_spreads = config.get('watchlist_credit_spreads', [])
                 wl_spreads_7 = config.get('watchlist_credit_spreads_7', [])
+                wl_spreads_75 = config.get('watchlist_credit_spreads_75', [])
                 wl_wheel = config.get('watchlist_wheel', [])
                 
                 # 3. Global Circuit Breaker Check and Strategy Execution
@@ -343,6 +353,7 @@ class BotService:
                 # Management ONLY logic
                 self._log(f"Running Credit Spread MANAGEMENT (Exits) ONLY...")
                 self.credit_spread_strategy.manage_positions()
+                self.credit_spread_75_strategy.manage_positions()
                 
                 return False
             return True
@@ -383,6 +394,16 @@ class BotService:
             cs7_config['min_obp_reserve'] = 0
             cs7_config['max_credit_spreads_per_symbol'] = config.get('max_credit_spreads_7_per_symbol', 5)
             self.credit_spread_7_strategy.execute(wl_spreads_7, cs7_config)
+
+        # Priority 4: 45DTE Credit Spreads Strategy (75 POP)
+        wl_spreads_75 = config.get('watchlist_credit_spreads_75', [])
+        if wl_spreads_75:
+            self._log(f"Managing & Running 45DTE/75POP Credit Spread Strategy on {len(wl_spreads_75)} symbols...")
+            self.credit_spread_75_strategy.manage_positions()
+            cs75_config = config.copy()
+            cs75_config['min_obp_reserve'] = 0
+            cs75_config['max_credit_spreads_per_symbol'] = config.get('max_credit_spreads_75_per_symbol', 5)
+            self.credit_spread_75_strategy.execute(wl_spreads_75, cs75_config)
     def _run_ml_scheduler(self, config):
         """
         Run daily predictions and biweekly training for all watchlist symbols.
@@ -395,6 +416,7 @@ class BotService:
         all_symbols.update(config.get('watchlist_credit_spreads', []))
         all_symbols.update(config.get('watchlist_wheel', []))
         all_symbols.update(config.get('watchlist_credit_spreads_7', []))
+        all_symbols.update(config.get('watchlist_credit_spreads_75', []))
         all_symbols = sorted(all_symbols)
 
         if not all_symbols:
@@ -507,6 +529,10 @@ class BotService:
             'credit_spreads_7_watchlist', 'watchlist_credit_spreads_7',
             ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
         )
+        cs75_watchlist = _resolve_watchlist(
+            'credit_spreads_75_watchlist', 'watchlist_credit_spreads_75',
+            ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
+        )
         wheel_watchlist = _resolve_watchlist(
             'wheel_watchlist', 'watchlist_wheel',
             ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
@@ -531,6 +557,15 @@ class BotService:
             bot_config_cs7['max_credit_spreads_per_symbol'] = bot_config.get('max_credit_spreads_7_per_symbol', 5)
             cs7_logs = strategy_cs7.execute(cs7_watchlist, bot_config_cs7)
             all_logs.extend(cs7_logs)
+
+            all_logs.append(f"--- 45DTE/75POP Credit Spread Strategy ---")
+            strategy_cs75 = CreditSpreads75Strategy(tradier_service, db, dry_run=True)
+            bot_config_cs75 = bot_config.copy()
+            bot_config_cs75['max_credit_spreads_per_symbol'] = bot_config.get('max_credit_spreads_75_per_symbol', 5)
+            cs75_logs_management = strategy_cs75.manage_positions(simulation_mode=True)
+            if cs75_logs_management: all_logs.extend(cs75_logs_management)
+            cs75_logs = strategy_cs75.execute(cs75_watchlist, bot_config_cs75)
+            all_logs.extend(cs75_logs)
 
         except Exception as e:
             logger.error(f"Credit Spread dry-run failed: {e}", exc_info=True)
