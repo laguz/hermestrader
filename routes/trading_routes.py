@@ -164,7 +164,7 @@ def update_watchlist():
     try:
         data = request.json
         watchlist = data.get('watchlist')
-        list_type = data.get('type', 'credit_spreads')
+        list_type = data.get('type', 'credit_spreads_7')
         
         if watchlist is None:
              return jsonify({'error': 'watchlist is required'}), 400

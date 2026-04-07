@@ -9,7 +9,6 @@ import traceback
 
 from datetime import datetime, timedelta
 
-from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.wheel import WheelStrategy
 from utils.indicators import (
     calculate_rsi, 
@@ -152,11 +151,9 @@ class BacktestService:
         # 3. Setup Strategy (Dynamic Injection)
         strategy = None
         # Use lazy instantiation mapping instead of hardcoded if/elif block
-        from bot.strategies.credit_spreads import CreditSpreadStrategy
         from bot.strategies.wheel import WheelStrategy
 
         strategy_registry = {
-            "credit_spread": CreditSpreadStrategy,
             "wheel": WheelStrategy,
         }
         
@@ -239,9 +236,7 @@ class BacktestService:
                 )
 
             # 3. Run Strategy: Manage Positions (Exits/Rolls)
-            if strategy_type == "credit_spread":
-                strategy.manage_positions()
-            elif strategy_type == "wheel":
+            if strategy_type == "wheel":
                 # Wheel handles management inside execute(), but we also
                 # need to process any management-only orders separately
                 strategy.execute([symbol])
@@ -325,8 +320,6 @@ class BacktestService:
                                 break
             
             # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
-            if strategy_type == "credit_spread":
-                strategy.execute([symbol], config={'max_credit_spreads_per_symbol': 5})
             # Wheel entries already captured in wheel_entry_orders from step 3
             
             # 5. Process New Orders (Assume filled at current mid-prices with slippage)

@@ -7,7 +7,6 @@ from exceptions import AppError
 from services.container import Container
 
 # Strategy imports needed for type hinting / proper resolving
-from bot.strategies.credit_spreads import CreditSpreadStrategy
 from bot.strategies.credit_spreads_7 import CreditSpreads7Strategy
 from bot.strategies.credit_spreads_75 import CreditSpreads75Strategy
 from bot.strategies.tastytrade45 import TastyTrade45Strategy
@@ -38,7 +37,6 @@ class BotService:
         self.trade_manager = TradeManager(self.tradier, self.db)
         
         # Initialize Strategies
-        self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db, trade_manager=self.trade_manager)
         self.credit_spread_7_strategy = CreditSpreads7Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
         self.credit_spread_75_strategy = CreditSpreads75Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
         self.tastytrade45_strategy = TastyTrade45Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
@@ -74,18 +72,15 @@ class BotService:
                  "last_heartbeat": None,
                  "logs": [],
                  "settings": {
-                     "watchlist_credit_spreads": [], # Start empty, user adds via UI
                      "watchlist_credit_spreads_7": [],
                      "watchlist_credit_spreads_75": [],
                      "watchlist_tastytrade45": [],
                      "watchlist_wheel": [],         # Start empty, user adds via UI
                      "max_drawdown": 500,
                      "max_position_size": 1000,
-                     "max_credit_spreads_per_symbol": 5,
                      "max_credit_spreads_7_per_symbol": 5,
                      "max_credit_spreads_75_per_symbol": 5,
                      "max_tastytrade45_per_symbol": 5,
-                     "max_total_credit_spreads": 10,
                      "max_wheel_contracts_per_symbol": 1
                  }
              }
@@ -96,8 +91,6 @@ class BotService:
                  # Migration: Ensure new fields exist if old doc exists
                  settings = status.get('settings', {})
                  updates = {}
-                 if 'watchlist_credit_spreads' not in settings:
-                     updates['settings.watchlist_credit_spreads'] = []
                  if 'watchlist_credit_spreads_7' not in settings:
                      updates['settings.watchlist_credit_spreads_7'] = []
                  if 'watchlist_credit_spreads_75' not in settings:
@@ -157,7 +150,7 @@ class BotService:
         )
 
     def update_watchlist(self, watchlist, list_type="credit_spreads"):
-        """Update the watchlist in settings. list_type: 'credit_spreads' or 'wheel'"""
+        """Update the watchlist in settings. list_type: 'wheel' or 'tastytrade45' or 'credit_spreads_7' etc."""
         if self.db is None: return False
         # Validate input (list of strings)
         if not isinstance(watchlist, list):
@@ -175,7 +168,7 @@ class BotService:
         # Map frontend type to DB key
         db_key = f"settings.watchlist_{list_type}"
         # Safety check to only allow specific keys
-        if list_type not in ['credit_spreads', 'wheel', 'credit_spreads_7', 'credit_spreads_75', 'tastytrade45']:
+        if list_type not in ['wheel', 'credit_spreads_7', 'credit_spreads_75', 'tastytrade45']:
             self._log(f"Error: Invalid watchlist type {list_type}")
             return None
 
@@ -195,11 +188,7 @@ class BotService:
         allowed_keys = [
             'max_drawdown',
             'max_position_size',
-            'max_credit_spreads_per_symbol',
-            'max_credit_spreads_7_per_symbol',
-            'max_credit_spreads_75_per_symbol',
             'max_tastytrade45_per_symbol',
-            'max_total_credit_spreads',
             'max_wheel_contracts_per_symbol'
         ]
         
@@ -428,7 +417,6 @@ class BotService:
                 
                 # Management ONLY logic
                 self._log(f"Running Credit Spread MANAGEMENT (Exits) ONLY...")
-                self.credit_spread_strategy.manage_positions()
                 self.credit_spread_75_strategy.manage_positions()
                 self.tastytrade45_strategy.manage_positions()
                 
@@ -445,23 +433,13 @@ class BotService:
             
     def _execute_strategies(self, config):
         """Executes all active trading strategies."""
-        wl_spreads = config.get('watchlist_credit_spreads', [])
-        wl_wheel = config.get('watchlist_wheel', [])
-
         # Priority 1: Wheel Strategy
+        wl_wheel = config.get('watchlist_wheel', [])
         if wl_wheel:
             self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
             wheel_config = config.copy()
             wheel_config['min_obp_reserve'] = 26000
             self.wheel_strategy.execute(wl_wheel, wheel_config)
-
-        # Priority 2: Credit Spread Strategy
-        if wl_spreads:
-            self._log(f"Running Credit Spread Strategy on {len(wl_spreads)} symbols...")
-            self.credit_spread_strategy.manage_positions()
-            cs_config = config.copy()
-            cs_config['min_obp_reserve'] = 0
-            self.credit_spread_strategy.execute(wl_spreads, cs_config)
 
         # Priority 3: 7DTE Credit Spread Strategy
         wl_spreads_7 = config.get('watchlist_credit_spreads_7', [])
@@ -500,7 +478,6 @@ class BotService:
 
         # Collect unique symbols from ALL watchlists
         all_symbols = set()
-        all_symbols.update(config.get('watchlist_credit_spreads', []))
         all_symbols.update(config.get('watchlist_wheel', []))
         all_symbols.update(config.get('watchlist_credit_spreads_7', []))
         all_symbols.update(config.get('watchlist_credit_spreads_75', []))
@@ -602,17 +579,10 @@ class BotService:
         # --- Resolve watchlists from request data, DB config, or defaults ---
         def _resolve_watchlist(request_key: str, db_key: str, defaults: list) -> list:
             wl = data.get(request_key)
-            if not wl and request_key == 'credit_spreads_watchlist':
-                wl = data.get('watchlist')  # backward compat
             if not wl:
                 bot_cfg = db.bot_config.find_one({"_id": "main_bot"}) or {}
                 wl = bot_cfg.get('settings', {}).get(db_key, [])
             return wl or defaults
-
-        cs_watchlist = _resolve_watchlist(
-            'credit_spreads_watchlist', 'watchlist_credit_spreads',
-            ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
-        )
         cs7_watchlist = _resolve_watchlist(
             'credit_spreads_7_watchlist', 'watchlist_credit_spreads_7',
             ['SPY', 'QQQ', 'IWM', 'TSLA', 'AAPL', 'NVDA', 'AMZN', 'GOOGL', 'MSFT', 'DIA']
@@ -630,18 +600,14 @@ class BotService:
             ['SPY', 'IWM', 'QQQ', 'DIA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA']
         )
 
-        logger.debug(f"Dry-run watchlists — CS: {cs_watchlist}, Wheel: {wheel_watchlist}")
+        logger.debug(f"Dry-run watchlists — CS7: {cs7_watchlist}, Wheel: {wheel_watchlist}")
 
         # Fetch config
         bot_config = (db.bot_config.find_one({"_id": "main_bot"}) or {}).get('settings', {})
         all_logs: list[str] = []
 
         # --- Credit Spreads ---
-        all_logs.append(f"--- Credit Spread Strategy (Limit: {bot_config.get('max_credit_spreads_per_symbol', 5)}) ---")
         try:
-            strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
-            cs_logs = strategy_cs.execute(cs_watchlist, bot_config)
-            all_logs.extend(cs_logs)
 
             all_logs.append(f"--- 7DTE Credit Spread Strategy ---")
             strategy_cs7 = CreditSpreads7Strategy(tradier_service, db, dry_run=True)
@@ -672,17 +638,7 @@ class BotService:
             logger.error(f"Credit Spread dry-run failed: {e}", exc_info=True)
             all_logs.append(f"❌ Credit Spread Strategy Failed: {e}")
 
-        # --- Credit Spread management ---
-        all_logs.append("\n--- Checking Open Credit Spreads (Closing Logic) ---")
-        try:
-            closing_logs = strategy_cs.manage_positions(simulation_mode=True)
-            if closing_logs:
-                all_logs.extend(closing_logs)
-            else:
-                all_logs.append("No open positions to manage or no actions needed.")
-        except Exception as e:
-            logger.error(f"Credit Spread closing-logic dry-run failed: {e}", exc_info=True)
-            all_logs.append(f"❌ Closing Logic Check Failed: {e}")
+
 
         # --- Wheel ---
         all_logs.append("\n--- Wheel Strategy ---")
