@@ -5,8 +5,8 @@ from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors
 
 class CreditSpreads7Strategy(AbstractStrategy):
-    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
-        super().__init__(tradier_service, db, dry_run, analysis_service)
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):
+        super().__init__(tradier_service, db, dry_run, analysis_service, trade_manager=trade_manager)
 
     def _log(self, message):
         super()._log(message, strategy_name="CREDIT_SPREADS_7")

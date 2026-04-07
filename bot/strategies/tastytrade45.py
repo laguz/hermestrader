@@ -7,8 +7,8 @@ from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors, get_expiry_str, get_underlying
 
 class TastyTrade45Strategy(AbstractStrategy):
-    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
-        super().__init__(tradier_service, db, dry_run, analysis_service)
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):
+        super().__init__(tradier_service, db, dry_run, analysis_service, trade_manager=trade_manager)
         self.hv_cache = {}
 
     def _log(self, message):

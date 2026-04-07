@@ -104,35 +104,8 @@
 
     </div>
 
-    <!-- LEFT COLUMN: Status & Config & Orphans -->
+    <!-- RIGHT COLUMN: Watchlists -->
     <div class="space-y-6">
-
-        <!-- Unmanaged Positions Card -->
-        <div class="p-6 bg-white rounded-lg border border-red-200 shadow-sm dark:bg-gray-800 dark:border-red-900 mt-6 mb-6">
-            <h3 class="text-lg font-bold text-red-600 dark:text-red-400 mb-4 flex items-center">
-                <span class="material-symbols-outlined mr-2">warning</span> 
-                Unmanaged Positions (Orphans)
-            </h3>
-            <p class="text-sm text-gray-500 mb-4">Trades isolated from bot logic. Close them manually if needed.</p>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
-                    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
-                        <tr>
-                            <th scope="col" class="px-3 py-2">Symbol</th>
-                            <th scope="col" class="px-3 py-2">Quantity</th>
-                            <th scope="col" class="px-3 py-2 text-right">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody id="orphans-container">
-                        <tr>
-                            <td colspan="3" class="px-3 py-4 text-center">Loading...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-    </div>
 
         <!-- Credit Spreads Watchlist -->
         <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
@@ -230,6 +203,31 @@
         </div>
 
 
+    </div>
+</div>
+
+<!-- Unmanaged Positions Card (Full Width Bottom) -->
+<div class="mt-6 p-6 bg-white rounded-lg border border-red-200 shadow-sm dark:bg-gray-800 dark:border-red-900">
+    <h3 class="text-lg font-bold text-red-600 dark:text-red-400 mb-4 flex items-center">
+        <span class="material-symbols-outlined mr-2">warning</span> 
+        Unmanaged Positions (Orphans)
+    </h3>
+    <p class="text-sm text-gray-500 mb-4">Trades isolated from bot logic. Close them manually if needed.</p>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+            <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                <tr>
+                    <th scope="col" class="px-3 py-2">Symbol</th>
+                    <th scope="col" class="px-3 py-2">Quantity</th>
+                    <th scope="col" class="px-3 py-2 text-right">Action</th>
+                </tr>
+            </thead>
+            <tbody id="orphans-container">
+                <tr>
+                    <td colspan="3" class="px-3 py-4 text-center">Loading...</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </div>
 
