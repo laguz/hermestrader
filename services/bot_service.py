@@ -8,6 +8,7 @@ from services.container import Container
 
 # Strategy imports needed for type hinting / proper resolving
 from bot.strategies.credit_spreads import CreditSpreadStrategy
+from bot.strategies.credit_spreads_7 import CreditSpreads7Strategy
 from bot.strategies.wheel import WheelStrategy
 from bot.portfolio_manager import PortfolioManager
 
@@ -34,6 +35,7 @@ class BotService:
         
         # Initialize Strategies
         self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
+        self.credit_spread_7_strategy = CreditSpreads7Strategy(self.tradier, self.db)
         self.wheel_strategy = WheelStrategy(self.tradier, self.db)
         self.portfolio_manager = PortfolioManager(self.tradier, self.db)
         
@@ -364,6 +366,9 @@ class BotService:
             cs_config = config.copy()
             cs_config['min_obp_reserve'] = 0
             self.credit_spread_strategy.execute(wl_spreads, cs_config)
+
+            self._log(f"Running 7DTE Credit Spread Strategy on {len(wl_spreads)} symbols...")
+            self.credit_spread_7_strategy.execute(wl_spreads, cs_config)
     def _run_ml_scheduler(self, config):
         """
         Run daily predictions and biweekly training for all watchlist symbols.
@@ -500,6 +505,12 @@ class BotService:
             strategy_cs = CreditSpreadStrategy(tradier_service, db, dry_run=True)
             cs_logs = strategy_cs.execute(cs_watchlist, bot_config)
             all_logs.extend(cs_logs)
+
+            all_logs.append(f"--- 7DTE Credit Spread Strategy ---")
+            strategy_cs7 = CreditSpreads7Strategy(tradier_service, db, dry_run=True)
+            cs7_logs = strategy_cs7.execute(cs_watchlist, bot_config)
+            all_logs.extend(cs7_logs)
+
         except Exception as e:
             logger.error(f"Credit Spread dry-run failed: {e}", exc_info=True)
             all_logs.append(f"❌ Credit Spread Strategy Failed: {e}")
