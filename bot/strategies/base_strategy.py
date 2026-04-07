@@ -5,11 +5,13 @@ from datetime import datetime, date, timedelta
 from bot.utils import Colors
 
 class AbstractStrategy(ABC):
-    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None):
+    def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, strategy_id=None, trade_manager=None):
         self.tradier = tradier_service
         self.db = db
         self.dry_run = dry_run
         self.execution_logs = []
+        self.strategy_id = strategy_id or self.__class__.__name__
+        self.trade_manager = trade_manager
         
         if analysis_service:
             self.analysis_service = analysis_service
@@ -178,34 +180,34 @@ class AbstractStrategy(ABC):
         if self.db is not None:
             doc = {
                 "symbol": symbol,
-                "strategy": strategy,
+                "strategy": self.strategy_id,
                 "price": price,
-                "entry_date": datetime.now(),
+                "timestamp": datetime.now(),
                 "order_details": response,
                 "status": "DRY_RUN" if self.dry_run else "OPEN",
                 "is_dry_run": self.dry_run
             }
             if extra_fields:
                 doc.update(extra_fields)
-            self.db['auto_trades'].insert_one(doc)
+            self.db['active_trades'].insert_one(doc)
 
     def _close_trade(self, underlying, option_symbol, exit_price, btc_res=None):
         """Find the matching STO trade in the DB and mark it CLOSED with P&L calculated."""
         if self.db is not None:
             # Find the OPEN trade matching underlying
-            query = {"symbol": underlying, "status": "OPEN", "strategy": {"$regex": "sto|sell_to_open", "$options": "i"}}
+            query = {"symbol": underlying, "status": "OPEN", "strategy": self.strategy_id}
             
             # Prioritize exact match if option_symbol was tracked
-            match = self.db['auto_trades'].find_one({**query, "option_symbol": option_symbol})
+            match = self.db['active_trades'].find_one({**query, "option_symbol": option_symbol})
             if not match:
-                match = self.db['auto_trades'].find_one(query, sort=[("entry_date", 1)])
+                match = self.db['active_trades'].find_one(query, sort=[("timestamp", 1)])
                 
             if match:
                 entry_price = match.get('price', 0)
                 qty = match.get('quantity', 1)
                 pnl = (entry_price - exit_price) * 100 * qty
                 
-                self.db['auto_trades'].update_one(
+                self.db['active_trades'].update_one(
                     {"_id": match['_id']},
                     {"$set": {
                         "status": "CLOSED",
@@ -217,6 +219,15 @@ class AbstractStrategy(ABC):
                 )
             else:
                 self._log(f"⚠️ Could not find OPEN auto_trade for {underlying} to mark CLOSED.")
+
+    def get_open_trades(self):
+        """Helper to safely fetch strictly isolated trades bound to this specific script."""
+        if self.trade_manager is not None:
+            return self.trade_manager.get_my_trades(self.strategy_id, status="OPEN")
+        # Fallback if unconfigured
+        if self.db is not None:
+            return list(self.db['active_trades'].find({"strategy": self.strategy_id, "status": "OPEN"}))
+        return []
 
     @abstractmethod
     def execute(self, watchlist, config=None):

@@ -34,13 +34,15 @@ class BotService:
         self.tradier = Container.get_tradier_service()
         self.ml_service = None # Lazy load to avoid circular deps if any
 
+        from bot.trade_manager import TradeManager
+        self.trade_manager = TradeManager(self.tradier, self.db)
         
         # Initialize Strategies
-        self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db)
-        self.credit_spread_7_strategy = CreditSpreads7Strategy(self.tradier, self.db)
-        self.credit_spread_75_strategy = CreditSpreads75Strategy(self.tradier, self.db)
-        self.tastytrade45_strategy = TastyTrade45Strategy(self.tradier, self.db)
-        self.wheel_strategy = WheelStrategy(self.tradier, self.db)
+        self.credit_spread_strategy = CreditSpreadStrategy(self.tradier, self.db, trade_manager=self.trade_manager)
+        self.credit_spread_7_strategy = CreditSpreads7Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
+        self.credit_spread_75_strategy = CreditSpreads75Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
+        self.tastytrade45_strategy = TastyTrade45Strategy(self.tradier, self.db, trade_manager=self.trade_manager)
+        self.wheel_strategy = WheelStrategy(self.tradier, self.db, trade_manager=self.trade_manager)
         self.portfolio_manager = PortfolioManager(self.tradier, self.db)
         
         self._init_db_config()
@@ -312,6 +314,15 @@ class BotService:
     def _run_loop(self):
         """Main execution loop."""
         self._log("Entering main loop.")
+        
+        # TradeManager: Reconcile dynamic orphan tags & register strategy states on boot
+        if hasattr(self, 'trade_manager'):
+            self.trade_manager.reconcile_orphans(self._log)
+            self.trade_manager.register_strategy(self.credit_spread_strategy.strategy_id)
+            self.trade_manager.register_strategy(self.credit_spread_7_strategy.strategy_id)
+            self.trade_manager.register_strategy(self.credit_spread_75_strategy.strategy_id)
+            self.trade_manager.register_strategy(self.tastytrade45_strategy.strategy_id)
+            self.trade_manager.register_strategy(self.wheel_strategy.strategy_id)
         
         while not self._stop_event.is_set():
             try:

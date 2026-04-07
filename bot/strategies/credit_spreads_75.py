@@ -198,28 +198,44 @@ class CreditSpreads75Strategy(AbstractStrategy):
             self._log(f"[DRY RUN] Simulating {side_name} Spread Order for {symbol}")
             response = {'id': 'mock_order_id', 'status': 'ok'}
         else:
-            response = self.tradier.place_order(
-                account_id=self.tradier.account_id,
-                symbol=symbol,
-                side='sell',
-                quantity=1,
-                order_type='credit',
-                duration='day',
-                price=net_credit,
-                order_class='multileg',
-                legs=legs,
-                tag="CREDSPRD_75"
-            )
+            if getattr(self, 'trade_manager', None):
+                response = self.trade_manager.execute_strategy_order(
+                    strategy_id=self.strategy_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag=self.strategy_id,
+                    strategy_params={'short_leg': short_leg['symbol'], 'long_leg': long_leg['symbol']}
+                )
+            else:
+                response = self.tradier.place_order(
+                    account_id=self.tradier.account_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag="CREDSPRD_75"
+                )
             
         if 'error' in response:
              self._log(f"Order failed: {response['error']}")
         else:
              self._log(f"Order placed: {response}")
-             legs_info = {
-                 'short_leg': short_leg['symbol'],
-                 'long_leg': long_leg['symbol']
-             }
-             self._record_trade(symbol, f"Credit Spreads 75 {side_name}", net_credit, response, legs_info)
+             if not getattr(self, 'trade_manager', None):
+                 legs_info = {
+                     'short_leg': short_leg['symbol'],
+                     'long_leg': long_leg['symbol']
+                 }
+                 self._record_trade(symbol, f"Credit Spreads 75 {side_name}", net_credit, response, legs_info)
 
     def manage_positions(self, simulation_mode=False):
         """
@@ -231,10 +247,7 @@ class CreditSpreads75Strategy(AbstractStrategy):
         if self.db is None: return
 
         # 1. Fetch OPEN trades specific to this strategy
-        open_trades = list(self.db['auto_trades'].find({
-            "status": "OPEN",
-            "strategy": {"$regex": "Credit Spreads 75", "$options": "i"}
-        }))
+        open_trades = self.get_open_trades()
 
         if not open_trades:
             return self.execution_logs if simulation_mode else None
@@ -326,10 +339,13 @@ class CreditSpreads75Strategy(AbstractStrategy):
         if self.dry_run or simulation_mode:
             self._log(f"[DRY RUN/SIM] Closing {trade['symbol']} spread. Limit: {limit_price}")
             if not simulation_mode:
-                self.db['auto_trades'].update_one(
-                    {"_id": trade['_id']},
-                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
-                )
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=None)
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
+                    )
         else:
             response = self.tradier.place_order(
                 account_id=self.tradier.account_id,
@@ -347,12 +363,15 @@ class CreditSpreads75Strategy(AbstractStrategy):
                 self._log(f"Close Output Failed: {response['error']}")
             else:
                 self._log(f"Close Ordered: {response.get('id')}")
-                self.db['auto_trades'].update_one(
-                    {"_id": trade['_id']},
-                    {"$set": {
-                        "status": "CLOSED", 
-                        "close_date": datetime.now(), 
-                        "close_order_id": response.get('id'),
-                        "exit_price": limit_price
-                    }}
-                )
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=response.get('id'))
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {
+                            "status": "CLOSED", 
+                            "close_date": datetime.now(), 
+                            "close_order_id": response.get('id'),
+                            "exit_price": limit_price
+                        }}
+                    )

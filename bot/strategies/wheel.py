@@ -273,18 +273,33 @@ class WheelStrategy(AbstractStrategy):
                                 self._log(f"[DRY RUN] Take Profit: BTC {symbol} @ {ask_price:.2f}")
                                 self._close_trade(underlying, symbol, ask_price, {'id': 'dry_run_btc_tp'})
                             else:
-                                btc_res = self.tradier.place_order(
-                                    account_id=self.tradier.account_id,
-                                    symbol=underlying,
-                                    side='buy_to_close',
-                                    quantity=int(qty),
-                                    order_type='limit',
-                                    duration='day',
-                                    price=round(ask_price, 2),
-                                    option_symbol=symbol,
-                                    order_class='option',
-                                    tag="WHEELTP"
-                                )
+                                if getattr(self, 'trade_manager', None):
+                                    btc_res = self.trade_manager.execute_strategy_order(
+                                        strategy_id=self.strategy_id,
+                                        symbol=underlying,
+                                        side='buy_to_close',
+                                        quantity=int(qty),
+                                        order_type='limit',
+                                        duration='day',
+                                        price=round(ask_price, 2),
+                                        order_class='option',
+                                        legs=[{'option_symbol': symbol, 'side': 'buy_to_close', 'quantity': 1}],
+                                        tag=self.strategy_id,
+                                        strategy_params={'option_symbol': symbol}
+                                    )
+                                else:
+                                    btc_res = self.tradier.place_order(
+                                        account_id=self.tradier.account_id,
+                                        symbol=underlying,
+                                        side='buy_to_close',
+                                        quantity=int(qty),
+                                        order_type='limit',
+                                        duration='day',
+                                        price=round(ask_price, 2),
+                                        option_symbol=symbol,
+                                        order_class='option',
+                                        tag="WHEELTP"
+                                    )
                                 if 'error' in btc_res:
                                     self._log(f"❌ Take Profit BTC Error: {btc_res['error']}")
                                 else:
@@ -369,18 +384,33 @@ class WheelStrategy(AbstractStrategy):
                         self._close_trade(underlying, symbol, close_price, btc_res={'id': 'dry_run_btc'})
                 else:
                     # BTC
-                    btc_res = self.tradier.place_order(
-                        account_id=self.tradier.account_id,
-                        symbol=underlying,
-                        side='buy_to_close',
-                        quantity=abs(int(position['quantity'])),
-                        order_type='limit',
-                        duration='day',
-                        price=close_price,
-                        option_symbol=symbol,
-                        order_class='option',
-                        tag="WHEEL"
-                    )
+                    if getattr(self, 'trade_manager', None):
+                        btc_res = self.trade_manager.execute_strategy_order(
+                            strategy_id=self.strategy_id,
+                            symbol=underlying,
+                            side='buy_to_close',
+                            quantity=abs(int(position['quantity'])),
+                            order_type='limit',
+                            duration='day',
+                            price=close_price,
+                            order_class='option',
+                            legs=[{'option_symbol': symbol, 'side': 'buy_to_close', 'quantity': 1}],
+                            tag=self.strategy_id,
+                            strategy_params={'option_symbol': symbol}
+                        )
+                    else:
+                        btc_res = self.tradier.place_order(
+                            account_id=self.tradier.account_id,
+                            symbol=underlying,
+                            side='buy_to_close',
+                            quantity=abs(int(position['quantity'])),
+                            order_type='limit',
+                            duration='day',
+                            price=close_price,
+                            option_symbol=symbol,
+                            order_class='option',
+                            tag="WHEEL"
+                        )
                     
                     if 'error' in btc_res:
                         self._log(f"❌ BTC Error: {btc_res['error']}")
@@ -390,18 +420,33 @@ class WheelStrategy(AbstractStrategy):
 
                     # STO only if under max_lots
                     if should_roll:
-                        sto_res = self.tradier.place_order(
-                            account_id=self.tradier.account_id,
-                            symbol=underlying,
-                            side='sell_to_open',
-                            quantity=abs(int(position['quantity'])),
-                            order_type='limit',
-                            duration='day',
-                            price=open_price,
-                            option_symbol=new_option['symbol'],
-                            order_class='option',
-                            tag="WHEEL"
-                        )
+                        if getattr(self, 'trade_manager', None):
+                            sto_res = self.trade_manager.execute_strategy_order(
+                                strategy_id=self.strategy_id,
+                                symbol=underlying,
+                                side='sell_to_open',
+                                quantity=abs(int(position['quantity'])),
+                                order_type='limit',
+                                duration='day',
+                                price=open_price,
+                                order_class='option',
+                                legs=[{'option_symbol': new_option['symbol'], 'side': 'sell_to_open', 'quantity': 1}],
+                                tag=self.strategy_id,
+                                strategy_params={'option_symbol': new_option['symbol']}
+                            )
+                        else:
+                            sto_res = self.tradier.place_order(
+                                account_id=self.tradier.account_id,
+                                symbol=underlying,
+                                side='sell_to_open',
+                                quantity=abs(int(position['quantity'])),
+                                order_type='limit',
+                                duration='day',
+                                price=open_price,
+                                option_symbol=new_option['symbol'],
+                                order_class='option',
+                                tag="WHEEL"
+                            )
                         
                         if 'error' in sto_res:
                             self._log(f"❌ STO Error: {sto_res['error']}")
@@ -464,18 +509,33 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"[DRY RUN] Order: {side} {option['symbol']} x{quantity} @ {price}")
             self._record_trade(symbol, f"Wheel {side}", price, {'id': 'dry_run_id'}, {'option_symbol': option['symbol']})
         else:
-            res = self.tradier.place_order(
-                account_id=self.tradier.account_id,
-                symbol=symbol,
-                side=side,
-                quantity=int(quantity),
-                order_type='limit',
-                duration='day',
-                price=price,
-                option_symbol=option['symbol'],
-                order_class='option',
-                tag="WHEEL"
-            )
+            if getattr(self, 'trade_manager', None):
+                res = self.trade_manager.execute_strategy_order(
+                    strategy_id=self.strategy_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=int(quantity),
+                    order_type='limit',
+                    duration='day',
+                    price=price,
+                    order_class='option',
+                    legs=[{'option_symbol': option['symbol'], 'side': side, 'quantity': 1}],
+                    tag=self.strategy_id,
+                    strategy_params={'option_symbol': option['symbol']}
+                )
+            else:
+                res = self.tradier.place_order(
+                    account_id=self.tradier.account_id,
+                    symbol=symbol,
+                    side=side,
+                    quantity=int(quantity),
+                    order_type='limit',
+                    duration='day',
+                    price=price,
+                    option_symbol=option['symbol'],
+                    order_class='option',
+                    tag="WHEEL"
+                )
             if 'error' in res:
                 self._log(f"Order Error: {res['error']}")
             else:

@@ -211,28 +211,44 @@ class TastyTrade45Strategy(AbstractStrategy):
             self._log(f"[DRY RUN] Simulating {side_name} Spread Order for {symbol}")
             response = {'id': 'mock_order_id', 'status': 'ok'}
         else:
-            response = self.tradier.place_order(
-                account_id=self.tradier.account_id,
-                symbol=symbol,
-                side='sell',
-                quantity=1,
-                order_type='credit',
-                duration='day',
-                price=net_credit,
-                order_class='multileg',
-                legs=legs,
-                tag="TT45"
-            )
+            if getattr(self, 'trade_manager', None):
+                response = self.trade_manager.execute_strategy_order(
+                    strategy_id=self.strategy_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag=self.strategy_id,
+                    strategy_params={'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
+                )
+            else:
+                response = self.tradier.place_order(
+                    account_id=self.tradier.account_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag="TT45"
+                )
             
         if 'error' in response:
              self._log(f"Order failed: {response['error']}")
         else:
              self._log(f"Order placed: {response}")
-             legs_info = {
-                 'short_leg': best_short['symbol'],
-                 'long_leg': long_leg['symbol']
-             }
-             self._record_trade(symbol, f"TastyTrade45 {side_name}", net_credit, response, legs_info)
+             if not getattr(self, 'trade_manager', None):
+                 legs_info = {
+                     'short_leg': best_short['symbol'],
+                     'long_leg': long_leg['symbol']
+                 }
+                 self._record_trade(symbol, f"TastyTrade45 {side_name}", net_credit, response, legs_info)
 
     def manage_positions(self, simulation_mode=False):
         if simulation_mode: self.execution_logs = []
@@ -247,10 +263,7 @@ class TastyTrade45Strategy(AbstractStrategy):
                 self._log(f"Error fetching positions for management: {e}")
                 return self.execution_logs if simulation_mode else None
 
-        open_trades = list(self.db['auto_trades'].find({
-            "status": "OPEN",
-            "strategy": {"$regex": "TastyTrade45", "$options": "i"}
-        }))
+        open_trades = self.get_open_trades()
 
         if not open_trades: return self.execution_logs if simulation_mode else None
 
@@ -415,22 +428,38 @@ class TastyTrade45Strategy(AbstractStrategy):
         symbol = tradeToClose['symbol']
         side_name = "Put" if is_put else "Call"
         
-        self._log(f"🛡️ TT45 Rolling -> {symbol} new {side_name} at {short_strike} Srike | Delta: {valid_shorts[0]['abs_delta']:.2f}")
-        response = self.tradier.place_order(
-            account_id=self.tradier.account_id,
-            symbol=symbol,
-            side='sell',
-            quantity=1, 
-            order_type='credit',
-            duration='day',
-            price=net_credit if net_credit > 0 else None,
-            order_class='multileg',
-            legs=legs,
-            tag="TT45"
-        )
+        self._log(f"🛡️ TT45 Rolling -> {symbol} new {side_name} at {short_strike} Strike | Delta: {valid_shorts[0]['abs_delta']:.2f}")
+        if getattr(self, 'trade_manager', None):
+            response = self.trade_manager.execute_strategy_order(
+                strategy_id=self.strategy_id,
+                symbol=symbol,
+                side='sell',
+                quantity=1, 
+                order_type='credit',
+                duration='day',
+                price=net_credit if net_credit > 0 else None,
+                order_class='multileg',
+                legs=legs,
+                tag=self.strategy_id,
+                strategy_params={'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
+            )
+        else:
+            response = self.tradier.place_order(
+                account_id=self.tradier.account_id,
+                symbol=symbol,
+                side='sell',
+                quantity=1, 
+                order_type='credit',
+                duration='day',
+                price=net_credit if net_credit > 0 else None,
+                order_class='multileg',
+                legs=legs,
+                tag="TT45"
+            )
         if 'error' not in response:
-            legs_info = {'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
-            self._record_trade(symbol, f"TastyTrade45 {side_name}", net_credit, response, legs_info)
+            if not getattr(self, 'trade_manager', None):
+                legs_info = {'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
+                self._record_trade(symbol, f"TastyTrade45 {side_name}", net_credit, response, legs_info)
 
     def _execute_close(self, trade, limit_price=None, simulation_mode=False):
         short_leg = trade['short_leg']
@@ -443,10 +472,13 @@ class TastyTrade45Strategy(AbstractStrategy):
         if self.dry_run or simulation_mode:
             self._log(f"[DRY RUN/SIM] Closing TT45 {trade['symbol']} spread.")
             if not simulation_mode:
-                self.db['auto_trades'].update_one(
-                    {"_id": trade['_id']},
-                    {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
-                )
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=None)
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
+                    )
         else:
             p = limit_price if limit_price and limit_price > 0 else 0.01 
             response = self.tradier.place_order(
@@ -462,12 +494,15 @@ class TastyTrade45Strategy(AbstractStrategy):
                 tag="TT45_CLOSE"
             )
             if 'error' not in response:
-                self.db['auto_trades'].update_one(
-                    {"_id": trade['_id']},
-                    {"$set": {
-                        "status": "CLOSED", 
-                        "close_date": datetime.now(), 
-                        "close_order_id": response.get('id'),
-                        "exit_price": limit_price
-                    }}
-                )
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=response.get('id'))
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {
+                            "status": "CLOSED", 
+                            "close_date": datetime.now(), 
+                            "close_order_id": response.get('id'),
+                            "exit_price": limit_price
+                        }}
+                    )

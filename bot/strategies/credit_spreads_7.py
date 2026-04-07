@@ -214,25 +214,41 @@ class CreditSpreads7Strategy(AbstractStrategy):
             self._log(f"[DRY RUN] Simulating {side_name} Spread Order for {symbol}")
             response = {'id': 'mock_order_id', 'status': 'ok'}
         else:
-            response = self.tradier.place_order(
-                account_id=self.tradier.account_id,
-                symbol=symbol,
-                side='sell',
-                quantity=1,
-                order_type='credit',
-                duration='day',
-                price=net_credit,
-                order_class='multileg',
-                legs=legs,
-                tag="CREDSPRD_7DTE"
-            )
+            if getattr(self, 'trade_manager', None):
+                response = self.trade_manager.execute_strategy_order(
+                    strategy_id=self.strategy_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag=self.strategy_id,
+                    strategy_params={'short_leg': short_leg['symbol'], 'long_leg': long_leg['symbol']}
+                )
+            else:
+                response = self.tradier.place_order(
+                    account_id=self.tradier.account_id,
+                    symbol=symbol,
+                    side='sell',
+                    quantity=1,
+                    order_type='credit',
+                    duration='day',
+                    price=net_credit,
+                    order_class='multileg',
+                    legs=legs,
+                    tag="CREDSPRD_7DTE"
+                )
             
         if 'error' in response:
              self._log(f"Order failed: {response['error']}")
         else:
              self._log(f"Order placed: {response}")
-             legs_info = {
-                 'short_leg': short_leg['symbol'],
-                 'long_leg': long_leg['symbol']
-             }
-             self._record_trade(symbol, f"Credit Spreads 7 {side_name}", net_credit, response, legs_info)
+             if not getattr(self, 'trade_manager', None):
+                 legs_info = {
+                     'short_leg': short_leg['symbol'],
+                     'long_leg': long_leg['symbol']
+                 }
+                 self._record_trade(symbol, f"Credit Spreads 7 {side_name}", net_credit, response, legs_info)
