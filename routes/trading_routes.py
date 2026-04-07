@@ -232,6 +232,31 @@ def get_bot_trades():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@trading_bp.route('/api/bot/orphans', methods=['GET'])
+@login_required
+def get_bot_orphans():
+    try:
+        service = Container.get_bot_service()
+        orphans = service.get_unmanaged_orphans()
+        return jsonify({'orphans': orphans})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@trading_bp.route('/api/bot/orphans/close', methods=['POST'])
+@login_required
+def close_bot_orphan():
+    try:
+        data = request.json or {}
+        trade_id = data.get('trade_id')
+        if not trade_id: return jsonify({'error': 'trade_id required'}), 400
+        service = Container.get_bot_service()
+        result = service.close_unmanaged_orphan(trade_id)
+        if 'error' in result:
+             return jsonify(result), 400
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @trading_bp.route('/api/bot/sync_positions', methods=['POST'])
 @login_required
 def sync_positions():

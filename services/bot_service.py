@@ -259,6 +259,61 @@ class BotService:
             trades.append(doc)
         return trades
 
+    def get_unmanaged_orphans(self):
+        """Retrieve MANUAL_ORPHAN trades."""
+        if not hasattr(self, 'trade_manager'): return []
+        orphans = self.trade_manager.get_unmanaged_orphans()
+        for o in orphans:
+             o['_id'] = str(o['_id'])
+        return orphans
+
+    def close_unmanaged_orphan(self, trade_id):
+        """Send a market close order natively for an unmanaged orphan, bypassing strategies."""
+        from bson.objectid import ObjectId
+        if not hasattr(self, 'trade_manager'): return {"error": "Trade Manager offline"}
+        if self.db is None: return {"error": "DB Offline"}
+        
+        try:
+             trade = self.db['active_trades'].find_one({"_id": ObjectId(trade_id), "strategy": "MANUAL_ORPHAN", "status": "OPEN"})
+             if not trade: 
+                 return {"error": "Orphan trade not found or already closed"}
+                 
+             symbol = trade.get('symbol')
+             qty = int(trade.get('quantity', 0))
+             
+             if qty == 0:
+                 self.db['active_trades'].update_one({"_id": ObjectId(trade_id)}, {"$set": {"status": "CLOSED"}})
+                 return {"status": "ok", "msg": "Trade verified closed (0 qty)"}
+                 
+             side = 'sell_to_close' if qty > 0 else 'buy_to_close'
+             
+             import bot.utils as utils
+             underlying = utils.get_underlying(symbol)
+             
+             if not self.tradier:
+                 pass
+             else:
+                 res = self.tradier.place_order(
+                    account_id=self.tradier.account_id,
+                    symbol=underlying,
+                    side=side,
+                    quantity=abs(qty),
+                    order_type='market',
+                    duration='day',
+                    option_symbol=symbol,
+                    order_class='option',
+                    tag="MANUAL_CLOSE"
+                 )
+                 if 'error' in res:
+                     return {"error": res['error']}
+             
+             self.trade_manager.mark_trade_closed(ObjectId(trade_id), limit_price=None, response_id=None)
+             self._log(f"✅ User manually liquidated ORPHAN trade: {symbol}")
+             return {"status": "ok", "msg": f"Closed {symbol} successfully."}
+             
+        except Exception as e:
+             return {"error": str(e)}
+
     def get_performance_summary(self):
         """Calculate P&L metrics."""
         if self.db is None: return {}

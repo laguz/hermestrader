@@ -104,8 +104,35 @@
 
     </div>
 
-    <!-- RIGHT COLUMN: Watchlists -->
+    <!-- LEFT COLUMN: Status & Config & Orphans -->
     <div class="space-y-6">
+
+        <!-- Unmanaged Positions Card -->
+        <div class="p-6 bg-white rounded-lg border border-red-200 shadow-sm dark:bg-gray-800 dark:border-red-900 mt-6 mb-6">
+            <h3 class="text-lg font-bold text-red-600 dark:text-red-400 mb-4 flex items-center">
+                <span class="material-symbols-outlined mr-2">warning</span> 
+                Unmanaged Positions (Orphans)
+            </h3>
+            <p class="text-sm text-gray-500 mb-4">Trades isolated from bot logic. Close them manually if needed.</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm text-left text-gray-500 dark:text-gray-400">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-50 dark:bg-gray-700 dark:text-gray-400">
+                        <tr>
+                            <th scope="col" class="px-3 py-2">Symbol</th>
+                            <th scope="col" class="px-3 py-2">Quantity</th>
+                            <th scope="col" class="px-3 py-2 text-right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="orphans-container">
+                        <tr>
+                            <td colspan="3" class="px-3 py-4 text-center">Loading...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
 
         <!-- Credit Spreads Watchlist -->
         <div class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
@@ -558,9 +585,61 @@
         modal.classList.remove('flex');
     }
 
+    async function fetchOrphans() {
+        try {
+            const res = await fetch('/api/bot/orphans');
+            const data = await res.json();
+            const container = document.getElementById('orphans-container');
+            
+            if (data.orphans && data.orphans.length > 0) {
+                container.innerHTML = data.orphans.map(o => `
+                    <tr class="bg-white border-b dark:bg-gray-800 dark:border-gray-700">
+                        <td class="px-3 py-2 font-medium text-gray-900 whitespace-nowrap dark:text-white">
+                            ${o.symbol}
+                        </td>
+                        <td class="px-3 py-2">
+                            ${o.quantity}
+                        </td>
+                        <td class="px-3 py-2 text-right">
+                            <button onclick="closeOrphan('${o._id}', '${o.symbol}')" class="text-white bg-red-600 hover:bg-red-700 focus:ring-4 focus:ring-red-300 font-medium rounded-lg text-xs px-3 py-1.5 dark:bg-red-500 dark:hover:bg-red-600 focus:outline-none dark:focus:ring-red-800">
+                                Liquidate
+                            </button>
+                        </td>
+                    </tr>
+                `).join('');
+            } else {
+                container.innerHTML = `<tr><td colspan="3" class="px-3 py-4 text-center text-green-500">No orphaned positions detected.</td></tr>`;
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async function closeOrphan(tradeId, symbol) {
+        if (!confirm(`Are you sure you want to market close the unmanaged position for ${symbol}?`)) return;
+        try {
+            const res = await fetch('/api/bot/orphans/close', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trade_id: tradeId })
+            });
+            const data = await res.json();
+            if (res.ok && !data.error) {
+                alert(`Success: ${data.msg || "Position Closed."}`);
+                fetchOrphans();
+            } else {
+                alert('Error: ' + (data.error || "Unknown"));
+            }
+        } catch (e) { alert(e); }
+    }
+
     // Poll every 3 seconds
     fetchStatus();
-    setInterval(fetchStatus, 3000);
+    fetchOrphans();
+    setInterval(() => {
+        fetchStatus();
+        fetchOrphans();
+    }, 3000);
 
 </script>
 {% endblock %}
