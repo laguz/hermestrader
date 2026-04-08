@@ -362,7 +362,6 @@ class BotService:
         # TradeManager: Reconcile dynamic orphan tags & register strategy states on boot
         if hasattr(self, 'trade_manager'):
             self.trade_manager.reconcile_orphans(self._log)
-            self.trade_manager.register_strategy(self.credit_spread_strategy.strategy_id)
             self.trade_manager.register_strategy(self.credit_spread_7_strategy.strategy_id)
             self.trade_manager.register_strategy(self.credit_spread_75_strategy.strategy_id)
             self.trade_manager.register_strategy(self.tastytrade45_strategy.strategy_id)
@@ -376,11 +375,6 @@ class BotService:
                 
                 # 3. Strategy Execution
                 config = self.get_status().get('settings', {})
-                wl_spreads = config.get('watchlist_credit_spreads', [])
-                wl_spreads_7 = config.get('watchlist_credit_spreads_7', [])
-                wl_spreads_75 = config.get('watchlist_credit_spreads_75', [])
-                wl_tastytrade45 = config.get('watchlist_tastytrade45', [])
-                wl_wheel = config.get('watchlist_wheel', [])
                 
                 # 3. Global Circuit Breaker Check and Strategy Execution
                 if self._check_circuit_breaker(config):
