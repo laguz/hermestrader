@@ -2,7 +2,7 @@ import logging
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, date, timedelta
-from bot.utils import Colors
+from bot.utils import Colors, get_expiry_str
 
 class AbstractStrategy(ABC):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, strategy_id=None, trade_manager=None):
@@ -228,6 +228,24 @@ class AbstractStrategy(ABC):
         if self.db is not None:
             return list(self.db['active_trades'].find({"strategy": self.strategy_id, "status": "OPEN"}))
         return []
+
+    def _count_existing_on_expiry(self, symbol, expiry):
+        """Count open spread lots for this strategy on a specific expiry chain."""
+        open_trades = self.get_open_trades()
+        count = 0
+        for trade in open_trades:
+            if trade.get('symbol') != symbol:
+                continue
+            short_leg = trade.get('short_leg', '')
+            exp_str = get_expiry_str(short_leg) if short_leg else None
+            if exp_str == expiry:
+                # Get lots from legs_info or quantity
+                legs = trade.get('legs_info', [])
+                if isinstance(legs, list) and legs:
+                    count += abs(legs[0].get('quantity', 1))
+                else:
+                    count += trade.get('quantity', 1)
+        return count
 
     @abstractmethod
     def execute(self, watchlist, config=None):

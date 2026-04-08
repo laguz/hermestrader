@@ -83,14 +83,9 @@ class WheelStrategy(AbstractStrategy):
             else:
                 self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
         
-        # 2. Evaluate Cash Secured Puts
-        open_put_contracts = sum(abs(p['quantity']) for p in short_puts)
-        if open_put_contracts >= max_lots:
-            self._log(f"ℹ️ {symbol}: Max put contracts reached ({open_put_contracts}/{max_lots}). Skipping new entry.")
-        else:
-            lots_to_open = max_lots - open_put_contracts
-            self._log(f"🟢 {symbol}: Put slot available ({open_put_contracts}/{max_lots}). Opening {lots_to_open} lot(s)...")
-            self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots, quantity=lots_to_open)
+        # 2. Evaluate Cash Secured Puts (per-chain limit)
+        self._log(f"🟢 {symbol}: Evaluating put entries (max {max_lots} per chain)...")
+        self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots, quantity=max_lots)
 
 
     def _entry_sell_put(self, symbol, current_price, analysis, min_credit=None, max_lots=1, quantity=1):
@@ -99,12 +94,20 @@ class WheelStrategy(AbstractStrategy):
         Priority B: Greeks Fallback (Delta Based)
         """
         # Check Constraints
-        exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
+        exclusions, expiry_counts = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
         target_expiry = self._find_expiry(symbol, target_dte=38, min_dte=38, max_dte=120, exclude_dates=exclusions, method='min')
         if not target_expiry:
             self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
+
+        # Per-chain quantity: max_lots minus what's already on this chain
+        existing_on_chain = expiry_counts.get(target_expiry, 0)
+        quantity = max_lots - existing_on_chain
+        if quantity <= 0:
+            self._log(f"ℹ️ {symbol}: Chain {target_expiry} already at max ({existing_on_chain}/{max_lots}).")
+            return
+        self._log(f"📦 {symbol}: Chain {target_expiry} has {existing_on_chain}/{max_lots} contracts. Opening {quantity} more.")
 
         target_strike = None
         target_reason = ""
@@ -154,10 +157,17 @@ class WheelStrategy(AbstractStrategy):
         Priority B: Greeks Fallback
         """
         # Check Constraints
-        exclusions = self._check_expiry_constraints(symbol, max_lots=max_lots)
+        exclusions, expiry_counts = self._check_expiry_constraints(symbol, max_lots=max_lots)
         
         target_expiry = self._find_expiry(symbol, target_dte=38, min_dte=38, max_dte=120, exclude_dates=exclusions, method='min')
         if not target_expiry: return
+
+        # Per-chain quantity: cap by what's already on this chain
+        existing_on_chain = expiry_counts.get(target_expiry, 0)
+        quantity = min(quantity, max_lots - existing_on_chain)
+        if quantity <= 0:
+            self._log(f"ℹ️ {symbol}: Call chain {target_expiry} at max ({existing_on_chain}/{max_lots}).")
+            return
 
         target_strike = None
         target_reason = ""
@@ -527,4 +537,4 @@ class WheelStrategy(AbstractStrategy):
         if full_expiries:
             self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max {max_lots} contract/week met).")
             
-        return full_expiries
+        return full_expiries, expiry_counts
