@@ -229,8 +229,6 @@ class CreditSpreads7Strategy(AbstractStrategy):
                     symbol=symbol,
                     side='sell',
                     quantity=1,
-                    order_type='credit',
-                    duration='day',
                     price=net_credit,
                     order_class='multileg',
                     legs=legs,
