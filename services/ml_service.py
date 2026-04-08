@@ -126,7 +126,8 @@ class MLService:
         """
         df = df.copy()
         df['close'] = df['close'].astype(float)
-        # Ensure high/low/volume are floats
+        # Ensure high/low/volume/open are floats
+        if 'open' in df.columns: df['open'] = df['open'].astype(float)
         if 'high' in df.columns: df['high'] = df['high'].astype(float)
         if 'low' in df.columns: df['low'] = df['low'].astype(float)
         if 'volume' in df.columns: df['volume'] = df['volume'].astype(float)
@@ -604,15 +605,24 @@ except Exception as e:
         forbidden = ['target', 'target_return', 'log_return', 'date', 'symbol']
         features = [f for f in features if f not in forbidden]
 
-        if df.iloc[-1].isna().any():
-             df_clean = df.dropna()
-             if df_clean.empty: raise ValidationError("Not enough data for indicators")
-             pass
+        # Handle NaN values in feature columns for the last row.
+        # Forward-fill first (uses most recent valid value), then check again.
+        if df[features].iloc[-1].isna().any():
+            nan_cols = [f for f in features if pd.isna(df[f].iloc[-1])]
+            logger.warning(f"NaN detected in last row for {symbol}, columns: {nan_cols}. Attempting forward-fill...")
+            df[features] = df[features].ffill()
+
+            # If still NaN after ffill (e.g. column was entirely NaN), fall back to clean rows
+            if df[features].iloc[-1].isna().any():
+                still_nan = [f for f in features if pd.isna(df[f].iloc[-1])]
+                logger.warning(f"Forward-fill insufficient for {symbol}, still NaN: {still_nan}. Falling back to last clean row.")
+                df_clean = df.dropna(subset=features)
+                if df_clean.empty or len(df_clean) < self.sequence_length:
+                    raise ValidationError(f"Latest data has NaNs in required features ({still_nan}) and not enough clean data to proceed.")
+                # Replace the tail of df with clean data for prediction
+                df = df_clean
 
         last_row = df.iloc[-1]
-        
-        if df[features].iloc[-1].isna().any():
-             raise ValidationError("Latest data has NaNs in required features.")
 
         prediction = 0
         
