@@ -57,6 +57,11 @@ class AnalysisService:
         df['volume'] = df['volume'].astype(float)
         df['date'] = pd.to_datetime(df['date'])
         
+        # Forward-fill any NaN in OHLCV columns to prevent cascading NaN in indicators
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = df[col].ffill()
+        
         # Filter to requested period for display/levels, but keep history for indicators
         # Actually indicators need history.
         # Let's calculate indicators on full DF then slice for "Key Levels" calculation if we want levels ONLY from that period.
