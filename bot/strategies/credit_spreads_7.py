@@ -12,6 +12,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
         super()._log(message, strategy_name="CREDIT_SPREADS_7")
 
     def execute(self, watchlist, config=None):
+        config = config or {}
         """
         Execute 7DTE Credit Spreads strategy.
         """
@@ -75,6 +76,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
         return None
 
     def _process_side(self, symbol, current_price, analysis, expiry, is_put, config=None):
+        config = config or {}
         # 1. Select the POP level
         side_name = "Put" if is_put else "Call"
         entry_key = 'put_entry_points' if is_put else 'call_entry_points'

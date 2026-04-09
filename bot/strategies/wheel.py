@@ -25,7 +25,8 @@ class WheelStrategy(AbstractStrategy):
         """
         Execute the Wheel Strategy Cycle for the watchlist.
         """
-        self.config = config or {}
+        config = config or {}
+        self.config = config
         analysis_service = self.analysis_service or Container.get_analysis_service()
         
         # 1. Fetch Current Positions (The Source of Truth)
@@ -38,7 +39,7 @@ class WheelStrategy(AbstractStrategy):
         for symbol in watchlist:
             try:
                 # 2. Determine State & Route
-                max_lots = int(config.get('max_wheel_contracts_per_symbol', 1)) if config else 1
+                max_lots = int(config.get('max_wheel_contracts_per_symbol', 1))
                 self._log(f"DEBUG: Processing {symbol} with Max Lots: {max_lots}")
                 self._process_symbol(symbol, positions, analysis_service, max_lots=max_lots)
             except Exception as e:

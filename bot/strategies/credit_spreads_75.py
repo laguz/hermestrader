@@ -14,6 +14,7 @@ class CreditSpreads75Strategy(AbstractStrategy):
         super()._log(message, strategy_name="CREDIT_SPREADS_75")
 
     def execute(self, watchlist, config=None):
+        config = config or {}
         for symbol in watchlist:
             try:
                 if self.dry_run:
@@ -72,6 +73,7 @@ class CreditSpreads75Strategy(AbstractStrategy):
         return None
 
     def _process_side(self, symbol, current_price, analysis, expiry, is_put, config=None):
+        config = config or {}
         side_name = "Put" if is_put else "Call"
         entry_key = 'put_entry_points' if is_put else 'call_entry_points'
         entry_points = analysis.get(entry_key, [])

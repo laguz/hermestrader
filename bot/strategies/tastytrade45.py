@@ -71,6 +71,7 @@ class TastyTrade45Strategy(AbstractStrategy):
         return rank
 
     def execute(self, watchlist, config=None):
+        config = config or {}
         for symbol in watchlist:
             try:
                 if self.dry_run:
@@ -132,6 +133,7 @@ class TastyTrade45Strategy(AbstractStrategy):
         return best['str']
 
     def _process_side(self, symbol, current_price, expiry, is_put, config=None):
+        config = config or {}
         side_name = "Put" if is_put else "Call"
         
         chain = self.tradier.get_option_chains(symbol, expiry)
