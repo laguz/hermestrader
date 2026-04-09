@@ -180,10 +180,10 @@ class CreditSpreads7Strategy(AbstractStrategy):
                 return
                 
             net_credit = round(short_price - long_price, 2)
-            min_required_credit = round(current_width * 0.16, 2)
+            min_required_credit = round(current_width * 0.12, 2)
             
             if net_credit < min_required_credit:
-                self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 16% limit ({min_required_credit}) for width {current_width}.")
+                self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 12% limit ({min_required_credit}) for width {current_width}.")
                 return
             else:
                 # Passes all filters!
