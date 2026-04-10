@@ -188,6 +188,8 @@ class BotService:
         allowed_keys = [
             'max_drawdown',
             'max_position_size',
+            'max_credit_spreads_7_per_symbol',
+            'max_credit_spreads_75_per_symbol',
             'max_tastytrade45_per_symbol',
             'max_wheel_contracts_per_symbol'
         ]
