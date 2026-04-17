@@ -44,6 +44,26 @@
                     <span class="material-symbols-outlined text-[18px] mr-2">science</span> Test Dry Run
                 </button>
             </div>
+
+            <!-- Trading Mode Toggle -->
+            <div class="mt-6 pt-5 border-t border-gray-200 dark:border-gray-600">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-sm font-medium text-gray-500 dark:text-gray-400">Trading Mode</div>
+                        <div class="flex items-center gap-2 mt-1">
+                            <span id="mode-badge" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
+                                📝 PAPER
+                            </span>
+                            <span id="mode-endpoint" class="text-xs text-gray-400 dark:text-gray-500 font-mono"></span>
+                        </div>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="trading-mode-toggle" class="sr-only peer" onchange="toggleTradingMode(this)">
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary-300 dark:peer-focus:ring-primary-800 rounded-full peer dark:bg-gray-600 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:after:border-gray-500 peer-checked:bg-red-600"></div>
+                        <span class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300">Live</span>
+                    </label>
+                </div>
+            </div>
         </div>
 
         <!-- Logs Card -->
@@ -268,6 +288,62 @@
 
     // Store last known settings to prevent overwriting user edits
     let lastSettings = null;
+    let currentTradingMode = 'paper';
+
+    function updateTradingModeUI(mode) {
+        currentTradingMode = mode;
+        const badge = document.getElementById('mode-badge');
+        const toggle = document.getElementById('trading-mode-toggle');
+
+        if (mode === 'live') {
+            badge.textContent = '🔴 LIVE';
+            badge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300';
+            toggle.checked = true;
+        } else {
+            badge.textContent = '📝 PAPER';
+            badge.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300';
+            toggle.checked = false;
+        }
+    }
+
+    async function toggleTradingMode(checkbox) {
+        const newMode = checkbox.checked ? 'live' : 'paper';
+
+        if (newMode === 'live') {
+            const confirmed = confirm(
+                '⚠️ WARNING: You are switching to LIVE trading mode.\n\n' +
+                'Real orders will be placed with real money.\n' +
+                'Make sure your TRADIER_LIVE_ACCESS_TOKEN and TRADIER_LIVE_ACCOUNT_ID are configured.\n\n' +
+                'Are you sure you want to continue?'
+            );
+            if (!confirmed) {
+                checkbox.checked = false;
+                return;
+            }
+        }
+
+        try {
+            const res = await fetch('/api/bot/trading_mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: newMode })
+            });
+            const data = await res.json();
+
+            if (res.ok && !data.error) {
+                updateTradingModeUI(data.mode);
+                const ep = document.getElementById('mode-endpoint');
+                if (ep && data.endpoint) ep.textContent = data.endpoint;
+            } else {
+                alert('Error: ' + (data.error || 'Unknown error'));
+                // Revert toggle
+                checkbox.checked = currentTradingMode === 'live';
+            }
+        } catch (e) {
+            alert('Failed to switch mode: ' + e);
+            checkbox.checked = currentTradingMode === 'live';
+        }
+    }
 
     function updateUI(status) {
         if (status.status === 'RUNNING') {
@@ -324,6 +400,13 @@
             updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
 
             lastSettings = s;
+        }
+
+        // Update trading mode
+        if (status.trading_mode) {
+            updateTradingModeUI(status.trading_mode);
+        } else if (status.settings && status.settings.trading_mode) {
+            updateTradingModeUI(status.settings.trading_mode);
         }
     }
 

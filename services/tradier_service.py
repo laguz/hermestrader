@@ -18,12 +18,51 @@ class TradierService:
         self.endpoint = endpoint or os.getenv(
             'TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1'
         )
+        self.trading_mode = 'paper'  # 'paper' or 'live'
         
     def update_access_token(self, token: str) -> None:
         self.access_token = token
 
     def update_account_id(self, account_id: str) -> None:
         self.account_id = account_id
+
+    def get_trading_mode(self) -> str:
+        """Return current trading mode: 'paper' or 'live'."""
+        return self.trading_mode
+
+    def set_trading_mode(self, mode: str) -> dict:
+        """
+        Switch between paper and live trading credentials.
+        Paper uses TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID / TRADIER_ENDPOINT (sandbox).
+        Live uses TRADIER_LIVE_ACCESS_TOKEN / TRADIER_LIVE_ACCOUNT_ID / TRADIER_LIVE_ENDPOINT.
+        Returns a dict with the result status.
+        """
+        mode = mode.lower().strip()
+        if mode not in ('paper', 'live'):
+            return {'error': f'Invalid mode: {mode}. Must be "paper" or "live".'}
+
+        if mode == 'live':
+            live_token = os.getenv('TRADIER_LIVE_ACCESS_TOKEN')
+            live_account = os.getenv('TRADIER_LIVE_ACCOUNT_ID')
+            live_endpoint = os.getenv('TRADIER_LIVE_ENDPOINT', 'https://api.tradier.com/v1')
+
+            if not live_token or not live_account:
+                return {'error': 'Live trading credentials not configured. Set TRADIER_LIVE_ACCESS_TOKEN and TRADIER_LIVE_ACCOUNT_ID environment variables.'}
+
+            self.access_token = live_token
+            self.account_id = live_account
+            self.endpoint = live_endpoint
+            self.trading_mode = 'live'
+            logger.info("🔴 Switched to LIVE trading mode.")
+            return {'status': 'ok', 'mode': 'live', 'endpoint': live_endpoint}
+
+        else:  # paper
+            self.access_token = os.getenv('TRADIER_ACCESS_TOKEN')
+            self.account_id = os.getenv('TRADIER_ACCOUNT_ID')
+            self.endpoint = os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
+            self.trading_mode = 'paper'
+            logger.info("📝 Switched to PAPER trading mode.")
+            return {'status': 'ok', 'mode': 'paper', 'endpoint': self.endpoint}
 
     def _get_headers(self) -> dict:
         auth_token = self.access_token

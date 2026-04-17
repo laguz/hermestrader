@@ -44,6 +44,8 @@ class BotService:
         self.portfolio_manager = PortfolioManager(self.tradier, self.db)
         
         self._init_db_config()
+        # Restore trading mode from DB if previously set
+        self._restore_trading_mode()
         # Reset state on startup to avoid phantom running state
         self._update_status("STOPPED")
         self.ml_training_in_progress = False
@@ -81,7 +83,8 @@ class BotService:
                      "max_credit_spreads_7_per_symbol": 5,
                      "max_credit_spreads_75_per_symbol": 5,
                      "max_tastytrade45_per_symbol": 5,
-                     "max_wheel_contracts_per_symbol": 1
+                     "max_wheel_contracts_per_symbol": 1,
+                     "trading_mode": "paper"
                  }
              }
 
@@ -107,6 +110,8 @@ class BotService:
                      updates['settings.max_credit_spreads_75_per_symbol'] = 5
                  if 'max_tastytrade45_per_symbol' not in settings:
                      updates['settings.max_tastytrade45_per_symbol'] = 5
+                 if 'trading_mode' not in settings:
+                     updates['settings.trading_mode'] = 'paper'
                  
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
@@ -123,9 +128,10 @@ class BotService:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         
+        mode = self.tradier.get_trading_mode().upper()
         self._update_status("RUNNING")
-        self._log("Bot started successfully.")
-        return {"message": "Bot started."}
+        self._log(f"Bot started successfully. Trading Mode: {mode}")
+        return {"message": f"Bot started in {mode} mode."}
 
     def stop_bot(self):
         # Check if thread is alive
@@ -146,8 +152,52 @@ class BotService:
         if self.db is None: return
         self.db['bot_config'].update_one(
             {"_id": "main_bot"},
-            {"$set": {"status": status, "last_heartbeat": datetime.now()}}
+            {"$set": {"status": status, "last_heartbeat": datetime.now(),
+                      "trading_mode": self.tradier.get_trading_mode()}}
         )
+
+    def _restore_trading_mode(self):
+        """Restore trading mode from DB on startup."""
+        if self.db is None: return
+        config = self.db['bot_config'].find_one({"_id": "main_bot"})
+        if config:
+            mode = config.get('settings', {}).get('trading_mode', 'paper')
+            if mode in ('paper', 'live'):
+                result = self.tradier.set_trading_mode(mode)
+                if 'error' in result:
+                    logger.warning(f"Failed to restore trading mode '{mode}': {result['error']}. Defaulting to paper.")
+                    self.tradier.set_trading_mode('paper')
+
+    def set_trading_mode(self, mode):
+        """
+        Switch trading mode between 'paper' and 'live'.
+        Requires the bot to be stopped.
+        Returns result dict.
+        """
+        # Safety: don't allow switching while bot is running
+        if self._thread and self._thread.is_alive():
+            return {'error': 'Cannot switch trading mode while bot is running. Stop the bot first.'}
+
+        result = self.tradier.set_trading_mode(mode)
+        if 'error' in result:
+            return result
+
+        # Persist to DB
+        if self.db is not None:
+            self.db['bot_config'].update_one(
+                {"_id": "main_bot"},
+                {"$set": {
+                    "settings.trading_mode": mode,
+                    "trading_mode": mode
+                }}
+            )
+
+        self._log(f"🔄 Trading mode switched to: {mode.upper()}")
+        return result
+
+    def get_trading_mode(self):
+        """Return current trading mode."""
+        return self.tradier.get_trading_mode()
 
     def update_watchlist(self, watchlist, list_type="credit_spreads"):
         """Update the watchlist in settings. list_type: 'wheel' or 'tastytrade45' or 'credit_spreads_7' etc."""
