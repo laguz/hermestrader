@@ -322,6 +322,10 @@
             }
         }
 
+        // Optimistic UI update — feels instant
+        const previousMode = currentTradingMode;
+        updateTradingModeUI(newMode);
+
         try {
             const res = await fetch('/api/bot/trading_mode', {
                 method: 'POST',
@@ -334,17 +338,22 @@
                 updateTradingModeUI(data.mode);
                 const ep = document.getElementById('mode-endpoint');
                 if (ep && data.endpoint) ep.textContent = data.endpoint;
-                // Reset lastSettings so the new mode's values load immediately
+                // Reset lastSettings so the new mode's values load on next poll
                 lastSettings = null;
+                // Fetch new mode's settings + orphans concurrently (non-blocking)
                 fetchStatus();
+                fetchOrphans();
             } else {
                 alert('Error: ' + (data.error || 'Unknown error'));
-                // Revert toggle
-                checkbox.checked = currentTradingMode === 'live';
+                // Revert to previous mode
+                updateTradingModeUI(previousMode);
+                checkbox.checked = previousMode === 'live';
             }
         } catch (e) {
             alert('Failed to switch mode: ' + e);
-            checkbox.checked = currentTradingMode === 'live';
+            // Revert optimistic update
+            updateTradingModeUI(previousMode);
+            checkbox.checked = previousMode === 'live';
         }
     }
 

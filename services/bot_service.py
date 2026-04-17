@@ -75,9 +75,10 @@ class BotService:
         "max_wheel_contracts_per_symbol": 1,
     }
 
-    def _settings_key(self):
+    def _settings_key(self, mode=None):
         """Return the DB key for the active trading mode's settings."""
-        mode = self.tradier.get_trading_mode()
+        if mode is None:
+            mode = self.tradier.get_trading_mode()
         return f"settings_{mode}"
 
     def _init_db_config(self):
@@ -127,8 +128,12 @@ class BotService:
         """Return bot status with settings mapped to the active trading mode."""
         if self.db is None: return {"status": "ERROR", "message": "DB Unavailable"}
         doc = self.db['bot_config'].find_one({"_id": "main_bot"}) or {}
+        # Sync in-memory mode from DB (handles multi-worker drift)
+        db_mode = doc.get('trading_mode', 'paper')
+        if db_mode != self.tradier.get_trading_mode():
+            self.tradier.set_trading_mode(db_mode)
         # Map active mode's settings into 'settings' for UI backwards compat
-        sk = self._settings_key()
+        sk = self._settings_key(mode=db_mode)
         doc['settings'] = doc.get(sk, dict(self._DEFAULT_SETTINGS))
         return doc
 
