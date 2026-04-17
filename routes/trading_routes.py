@@ -158,28 +158,23 @@ def stop_bot():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@trading_bp.route('/api/bot/trading_mode', methods=['GET'])
+@trading_bp.route('/api/bot/trading_mode', methods=['GET', 'POST'])
 @login_required
-def get_trading_mode():
-    """Get the current trading mode (paper or live)."""
+def trading_mode():
+    """Get or set the current trading mode (paper or live)."""
     try:
         service = Container.get_bot_service()
-        mode = service.get_trading_mode()
-        return jsonify({'mode': mode})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
-@trading_bp.route('/api/bot/trading_mode', methods=['POST'])
-@login_required
-def set_trading_mode():
-    """Toggle between paper and live trading mode. Bot must be stopped."""
-    try:
+        if request.method == 'GET':
+            mode = service.get_trading_mode()
+            return jsonify({'mode': mode})
+
+        # POST
         data = request.json or {}
         mode = data.get('mode')
         if mode not in ('paper', 'live'):
             return jsonify({'error': 'mode must be "paper" or "live"'}), 400
 
-        service = Container.get_bot_service()
         result = service.set_trading_mode(mode)
         if 'error' in result:
             return jsonify(result), 400

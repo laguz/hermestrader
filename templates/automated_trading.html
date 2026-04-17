@@ -567,7 +567,7 @@
             if (res.ok) {
                 fetchStatus();
             } else {
-                alert('Error: ' + data.message);
+                alert('Error: ' + (data.error || data.message || 'Unknown'));
             }
         } catch (e) { alert(e); }
         btnStart.disabled = false;
@@ -581,7 +581,7 @@
             if (res.ok) {
                 fetchStatus();
             } else {
-                alert('Error: ' + data.message);
+                alert('Error: ' + (data.error || data.message || 'Unknown'));
             }
         } catch (e) { alert(e); }
         btnStop.disabled = false;
