@@ -271,10 +271,12 @@ def get_bot_orphans():
 def close_bot_orphan():
     try:
         data = request.json or {}
-        trade_id = data.get('trade_id')
-        if not trade_id: return jsonify({'error': 'trade_id required'}), 400
+        symbol = data.get('symbol')
+        quantity = data.get('quantity')
+        if not symbol: return jsonify({'error': 'symbol required'}), 400
+        if quantity is None: return jsonify({'error': 'quantity required'}), 400
         service = Container.get_bot_service()
-        result = service.close_unmanaged_orphan(trade_id)
+        result = service.close_unmanaged_orphan(symbol, quantity)
         if 'error' in result:
              return jsonify(result), 400
         return jsonify(result)

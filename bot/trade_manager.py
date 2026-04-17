@@ -57,17 +57,60 @@ class TradeManager:
                 logger.error(f"Error fetching trades for {strategy_id}: {e}")
                 return []
                 
+    def _get_tracked_symbols(self):
+        """
+        Build a set of all option/equity symbols currently tracked by bot strategies.
+        Used to diff against live Tradier positions to find orphans.
+        """
+        db_tracked_legs = set()
+        if self.db is None:
+            return db_tracked_legs
+
+        active_db_trades = list(self.db['active_trades'].find({"status": "OPEN", "strategy": {"$ne": "MANUAL_ORPHAN"}}))
+        legacy_db_trades = list(self.db['auto_trades'].find({"status": "OPEN"}))
+        active_db_trades.extend(legacy_db_trades)
+
+        for trade in active_db_trades:
+            if 'short_leg' in trade: db_tracked_legs.add(trade['short_leg'])
+            if 'long_leg' in trade: db_tracked_legs.add(trade['long_leg'])
+
+            if 'legs_info' in trade and isinstance(trade['legs_info'], list):
+                for l in trade['legs_info']:
+                    if 'option_symbol' in l:
+                        db_tracked_legs.add(l['option_symbol'])
+
+            if 'strategy' in trade and 'wheel' in trade['strategy'].lower():
+                if 'symbol' in trade and sum(c.isdigit() for c in trade['symbol']) < 6:
+                    db_tracked_legs.add(trade['symbol'])
+
+        return db_tracked_legs
+
     def get_unmanaged_orphans(self):
         """
-        Retrieves all live trades flagged as MANUAL_ORPHAN for UI display & manual fixing.
+        Compute orphans LIVE by diffing Tradier positions against tracked DB trades.
+        No database persistence — orphans disappear as soon as positions are closed on Tradier.
         """
-        if self.db is None: return []
-        with self.lock:
-            try:
-                return list(self.db['active_trades'].find({"strategy": "MANUAL_ORPHAN", "status": "OPEN"}))
-            except Exception as e:
-                logger.error(f"Error fetching orphans: {e}")
+        try:
+            t_positions = self.tradier.get_positions()
+            if not t_positions:
                 return []
+
+            db_tracked = self._get_tracked_symbols()
+
+            orphans = []
+            for p in t_positions:
+                p_symbol = p.get('symbol')
+                if p_symbol and p_symbol not in db_tracked:
+                    orphans.append({
+                        'symbol': p_symbol,
+                        'quantity': p.get('quantity', 0),
+                        'cost_basis': p.get('cost_basis', 0),
+                        'date_acquired': p.get('date_acquired', ''),
+                    })
+            return orphans
+        except Exception as e:
+            logger.error(f"Error computing live orphans: {e}")
+            return []
 
     def execute_strategy_order(self, strategy_id, symbol, order_class, legs, price, side, quantity=1, tag=None, strategy_params=None):
         """
@@ -121,70 +164,22 @@ class TradeManager:
         
     def reconcile_orphans(self, log_func=logger.info):
         """
-        Validates live Tradier positions against locked `active_trades`.
-        Tags untracked elements purely as 'MANUAL_ORPHAN'.
+        Log-only reconciliation: reports untracked positions without writing to DB.
+        Orphans are computed live via get_unmanaged_orphans().
         """
-        if self.db is None: return
         log_func("🔄 Reconciling active portfolio positions against strategy DB...")
         
-        with self.lock:
-            try:
-                t_positions = self.tradier.get_positions()
-                if not t_positions: return
-                
-                # Fetch all active system trades tracked dynamically
-                active_db_trades = list(self.db['active_trades'].find({"status": "OPEN"}))
-                
-                # Legacy mapping bridge for strategies not fully written over yet
-                legacy_db_trades = list(self.db['auto_trades'].find({"status": "OPEN"}))
-                active_db_trades.extend(legacy_db_trades)
-                
-                db_tracked_legs = set()
-                for trade in active_db_trades:
-                    # Strategy might define legacy "short_leg" "long_leg" directly
-                    if 'short_leg' in trade: db_tracked_legs.add(trade['short_leg'])
-                    if 'long_leg' in trade: db_tracked_legs.add(trade['long_leg'])
-                    
-                    # Or nested inside legs_info list
-                    if 'legs_info' in trade and isinstance(trade['legs_info'], list):
-                        for l in trade['legs_info']:
-                            if 'option_symbol' in l:
-                                db_tracked_legs.add(l['option_symbol'])
-                                
-                    # Naked equity entries directly as symbol
-                    # If it's a wheel trade tracking a core equity, the trade 'symbol' itself is tracked 
-                    if 'strategy' in trade and 'wheel' in trade['strategy'].lower():
-                        if 'symbol' in trade and sum(c.isdigit() for c in trade['symbol']) < 6: # Not an option string heuristically
-                             db_tracked_legs.add(trade['symbol'])
-
-                orphan_count = 0
-                for p in t_positions:
-                    p_symbol = p.get('symbol') 
-                    
-                    if p_symbol not in db_tracked_legs:
-                        # Evaluate if already marked as orphan
-                        existing_orphan = self.db['active_trades'].find_one({
-                            "strategy": "MANUAL_ORPHAN",
-                            "status": "OPEN",
-                            "symbol": p_symbol 
-                        })
-                        
-                        if not existing_orphan:
-                            self.db['active_trades'].insert_one({
-                                "strategy": "MANUAL_ORPHAN",
-                                "status": "OPEN",
-                                "symbol": p_symbol,
-                                "quantity": p.get('quantity', 0),
-                                "cost_basis": p.get('cost_basis', 0),
-                                "timestamp": datetime.now(),
-                                "raw_tradier_data": p
-                            })
-                            orphan_count += 1
-                            log_func(f"⚠️ MANUAL_ORPHAN detected & isolated: {p_symbol}")
-                            
-            except Exception as e:
-                log_func(f"Error during Orphan Reconciliation: {e}")
-                traceback.print_exc()
+        try:
+            orphans = self.get_unmanaged_orphans()
+            if orphans:
+                for o in orphans:
+                    log_func(f"⚠️ Untracked position detected: {o['symbol']} (qty: {o['quantity']})")
+                log_func(f"Found {len(orphans)} untracked position(s). View them in the Orphans panel.")
+            else:
+                log_func("✅ All positions are tracked by strategies.")
+        except Exception as e:
+            log_func(f"Error during Orphan Reconciliation: {e}")
+            traceback.print_exc()
 
     def mark_trade_closed(self, trade_id, limit_price=None, response_id=None, collection='active_trades'):
          if self.db is None: return
