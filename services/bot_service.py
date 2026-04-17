@@ -62,6 +62,24 @@ class BotService:
             self.ml_service = MLService(self.tradier)
         return self.ml_service
 
+    _DEFAULT_SETTINGS = {
+        "watchlist_credit_spreads_7": [],
+        "watchlist_credit_spreads_75": [],
+        "watchlist_tastytrade45": [],
+        "watchlist_wheel": [],
+        "max_drawdown": 500,
+        "max_position_size": 1000,
+        "max_credit_spreads_7_per_symbol": 5,
+        "max_credit_spreads_75_per_symbol": 5,
+        "max_tastytrade45_per_symbol": 5,
+        "max_wheel_contracts_per_symbol": 1,
+    }
+
+    def _settings_key(self):
+        """Return the DB key for the active trading mode's settings."""
+        mode = self.tradier.get_trading_mode()
+        return f"settings_{mode}"
+
     def _init_db_config(self):
         """Ensure initial bot configuration exists in DB."""
         if self.db is not None:
@@ -70,55 +88,49 @@ class BotService:
              # prepare default structure
              defaults = {
                  "_id": "main_bot",
-                 "status": "STOPPED", # STOPPED, RUNNING, ERROR
+                 "status": "STOPPED",
+                 "trading_mode": "paper",
                  "last_heartbeat": None,
                  "logs": [],
-                 "settings": {
-                     "watchlist_credit_spreads_7": [],
-                     "watchlist_credit_spreads_75": [],
-                     "watchlist_tastytrade45": [],
-                     "watchlist_wheel": [],         # Start empty, user adds via UI
-                     "max_drawdown": 500,
-                     "max_position_size": 1000,
-                     "max_credit_spreads_7_per_symbol": 5,
-                     "max_credit_spreads_75_per_symbol": 5,
-                     "max_tastytrade45_per_symbol": 5,
-                     "max_wheel_contracts_per_symbol": 1,
-                     "trading_mode": "paper"
-                 }
+                 "settings_paper": dict(self._DEFAULT_SETTINGS),
+                 "settings_live": dict(self._DEFAULT_SETTINGS),
              }
 
              if not status:
                  self.db['bot_config'].insert_one(defaults)
              else:
-                 # Migration: Ensure new fields exist if old doc exists
-                 settings = status.get('settings', {})
                  updates = {}
-                 if 'watchlist_credit_spreads_7' not in settings:
-                     updates['settings.watchlist_credit_spreads_7'] = []
-                 if 'watchlist_credit_spreads_75' not in settings:
-                     updates['settings.watchlist_credit_spreads_75'] = []
-                 if 'watchlist_tastytrade45' not in settings:
-                     updates['settings.watchlist_tastytrade45'] = []
-                 if 'watchlist_wheel' not in settings:
-                    updates['settings.watchlist_wheel'] = []
-                 if 'max_wheel_contracts_per_symbol' not in settings:
-                     updates['settings.max_wheel_contracts_per_symbol'] = 1
-                 if 'max_credit_spreads_7_per_symbol' not in settings:
-                     updates['settings.max_credit_spreads_7_per_symbol'] = 5
-                 if 'max_credit_spreads_75_per_symbol' not in settings:
-                     updates['settings.max_credit_spreads_75_per_symbol'] = 5
-                 if 'max_tastytrade45_per_symbol' not in settings:
-                     updates['settings.max_tastytrade45_per_symbol'] = 5
-                 if 'trading_mode' not in settings:
-                     updates['settings.trading_mode'] = 'paper'
-                 
+                 # Migration: create per-mode settings if missing
+                 for mode_key in ('settings_paper', 'settings_live'):
+                     if mode_key not in status:
+                         # Seed from old unified 'settings' if it exists, otherwise defaults
+                         old_settings = status.get('settings', {})
+                         seed = dict(self._DEFAULT_SETTINGS)
+                         for k in self._DEFAULT_SETTINGS:
+                             if k in old_settings:
+                                 seed[k] = old_settings[k]
+                         updates[mode_key] = seed
+                     else:
+                         # Ensure all keys exist within existing per-mode settings
+                         mode_settings = status[mode_key]
+                         for k, v in self._DEFAULT_SETTINGS.items():
+                             if k not in mode_settings:
+                                 updates[f"{mode_key}.{k}"] = v
+
+                 if 'trading_mode' not in status:
+                     updates['trading_mode'] = status.get('settings', {}).get('trading_mode', 'paper')
+
                  if updates:
                      self.db['bot_config'].update_one({"_id": "main_bot"}, {"$set": updates})
 
     def get_status(self):
+        """Return bot status with settings mapped to the active trading mode."""
         if self.db is None: return {"status": "ERROR", "message": "DB Unavailable"}
-        return self.db['bot_config'].find_one({"_id": "main_bot"}) or {}
+        doc = self.db['bot_config'].find_one({"_id": "main_bot"}) or {}
+        # Map active mode's settings into 'settings' for UI backwards compat
+        sk = self._settings_key()
+        doc['settings'] = doc.get(sk, dict(self._DEFAULT_SETTINGS))
+        return doc
 
     def start_bot(self):
         if self._thread and self._thread.is_alive():
@@ -161,7 +173,7 @@ class BotService:
         if self.db is None: return
         config = self.db['bot_config'].find_one({"_id": "main_bot"})
         if config:
-            mode = config.get('settings', {}).get('trading_mode', 'paper')
+            mode = config.get('trading_mode', 'paper')
             if mode in ('paper', 'live'):
                 result = self.tradier.set_trading_mode(mode)
                 if 'error' in result:
@@ -186,10 +198,7 @@ class BotService:
         if self.db is not None:
             self.db['bot_config'].update_one(
                 {"_id": "main_bot"},
-                {"$set": {
-                    "settings.trading_mode": mode,
-                    "trading_mode": mode
-                }}
+                {"$set": {"trading_mode": mode}}
             )
 
         self._log(f"🔄 Trading mode switched to: {mode.upper()}")
@@ -200,9 +209,8 @@ class BotService:
         return self.tradier.get_trading_mode()
 
     def update_watchlist(self, watchlist, list_type="credit_spreads"):
-        """Update the watchlist in settings. list_type: 'wheel' or 'tastytrade45' or 'credit_spreads_7' etc."""
+        """Update the watchlist for the active trading mode."""
         if self.db is None: return False
-        # Validate input (list of strings)
         if not isinstance(watchlist, list):
             return False
         
@@ -215,26 +223,27 @@ class BotService:
                 clean_list.append(s)
                 seen.add(s)
         
-        # Map frontend type to DB key
-        db_key = f"settings.watchlist_{list_type}"
-        # Safety check to only allow specific keys
         if list_type not in ['wheel', 'credit_spreads_7', 'credit_spreads_75', 'tastytrade45']:
             self._log(f"Error: Invalid watchlist type {list_type}")
             return None
+
+        # Write to the active mode's settings
+        sk = self._settings_key()
+        db_key = f"{sk}.watchlist_{list_type}"
 
         self.db['bot_config'].update_one(
             {"_id": "main_bot"},
             {"$set": {db_key: clean_list}}
         )
-        self._log(f"Watchlist ({list_type}) updated: {clean_list}")
+        mode = self.tradier.get_trading_mode().upper()
+        self._log(f"Watchlist ({list_type}) updated [{mode}]: {clean_list}")
         return clean_list
 
     def update_settings(self, settings_update):
-        """Generic method to update settings fields."""
+        """Update settings for the active trading mode."""
         if self.db is None: return False
         if not isinstance(settings_update, dict): return False
         
-        # Whitelist allowed keys to prevent overwriting critical internal state
         allowed_keys = [
             'max_drawdown',
             'max_position_size',
@@ -244,14 +253,13 @@ class BotService:
             'max_wheel_contracts_per_symbol'
         ]
         
+        sk = self._settings_key()
         safe_updates = {}
         for k, v in settings_update.items():
             if k in allowed_keys:
-                # Ensure we cast to appropriate types if needed (e.g. int/float)
-                # For now assume input is clean or cast safe
                 try:
-                    if 'max' in k: safe_updates[f"settings.{k}"] = int(v)
-                    else: safe_updates[f"settings.{k}"] = v
+                    if 'max' in k: safe_updates[f"{sk}.{k}"] = int(v)
+                    else: safe_updates[f"{sk}.{k}"] = v
                 except Exception:
                    self._log(f"Invalid value for {k}: {v}")
 
@@ -262,7 +270,8 @@ class BotService:
             {"_id": "main_bot"},
             {"$set": safe_updates}
         )
-        self._log(f"Settings updated: {safe_updates}")
+        mode = self.tradier.get_trading_mode().upper()
+        self._log(f"Settings updated [{mode}]: {safe_updates}")
         return True
 
     # ... (logs, status methods unchanged) ...
@@ -608,12 +617,13 @@ class BotService:
         tradier_service = self.tradier
         db = self.db
 
-        # --- Resolve watchlists from request data, DB config, or defaults ---
+        # --- Resolve watchlists from the active mode's settings ---
+        sk = self._settings_key()
         def _resolve_watchlist(request_key: str, db_key: str, defaults: list) -> list:
             wl = data.get(request_key)
             if not wl:
                 bot_cfg = db.bot_config.find_one({"_id": "main_bot"}) or {}
-                wl = bot_cfg.get('settings', {}).get(db_key, [])
+                wl = bot_cfg.get(sk, {}).get(db_key, [])
             return wl or defaults
         cs7_watchlist = _resolve_watchlist(
             'credit_spreads_7_watchlist', 'watchlist_credit_spreads_7',
@@ -634,8 +644,8 @@ class BotService:
 
         logger.debug(f"Dry-run watchlists — CS7: {cs7_watchlist}, Wheel: {wheel_watchlist}")
 
-        # Fetch config
-        bot_config = (db.bot_config.find_one({"_id": "main_bot"}) or {}).get('settings', {})
+        # Fetch config from active mode
+        bot_config = (db.bot_config.find_one({"_id": "main_bot"}) or {}).get(sk, {})
         all_logs: list[str] = []
 
         # --- Credit Spreads ---
