@@ -472,43 +472,48 @@ class BotService:
             return False
             
     def _execute_strategies(self, config):
-        """Executes all active trading strategies."""
+        """Executes all active trading strategies. Strategies with max lots = 0 are skipped."""
         # Priority 1: Wheel Strategy
+        max_wheel = config.get('max_wheel_contracts_per_symbol', 1)
         wl_wheel = config.get('watchlist_wheel', [])
-        if wl_wheel:
+        if wl_wheel and max_wheel > 0:
             self._log(f"Running Wheel Strategy on {len(wl_wheel)} symbols...")
             wheel_config = config.copy()
             wheel_config['min_obp_reserve'] = 26000
             self.wheel_strategy.execute(wl_wheel, wheel_config)
 
         # Priority 3: 7DTE Credit Spread Strategy
+        max_cs7 = config.get('max_credit_spreads_7_per_symbol', 5)
         wl_spreads_7 = config.get('watchlist_credit_spreads_7', [])
-        if wl_spreads_7:
-            self._log(f"Managing & Running 7DTE Credit Spread Strategy on {len(wl_spreads_7)} symbols...")
-            self.credit_spread_7_strategy.manage_positions()
+        # Always manage existing positions (TP/SL exits)
+        self.credit_spread_7_strategy.manage_positions()
+        if wl_spreads_7 and max_cs7 > 0:
+            self._log(f"Running 7DTE Credit Spread Strategy on {len(wl_spreads_7)} symbols...")
             cs7_config = config.copy()
             cs7_config['min_obp_reserve'] = 0
-            cs7_config['max_credit_spreads_per_symbol'] = config.get('max_credit_spreads_7_per_symbol', 5)
+            cs7_config['max_credit_spreads_per_symbol'] = max_cs7
             self.credit_spread_7_strategy.execute(wl_spreads_7, cs7_config)
 
         # Priority 4: 45DTE Credit Spreads Strategy (75 POP)
+        max_cs75 = config.get('max_credit_spreads_75_per_symbol', 5)
         wl_spreads_75 = config.get('watchlist_credit_spreads_75', [])
-        if wl_spreads_75:
-            self._log(f"Managing & Running 45DTE/75POP Credit Spread Strategy on {len(wl_spreads_75)} symbols...")
-            self.credit_spread_75_strategy.manage_positions()
+        self.credit_spread_75_strategy.manage_positions()
+        if wl_spreads_75 and max_cs75 > 0:
+            self._log(f"Running 45DTE/75POP Credit Spread Strategy on {len(wl_spreads_75)} symbols...")
             cs75_config = config.copy()
             cs75_config['min_obp_reserve'] = 0
-            cs75_config['max_credit_spreads_per_symbol'] = config.get('max_credit_spreads_75_per_symbol', 5)
+            cs75_config['max_credit_spreads_per_symbol'] = max_cs75
             self.credit_spread_75_strategy.execute(wl_spreads_75, cs75_config)
 
         # Priority 5: TastyTrade45
+        max_tt45 = config.get('max_tastytrade45_per_symbol', 5)
         wl_tastytrade45 = config.get('watchlist_tastytrade45', [])
-        if wl_tastytrade45:
-            self._log(f"Managing & Running TastyTrade45 Strategy on {len(wl_tastytrade45)} symbols...")
-            self.tastytrade45_strategy.manage_positions()
+        self.tastytrade45_strategy.manage_positions()
+        if wl_tastytrade45 and max_tt45 > 0:
+            self._log(f"Running TastyTrade45 Strategy on {len(wl_tastytrade45)} symbols...")
             tt45_config = config.copy()
             tt45_config['min_obp_reserve'] = 0
-            tt45_config['max_tastytrade45_per_symbol'] = config.get('max_tastytrade45_per_symbol', 5)
+            tt45_config['max_tastytrade45_per_symbol'] = max_tt45
             self.tastytrade45_strategy.execute(wl_tastytrade45, tt45_config)
     def _run_ml_scheduler(self, config):
         """
