@@ -334,6 +334,9 @@
                 updateTradingModeUI(data.mode);
                 const ep = document.getElementById('mode-endpoint');
                 if (ep && data.endpoint) ep.textContent = data.endpoint;
+                // Reset lastSettings so the new mode's values load immediately
+                lastSettings = null;
+                fetchStatus();
             } else {
                 alert('Error: ' + (data.error || 'Unknown error'));
                 // Revert toggle
@@ -393,11 +396,12 @@
         // Update Configuration Inputs
         if (status.settings) {
             const s = status.settings;
+            const _v = (val, def) => (val !== undefined && val !== null) ? val : def;
 
-            updateInputIfSafe('cfg-cs7-lots', s.max_credit_spreads_7_per_symbol || 5);
-            updateInputIfSafe('cfg-cs75-lots', s.max_credit_spreads_75_per_symbol || 5);
-            updateInputIfSafe('cfg-tt45-lots', s.max_tastytrade45_per_symbol || 5);
-            updateInputIfSafe('cfg-wheel-lots', s.max_wheel_contracts_per_symbol || 1);
+            updateInputIfSafe('cfg-cs7-lots', _v(s.max_credit_spreads_7_per_symbol, 5));
+            updateInputIfSafe('cfg-cs75-lots', _v(s.max_credit_spreads_75_per_symbol, 5));
+            updateInputIfSafe('cfg-tt45-lots', _v(s.max_tastytrade45_per_symbol, 5));
+            updateInputIfSafe('cfg-wheel-lots', _v(s.max_wheel_contracts_per_symbol, 1));
 
             lastSettings = s;
         }
@@ -425,13 +429,13 @@
 
         // 3. Compare current input value with LAST KNOWN DB value.
         // If current input value != last known DB value, user edited it. Do not overwrite.
-        // We map ID to the settings key for comparison
+        const _v = (val, def) => (val !== undefined && val !== null) ? val : def;
         let oldDbValue = null;
 
-        if (id === 'cfg-cs7-lots') oldDbValue = lastSettings.max_credit_spreads_7_per_symbol || 5;
-        if (id === 'cfg-cs75-lots') oldDbValue = lastSettings.max_credit_spreads_75_per_symbol || 5;
-        if (id === 'cfg-tt45-lots') oldDbValue = lastSettings.max_tastytrade45_per_symbol || 5;
-        if (id === 'cfg-wheel-lots') oldDbValue = lastSettings.max_wheel_contracts_per_symbol || 1;
+        if (id === 'cfg-cs7-lots') oldDbValue = _v(lastSettings.max_credit_spreads_7_per_symbol, 5);
+        if (id === 'cfg-cs75-lots') oldDbValue = _v(lastSettings.max_credit_spreads_75_per_symbol, 5);
+        if (id === 'cfg-tt45-lots') oldDbValue = _v(lastSettings.max_tastytrade45_per_symbol, 5);
+        if (id === 'cfg-wheel-lots') oldDbValue = _v(lastSettings.max_wheel_contracts_per_symbol, 1);
 
         // Loose comparison (string vs number)
         if (el.value == oldDbValue) {
