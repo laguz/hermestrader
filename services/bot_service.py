@@ -413,6 +413,7 @@ class BotService:
                 
                 # Management ONLY logic
                 self._log(f"Running Credit Spread MANAGEMENT (Exits) ONLY...")
+                self.credit_spread_7_strategy.manage_positions()
                 self.credit_spread_75_strategy.manage_positions()
                 self.tastytrade45_strategy.manage_positions()
                 
@@ -440,7 +441,8 @@ class BotService:
         # Priority 3: 7DTE Credit Spread Strategy
         wl_spreads_7 = config.get('watchlist_credit_spreads_7', [])
         if wl_spreads_7:
-            self._log(f"Running 7DTE Credit Spread Strategy on {len(wl_spreads_7)} symbols...")
+            self._log(f"Managing & Running 7DTE Credit Spread Strategy on {len(wl_spreads_7)} symbols...")
+            self.credit_spread_7_strategy.manage_positions()
             cs7_config = config.copy()
             cs7_config['min_obp_reserve'] = 0
             cs7_config['max_credit_spreads_per_symbol'] = config.get('max_credit_spreads_7_per_symbol', 5)
@@ -609,6 +611,8 @@ class BotService:
             strategy_cs7 = CreditSpreads7Strategy(tradier_service, db, dry_run=True)
             bot_config_cs7 = bot_config.copy()
             bot_config_cs7['max_credit_spreads_per_symbol'] = bot_config.get('max_credit_spreads_7_per_symbol', 5)
+            cs7_logs_management = strategy_cs7.manage_positions(simulation_mode=True)
+            if cs7_logs_management: all_logs.extend(cs7_logs_management)
             cs7_logs = strategy_cs7.execute(cs7_watchlist, bot_config_cs7)
             all_logs.extend(cs7_logs)
 

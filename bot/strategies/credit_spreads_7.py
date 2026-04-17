@@ -1,6 +1,7 @@
+import re
 import traceback
 import pytz
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors
 
@@ -261,3 +262,150 @@ class CreditSpreads7Strategy(AbstractStrategy):
                      'long_leg': long_leg['symbol']
                  }
                  self._record_trade(symbol, f"Credit Spreads 7 {side_name}", net_credit, response, legs_info)
+
+    def manage_positions(self, simulation_mode=False):
+        """
+        Check open positions for exit conditions.
+        """
+        if simulation_mode:
+            self.execution_logs = []
+
+        if self.db is None: return
+
+        # 1. Fetch OPEN trades specific to this strategy
+        open_trades = self.get_open_trades()
+
+        if not open_trades:
+            return self.execution_logs if simulation_mode else None
+
+        active_option_symbols = {}
+        if not simulation_mode:
+            try:
+                positions = self.tradier.get_positions()
+                active_option_symbols = {p['symbol']: p for p in positions}
+            except Exception as e:
+                self._log(f"Error fetching positions for management: {e}")
+                return self.execution_logs if simulation_mode else None
+
+        for trade in open_trades:
+            symbol = trade['symbol']
+            short_leg = trade.get('short_leg')
+            long_leg = trade.get('long_leg')
+            entry_credit = float(trade.get('price', 0))
+
+            if not simulation_mode and (not short_leg or short_leg not in active_option_symbols):
+                 self._log(f"⚠️ Trade {symbol} ({short_leg}) not found in active positions. Ignoring.")
+                 continue
+
+            # Parse expiration and strike to calculate width
+            match_short = re.search(r'[A-Z]+(\d{6})[PC](\d{8})', short_leg)
+            match_long = re.search(r'[A-Z]+\d{6}[PC](\d{8})', long_leg) if long_leg else None
+            
+            if not match_short or not match_long:
+                 continue
+                 
+            try:
+                expiry_date = datetime.strptime(match_short.group(1), '%y%m%d').date()
+                dte = (expiry_date - self._get_current_date()).days
+                short_strike = float(match_short.group(2)) / 1000.0
+                long_strike = float(match_long.group(1)) / 1000.0
+                spread_width = abs(short_strike - long_strike)
+            except ValueError:
+                continue
+
+            # Get natural debit
+            should_close = False
+            close_reason = ""
+            current_debit = 0.0
+
+            try:
+                if long_leg:
+                    legs_str = f"{short_leg},{long_leg}"
+                    q_data = self.tradier.get_quote(legs_str)
+                    if isinstance(q_data, dict): legs_quotes = [q_data]
+                    elif isinstance(q_data, list): legs_quotes = q_data
+                    else: legs_quotes = []
+
+                    sq = next((q for q in legs_quotes if q['symbol'] == short_leg), None)
+                    lq = next((q for q in legs_quotes if q['symbol'] == long_leg), None)
+
+                    if sq and lq:
+                        sq_ask = float(sq.get('ask', 0))
+                        lq_bid = float(lq.get('bid', 0))
+                        
+                        current_debit = round(sq_ask - lq_bid, 2)
+                        
+                        # Take Profit (<= 2% of width)
+                        target_tp_debit = spread_width * 0.02
+                        target_sl_debit = spread_width * 0.36
+                        
+                        if current_debit <= target_tp_debit:
+                            should_close = True
+                            close_reason = f"Take Profit (Debit ${current_debit:.2f} <= 2% of width ${spread_width:.2f} [${target_tp_debit:.2f}])"
+                            
+                        # Stop Loss (>= 36% of width)
+                        elif current_debit >= target_sl_debit:
+                            should_close = True
+                            close_reason = f"Stop Loss (Debit ${current_debit:.2f} >= 36% of width ${spread_width:.2f} [${target_sl_debit:.2f}])"
+            except Exception as e:
+                self._log(f"Error quoting {short_leg}: {e}")
+
+            # Time Exit check overrides 
+            if not should_close and dte <= 0:
+                should_close = True
+                close_reason = f"Time Exit (DTE {dte} <= 0)"
+
+            if should_close:
+                self._log(f"🚨 Closing {symbol} Spread ({short_leg}) — Reason: {close_reason}")
+                limit_price = round(current_debit * 1.05, 2) if current_debit > 0 else 0.05
+                self._execute_close(trade, limit_price=limit_price, simulation_mode=simulation_mode)
+
+        return self.execution_logs if simulation_mode else None
+
+    def _execute_close(self, trade, limit_price=None, simulation_mode=False):
+        short_leg = trade['short_leg']
+        long_leg = trade['long_leg']
+        legs = [
+            {'option_symbol': short_leg, 'side': 'buy_to_close', 'quantity': 1},
+            {'option_symbol': long_leg, 'side': 'sell_to_close', 'quantity': 1}
+        ]
+
+        if self.dry_run or simulation_mode:
+            self._log(f"[DRY RUN/SIM] Closing {trade['symbol']} spread. Limit: {limit_price}")
+            if not simulation_mode:
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=None)
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {"status": "CLOSED", "close_date": datetime.now(), "exit_price": limit_price}}
+                    )
+        else:
+            response = self.tradier.place_order(
+                account_id=self.tradier.account_id,
+                symbol=trade['symbol'],
+                side='buy',
+                quantity=1,
+                order_type='debit',
+                duration='day',
+                price=limit_price,
+                order_class='multileg',
+                legs=legs,
+                tag="CREDSPRD_7_CLOSE"
+            )
+            if 'error' in response:
+                self._log(f"Close Output Failed: {response['error']}")
+            else:
+                self._log(f"Close Ordered: {response.get('id')}")
+                if getattr(self, 'trade_manager', None):
+                    self.trade_manager.mark_trade_closed(trade['_id'], limit_price=limit_price, response_id=response.get('id'))
+                else:
+                    self.db['active_trades'].update_one(
+                        {"_id": trade['_id']},
+                        {"$set": {
+                            "status": "CLOSED", 
+                            "close_date": datetime.now(), 
+                            "close_order_id": response.get('id'),
+                            "exit_price": limit_price
+                        }}
+                    )
