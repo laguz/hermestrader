@@ -72,12 +72,48 @@ class TastyTrade45Strategy(AbstractStrategy):
 
     def execute(self, watchlist, config=None):
         config = config or {}
+        """
+        Execute TastyTrade45 strategy — Iron Condor Completion Mode.
+        
+        Only attempts to open the opposite side of an existing single-side
+        credit spread to form an iron condor, if the open position has 21–45 DTE.
+        Does NOT open fresh positions when no position exists.
+        """
         for symbol in watchlist:
             try:
                 if self.dry_run:
                     print(f"\n{Colors.HEADER}📦 Analyzing TT45 {symbol}...{Colors.ENDC}")
                 else:
                     self._log(f"Analyzing {symbol}...")
+                
+                # 1. Check for existing open positions on this symbol
+                open_info = self._get_open_sides_for_symbol(symbol)
+                
+                if not open_info:
+                    self._log(f"ℹ️ {symbol}: No open positions. Skipping (iron condor mode).")
+                    continue
+                
+                open_sides = open_info['sides']  # set of 'put' and/or 'call'
+                dte = open_info['dte']
+                expiry = open_info['expiry']
+                
+                # Already a full iron condor (both sides open)
+                if 'put' in open_sides and 'call' in open_sides:
+                    self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
+                    continue
+                
+                # Check DTE window for condor completion (21–45 DTE)
+                if dte < 21 or dte > 45:
+                    open_side = list(open_sides)[0]
+                    self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 21–45 DTE window. Skipping condor completion.")
+                    continue
+                
+                # Single side open, within 21–45 DTE — try the opposite side
+                open_side = list(open_sides)[0]
+                opposite_is_put = (open_side == 'call')
+                opposite_name = 'put' if opposite_is_put else 'call'
+                
+                self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
                 
                 # Check Volatility Rank threshold (> 30)
                 hv_rank = self._calculate_hv_rank(symbol)
@@ -89,19 +125,72 @@ class TastyTrade45Strategy(AbstractStrategy):
                 if not q: continue
                 current_price = q.get('last') or q.get('close')
                 if not current_price: continue
-
-                expiry = self._find_best_dte_expiry(symbol)
-                if not expiry:
-                    continue
-                    
-                self._process_side(symbol, current_price, expiry, is_put=True, config=config)
-                self._process_side(symbol, current_price, expiry, is_put=False, config=config)
+                
+                # Process the opposite side using the SAME expiry as the open position
+                self._process_side(symbol, current_price, expiry, is_put=opposite_is_put, config=config)
                 
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
         
         return self.execution_logs
+
+    def _get_open_sides_for_symbol(self, symbol):
+        """
+        Check existing OPEN trades for this symbol under this strategy.
+        Returns dict with open sides info, or None if no open positions.
+        
+        Returns:
+            {
+                'sides': {'put'} or {'call'} or {'put', 'call'},
+                'expiry': '2026-05-30',   # expiry of the open position(s)
+                'dte': 35                 # days remaining to expiry
+            }
+            or None if no open positions.
+        """
+        open_trades = self.get_open_trades()
+        if not open_trades:
+            return None
+        
+        today = self._get_current_date()
+        sides = set()
+        latest_expiry = None
+        latest_dte = None
+        
+        for trade in open_trades:
+            if trade.get('symbol') != symbol:
+                continue
+            
+            short_leg = trade.get('short_leg', '')
+            if not short_leg:
+                continue
+            
+            # Parse OCC symbol: e.g. SPY260530P00520000
+            match = re.search(r'[A-Z]+(\d{6})([PC])(\d{8})', short_leg)
+            if not match:
+                continue
+            
+            try:
+                expiry_date = datetime.strptime(match.group(1), '%y%m%d').date()
+                option_type = 'put' if match.group(2) == 'P' else 'call'
+                dte = (expiry_date - today).days
+                
+                sides.add(option_type)
+                
+                if latest_expiry is None or expiry_date > datetime.strptime(latest_expiry, '%Y-%m-%d').date():
+                    latest_expiry = expiry_date.strftime('%Y-%m-%d')
+                    latest_dte = dte
+            except ValueError:
+                continue
+        
+        if not sides:
+            return None
+        
+        return {
+            'sides': sides,
+            'expiry': latest_expiry,
+            'dte': latest_dte
+        }
 
     def _find_best_dte_expiry(self, symbol):
         expirations = self.tradier.get_option_expirations(symbol)
@@ -319,10 +408,10 @@ class TastyTrade45Strategy(AbstractStrategy):
                     lq_bid = float(lq.get('bid', 0))
                     current_debit = round(sq_ask - lq_bid, 2)
                     
-                    # Target 50% Take Profit
-                    if current_debit <= (entry_credit * 0.50):
+                    # Take Profit: 50% only if DTE >= 22
+                    if dte >= 22 and current_debit <= (entry_credit * 0.50):
                         should_close = True
-                        close_reason = f"Take Profit 50% (Debit ${current_debit:.2f} <= 50% of Setup ${entry_credit:.2f})"
+                        close_reason = f"Take Profit 50% (Debit ${current_debit:.2f} <= 50% of Setup ${entry_credit:.2f}) — DTE {dte} (>=22)"
             except Exception as e:
                 pass
 
