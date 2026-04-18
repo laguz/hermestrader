@@ -15,7 +15,11 @@ class CreditSpreads7Strategy(AbstractStrategy):
     def execute(self, watchlist, config=None):
         config = config or {}
         """
-        Execute 7DTE Credit Spreads strategy.
+        Execute 7DTE Credit Spreads strategy — Iron Condor Completion Mode.
+        
+        Only attempts to open the opposite side of an existing single-side
+        credit spread to form an iron condor, if the open position has 3–6 DTE.
+        Does NOT open fresh positions when no position exists.
         """
         for symbol in watchlist:
             try:
@@ -24,7 +28,36 @@ class CreditSpreads7Strategy(AbstractStrategy):
                 else:
                     self._log(f"Analyzing {symbol}...")
                 
-                # 1. Analyze 3m data
+                # 1. Check for existing open positions on this symbol
+                open_info = self._get_open_sides_for_symbol(symbol)
+                
+                if not open_info:
+                    self._log(f"ℹ️ {symbol}: No open positions. Skipping (iron condor mode).")
+                    continue
+                
+                open_sides = open_info['sides']  # set of 'put' and/or 'call'
+                dte = open_info['dte']
+                expiry = open_info['expiry']
+                
+                # Already a full iron condor (both sides open)
+                if 'put' in open_sides and 'call' in open_sides:
+                    self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
+                    continue
+                
+                # Check DTE window for condor completion
+                if dte < 3 or dte > 6:
+                    open_side = list(open_sides)[0]
+                    self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 3–6 DTE window. Skipping condor completion.")
+                    continue
+                
+                # Single side open, within 3–6 DTE — try the opposite side
+                open_side = list(open_sides)[0]
+                opposite_is_put = (open_side == 'call')
+                opposite_name = 'put' if opposite_is_put else 'call'
+                
+                self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
+                
+                # 2. Analyze 3m data
                 analysis = self.analysis_service.analyze_symbol(symbol, period='3m')
                 if not analysis or 'error' in analysis:
                     self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
@@ -34,21 +67,75 @@ class CreditSpreads7Strategy(AbstractStrategy):
                 if not current_price:
                     self._log(f"⚠️  Missing current price for {symbol}")
                     continue
-
-                # Get expiry exactly 7DTE
-                expiry = self._find_exact_7dte_expiry(symbol)
-                if not expiry:
-                    continue
                 
-                # Process Put Spreads and Call Spreads Independently
-                self._process_side(symbol, current_price, analysis, expiry, is_put=True, config=config)
-                self._process_side(symbol, current_price, analysis, expiry, is_put=False, config=config)
+                # 3. Process the opposite side using the SAME expiry as the open position
+                self._process_side(symbol, current_price, analysis, expiry, is_put=opposite_is_put, config=config)
                 
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
                 traceback.print_exc()
         
         return self.execution_logs
+
+    def _get_open_sides_for_symbol(self, symbol):
+        """
+        Check existing OPEN trades for this symbol under this strategy.
+        Returns dict with open sides info, or None if no open positions.
+        
+        Returns:
+            {
+                'sides': {'put'} or {'call'} or {'put', 'call'},
+                'expiry': '2026-04-24',   # expiry of the open position(s)
+                'dte': 5                  # days remaining to expiry
+            }
+            or None if no open positions.
+        """
+        open_trades = self.get_open_trades()
+        if not open_trades:
+            return None
+        
+        today = self._get_current_date()
+        sides = set()
+        latest_expiry = None
+        latest_dte = None
+        
+        for trade in open_trades:
+            if trade.get('symbol') != symbol:
+                continue
+            
+            short_leg = trade.get('short_leg', '')
+            if not short_leg:
+                continue
+            
+            # Parse OCC symbol: e.g. SPY260424P00520000
+            # The P or C character tells us put vs call
+            match = re.search(r'[A-Z]+(\d{6})([PC])(\d{8})', short_leg)
+            if not match:
+                continue
+            
+            try:
+                expiry_date = datetime.strptime(match.group(1), '%y%m%d').date()
+                option_type = 'put' if match.group(2) == 'P' else 'call'
+                dte = (expiry_date - today).days
+                
+                sides.add(option_type)
+                
+                # Track the expiry (all legs on same symbol should share expiry,
+                # but use the latest if there are multiple)
+                if latest_expiry is None or expiry_date > datetime.strptime(latest_expiry, '%Y-%m-%d').date():
+                    latest_expiry = expiry_date.strftime('%Y-%m-%d')
+                    latest_dte = dte
+            except ValueError:
+                continue
+        
+        if not sides:
+            return None
+        
+        return {
+            'sides': sides,
+            'expiry': latest_expiry,
+            'dte': latest_dte
+        }
 
     def _find_exact_7dte_expiry(self, symbol):
         expirations = self.tradier.get_option_expirations(symbol)
