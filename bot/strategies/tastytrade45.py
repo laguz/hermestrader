@@ -73,11 +73,9 @@ class TastyTrade45Strategy(AbstractStrategy):
     def execute(self, watchlist, config=None):
         config = config or {}
         """
-        Execute TastyTrade45 strategy — Iron Condor Completion Mode.
-        
-        Only attempts to open the opposite side of an existing single-side
-        credit spread to form an iron condor, if the open position has 21–45 DTE.
-        Does NOT open fresh positions when no position exists.
+        Execute TastyTrade45 strategy.
+        Mode A: Initial Open (no open spreads, 30-60 DTE)
+        Mode B: Iron Condor Completion (1 side open, 30-60 DTE)
         """
         for symbol in watchlist:
             try:
@@ -85,35 +83,6 @@ class TastyTrade45Strategy(AbstractStrategy):
                     print(f"\n{Colors.HEADER}📦 Analyzing TT45 {symbol}...{Colors.ENDC}")
                 else:
                     self._log(f"Analyzing {symbol}...")
-                
-                # 1. Check for existing open positions on this symbol
-                open_info = self._get_open_sides_for_symbol(symbol)
-                
-                if not open_info:
-                    self._log(f"ℹ️ {symbol}: No open positions. Skipping (iron condor mode).")
-                    continue
-                
-                open_sides = open_info['sides']  # set of 'put' and/or 'call'
-                dte = open_info['dte']
-                expiry = open_info['expiry']
-                
-                # Already a full iron condor (both sides open)
-                if 'put' in open_sides and 'call' in open_sides:
-                    self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
-                    continue
-                
-                # Check DTE window for condor completion (21–45 DTE)
-                if dte < 21 or dte > 45:
-                    open_side = list(open_sides)[0]
-                    self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 21–45 DTE window. Skipping condor completion.")
-                    continue
-                
-                # Single side open, within 21–45 DTE — try the opposite side
-                open_side = list(open_sides)[0]
-                opposite_is_put = (open_side == 'call')
-                opposite_name = 'put' if opposite_is_put else 'call'
-                
-                self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
                 
                 # Check Volatility Rank threshold (> 30)
                 hv_rank = self._calculate_hv_rank(symbol)
@@ -125,9 +94,46 @@ class TastyTrade45Strategy(AbstractStrategy):
                 if not q: continue
                 current_price = q.get('last') or q.get('close')
                 if not current_price: continue
+
+                # 1. Check for existing open positions on this symbol
+                open_info = self._get_open_sides_for_symbol(symbol)
                 
-                # Process the opposite side using the SAME expiry as the open position
-                self._process_side(symbol, current_price, expiry, is_put=opposite_is_put, config=config)
+                if not open_info:
+                    # Mode A: Initial Open
+                    self._log(f"ℹ️ {symbol}: No open positions. Attempting Initial Open.")
+                    expiry = self._find_best_dte_expiry(symbol)
+                    if not expiry:
+                        continue
+
+                    # Try to open put and call independently
+                    self._process_side(symbol, current_price, expiry, is_put=True, config=config)
+                    self._process_side(symbol, current_price, expiry, is_put=False, config=config)
+                else:
+                    # Mode B: Iron Condor Completion
+                    open_sides = open_info['sides']  # set of 'put' and/or 'call'
+                    dte = open_info['dte']
+                    expiry = open_info['expiry']
+
+                    # Already a full iron condor (both sides open)
+                    if 'put' in open_sides and 'call' in open_sides:
+                        self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
+                        continue
+
+                    # Check DTE window for condor completion (30-60 DTE)
+                    if dte < 30 or dte > 60:
+                        open_side = list(open_sides)[0]
+                        self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 30–60 DTE window. Skipping condor completion.")
+                        continue
+
+                    # Single side open, within 30–60 DTE — try the opposite side
+                    open_side = list(open_sides)[0]
+                    opposite_is_put = (open_side == 'call')
+                    opposite_name = 'put' if opposite_is_put else 'call'
+
+                    self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
+
+                    # Process the opposite side using the SAME expiry as the open position
+                    self._process_side(symbol, current_price, expiry, is_put=opposite_is_put, config=config)
                 
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
@@ -272,8 +278,10 @@ class TastyTrade45Strategy(AbstractStrategy):
             
         net_credit = round(short_price - long_price, 2)
         
-        if net_credit <= 0.10: # Minimum nominal credit to make math/commission worthwhile
-            self._log(f"Skipping {symbol} {side_name}: Net credit {net_credit} is too poor.")
+        # Require net credit >= 10% of width (0.50 for 5.0 wide)
+        min_required_credit = round(target_width * 0.10, 2)
+        if net_credit < min_required_credit:
+            self._log(f"Skipping {symbol} {side_name}: Net credit {net_credit} < 10% limit ({min_required_credit}) for width {target_width}.")
             return
             
         requirement_per_lot = target_width * 100
@@ -514,9 +522,12 @@ class TastyTrade45Strategy(AbstractStrategy):
         long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
         net_credit = round(short_price - long_price, 2)
         
-        qty = 1 
-        if 'long_leg' in tradeToClose:
-            qty = 1 
+        min_required_credit = round(target_width * 0.10, 2)
+        if net_credit < min_required_credit:
+            self._log(f"Skipping TT45 Roll: Net credit {net_credit} < 10% limit ({min_required_credit}) for width {target_width}.")
+            return
+
+        qty = tradeToClose.get('quantity', 1)
             
         legs = [
             {'option_symbol': best_short['symbol'], 'side': 'sell_to_open', 'quantity': qty},
