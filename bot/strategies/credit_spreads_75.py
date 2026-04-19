@@ -16,11 +16,9 @@ class CreditSpreads75Strategy(AbstractStrategy):
     def execute(self, watchlist, config=None):
         config = config or {}
         """
-        Execute 45DTE/75POP Credit Spreads strategy — Iron Condor Completion Mode.
-        
-        Only attempts to open the opposite side of an existing single-side
-        credit spread to form an iron condor, if the open position has 21–45 DTE.
-        Does NOT open fresh positions when no position exists.
+        Execute 45DTE/75POP Credit Spreads strategy.
+        Mode A: Initial Open (no open spreads, exact 45DTE)
+        Mode B: Iron Condor Completion (1 side open, 21-45 DTE)
         """
         for symbol in watchlist:
             try:
@@ -29,36 +27,7 @@ class CreditSpreads75Strategy(AbstractStrategy):
                 else:
                     self._log(f"Analyzing {symbol}...")
                 
-                # 1. Check for existing open positions on this symbol
-                open_info = self._get_open_sides_for_symbol(symbol)
-                
-                if not open_info:
-                    self._log(f"ℹ️ {symbol}: No open positions. Skipping (iron condor mode).")
-                    continue
-                
-                open_sides = open_info['sides']  # set of 'put' and/or 'call'
-                dte = open_info['dte']
-                expiry = open_info['expiry']
-                
-                # Already a full iron condor (both sides open)
-                if 'put' in open_sides and 'call' in open_sides:
-                    self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
-                    continue
-                
-                # Check DTE window for condor completion (21–45 DTE)
-                if dte < 21 or dte > 45:
-                    open_side = list(open_sides)[0]
-                    self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 21–45 DTE window. Skipping condor completion.")
-                    continue
-                
-                # Single side open, within 21–45 DTE — try the opposite side
-                open_side = list(open_sides)[0]
-                opposite_is_put = (open_side == 'call')
-                opposite_name = 'put' if opposite_is_put else 'call'
-                
-                self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
-                
-                # 2. Analyze 6m data
+                # 1. Analyze 6m data
                 analysis = self.analysis_service.analyze_symbol(symbol, period='6m')
                 if not analysis or 'error' in analysis:
                     self._log(f"⚠️  Analysis failed for {symbol}: {analysis.get('error')}")
@@ -68,9 +37,46 @@ class CreditSpreads75Strategy(AbstractStrategy):
                 if not current_price:
                     self._log(f"⚠️  Missing current price for {symbol}")
                     continue
+
+                # 2. Check for existing open positions on this symbol
+                open_info = self._get_open_sides_for_symbol(symbol)
                 
-                # 3. Process the opposite side using the SAME expiry as the open position
-                self._process_side(symbol, current_price, analysis, expiry, is_put=opposite_is_put, config=config)
+                if not open_info:
+                    # Mode A: Initial Open
+                    self._log(f"ℹ️ {symbol}: No open positions. Attempting Initial Open.")
+                    expiry = self._find_exact_dte_expiry(symbol, 45)
+                    if not expiry:
+                        continue
+
+                    # Try to open put and call independently
+                    self._process_side(symbol, current_price, analysis, expiry, is_put=True, config=config)
+                    self._process_side(symbol, current_price, analysis, expiry, is_put=False, config=config)
+                else:
+                    # Mode B: Iron Condor Completion
+                    open_sides = open_info['sides']  # set of 'put' and/or 'call'
+                    dte = open_info['dte']
+                    expiry = open_info['expiry']
+
+                    # Already a full iron condor (both sides open)
+                    if 'put' in open_sides and 'call' in open_sides:
+                        self._log(f"ℹ️ {symbol}: Already an iron condor (both sides open, {dte} DTE). Skipping.")
+                        continue
+
+                    # Check DTE window for condor completion (21–45 DTE)
+                    if dte < 21 or dte > 45:
+                        open_side = list(open_sides)[0]
+                        self._log(f"ℹ️ {symbol}: Open {open_side} spread with {dte} DTE — outside 21–45 DTE window. Skipping condor completion.")
+                        continue
+
+                    # Single side open, within 21–45 DTE — try the opposite side
+                    open_side = list(open_sides)[0]
+                    opposite_is_put = (open_side == 'call')
+                    opposite_name = 'put' if opposite_is_put else 'call'
+
+                    self._log(f"🦅 {symbol}: Completing Iron Condor — open {open_side} spread ({dte} DTE). Trying {opposite_name} side on expiry {expiry}.")
+
+                    # Process the opposite side using the SAME expiry as the open position
+                    self._process_side(symbol, current_price, analysis, expiry, is_put=opposite_is_put, config=config)
                 
             except Exception as e:
                 self._log(f"❌ Error processing {symbol}: {e}")
@@ -211,60 +217,35 @@ class CreditSpreads75Strategy(AbstractStrategy):
 
         # 3. Fixed Width 5.0 and Long Leg Check
         target_width = 5.00
-        current_width = target_width
         long_leg = None
         
-        strikes = sorted(set([o['strike'] for o in options]))
+        expected_long_strike = short_strike - target_width if is_put else short_strike + target_width
+        expected_long_strike = round(expected_long_strike, 2)
         
-        while True:
-            expected_long_strike = short_strike - current_width if is_put else short_strike + current_width
-            expected_long_strike = round(expected_long_strike, 2)
+        long_leg = next((o for o in options if abs(o['strike'] - expected_long_strike) < 0.01), None)
+
+        if not long_leg:
+             self._log(f"Skipping {symbol} {side_name}: Required Long Leg {expected_long_strike} for 5.0 parameter width is missing in chain.")
+             return
             
-            long_leg = next((o for o in options if abs(o['strike'] - expected_long_strike) < 0.01), None)
+        short_price = round((short_leg['bid'] + short_leg['ask']) / 2, 2)
+        long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
+
+        if short_leg['bid'] == 0 and short_leg['ask'] == 0:
+            self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
+            return
             
-            if not long_leg:
-                # Expand up to next strike if mathematically missing in chain (safety net)
-                if strikes:
-                    try:
-                        if is_put:
-                            candidates = [s for s in strikes if s < expected_long_strike]
-                            if not candidates: raise ValueError()
-                            next_strike = max(candidates)
-                            current_width = round(short_strike - next_strike, 2)
-                        else:
-                            candidates = [s for s in strikes if s > expected_long_strike]
-                            if not candidates: raise ValueError()
-                            next_strike = min(candidates)
-                            current_width = round(next_strike - short_strike, 2)
-                    except ValueError:
-                        self._log(f"Skipping {symbol} {side_name}: Chain exhausted looking for long strike.")
-                        return
-                    
-                if current_width >= target_width * 3:
-                     self._log(f"Skipping {symbol} {side_name}: Failed to resolve a reasonable spread width.")
-                     return
-                continue
-                
-            short_price = round((short_leg['bid'] + short_leg['ask']) / 2, 2)
-            long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
-            
-            if short_leg['bid'] == 0 and short_leg['ask'] == 0:
-                self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
-                return
-                
-            net_credit = round(short_price - long_price, 2)
-            
-            # The 25% Rule: Min Credit = Width * 0.25 (which is 1.25 for 5 wide)
-            min_required_credit = round(current_width * 0.25, 2)
-            
-            if net_credit < min_required_credit:
-                self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 25% limit ({min_required_credit}) for width {current_width}.")
-                return
-            else:
-                break
+        net_credit = round(short_price - long_price, 2)
+
+        # The 25% Rule: Min Credit = Width * 0.25 (which is 1.25 for 5 wide)
+        min_required_credit = round(target_width * 0.25, 2)
+
+        if net_credit < min_required_credit:
+            self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 25% limit ({min_required_credit}) for width {target_width}.")
+            return
                 
         # 4. BP and Allocation Check
-        requirement_per_lot = current_width * 100
+        requirement_per_lot = target_width * 100
         available_bp = self._get_available_bp(config)
         max_lots_config = config.get('max_credit_spreads_75_per_symbol', config.get('max_credit_spreads_per_symbol', 5))
         
