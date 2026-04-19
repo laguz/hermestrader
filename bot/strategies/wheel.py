@@ -210,12 +210,10 @@ class WheelStrategy(AbstractStrategy):
     def _manage_positions(self, positions, watchlist=None, config=None):
         """
         Scan open options and trigger roll if ITM AND DTE <= 7 Days.
-        Respects max_lots: only rolls up to max_lots puts per underlying.
-        Excess positions are closed (BTC only) without opening a replacement.
+        Rollovers ignore max_lots (user request) to allow defending existing positions.
         Skips positions that already have a pending BTC order (prevents duplicate rolls).
         """
         config = config or {}
-        default_max_lots = int(config.get('max_wheel_contracts_per_symbol', 1))
         rolls_done = {}  # Track rolls per underlying: {'RIOT': 1, ...}
 
         # Fetch pending orders ONCE to avoid re-rolling positions with open BTC orders
@@ -279,15 +277,10 @@ class WheelStrategy(AbstractStrategy):
                     self._log(f"ℹ️ {symbol} is OTM (Price {current_price}, Strike {strike}). Allowing to expire.")
                     continue
 
-                # Check max_lots before rolling
-                max_lots = default_max_lots
+                # User request: Ignore max_lots for rollovers
+                should_roll = True
                 rolled_count = rolls_done.get(underlying, 0)
-                should_roll = rolled_count < max_lots
-
-                if should_roll:
-                    self._log(f"🚨 {symbol} is ITM (Price {current_price}, Strike {strike}). Triggering ROLL ({rolled_count+1}/{max_lots}).")
-                else:
-                    self._log(f"🚨 {symbol} is ITM. Max rolls reached ({rolled_count}/{max_lots}). Closing WITHOUT replacement.")
+                self._log(f"🚨 {symbol} is ITM (Price {current_price}, Strike {strike}). Triggering ROLL.")
 
                 # Execute Roll
                 chain = self.tradier.get_option_chains(underlying, expiry_str)
