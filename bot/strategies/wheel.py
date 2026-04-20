@@ -269,7 +269,7 @@ class WheelStrategy(AbstractStrategy):
                 quote = self.tradier.get_quote(underlying)
                 if not quote: continue
                 
-                current_price = float(quote.get('last'))
+                current_price = float(quote.get('last') or 0)
                 is_itm = (option_type == 'put' and current_price < strike) or \
                          (option_type == 'call' and current_price > strike)
                 
