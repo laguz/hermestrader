@@ -439,3 +439,7 @@ async function generateLoginQR() {
         );
     } catch (error) {
         console.error("QR Generate Error:", error);
+        statusDiv.innerText = "Error: " + error.message;
+        btnGenerate.disabled = false;
+    }
+}

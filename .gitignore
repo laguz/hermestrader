@@ -8,8 +8,13 @@
 *.pyo
 *.pyd
 .Python
-venv/
-env/
+venv*/
+.venv*/
+env*/
+.env*/
+v-env*/
+virtualenv*/
+ENV*/
 *.egg-info/
 dist/
 build/

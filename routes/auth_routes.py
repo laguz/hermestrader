@@ -10,7 +10,17 @@ def login():
         return redirect(url_for('main.dashboard'))
         
     if request.method == 'POST':
-        flash('Password login is temporarily disabled. Please use Nostr (NIP-07).', 'error')
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        auth_service = Container.get_auth_service()
+        user = auth_service.login(username, password)
+        
+        if user:
+            login_user(user)
+            return redirect(url_for('main.dashboard'))
+        else:
+            flash('Invalid username or password.', 'error')
             
     return render_template('login.html')
 
