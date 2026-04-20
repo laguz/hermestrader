@@ -162,7 +162,7 @@ async function loginWithNip46() {
 
         const { Nip46, generateSecretKey, getPublicKey, nip19, SimplePool } = window.NostrTools;
 
-        // Note: old nostr-tools used generatePrivateKey, new uses generateSecretKey. 
+        // Note: old nostr-tools used generatePrivateKey, new uses generateSecretKey.
         // We try both to be safe or check version. Usually window.NostrTools implies recent bundle.
         const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
 
@@ -190,7 +190,7 @@ async function loginWithNip46() {
 
         if (!bunkerUri.startsWith("bunker://")) {
             // Fallback for user@domain if we didn't implement full NIP-05 resolution to bunker URI here
-            // Using a dummy check to warn user if they didn't input a bunker URI 
+            // Using a dummy check to warn user if they didn't input a bunker URI
             // as we are manually constructing the signer below.
             if (!input.includes('bunker://')) {
                 // For now, let's just proceed and see if valid.
@@ -206,7 +206,7 @@ async function loginWithNip46() {
 
         // 1. Generate local ephemeral key
         const localSk = generateSk();
-        // localSk is Uint8Array in new tools, hex string in old. 
+        // localSk is Uint8Array in new tools, hex string in old.
         // getPublicKey handles both usually?
         let localPk;
         try {
@@ -231,7 +231,7 @@ async function loginWithNip46() {
         }
 
         const pool = new SimplePool();
-        const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey, { secret });
+        const signer = new Nip46.BunkerSigner(pool, localSk, remotePubkey, { secret });
 
         // 3. Connect
         await signer.connect(relays);
@@ -310,132 +310,3 @@ async function loginWithNip46() {
         statusDiv.style.color = "var(--md-sys-color-error)";
     }
 }
-
-/**
- * Generate Login QR Code (nostrconnect:// URI)
- */
-async function generateLoginQR() {
-    const statusDiv = document.getElementById('nip46-status');
-    const qrContainer = document.getElementById('qrcode');
-    const btnGenerate = document.getElementById('btn-generate-qr');
-
-    statusDiv.innerText = "Initializing...";
-    statusDiv.style.color = "var(--md-sys-color-primary)";
-    qrContainer.innerHTML = '';
-    btnGenerate.disabled = true;
-
-    try {
-        if (typeof window.NostrTools === 'undefined') {
-            throw new Error("NostrTools library not loaded.");
-        }
-
-        const { generateSecretKey, getPublicKey, SimplePool } = window.NostrTools;
-        const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
-
-        // 1. Generate local ephemeral key
-        const localSk = generateSk();
-        let localPk;
-        try {
-            localPk = getPublicKey(localSk);
-        } catch (e) {
-            throw e;
-        }
-
-        // 2. Construct nostrconnect URI
-        const relayUrl = 'wss://relay.damus.io';
-        const appName = 'Laguz Tech';
-
-        const metadata = JSON.stringify({ name: appName });
-        const connectUri = `nostrconnect://${localPk}?relay=${encodeURIComponent(relayUrl)}&metadata=${encodeURIComponent(metadata)}`;
-
-        // 3. Render QR Code
-        new QRCode(qrContainer, {
-            text: connectUri,
-            width: 256,
-            height: 256,
-            colorDark : "#000000",
-            colorLight : "#ffffff",
-            correctLevel : QRCode.CorrectLevel.L
-        });
-
-        statusDiv.innerText = "Scan the QR code with your Nostr app...";
-
-        const pool = new SimplePool();
-
-        const sub = pool.subscribeMany(
-            [relayUrl],
-            [{
-                kinds: [24133],
-                '#p': [localPk],
-                since: Math.floor(Date.now() / 1000)
-            }],
-            {
-                async onevent(event) {
-                    statusDiv.innerText = "Connection received! Processing...";
-                    const remotePubkey = event.pubkey;
-
-                    try {
-                        const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
-
-                        const eventTemplate = {
-                            kind: 22242,
-                            created_at: Math.floor(Date.now() / 1000),
-                            tags: [
-                                ['challenge', 'login_challenge_qr'],
-                                ['domain', window.location.hostname]
-                            ],
-                            content: 'Login to Laguz Tech via NIP-46 (QR)'
-                        };
-
-                        statusDiv.innerText = "Requesting login signature...";
-
-                        const signedEvent = await signer.signEvent(eventTemplate);
-
-                        statusDiv.innerText = "Verifying with server...";
-
-                        const response = await fetch('/login/nostr', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ event: signedEvent })
-                        });
-
-                        const result = await response.json();
-
-                        if (result.success) {
-                            statusDiv.innerText = "Login successful!";
-                            if (result.vault_locked && result.vault_metadata) {
-                                statusDiv.innerText = "Vault locked. Requesting decryption...";
-                                const metadata = result.vault_metadata;
-
-                                const decryptedDek = await signer.nip04.decrypt(
-                                    metadata.sender_pubkey,
-                                    metadata.encrypted_dek
-                                );
-
-                                const unlockResponse = await fetch('/api/auth/unlock', {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ dek: decryptedDek })
-                                });
-
-                                const unlockResult = await unlockResponse.json();
-                                if (unlockResult.success) {
-                                    window.location.href = '/';
-                                } else {
-                                    throw new Error("Vault unlock failed: " + unlockResult.message);
-                                }
-                            } else {
-                                window.location.href = '/';
-                            }
-                        } else {
-                            throw new Error(result.message || "Login failed");
-                        }
-                    } catch (e) {
-                        statusDiv.innerText = "Error: " + e.message;
-                        statusDiv.style.color = "var(--md-sys-color-error)";
-                    }
-                }
-            }
-        );
-    } catch (error) {
-        console.error("QR Generate Error:", error);
