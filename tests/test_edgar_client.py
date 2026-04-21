@@ -55,3 +55,74 @@ def test_get_company_facts_api_error():
             assert result is None
             mock_get_cik.assert_called_once_with('AAPL')
             mock_get.assert_called_once()
+
+def test_get_cik_from_ticker_happy_path():
+    mock_requests = Mock()
+    with patch.dict('sys.modules', {'requests': mock_requests}):
+        from logic.edgar_client import get_cik_from_ticker
+
+        with patch('logic.edgar_client.requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+                "1": {"cik_str": 789019, "ticker": "MSFT", "title": "MICROSOFT CORP"}
+            }
+            mock_get.return_value = mock_response
+
+            result = get_cik_from_ticker('AAPL')
+
+            assert result == '0000320193'
+            mock_get.assert_called_once()
+            args, kwargs = mock_get.call_args
+            assert args[0] == "https://www.sec.gov/files/company_tickers.json"
+            mock_response.raise_for_status.assert_called_once()
+
+
+def test_get_cik_from_ticker_case_insensitive():
+    mock_requests = Mock()
+    with patch.dict('sys.modules', {'requests': mock_requests}):
+        from logic.edgar_client import get_cik_from_ticker
+
+        with patch('logic.edgar_client.requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+            }
+            mock_get.return_value = mock_response
+
+            result = get_cik_from_ticker('aapl')
+
+            assert result == '0000320193'
+            mock_get.assert_called_once()
+
+
+def test_get_cik_from_ticker_not_found():
+    mock_requests = Mock()
+    with patch.dict('sys.modules', {'requests': mock_requests}):
+        from logic.edgar_client import get_cik_from_ticker
+
+        with patch('logic.edgar_client.requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+            }
+            mock_get.return_value = mock_response
+
+            result = get_cik_from_ticker('INVALID')
+
+            assert result is None
+            mock_get.assert_called_once()
+
+
+def test_get_cik_from_ticker_api_error():
+    mock_requests = Mock()
+    with patch.dict('sys.modules', {'requests': mock_requests}):
+        from logic.edgar_client import get_cik_from_ticker
+
+        with patch('logic.edgar_client.requests.get') as mock_get:
+            mock_get.side_effect = Exception("API Error")
+
+            result = get_cik_from_ticker('AAPL')
+
+            assert result is None
+            mock_get.assert_called_once()
