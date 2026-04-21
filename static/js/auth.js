@@ -167,7 +167,6 @@ async function loginWithNip46() {
         const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
 
         let bunkerUri = input;
-        let bunkerUri = input;
         
         if (!bunkerUri.startsWith("bunker://")) {
             throw new Error("Please use the full 'bunker://' URI from your signer app.");
