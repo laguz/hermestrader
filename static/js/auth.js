@@ -284,6 +284,8 @@ async function generateLoginQR() {
     const qrContainer = document.getElementById('qrcode');
     const btnGenerate = document.getElementById('btn-generate-qr');
 
+    if (!statusDiv || !qrContainer || !btnGenerate) return;
+
     statusDiv.innerText = "Initializing...";
     statusDiv.style.color = "var(--md-sys-color-primary)";
     qrContainer.innerHTML = '';
@@ -299,23 +301,20 @@ async function generateLoginQR() {
 
         // 1. Generate local ephemeral key
         const localSk = generateSk();
-        let localPk;
-        try {
-            localPk = getPublicKey(localSk);
-        } catch (e) {
-            throw e;
-        }
+        const localPk = getPublicKey(localSk);
 
         // 2. Construct nostrconnect URI
+        // Using Primal relay as primary for better compatibility with Primal app
         const relays = [
             'wss://relay.primal.net',
             'wss://relay.damus.io',
             'wss://nos.lol'
         ];
+        
         const appName = 'LaguzTech';
         const metadata = JSON.stringify({ name: appName });
         
-        // Use the format without // as some mobile apps prefer it
+        // Use the format that works best for mobile apps
         const connectUri = `nostrconnect:${localPk}?relay=${encodeURIComponent(relays[0])}&metadata=${encodeURIComponent(metadata)}`;
 
         // 3. Render QR Code
@@ -330,16 +329,14 @@ async function generateLoginQR() {
 
         statusDiv.innerText = "Scan the QR code with your Nostr app...";
 
+        // 4. Subscribe to responses
         const pool = new SimplePool();
-        const filters = [{
-            kinds: [24133],
-            '#p': [localPk],
-            since: Math.floor(Date.now() / 1000)
-        }];
-
         const sub = pool.subscribeMany(
             relays,
-            filters,
+            [{
+                kinds: [24133],
+                "#p": [localPk]
+            }],
             {
                 async onevent(event) {
                     statusDiv.innerText = "Connection received! Processing...";
@@ -348,8 +345,8 @@ async function generateLoginQR() {
                     try {
                         const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
                         
+                        // Connect to relays for signing
                         await signer.connect(relays);
-                        
                         await new Promise(r => setTimeout(r, 500));
 
                         const eventTemplate = {
@@ -359,25 +356,22 @@ async function generateLoginQR() {
                                 ['challenge', 'login_challenge_qr'],
                                 ['domain', window.location.hostname]
                             ],
-                            content: 'Login to Laguz Tech via NIP-46'
+                            content: 'Login to Laguz Tech'
                         };
 
-                        // Manually calculate ID if needed for backend nostr-sdk verification
+                        // Manually calculate ID for backend compatibility
                         if (typeof window.NostrTools.getEventHash === 'function') {
                             eventTemplate.id = window.NostrTools.getEventHash(eventTemplate);
                         }
 
-                        statusDiv.innerText = "Requesting login signature...";
-
+                        statusDiv.innerText = "Requesting signature...";
                         const signedEvent = await signer.signEvent(eventTemplate);
 
-                        // Ensure id and sig are present
                         if (!signedEvent.id || !signedEvent.sig) {
-                             throw new Error("Signer returned incomplete event (missing id or sig)");
+                             throw new Error("Signer returned incomplete event.");
                         }
 
                         statusDiv.innerText = "Verifying with server...";
-
                         const response = await fetch('/login/nostr', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -422,6 +416,7 @@ async function generateLoginQR() {
                 }
             }
         );
+
     } catch (error) {
         console.error("QR Generate Error:", error);
         statusDiv.innerText = "Error: " + error.message;
