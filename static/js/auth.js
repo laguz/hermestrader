@@ -332,24 +332,15 @@ async function generateLoginQR() {
 
         // 2. Construct nostrconnect URI
         const relays = [
-            'wss://relay.damus.io',
             'wss://relay.primal.net',
-            'wss://nos.lol',
-            'wss://relay.snort.social'
+            'wss://relay.damus.io',
+            'wss://nos.lol'
         ];
-        const appName = 'Laguz Tech';
-
-        const metadata = JSON.stringify({ 
-            name: appName,
-            description: 'Laguz Tech Investment Platform',
-            icons: ['https://laguz.tech/logo.png'] // Example icon
-        });
+        const appName = 'LaguzTech';
+        const metadata = JSON.stringify({ name: appName });
         
-        // Build the URI with multiple relays
-        let connectUri = `nostrconnect://${localPk}?metadata=${encodeURIComponent(metadata)}`;
-        relays.forEach(r => {
-            connectUri += `&relay=${encodeURIComponent(r)}`;
-        });
+        // Use the format without // as some mobile apps prefer it
+        const connectUri = `nostrconnect:${localPk}?relay=${encodeURIComponent(relays[0])}&metadata=${encodeURIComponent(metadata)}`;
 
         // 3. Render QR Code
         new QRCode(qrContainer, {
@@ -358,7 +349,7 @@ async function generateLoginQR() {
             height: 256,
             colorDark : "#000000",
             colorLight : "#ffffff",
-            correctLevel : QRCode.CorrectLevel.L
+            correctLevel : QRCode.CorrectLevel.M
         });
 
         statusDiv.innerText = "Scan the QR code with your Nostr app...";
@@ -382,6 +373,9 @@ async function generateLoginQR() {
                         
                         // IMPORTANT: Must connect to the relays to send requests!
                         await signer.connect(relays);
+                        
+                        // Small delay to ensure relay connection is stable
+                        await new Promise(r => setTimeout(r, 500));
 
                         const eventTemplate = {
                             kind: 22242,
