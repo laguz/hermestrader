@@ -1,12 +1,9 @@
 import os
 import sys
-import pandas as pd
-import json
 
 # Ensure project root is in path
 sys.path.append(os.getcwd())
 
-from services.ml_service import MLService
 from services.rl_price_predictor import RLPricePredictor
 from services.container import Container
 
