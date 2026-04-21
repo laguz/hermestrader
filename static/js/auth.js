@@ -167,42 +167,19 @@ async function loginWithNip46() {
         const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
 
         let bunkerUri = input;
-        let remotePubkey = null;
-        let relays = [];
-
-        // Handle NIP-05 (user@domain)
-        if (!input.startsWith('bunker://') && input.includes('@')) {
-            statusDiv.innerText = "Looking up NIP-05...";
-            const profile = await window.NostrTools.nip05.queryProfile(input);
-            if (!profile || !profile.pubkey) {
-                throw new Error("NIP-05 profile not found or missing pubkey.");
-            }
-
-            remotePubkey = profile.pubkey;
-            // Primal and others often put relays in the nip46 field or we use defaults
-            relays = profile.relays || [
-                'wss://relay.primal.net',
-                'wss://relay.damus.io',
-                'wss://nos.lol'
-            ];
-            
-            statusDiv.innerText = "NIP-05 Resolved. Connecting...";
-        } else if (input.startsWith('bunker://')) {
-            const url = new URL(input);
-            remotePubkey = url.pathname.replace('//', '');
-            const params = new URLSearchParams(url.search);
-            relays = params.getAll('relay');
-        } else {
-            throw new Error("Invalid format. Use bunker://... or user@domain");
+        let bunkerUri = input;
+        
+        if (!bunkerUri.startsWith("bunker://")) {
+            throw new Error("Please use the full 'bunker://' URI from your signer app.");
         }
 
-        if (!remotePubkey) {
-            throw new Error("Could not determine remote pubkey.");
-        }
+        const url = new URL(bunkerUri);
+        const remotePubkey = url.pathname.replace('//', '');
+        const params = new URLSearchParams(url.search);
+        const relays = params.getAll('relay');
 
         if (relays.length === 0) {
-            // Default relays if none found
-            relays = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
+            throw new Error("No relays found in Bunker URI.");
         }
 
         // 1. Generate local ephemeral key
@@ -361,21 +338,17 @@ async function generateLoginQR() {
             since: Math.floor(Date.now() / 1000)
         }];
 
-        console.log("Subscribing to relays:", relays, "with filters:", filters);
-
         const sub = pool.subscribeMany(
             relays,
             filters,
             {
                 async onevent(event) {
-                    console.log("NIP-46 Response Event:", event);
                     statusDiv.innerText = "Connection received! Processing...";
                     const remotePubkey = event.pubkey;
 
                     try {
                         const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
                         
-                        console.log("Connecting to signer...");
                         await signer.connect(relays);
                         
                         await new Promise(r => setTimeout(r, 500));
@@ -393,14 +366,11 @@ async function generateLoginQR() {
                         // Manually calculate ID if needed for backend nostr-sdk verification
                         if (typeof window.NostrTools.getEventHash === 'function') {
                             eventTemplate.id = window.NostrTools.getEventHash(eventTemplate);
-                            console.log("Calculated Event ID:", eventTemplate.id);
                         }
 
                         statusDiv.innerText = "Requesting login signature...";
-                        console.log("Requesting signature for event:", eventTemplate);
 
                         const signedEvent = await signer.signEvent(eventTemplate);
-                        console.log("Signed Event Received:", signedEvent);
 
                         // Ensure id and sig are present
                         if (!signedEvent.id || !signedEvent.sig) {
@@ -416,7 +386,6 @@ async function generateLoginQR() {
                         });
 
                         const result = await response.json();
-                        console.log("Server response:", result);
 
                         if (result.success) {
                             statusDiv.innerText = "Login successful!";

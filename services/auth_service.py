@@ -185,14 +185,10 @@ class AuthService:
         
         # TODO: Verify Signature using nostr sdk (Verified in routes for now)
         pubkey = event.get('pubkey')
-        print(f"DEBUG: Searching for user with nostr_pubkey: {pubkey}")
         
         user_doc = self.db['users'].find_one({"nostr_pubkey": pubkey})
         if not user_doc:
-            print(f"DEBUG: No user found for pubkey: {pubkey}")
             return None, None 
-        
-        print(f"DEBUG: User found: {user_doc.get('username')}")
 
         vault = user_doc.get('vault', {})
         nostr_manager = vault.get('dek_managers', {}).get('nostr', {})
