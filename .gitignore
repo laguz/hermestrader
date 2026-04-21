@@ -1,6 +1,7 @@
 # Environment & Secrets
 .env
-.env.*
+.env.production
+.env.development
 
 # Python
 **/__pycache__/

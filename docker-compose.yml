@@ -4,12 +4,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - MONGODB_URI=mongodb://host.docker.internal:27017/investment_db
+      - MONGODB_URI=${MONGODB_URI:-mongodb://host.docker.internal:27017/investment_db}
       - GUNICORN_CMD_ARGS=--workers 1 --worker-class sync --timeout 600 --bind 0.0.0.0:8080
-      - FLASK_SECRET_KEY=Rbq7i5R2ru5EXo
-      - TRADIER_ACCESS_TOKEN=7xVW1wTgL4DwxD4dGFDZieCIl1ta
-      - TRADIER_ACCOUNT_ID=VA60129978
-      - TRADIER_ENDPOINT=https://sandbox.tradier.com/v1
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - TRADIER_ACCESS_TOKEN=${TRADIER_ACCESS_TOKEN}
+      - TRADIER_ACCOUNT_ID=${TRADIER_ACCOUNT_ID}
+      - TRADIER_ENDPOINT=${TRADIER_ENDPOINT:-https://sandbox.tradier.com/v1}
       - OMP_NUM_THREADS=1
       - MKL_NUM_THREADS=1
       - TF_ENABLE_ONEDNN_OPTS=0
