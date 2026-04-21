@@ -1,7 +1,6 @@
 import os
 import sys
 import pandas as pd
-import json
 
 # mock data
 dates = pd.date_range('2023-01-01', periods=10).strftime('%Y-%m-%d')
