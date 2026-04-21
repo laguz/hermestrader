@@ -84,22 +84,22 @@
                     class="p-6 bg-white rounded-lg border border-gray-200 shadow-sm dark:bg-gray-800 dark:border-gray-700">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Valuation Inputs</h3>
                     <ul class="space-y-3 text-gray-600 dark:text-gray-400">
-                        <li class="flex justify-between items-center bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
+                        <li class=" bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
                             <strong class="font-medium text-gray-900 dark:text-white">Current EPS:</strong>
                             <span class="font-mono text-gray-900 dark:text-white">${{
                                 result.valuation.Current_EPS|round(2) }}</span>
                         </li>
-                        <li class="flex justify-between items-center bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
+                        <li class=" bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
                             <strong class="font-medium text-gray-900 dark:text-white">Est. Growth Rate:</strong>
                             <span class="font-mono text-primary-600 dark:text-primary-400">{{
                                 (result.valuation.Estimated_Growth_Rate * 100)|round(1) }}%</span>
                         </li>
-                        <li class="flex justify-between items-center bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
+                        <li class=" bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
                             <strong class="font-medium text-gray-900 dark:text-white">Future PE:</strong>
                             <span class="font-mono text-gray-900 dark:text-white">{{ result.valuation.Future_PE|round(1)
                                 }}</span>
                         </li>
-                        <li class="flex justify-between items-center bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
+                        <li class=" bg-gray-50 dark:bg-gray-700 px-4 py-2 rounded">
                             <strong class="font-medium text-gray-900 dark:text-white">Min Rate of Return:</strong>
                             <span class="font-mono text-gray-900 dark:text-white">15%</span>
                         </li>
@@ -190,7 +190,7 @@
                     <div class="space-y-2">
                         {% for year, val in result.metrics.ROIC_History.items() %}
                         <div
-                            class="flex justify-between items-center py-2 border-b border-gray-100 dark:border-gray-700 last:border-0">
+                            class=" py-2 border-b border-gray-100 dark:border-gray-700 last:border-0">
                             <span class="font-medium text-gray-600 dark:text-gray-400">{{ year }}</span>
                             <span
                                 class="font-bold font-mono {{ 'text-green-500' if val >= 0.10 else 'text-red-500' }}">{{
