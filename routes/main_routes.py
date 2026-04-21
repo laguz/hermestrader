@@ -3,6 +3,17 @@ from flask_login import login_required
 
 main_bp = Blueprint('main', __name__)
 
+@main_bp.route('/debug/users')
+def debug_users():
+    auth_service = Container.get_auth_service()
+    if auth_service.db is None:
+        return {"error": "DB not connected"}
+    users = list(auth_service.db.users.find())
+    for u in users:
+        u['_id'] = str(u['_id'])
+        if 'password' in u: u['password'] = '***'
+    return {"users": users}
+
 @main_bp.route('/')
 @login_required
 def dashboard():
