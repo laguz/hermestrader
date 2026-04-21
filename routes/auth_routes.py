@@ -38,12 +38,15 @@ def login_nostr():
         
     # Verify NIP-98/Auth event signature
     from nostr_sdk import Event
+    import json
     try:
-        import json
+        print(f"DEBUG: Received Nostr Login Event: {json.dumps(event)}")
         event_obj = Event.from_json(json.dumps(event))
         if not event_obj.verify():
+            print("DEBUG: Signature verification failed (verify() returned False)")
             return {'success': False, 'message': 'Invalid signature'}, 401
     except Exception as e:
+        print(f"DEBUG: Signature verification failed with exception: {str(e)}")
         return {'success': False, 'message': f'Signature verification failed: {str(e)}'}, 401
         
     auth_service = Container.get_auth_service()

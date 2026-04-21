@@ -355,26 +355,29 @@ async function generateLoginQR() {
         statusDiv.innerText = "Scan the QR code with your Nostr app...";
 
         const pool = new SimplePool();
+        const filters = [{
+            kinds: [24133],
+            '#p': [localPk],
+            since: Math.floor(Date.now() / 1000)
+        }];
+
+        console.log("Subscribing to relays:", relays, "with filters:", filters);
 
         const sub = pool.subscribeMany(
             relays,
-            [{
-                kinds: [24133],
-                '#p': [localPk],
-                since: Math.floor(Date.now() / 1000)
-            }],
+            filters,
             {
                 async onevent(event) {
+                    console.log("NIP-46 Response Event:", event);
                     statusDiv.innerText = "Connection received! Processing...";
                     const remotePubkey = event.pubkey;
 
                     try {
                         const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
                         
-                        // IMPORTANT: Must connect to the relays to send requests!
+                        console.log("Connecting to signer...");
                         await signer.connect(relays);
                         
-                        // Small delay to ensure relay connection is stable
                         await new Promise(r => setTimeout(r, 500));
 
                         const eventTemplate = {
@@ -384,12 +387,25 @@ async function generateLoginQR() {
                                 ['challenge', 'login_challenge_qr'],
                                 ['domain', window.location.hostname]
                             ],
-                            content: 'Login to Laguz Tech via NIP-46 (QR)'
+                            content: 'Login to Laguz Tech via NIP-46'
                         };
 
+                        // Manually calculate ID if needed for backend nostr-sdk verification
+                        if (typeof window.NostrTools.getEventHash === 'function') {
+                            eventTemplate.id = window.NostrTools.getEventHash(eventTemplate);
+                            console.log("Calculated Event ID:", eventTemplate.id);
+                        }
+
                         statusDiv.innerText = "Requesting login signature...";
+                        console.log("Requesting signature for event:", eventTemplate);
 
                         const signedEvent = await signer.signEvent(eventTemplate);
+                        console.log("Signed Event Received:", signedEvent);
+
+                        // Ensure id and sig are present
+                        if (!signedEvent.id || !signedEvent.sig) {
+                             throw new Error("Signer returned incomplete event (missing id or sig)");
+                        }
 
                         statusDiv.innerText = "Verifying with server...";
 
@@ -400,6 +416,7 @@ async function generateLoginQR() {
                         });
 
                         const result = await response.json();
+                        console.log("Server response:", result);
 
                         if (result.success) {
                             statusDiv.innerText = "Login successful!";
