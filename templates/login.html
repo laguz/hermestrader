@@ -64,6 +64,24 @@
                         onclick="generateLoginQR()">
                         Generate QR Code
                     </button>
+
+                    <div class="inline-flex items-center justify-center w-full relative py-6">
+                        <hr class="w-full h-px border-0 bg-gray-200 dark:bg-gray-700">
+                        <span class="absolute px-3 text-xs text-gray-500 font-medium tracking-wider uppercase bg-white dark:bg-gray-900 left-1/2 -translate-x-1/2">OR</span>
+                    </div>
+
+                    <div class="space-y-2 text-left">
+                        <label for="nostr-remote-address" class="block text-xs font-medium text-gray-700 dark:text-gray-300">NIP-05 or Bunker URI</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="nostr-remote-address" 
+                                class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white" 
+                                placeholder="user@primal.net or bunker://...">
+                            <button onclick="loginWithNip46()" 
+                                class="text-white bg-primary-600 hover:bg-primary-700 focus:ring-4 focus:ring-primary-300 font-medium rounded-lg text-sm px-4 py-2 dark:bg-primary-600 dark:hover:bg-primary-700">
+                                Connect
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Password Tab Content -->

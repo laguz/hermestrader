@@ -167,41 +167,42 @@ async function loginWithNip46() {
         const generateSk = generateSecretKey || window.NostrTools.generatePrivateKey;
 
         let bunkerUri = input;
+        let remotePubkey = null;
+        let relays = [];
 
         // Handle NIP-05 (user@domain)
-        if (!input.startsWith('bunker://')) {
-            if (input.includes('@')) {
-                statusDiv.innerText = "Looking up NIP-05...";
-                const profile = await window.NostrTools.nip05.queryProfile(input);
-                if (!profile) {
-                    throw new Error("NIP-05 profile not found.");
-                }
-
-                // Construct Bunker URI if possible, or support NIP-05 connect flow if library supports it.
-                // For MVP simplicity without a complex robust NIP-05->NIP-46 discovery implementation:
-                if (profile.nip46) {
-                    // If relays are present in nip46 field (some implementations), use them.
-                }
-            } else {
-                // Not a valid NIP-05 or Bunker URI
-                throw new Error("Invalid format. Use bunker://... or user@domain");
+        if (!input.startsWith('bunker://') && input.includes('@')) {
+            statusDiv.innerText = "Looking up NIP-05...";
+            const profile = await window.NostrTools.nip05.queryProfile(input);
+            if (!profile || !profile.pubkey) {
+                throw new Error("NIP-05 profile not found or missing pubkey.");
             }
+
+            remotePubkey = profile.pubkey;
+            // Primal and others often put relays in the nip46 field or we use defaults
+            relays = profile.relays || [
+                'wss://relay.primal.net',
+                'wss://relay.damus.io',
+                'wss://nos.lol'
+            ];
+            
+            statusDiv.innerText = "NIP-05 Resolved. Connecting...";
+        } else if (input.startsWith('bunker://')) {
+            const url = new URL(input);
+            remotePubkey = url.pathname.replace('//', '');
+            const params = new URLSearchParams(url.search);
+            relays = params.getAll('relay');
+        } else {
+            throw new Error("Invalid format. Use bunker://... or user@domain");
         }
 
-        if (!bunkerUri.startsWith("bunker://")) {
-            // Fallback for user@domain if we didn't implement full NIP-05 resolution to bunker URI here
-            // Using a dummy check to warn user if they didn't input a bunker URI 
-            // as we are manually constructing the signer below.
-            if (!input.includes('bunker://')) {
-                // For now, let's just proceed and see if valid.
-                // Ideally we resolve NIP-05 to pubkey and use default relays?
-                // No, NIP-46 *needs* the specific relays the signer is listening on.
-                // So we compel the user to use Bunker URI for now or fail.
-                if (!input.startsWith('bunker://')) {
-                    // Attempt to be helpful?
-                    throw new Error("For this version, please use the full 'bunker://' URI from your signer app.");
-                }
-            }
+        if (!remotePubkey) {
+            throw new Error("Could not determine remote pubkey.");
+        }
+
+        if (relays.length === 0) {
+            // Default relays if none found
+            relays = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net'];
         }
 
         // 1. Generate local ephemeral key
@@ -218,20 +219,8 @@ async function loginWithNip46() {
 
         statusDiv.innerText = "Connecting to remote signer...";
 
-        // 2. Initialize Bunker Signer
-        // Parsing Bunker URI
-        const url = new URL(bunkerUri);
-        const remotePubkey = url.pathname.replace('//', '');
-        const params = new URLSearchParams(url.search);
-        const relays = params.getAll('relay');
-        const secret = params.get('secret'); // Optional
-
-        if (relays.length === 0) {
-            throw new Error("No relays found in Bunker URI.");
-        }
-
         const pool = new SimplePool();
-        const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey, { secret });
+        const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
 
         // 3. Connect
         await signer.connect(relays);
@@ -342,11 +331,25 @@ async function generateLoginQR() {
         }
 
         // 2. Construct nostrconnect URI
-        const relayUrl = 'wss://relay.damus.io';
+        const relays = [
+            'wss://relay.damus.io',
+            'wss://relay.primal.net',
+            'wss://nos.lol',
+            'wss://relay.snort.social'
+        ];
         const appName = 'Laguz Tech';
 
-        const metadata = JSON.stringify({ name: appName });
-        const connectUri = `nostrconnect://${localPk}?relay=${encodeURIComponent(relayUrl)}&metadata=${encodeURIComponent(metadata)}`;
+        const metadata = JSON.stringify({ 
+            name: appName,
+            description: 'Laguz Tech Investment Platform',
+            icons: ['https://laguz.tech/logo.png'] // Example icon
+        });
+        
+        // Build the URI with multiple relays
+        let connectUri = `nostrconnect://${localPk}?metadata=${encodeURIComponent(metadata)}`;
+        relays.forEach(r => {
+            connectUri += `&relay=${encodeURIComponent(r)}`;
+        });
 
         // 3. Render QR Code
         new QRCode(qrContainer, {
@@ -363,7 +366,7 @@ async function generateLoginQR() {
         const pool = new SimplePool();
 
         const sub = pool.subscribeMany(
-            [relayUrl],
+            relays,
             [{
                 kinds: [24133],
                 '#p': [localPk],
@@ -376,6 +379,9 @@ async function generateLoginQR() {
 
                     try {
                         const signer = new window.NostrTools.nip46.BunkerSigner(localSk, pool, remotePubkey);
+                        
+                        // IMPORTANT: Must connect to the relays to send requests!
+                        await signer.connect(relays);
 
                         const eventTemplate = {
                             kind: 22242,
