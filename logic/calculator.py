@@ -112,17 +112,12 @@ def calculate_metrics(df, splits=None):
 
 def calculate_sticker_price(current_eps, growth_rate, future_pe, min_rate_of_return=0.15):
     """
-    Calculates the Rule #1 Sticker Price.
-    
-    1. Future EPS = Current EPS * (1 + growth_rate)^10
-    2. Future Price = Future EPS * Future PE
-    3. Sticker Price = Future Price / (1 + min_rate_of_return)^10
-    4. Buy Price = Sticker Price * 0.5 (Margin of Safety) - Optional return
+    Rule #1 Sticker Price Calculation.
     """
-    
-    if current_eps <= 0:
-        return {'Error': "Current EPS is negative, cannot calculate projection."}
-    
+    if not all([current_eps, growth_rate, future_pe]):
+        return None
+
+    # 1. Estimate future EPS (10 years)
     future_eps = current_eps * ((1 + growth_rate) ** 10)
     future_price = future_eps * future_pe
     sticker_price = future_price / ((1 + min_rate_of_return) ** 10)
