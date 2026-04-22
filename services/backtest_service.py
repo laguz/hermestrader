@@ -309,14 +309,15 @@ class BacktestService:
                     if order.get('legs'):
                         for leg in order['legs']:
                             symbol_to_remove = leg['option_symbol']
-                            for p in list(mock_tradier.positions):
-                                if p['symbol'] == symbol_to_remove:
-                                    mock_tradier.positions.remove(p)
+                            for i in range(len(mock_tradier.positions)):
+                                if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                                    del mock_tradier.positions[i]
                                     break
                     else:
-                        for p in list(mock_tradier.positions):
-                            if p['symbol'] == order['symbol']:
-                                mock_tradier.positions.remove(p)
+                        symbol_to_remove = order['symbol']
+                        for i in range(len(mock_tradier.positions)):
+                            if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                                del mock_tradier.positions[i]
                                 break
             
             # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
