@@ -46,18 +46,13 @@ def index():
                             
                         try:
                             from services.container import Container
-                            import requests
                             tradier = Container.get_tradier_service()
                             quote = tradier.get_quote(ticker)
                             if quote and 'last' in quote:
                                 current_price = float(quote['last'])
                             else:
-                                # Fallback to raw Yahoo Finance request due to yfinance bug
-                                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
-                                headers = {'User-Agent': 'Mozilla/5.0'}
-                                resp = requests.get(url, headers=headers, timeout=5)
-                                data = resp.json()
-                                current_price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+                                # Fallback to yfinance if Tradier fails
+                                current_price = float(yf.Ticker(ticker).fast_info.last_price)
                         except Exception as e:
                             logger.warning(f"Failed to fetch price for {ticker}: {e}")
 
