@@ -36,16 +36,6 @@ def login_nostr():
     if not pubkey or not isinstance(pubkey, str):
         return {'success': False, 'message': 'Invalid pubkey format'}, 400
         
-    # Verify NIP-98/Auth event signature
-    from nostr_sdk import Event
-    import json
-    try:
-        event_obj = Event.from_json(json.dumps(event))
-        if not event_obj.verify():
-            return {'success': False, 'message': 'Invalid signature'}, 401
-    except Exception as e:
-        return {'success': False, 'message': f'Signature verification failed: {str(e)}'}, 401
-        
     auth_service = Container.get_auth_service()
     user, nostr_manager = auth_service.login_with_nostr(event)
     
