@@ -2,6 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
+from pymongo import UpdateOne
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
@@ -858,30 +859,48 @@ except Exception as e:
             
             history = list(cursor)
             
-            # Lazy update of actuals
+            # Identify missing actuals
+            missing_actuals = set()
             for record in history:
                 if record.get('actual_close_price') is None:
                     pred_date = record.get('prediction_date')
                     rec_symbol = record.get('symbol')
-                    
                     if pred_date and rec_symbol:
-                        # Check market data
-                        market_doc = self.db['market_data'].find_one({"symbol": rec_symbol, "date": pred_date})
-                        if market_doc and 'close' in market_doc:
-                            actual_price = float(market_doc['close'])
+                        missing_actuals.add((rec_symbol, pred_date))
+
+            if missing_actuals:
+                # Query all missing market data in one go
+                query_conds = [{"symbol": sym, "date": d} for sym, d in missing_actuals]
+                market_docs = list(self.db['market_data'].find({"$or": query_conds}))
+
+                # Build lookup map
+                market_map = { (doc["symbol"], doc["date"]): float(doc["close"])
+                               for doc in market_docs if "close" in doc }
+
+                # Update memory and prepare batch update
+                bulk_ops = []
+                for record in history:
+                    if record.get('actual_close_price') is None:
+                        pred_date = record.get('prediction_date')
+                        rec_symbol = record.get('symbol')
+                        if pred_date and rec_symbol and (rec_symbol, pred_date) in market_map:
+                            actual_price = market_map[(rec_symbol, pred_date)]
+                            record['actual_close_price'] = actual_price
                             
-                            # Update DB
-                            self.db['predictions'].update_one(
-                                {
-                                    "symbol": rec_symbol, 
-                                    "prediction_date": pred_date, 
-                                    "model_type": record.get('model_type')
-                                },
-                                {"$set": {"actual_close_price": actual_price}}
+                            bulk_ops.append(
+                                UpdateOne(
+                                    {
+                                        "symbol": rec_symbol,
+                                        "prediction_date": pred_date,
+                                        "model_type": record.get('model_type')
+                                    },
+                                    {"$set": {"actual_close_price": actual_price}}
+                                )
                             )
                             
-                            # Update memory
-                            record['actual_close_price'] = actual_price
+                # Execute bulk update
+                if bulk_ops:
+                    self.db['predictions'].bulk_write(bulk_ops)
             
             return history
         except Exception as e:
