@@ -1,8 +1,7 @@
-import json
-from nostr_sdk import EventBuilder, Keys
+from nostr_sdk import Event, EventBuilder, Keys, Kind
 
 keys = Keys.generate()
-builder = EventBuilder(22242, "Login", [])
+builder = EventBuilder(Kind(22242), "Login")
 event = builder.sign_with_keys(keys)
 event_json = event.as_json()
 print("Valid Event JSON:")
