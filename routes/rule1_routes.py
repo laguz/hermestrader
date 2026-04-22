@@ -5,8 +5,13 @@ import yfinance as yf
 from logic.edgar_client import get_company_facts
 from logic.parser import extract_financials
 from logic.calculator import analyze_stock
+import time
 
 rule1_bp = Blueprint('rule1', __name__, url_prefix='/rule1')
+
+_yahoo_price_cache = {}
+YAHOO_PRICE_CACHE_TTL = 300  # 5 minutes
+MAX_CACHE_SIZE = 1000
 logger = logging.getLogger(__name__)
 
 @rule1_bp.route('/', methods=['GET', 'POST'])
@@ -53,11 +58,31 @@ def index():
                                 current_price = float(quote['last'])
                             else:
                                 # Fallback to raw Yahoo Finance request due to yfinance bug
-                                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
-                                headers = {'User-Agent': 'Mozilla/5.0'}
-                                resp = requests.get(url, headers=headers, timeout=5)
-                                data = resp.json()
-                                current_price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+                                now = time.time()
+                                cached_val = None
+                                if ticker in _yahoo_price_cache:
+                                    cached_price, timestamp = _yahoo_price_cache[ticker]
+                                    if now - timestamp < YAHOO_PRICE_CACHE_TTL:
+                                        cached_val = cached_price
+
+                                if cached_val is not None:
+                                    current_price = cached_val
+                                else:
+                                    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+                                    headers = {'User-Agent': 'Mozilla/5.0'}
+                                    resp = requests.get(url, headers=headers, timeout=5)
+                                    data = resp.json()
+                                    fetched_price = float(data['chart']['result'][0]['meta']['regularMarketPrice'])
+                                    current_price = fetched_price
+
+                                    # Simple eviction if cache gets too big
+                                    if len(_yahoo_price_cache) >= MAX_CACHE_SIZE:
+                                        # Remove oldest 20%
+                                        sorted_cache = sorted(_yahoo_price_cache.items(), key=lambda item: item[1][1])
+                                        for key, _ in sorted_cache[:int(MAX_CACHE_SIZE * 0.2)]:
+                                            _yahoo_price_cache.pop(key, None)
+
+                                    _yahoo_price_cache[ticker] = (fetched_price, now)
                         except Exception as e:
                             logger.warning(f"Failed to fetch price for {ticker}: {e}")
 
