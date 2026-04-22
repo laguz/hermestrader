@@ -1,5 +1,4 @@
 from services.container import Container
-import os
 from dotenv import load_dotenv
 load_dotenv()
 try:
