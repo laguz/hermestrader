@@ -971,13 +971,25 @@ except Exception as e:
         # Re-fetch pending to be safe or iterate pending list
         
         prediction_updates = []
+
+        # Optimize with bulk fetch instead of N+1 find_one
+        query_conds = []
+        for p in pending:
+            query_conds.append({"symbol": p['symbol'], "date": p['prediction_date']})
+
+        market_map = {}
+        if query_conds:
+            market_docs = list(self.db['market_data'].find({"$or": query_conds}))
+            for doc in market_docs:
+                if 'close' in doc:
+                    market_map[(doc['symbol'], doc['date'])] = float(doc['close'])
+
         for p in pending:
             symbol = p['symbol']
             p_date = p['prediction_date']
             
-            market_doc = self.db['market_data'].find_one({"symbol": symbol, "date": p_date})
-            if market_doc and 'close' in market_doc:
-                actual = float(market_doc['close'])
+            if (symbol, p_date) in market_map:
+                actual = market_map[(symbol, p_date)]
                 prediction_updates.append(
                     UpdateOne(
                         {"_id": p['_id']},
@@ -987,7 +999,7 @@ except Exception as e:
                 updated_count += 1
                 
         if prediction_updates:
-            self.db['predictions'].bulk_write(prediction_updates)
+            self.db['predictions'].bulk_write(prediction_updates, ordered=False)
 
         return {
             "message": f"Refreshed {len(updated_symbols)} symbols. Updated {updated_count} prediction records.",
