@@ -5,8 +5,13 @@ import yfinance as yf
 from logic.edgar_client import get_company_facts
 from logic.parser import extract_financials
 from logic.calculator import analyze_stock
+import time
 
 rule1_bp = Blueprint('rule1', __name__, url_prefix='/rule1')
+
+_yahoo_price_cache = {}
+YAHOO_PRICE_CACHE_TTL = 300  # 5 minutes
+MAX_CACHE_SIZE = 1000
 logger = logging.getLogger(__name__)
 
 @rule1_bp.route('/', methods=['GET', 'POST'])
