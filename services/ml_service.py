@@ -1116,7 +1116,7 @@ except Exception as e:
             worker_path = os.path.join(tmp_dir, f'rl_eval_worker_{symbol}.py')
             result_path = os.path.join(tmp_dir, f'rl_eval_result_{symbol}.json')
 
-            eval_script = f"""
+            eval_script = """
 import pandas as pd
 import joblib
 import os
@@ -1128,17 +1128,24 @@ sys.path.append(os.getcwd())
 from services.rl_price_predictor import RLPricePredictor
 
 try:
-    recent_df = joblib.load(r'{df_path}')
-    features = joblib.load(r'{features_path}')
+    symbol = sys.argv[1]
+    model_dir = sys.argv[2]
+    df_path = sys.argv[3]
+    features_path = sys.argv[4]
+    days = int(sys.argv[5])
+    result_path = sys.argv[6]
+
+    recent_df = joblib.load(df_path)
+    features = joblib.load(features_path)
     
-    predictor = RLPricePredictor('{symbol}', recent_df, features, '{self.model_dir}')
+    predictor = RLPricePredictor(symbol, recent_df, features, model_dir)
     
     predictions = []
     actuals = []
     dates = []
     close_list = []
     
-    eval_start_idx = len(recent_df) - {days}
+    eval_start_idx = len(recent_df) - days
     for i in range(max(0, eval_start_idx), len(recent_df)):
         basis_df = recent_df.iloc[:i+1]
         try:
@@ -1159,8 +1166,8 @@ try:
     if not predictions:
         raise ValueError("RL Predictor failed to generate any predictions. Check observation space shapes.")
         
-    with open(r'{result_path}', 'w') as fh:
-        json.dump({{"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}}, fh)
+    with open(result_path, 'w') as fh:
+        json.dump({"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}, fh)
 except Exception as e:
     print(str(e), file=sys.stderr)
     exit(1)
@@ -1172,7 +1179,7 @@ except Exception as e:
                 f.write(eval_script)
                 
             try:
-                result = subprocess.run([sys.executable, worker_path], capture_output=True, text=True)
+                result = subprocess.run([sys.executable, worker_path, symbol, self.model_dir, df_path, features_path, str(days), result_path], capture_output=True, text=True)
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
                     raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
