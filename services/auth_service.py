@@ -183,7 +183,18 @@ class AuthService:
         """
         if self.db is None: return None, None
         
-        # TODO: Verify Signature using nostr sdk (Verified in routes for now)
+        import json
+        from nostr_sdk import Event
+
+        try:
+            event_obj = Event.from_json(json.dumps(event))
+            if not event_obj.verify():
+                logger.warning("Nostr login failed: Invalid signature")
+                return None, None
+        except Exception as e:
+            logger.warning(f"Nostr login failed: Signature verification error: {str(e)}")
+            return None, None
+
         pubkey = event.get('pubkey')
         
         user_doc = self.db['users'].find_one({"nostr_pubkey": pubkey})
