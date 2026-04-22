@@ -57,7 +57,7 @@ def test_calculate_sticker_price_missing_future_pe():
     assert calculate_sticker_price(2.0, 0.10, None) is None
 
 import pandas as pd
-from logic.calculator import analyze_stock
+from logic.calculator import analyze_stock, calculate_growth_rate
 
 def create_financial_df(periods=11, growth_rate=0.10, base_eps=1.0, base_equity=100.0, base_shares=100.0, base_revenue=500.0, base_ocf=50.0):
     """Helper to create a predictable financial DataFrame."""
@@ -169,3 +169,14 @@ def test_analyze_stock_capped_growth():
 
     # The actual growth is 30%, but it should be capped at 20%
     assert valuation['Estimated_Growth_Rate'] == pytest.approx(0.20, rel=1e-4)
+
+
+def test_calculate_growth_rate_insufficient_data():
+    """Test calculate_growth_rate returns None when there are fewer elements than periods + 1."""
+    # periods = 3, so we need at least 3 + 1 = 4 elements in the series.
+    # We provide a series with 3 elements, which should return None.
+    series = pd.Series([10.0, 11.0, 12.0])
+
+    result = calculate_growth_rate(series, periods=3)
+
+    assert result is None
