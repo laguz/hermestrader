@@ -9,6 +9,7 @@ import os
 import joblib
 import json
 from datetime import datetime, timedelta
+from pymongo import UpdateOne
 import pandas as pd
 from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday, nearest_workday, \
     USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay, USThanksgivingDay, GoodFriday
@@ -93,8 +94,8 @@ class MLService:
         logger.info(f"Retrieved {len(history)} records. Saving to MongoDB...")
         
         collection = self.db['market_data']
-        count = 0
         
+        operations = []
         for record in history:
             doc = {
                 "symbol": symbol,
@@ -105,15 +106,19 @@ class MLService:
                 "close": float(record['close']),
                 "volume": float(record['volume'])
             }
-            
-            result = collection.update_one(
-                {"symbol": symbol, "date": record['date']},
-                {"$set": doc},
-                upsert=True
+            operations.append(
+                UpdateOne(
+                    {"symbol": symbol, "date": record['date']},
+                    {"$set": doc},
+                    upsert=True
+                )
             )
-            if result.upserted_id or result.modified_count > 0:
-                count += 1
-                
+
+        count = 0
+        if operations:
+            result = collection.bulk_write(operations)
+            count = result.upserted_count + result.modified_count
+
         logger.info(f"Backfill Complete! Processed {count} records.")
         return True
 
@@ -918,6 +923,7 @@ except Exception as e:
                 if history:
                     # Update Market Data
                     collection = self.db['market_data']
+                    operations = []
                     for record in history:
                          doc = {
                             "symbol": symbol,
@@ -928,11 +934,15 @@ except Exception as e:
                             "close": float(record['close']),
                             "volume": float(record['volume'])
                         }
-                         collection.update_one(
-                            {"symbol": symbol, "date": record['date']},
-                            {"$set": doc},
-                            upsert=True
+                         operations.append(
+                            UpdateOne(
+                                {"symbol": symbol, "date": record['date']},
+                                {"$set": doc},
+                                upsert=True
+                            )
                         )
+                    if operations:
+                        collection.bulk_write(operations)
                     updated_symbols.append(symbol)
             except Exception as e:
                 print(f"Error refreshing {symbol}: {e}")
@@ -941,6 +951,7 @@ except Exception as e:
         # We can just re-run the lazy update logic essentially, but explicitly
         # Re-fetch pending to be safe or iterate pending list
         
+        prediction_updates = []
         for p in pending:
             symbol = p['symbol']
             p_date = p['prediction_date']
@@ -948,12 +959,17 @@ except Exception as e:
             market_doc = self.db['market_data'].find_one({"symbol": symbol, "date": p_date})
             if market_doc and 'close' in market_doc:
                 actual = float(market_doc['close'])
-                self.db['predictions'].update_one(
-                    {"_id": p['_id']}, 
-                    {"$set": {"actual_close_price": actual}}
+                prediction_updates.append(
+                    UpdateOne(
+                        {"_id": p['_id']},
+                        {"$set": {"actual_close_price": actual}}
+                    )
                 )
                 updated_count += 1
                 
+        if prediction_updates:
+            self.db['predictions'].bulk_write(prediction_updates)
+
         return {
             "message": f"Refreshed {len(updated_symbols)} symbols. Updated {updated_count} prediction records.",
             "updated_count": updated_count
