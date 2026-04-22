@@ -1128,10 +1128,10 @@ sys.path.append(os.getcwd())
 from services.rl_price_predictor import RLPricePredictor
 
 try:
-    symbol = sys.argv[1]
-    model_dir = sys.argv[2]
-    df_path = sys.argv[3]
-    features_path = sys.argv[4]
+    df_path = sys.argv[1]
+    features_path = sys.argv[2]
+    symbol = sys.argv[3]
+    model_dir = sys.argv[4]
     days = int(sys.argv[5])
     result_path = sys.argv[6]
 
@@ -1179,7 +1179,11 @@ except Exception as e:
                 f.write(eval_script)
                 
             try:
-                result = subprocess.run([sys.executable, worker_path, symbol, self.model_dir, df_path, features_path, str(days), result_path], capture_output=True, text=True)
+                result = subprocess.run(
+                    [sys.executable, worker_path, df_path, features_path, symbol, self.model_dir, str(days), result_path],
+                    capture_output=True,
+                    text=True
+                )
                 if result.returncode != 0:
                     error_msg = result.stderr.strip()
                     raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
