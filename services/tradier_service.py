@@ -62,7 +62,7 @@ class TradierService:
             self.endpoint = os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
             self.trading_mode = 'paper'
             logger.info("📝 Switched to PAPER trading mode.")
-            return {'status': 'ok', 'mode': 'paper', 'endpoint': self.endpoint}
+            return {'status': 'ok', 'mode': 'paper', 'endpoint': self._get_endpoint()}
 
     def _get_headers(self) -> dict:
         auth_token = self.access_token
@@ -91,7 +91,7 @@ class TradierService:
 
     def get_quote(self, symbol: str) -> Optional[dict]:
         """Fetch real-time or delayed quote for a symbol."""
-        url = f"{self.endpoint}/markets/quotes"
+        url = f"{self._get_endpoint()}/markets/quotes"
         params = {'symbols': symbol}
         try:
             response = requests.get(url, params=params,
@@ -111,7 +111,7 @@ class TradierService:
 
     def get_option_expirations(self, symbol: str) -> list:
         """Fetch option expirations for a given symbol."""
-        url = f"{self.endpoint}/markets/options/expirations"
+        url = f"{self._get_endpoint()}/markets/options/expirations"
         params = {'symbol': symbol}
         try:
             response = requests.get(url, params=params,
@@ -135,7 +135,7 @@ class TradierService:
 
     def get_option_chains(self, symbol: str, expiration: str) -> Optional[list]:
         """Fetch option chains for a given symbol and expiration date."""
-        url = f"{self.endpoint}/markets/options/chains"
+        url = f"{self._get_endpoint()}/markets/options/chains"
         params = {'symbol': symbol, 'expiration': expiration, 'greeks': 'true'}
         try:
             response = requests.get(url, params=params,
@@ -156,7 +156,7 @@ class TradierService:
     def get_historical_pricing(self, symbol: str, start_date: str,
                                end_date: str, interval: str = 'daily') -> Optional[list]:
         """Fetch historical pricing data."""
-        url = f"{self.endpoint}/markets/history"
+        url = f"{self._get_endpoint()}/markets/history"
         params = {
             'symbol': symbol,
             'start': start_date,
@@ -180,7 +180,7 @@ class TradierService:
             return None
 
     def _get_account_id(self) -> Optional[str]:
-        acct_id = self.account_id
+        acct_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
         try:
             from flask import has_request_context
             from services.container import Container
@@ -200,11 +200,11 @@ class TradierService:
 
     def get_account_balances(self) -> Optional[dict]:
         """Fetch account balances including total equity and option buying power."""
-        current_account_id = self._get_account_id()
+        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
         if not current_account_id:
             logger.error("Cannot fetch account balances: account_id is missing.")
             return None
-        url = f"{self.endpoint}/accounts/{current_account_id}/balances"
+        url = f"{self._get_endpoint()}/accounts/{current_account_id}/balances"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -251,11 +251,11 @@ class TradierService:
 
     def get_positions(self) -> list:
         """Fetch open positions for the account."""
-        current_account_id = self._get_account_id()
+        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
         if not current_account_id:
             logger.error("Cannot fetch positions: account_id is missing.")
             return []
-        url = f"{self.endpoint}/accounts/{current_account_id}/positions"
+        url = f"{self._get_endpoint()}/accounts/{current_account_id}/positions"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -279,11 +279,11 @@ class TradierService:
 
     def get_orders(self, page: int = 1, limit: int = 100) -> list:
         """Fetch orders for the account."""
-        current_account_id = self._get_account_id()
+        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
         if not current_account_id:
             logger.error("Cannot fetch orders: account_id is missing.")
             return []
-        url = f"{self.endpoint}/accounts/{current_account_id}/orders"
+        url = f"{self._get_endpoint()}/accounts/{current_account_id}/orders"
         params = {'page': page, 'limit': limit}
         try:
             response = requests.get(url, params=params,
@@ -335,7 +335,7 @@ class TradierService:
             legs: List of leg dicts for multileg orders
             tag: Optional tag for tracking
         """
-        url = f"{self.endpoint}/accounts/{account_id}/orders"
+        url = f"{self._get_endpoint()}/accounts/{account_id}/orders"
         
         data = {
             'class': order_class,
@@ -383,7 +383,7 @@ class TradierService:
 
     def get_clock(self) -> Optional[dict]:
         """Fetch market clock/status."""
-        url = f"{self.endpoint}/markets/clock"
+        url = f"{self._get_endpoint()}/markets/clock"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -401,12 +401,12 @@ class TradierService:
                      end_date: Optional[str] = None,
                      symbol: Optional[str] = None) -> list:
         """Fetch realized gain/loss data from Tradier."""
-        current_account_id = self._get_account_id()
+        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
         if not current_account_id:
             logger.error("Cannot fetch gain/loss: account_id is missing.")
             return []
             
-        url = f"{self.endpoint}/accounts/{current_account_id}/gainloss"
+        url = f"{self._get_endpoint()}/accounts/{current_account_id}/gainloss"
         params = {
             'page': page,
             'limit': limit,

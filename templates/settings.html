@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-[80vh] px-4">
+    <div
+        class="w-full max-w-2xl p-8 bg-white/10 dark:bg-gray-900/80 backdrop-blur-md rounded-3xl border border-gray-200/50 dark:border-gray-700/50 shadow-xl">
+        <div class="text-center mb-8">
+            <span class="material-symbols-outlined text-5xl text-yellow-500 mb-4 inline-block">settings</span>
+            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">API Configuration</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Update your trading credentials and endpoints securely.</p>
+        </div>
+
+        <div id="alert-container"></div>
+
+        <form id="settings-form" class="space-y-6">
+
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
+                Authentication
+            </h3>
+
+            <div>
+                <label for="password" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Vault Password (Required to Re-encrypt)</label>
+                <input type="password" id="password" required
+                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white"
+                    placeholder="••••••••">
+            </div>
+
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 mt-6">
+                Paper Trading (Sandbox)
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="paper_key" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper API Key</label>
+                    <input type="password" id="paper_key" required
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        placeholder="New Paper Key">
+                </div>
+                <div>
+                    <label for="paper_account" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper Account ID</label>
+                    <input type="text" id="paper_account" required
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        placeholder="New Paper Account ID">
+                </div>
+            </div>
+
+            <div>
+                <label for="paper_endpoint" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper Endpoint URL</label>
+                <input type="text" id="paper_endpoint" required value="{{ endpoints.paper }}"
+                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    placeholder="https://sandbox.tradier.com/v1">
+            </div>
+
+            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 mt-6">
+                Live Trading (Production)
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="live_key" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live API Key</label>
+                    <input type="password" id="live_key"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        placeholder="New Live Key (Optional)">
+                </div>
+                <div>
+                    <label for="live_account" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live Account ID</label>
+                    <input type="text" id="live_account"
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        placeholder="New Live Account ID (Optional)">
+                </div>
+            </div>
+
+            <div>
+                <label for="live_endpoint" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live Endpoint URL</label>
+                <input type="text" id="live_endpoint" required value="{{ endpoints.live }}"
+                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    placeholder="https://api.tradier.com/v1">
+            </div>
+
+            <button type="submit"
+                class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800 transition-colors mt-6">
+                Save Settings
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.getElementById('settings-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalText = btn.innerText;
+    btn.innerText = 'Saving...';
+    btn.disabled = true;
+
+    const payload = {
+        password: document.getElementById('password').value,
+        paper_key: document.getElementById('paper_key').value,
+        paper_account: document.getElementById('paper_account').value,
+        live_key: document.getElementById('live_key').value,
+        live_account: document.getElementById('live_account').value,
+        paper_endpoint: document.getElementById('paper_endpoint').value,
+        live_endpoint: document.getElementById('live_endpoint').value
+    };
+
+    try {
+        const response = await fetch('/api/auth/update_credentials', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+        const alertContainer = document.getElementById('alert-container');
+
+        if (result.success) {
+            alertContainer.innerHTML = `<div class="p-4 mb-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400">Settings updated successfully!</div>`;
+            document.getElementById('password').value = ''; // clear password
+        } else {
+            alertContainer.innerHTML = `<div class="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400">${result.message || 'Update failed'}</div>`;
+        }
+    } catch (err) {
+        document.getElementById('alert-container').innerHTML = `<div class="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400">An error occurred while saving.</div>`;
+    } finally {
+        btn.innerText = originalText;
+        btn.disabled = false;
+    }
+});
+</script>
+{% endblock %}

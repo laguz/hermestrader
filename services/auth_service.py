@@ -56,7 +56,7 @@ class AuthService:
         )
         return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
-    def create_user(self, username, password, tradier_key, account_id):
+    def create_user(self, username, password, tradier_key, account_id, live_tradier_key=None, live_account_id=None, paper_endpoint='https://sandbox.tradier.com/v1', live_endpoint='https://api.tradier.com/v1'):
         """Create a new user with Multi-Key Vault architecture (DEK)."""
         if self.db is None: return None
         
@@ -76,6 +76,8 @@ class AuthService:
         # 2. Encrypt Secrets with DEK
         enc_tradier_key = f_dek.encrypt(tradier_key.encode()).decode('utf-8')
         enc_account_id = f_dek.encrypt(account_id.encode()).decode('utf-8')
+        enc_live_key = f_dek.encrypt(live_tradier_key.encode()).decode('utf-8') if live_tradier_key else None
+        enc_live_account = f_dek.encrypt(live_account_id.encode()).decode('utf-8') if live_account_id else None
 
         # 3. Encrypt DEK with Password
         salt = os.urandom(16)
@@ -103,10 +105,10 @@ class AuthService:
         res = self.db['users'].insert_one(user_doc)
         user_doc['_id'] = res.inserted_id
         
-        self._unlock_session(tradier_key, account_id)
+        self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
         return User(user_doc)
 
-    def create_user_with_nostr(self, username, nostr_pubkey, tradier_key, account_id):
+    def create_user_with_nostr(self, username, nostr_pubkey, tradier_key, account_id, live_tradier_key=None, live_account_id=None, paper_endpoint='https://sandbox.tradier.com/v1', live_endpoint='https://api.tradier.com/v1'):
         """Create a new user with Nostr DEK manager."""
         if self.db is None: return None
         
@@ -127,6 +129,8 @@ class AuthService:
         # 2. Encrypt Secrets with DEK
         enc_tradier_key = f_dek.encrypt(tradier_key.encode()).decode('utf-8')
         enc_account_id = f_dek.encrypt(account_id.encode()).decode('utf-8')
+        enc_live_key = f_dek.encrypt(live_tradier_key.encode()).decode('utf-8') if live_tradier_key else None
+        enc_live_account = f_dek.encrypt(live_account_id.encode()).decode('utf-8') if live_account_id else None
 
         # 3. Encrypt DEK with Nostr (NIP-04)
         # Server generates ephemeral keys to encrypt TO the user
@@ -162,7 +166,7 @@ class AuthService:
         res = self.db['users'].insert_one(user_doc)
         user_doc['_id'] = res.inserted_id
         
-        self._unlock_session(tradier_key, account_id)
+        self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
         return User(user_doc)
 
     def login(self, username, password):
@@ -225,6 +229,8 @@ class AuthService:
             
             tradier_key = None
             account_id = None
+            live_tradier_key = None
+            live_account_id = None
             
             if version == 1 and password:
                 # --- LEGACY VAULT ---
@@ -271,7 +277,7 @@ class AuthService:
                         account_id = f_dek.decrypt(enc_acc.encode()).decode('utf-8')
 
             if tradier_key:
-                self._unlock_session(tradier_key, account_id)
+                self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
                 return User(user_doc)
                 
         except Exception as e:
@@ -283,7 +289,7 @@ class AuthService:
         # For now, we return User (so they are logged in) but session key is None.
         return User(user_doc)
 
-    def _unlock_session(self, key, account_id):
+    def _unlock_session(self, key, account_id, live_key=None, live_account_id=None):
         from flask import session, has_request_context
         if has_request_context():
             enc_key = _F_EPHEMERAL.encrypt(key.encode()).decode('utf-8')
@@ -291,6 +297,10 @@ class AuthService:
             if account_id:
                 enc_acct = _F_EPHEMERAL.encrypt(account_id.encode()).decode('utf-8')
                 session['account_id'] = enc_acct
+            if live_key:
+                session['live_tradier_key'] = _F_EPHEMERAL.encrypt(live_key.encode()).decode('utf-8')
+            if live_account_id:
+                session['live_account_id'] = _F_EPHEMERAL.encrypt(live_account_id.encode()).decode('utf-8')
         
         # We still update the tradier service, but the tradier service itself 
         # needs to be modified to pull from session instead of storing it on tracking instances.
@@ -332,10 +342,11 @@ class AuthService:
         self.db['users'].update_one({"_id": user_id}, {"$set": {"vault": new_vault}})
         logger.info("Migration complete.")
 
-    def get_api_key(self):
+    def get_api_key(self, mode='paper'):
         from flask import session, has_request_context
         if has_request_context():
-            enc_key = session.get('tradier_key')
+            key_name = 'tradier_key' if mode == 'paper' else 'live_tradier_key'
+            enc_key = session.get(key_name)
             if enc_key:
                 try:
                     return _F_EPHEMERAL.decrypt(enc_key.encode()).decode('utf-8')
@@ -344,10 +355,11 @@ class AuthService:
                     return None
         return None
 
-    def get_account_id(self):
+    def get_account_id(self, mode='paper'):
         from flask import session, has_request_context
         if has_request_context():
-            enc_acct = session.get('account_id')
+            key_name = 'account_id' if mode == 'paper' else 'live_account_id'
+            enc_acct = session.get(key_name)
             if enc_acct:
                 try:
                     return _F_EPHEMERAL.decrypt(enc_acct.encode()).decode('utf-8')
@@ -355,3 +367,60 @@ class AuthService:
                     logger.error("Failed to decrypt ephemeral account id.")
                     return None
         return None
+
+    def update_vault_credentials(self, user_id, password, paper_key, paper_account, live_key, live_account, paper_endpoint, live_endpoint):
+        if self.db is None: return False
+        import base64
+        from bson.objectid import ObjectId
+
+        user_doc = self.db['users'].find_one({"_id": ObjectId(user_id)})
+        if not user_doc: return False
+
+        vault = user_doc.get('vault', {})
+        managers = vault.get('dek_managers', {})
+        pwd_manager = managers.get('password')
+
+        dek = None
+        if pwd_manager:
+            salt_b64 = pwd_manager.get('salt')
+            enc_dek_blob = pwd_manager.get('encrypted_dek')
+            salt = base64.b64decode(salt_b64)
+            key = self._derive_key(password, salt)
+            f_pwd = Fernet(key)
+            try:
+                dek = f_pwd.decrypt(enc_dek_blob.encode())
+            except Exception:
+                return False # wrong password
+        else:
+            return False
+
+        f_dek = Fernet(dek)
+        enc_paper_key = f_dek.encrypt(paper_key.encode()).decode('utf-8')
+        enc_paper_acc = f_dek.encrypt(paper_account.encode()).decode('utf-8') if paper_account else None
+        enc_live_key = f_dek.encrypt(live_key.encode()).decode('utf-8') if live_key else None
+        enc_live_acc = f_dek.encrypt(live_account.encode()).decode('utf-8') if live_account else None
+
+        self.db['users'].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {
+                "vault.encrypted_tradier_key": enc_paper_key,
+                "vault.encrypted_account_id": enc_paper_acc,
+                "vault.encrypted_live_tradier_key": enc_live_key,
+                "vault.encrypted_live_account_id": enc_live_acc,
+                "endpoints": {
+                    "paper": paper_endpoint,
+                    "live": live_endpoint
+                }
+            }}
+        )
+
+        self._unlock_session(paper_key, paper_account, live_key, live_account)
+        return True
+
+    def get_endpoints(self, user_id):
+        if self.db is None: return {"paper": "https://sandbox.tradier.com/v1", "live": "https://api.tradier.com/v1"}
+        from bson.objectid import ObjectId
+        user_doc = self.db['users'].find_one({"_id": ObjectId(user_id)})
+        if user_doc and "endpoints" in user_doc:
+            return user_doc["endpoints"]
+        return {"paper": "https://sandbox.tradier.com/v1", "live": "https://api.tradier.com/v1"}
