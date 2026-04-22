@@ -88,7 +88,9 @@ def register():
             return redirect(url_for('auth.register'))
             
         auth_service = Container.get_auth_service()
-        user = auth_service.create_user(username, password, key, account_id)
+        live_key = request.form.get('live_tradier_key')
+        live_account_id = request.form.get('live_account_id')
+        user = auth_service.create_user(username, password, key, account_id, live_tradier_key=live_key, live_account_id=live_account_id)
         
         if user:
             login_user(user)
@@ -130,7 +132,9 @@ def register_nostr():
         if user_count > 0:
              return {'success': False, 'message': 'Registration is disabled.'}, 403
     
-    user = auth_service.create_user_with_nostr(username, pubkey, tradier_key, account_id)
+    live_key = data.get('live_tradier_key')
+    live_account_id = data.get('live_account_id')
+    user = auth_service.create_user_with_nostr(username, pubkey, tradier_key, account_id, live_tradier_key=live_key, live_account_id=live_account_id)
     
     if user:
         login_user(user)
@@ -143,3 +147,38 @@ def register_nostr():
 def logout():
     logout_user()
     return redirect(url_for('auth.login'))
+
+@auth_bp.route('/settings')
+@login_required
+def settings():
+    auth_service = Container.get_auth_service()
+    endpoints = auth_service.get_endpoints(current_user.id)
+    return render_template('settings.html', endpoints=endpoints)
+
+@auth_bp.route('/api/auth/update_credentials', methods=['POST'])
+@login_required
+def update_credentials():
+    data = request.json
+    password = data.get('password')
+    paper_key = data.get('paper_key')
+    paper_account = data.get('paper_account')
+    live_key = data.get('live_key')
+    live_account = data.get('live_account')
+    paper_endpoint = data.get('paper_endpoint', 'https://sandbox.tradier.com/v1')
+    live_endpoint = data.get('live_endpoint', 'https://api.tradier.com/v1')
+
+    if not password or not paper_key or not paper_account:
+        return {'success': False, 'message': 'Password, Paper Key, and Paper Account are required'}, 400
+
+    auth_service = Container.get_auth_service()
+    success = auth_service.update_vault_credentials(
+        current_user.id, password,
+        paper_key, paper_account,
+        live_key, live_account,
+        paper_endpoint, live_endpoint
+    )
+
+    if success:
+        return {'success': True}
+    else:
+        return {'success': False, 'message': 'Failed to update credentials. Check password.'}, 400
