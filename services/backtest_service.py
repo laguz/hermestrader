@@ -131,8 +131,6 @@ class BacktestService:
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
 
         
-
-        
         # Key Level Caching Mechanism
         # K-Means clustering is CPU intensive. Rather than calculating 
         # Support/Resistance every single simulated day, we'll recalculate every 5 trading days.
@@ -147,25 +145,10 @@ class BacktestService:
         mock_db = MockDB()
         
         # 3. Setup Strategy (Dynamic Injection)
-        strategy = None
-        # Use lazy instantiation mapping instead of hardcoded if/elif block
-        from bot.strategies.wheel import WheelStrategy
-
-        strategy_registry = {
-            "wheel": WheelStrategy,
-        }
-        
-        strategy_class = strategy_registry.get(strategy_type)
-        if not strategy_class:
+        strategy = self._setup_strategy(strategy_type, mock_tradier, mock_db, mock_analysis)
+        if not strategy:
             return {"error": f"Strategy '{strategy_type}' not supported in Backtester."}
             
-        strategy = strategy_class(
-            tradier_service=mock_tradier, 
-            db=mock_db, 
-            dry_run=False,
-            analysis_service=mock_analysis
-        )
-        
         # Results containers
         portfolio_values = []
         dates = []
@@ -252,71 +235,10 @@ class BacktestService:
                 strategy.execution_logs = []
 
             
-            for order in exit_orders:
-                if 'close' in order['side'] or order['side'] == 'buy_to_close':
-                    # Determine Fill Price
-                    fill_price = order.get('price')
-                    
-                    if not fill_price: 
-                        fill_price = 0.0
-                        if order.get('legs'):
-                            for leg in order['legs']:
-                                opt_sym = leg['option_symbol']
-                                qs = mock_tradier.get_quotes([opt_sym])
-                                if qs:
-                                    q = qs[0]
-                                    leg_price = q['ask'] if 'buy' in leg['side'] else q['bid']
-                                    fill_price += leg_price
-                        else:
-                            qs = mock_tradier.get_quotes([order['symbol']])
-                            if qs:
-                                fill_price = qs[0]['ask']
-                    
-                    # Slippage (Debit = paying more)
-                    num_legs = len(order.get('legs') or []) or 1
-                    slippage = slippage_rate * num_legs
-                    final_price = fill_price + slippage
-                    
-                    qty = abs(order['quantity'])
-                    multiplier = 1 if order.get('class') == 'equity' else 100
-                    cost = final_price * qty * multiplier
-                    
-                    # Commission
-                    commission_cost = commission_per * qty * num_legs
-                    total_commissions += commission_cost
-                    
-                    cash -= (cost + commission_cost)
-                    
-                    # Compute per-trade realized P&L
-                    close_symbol = order['symbol']
-                    entry_info = open_trade_credits.pop(close_symbol, None)
-                    realized_pnl = 0
-                    if entry_info:
-                        realized_pnl = round((entry_info['credit'] - final_price) * qty * multiplier, 2)
-                    
-                    trades_log.append({
-                        'date': current_date_str,
-                        'action': f"CLOSE {close_symbol}",
-                        'debit': round(final_price, 4),
-                        'slippage': slippage,
-                        'commission': round(commission_cost, 2),
-                        'pnl': realized_pnl
-                    })
-                    
-                    # Remove Position
-                    if order.get('legs'):
-                        for leg in order['legs']:
-                            symbol_to_remove = leg['option_symbol']
-                            for i in range(len(mock_tradier.positions)):
-                                if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
-                                    del mock_tradier.positions[i]
-                                    break
-                    else:
-                        symbol_to_remove = order['symbol']
-                        for i in range(len(mock_tradier.positions)):
-                            if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
-                                del mock_tradier.positions[i]
-                                break
+            cash, total_commissions = self._process_exit_orders(
+                exit_orders, mock_tradier, slippage_rate, commission_per,
+                cash, total_commissions, open_trade_credits, trades_log, current_date_str
+            )
             
             # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
             # Wheel entries already captured in wheel_entry_orders from step 3
@@ -357,6 +279,97 @@ class BacktestService:
         # ---------------------------------------------------------------
         # Summary Metrics
         # ---------------------------------------------------------------
+        return self._wrap_up_backtest(
+            portfolio_values, benchmark_values, dates, trades_log, starting_cash, total_commissions
+        )
+
+    def _setup_strategy(self, strategy_type, mock_tradier, mock_db, mock_analysis):
+        from bot.strategies.wheel import WheelStrategy
+
+        strategy_registry = {
+            "wheel": WheelStrategy,
+        }
+
+        strategy_class = strategy_registry.get(strategy_type)
+        if not strategy_class:
+            return None
+
+        return strategy_class(
+            tradier_service=mock_tradier,
+            db=mock_db,
+            dry_run=False,
+            analysis_service=mock_analysis
+        )
+
+    def _process_exit_orders(self, exit_orders, mock_tradier, slippage_rate, commission_per, cash, total_commissions, open_trade_credits, trades_log, current_date_str):
+        for order in exit_orders:
+            if 'close' in order['side'] or order['side'] == 'buy_to_close':
+                # Determine Fill Price
+                fill_price = order.get('price')
+
+                if not fill_price:
+                    fill_price = 0.0
+                    if order.get('legs'):
+                        for leg in order['legs']:
+                            opt_sym = leg['option_symbol']
+                            qs = mock_tradier.get_quotes([opt_sym])
+                            if qs:
+                                q = qs[0]
+                                leg_price = q['ask'] if 'buy' in leg['side'] else q['bid']
+                                fill_price += leg_price
+                    else:
+                        qs = mock_tradier.get_quotes([order['symbol']])
+                        if qs:
+                            fill_price = qs[0]['ask']
+
+                # Slippage (Debit = paying more)
+                num_legs = len(order.get('legs') or []) or 1
+                slippage = slippage_rate * num_legs
+                final_price = fill_price + slippage
+
+                qty = abs(order['quantity'])
+                multiplier = 1 if order.get('class') == 'equity' else 100
+                cost = final_price * qty * multiplier
+
+                # Commission
+                commission_cost = commission_per * qty * num_legs
+                total_commissions += commission_cost
+
+                cash -= (cost + commission_cost)
+
+                # Compute per-trade realized P&L
+                close_symbol = order['symbol']
+                entry_info = open_trade_credits.pop(close_symbol, None)
+                realized_pnl = 0
+                if entry_info:
+                    realized_pnl = round((entry_info['credit'] - final_price) * qty * multiplier, 2)
+
+                trades_log.append({
+                    'date': current_date_str,
+                    'action': f"CLOSE {close_symbol}",
+                    'debit': round(final_price, 4),
+                    'slippage': slippage,
+                    'commission': round(commission_cost, 2),
+                    'pnl': realized_pnl
+                })
+
+                # Remove Position
+                if order.get('legs'):
+                    for leg in order['legs']:
+                        symbol_to_remove = leg['option_symbol']
+                        for i in range(len(mock_tradier.positions)):
+                            if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                                del mock_tradier.positions[i]
+                                break
+                else:
+                    symbol_to_remove = order['symbol']
+                    for i in range(len(mock_tradier.positions)):
+                        if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                            del mock_tradier.positions[i]
+                            break
+        return cash, total_commissions
+
+    def _wrap_up_backtest(self, portfolio_values, benchmark_values, dates, trades_log, starting_cash, total_commissions):
         if not portfolio_values:
             return {"error": "No simulation steps"}
 
