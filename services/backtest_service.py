@@ -1,21 +1,13 @@
-import re
 import logging
-import uuid
 import numpy as np
 import pandas as pd
-from scipy import stats
-import math
-import traceback
 
 from datetime import datetime, timedelta
 
 from bot.strategies.wheel import WheelStrategy
 from utils.indicators import (
     calculate_rsi, 
-    find_key_levels, 
-    calculate_option_price,
-    calculate_prob_it_expires_otm,
-    calculate_historical_volatility
+    find_key_levels
 )
 
 logger = logging.getLogger(__name__)
