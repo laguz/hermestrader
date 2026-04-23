@@ -316,12 +316,8 @@ class AuthService:
             if dek:
                 session['dek'] = _F_EPHEMERAL.encrypt(dek).decode('utf-8')
         
-        # We still update the tradier service, but the tradier service itself 
-        # needs to be modified to pull from session instead of storing it on tracking instances.
-        ts = Container.get_tradier_service()
-        ts.update_access_token(key)
-        if account_id: 
-            ts.update_account_id(account_id)
+        # TradierService now uses dynamic session-aware properties
+        pass
 
     def _migrate_to_dek(self, user_id, password, tradier_key, account_id):
         """Migrate legacy vault to DEK vault."""

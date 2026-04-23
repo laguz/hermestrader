@@ -13,54 +13,14 @@ class TradierService:
     def __init__(self, access_token: Optional[str] = None,
                  account_id: Optional[str] = None,
                  endpoint: Optional[str] = None):
-        self.access_token = access_token or os.getenv('TRADIER_ACCESS_TOKEN')
-        self.account_id = account_id or os.getenv('TRADIER_ACCOUNT_ID')
-        self.endpoint = endpoint or os.getenv(
-            'TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1'
-        )
+        self._init_access_token = access_token
+        self._init_account_id = account_id
+        self._init_endpoint = endpoint
         self.trading_mode = 'paper'  # 'paper' or 'live'
-        
-    def update_access_token(self, token: str) -> None:
-        self.access_token = token
 
-    def update_account_id(self, account_id: str) -> None:
-        self.account_id = account_id
-
-    def get_trading_mode(self) -> str:
-        """Return current trading mode: 'paper' or 'live'."""
-        return self.trading_mode
-
-    def set_trading_mode(self, mode: str) -> dict:
-        """Switch between paper and live trading mode."""
-        mode = mode.lower().strip()
-        if mode not in ('paper', 'live'):
-            return {'error': f'Invalid mode: {mode}'}
-        
-        self.trading_mode = mode
-        logger.info(f"🔄 Switched to {mode.upper()} trading mode.")
-        return {'status': 'ok', 'mode': mode, 'endpoint': self._get_endpoint()}
-
-    def _get_endpoint(self) -> str:
-        """Return the correct endpoint, prioritizing session-based vault config."""
-        try:
-            from flask import has_request_context, session
-            from services.container import Container
-            if has_request_context():
-                auth_svc = Container.get_auth_service()
-                from flask_login import current_user
-                if current_user.is_authenticated:
-                    endpoints = auth_svc.get_endpoints(current_user.id)
-                    return endpoints.get(self.trading_mode, 'https://sandbox.tradier.com/v1' if self.trading_mode == 'paper' else 'https://api.tradier.com/v1')
-        except Exception:
-            pass
-            
-        # Fallback to env or init value
-        if self.trading_mode == 'live':
-            return os.getenv('TRADIER_LIVE_ENDPOINT', 'https://api.tradier.com/v1')
-        return self.endpoint or os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
-
-    def _get_headers(self) -> dict:
-        """Get headers with bearer token, prioritizing session/vault."""
+    @property
+    def access_token(self):
+        """Dynamic access token with session awareness."""
         auth_token = None
         try:
             from flask import has_request_context
@@ -75,16 +35,81 @@ class TradierService:
             if self.trading_mode == 'live':
                 auth_token = os.getenv('TRADIER_LIVE_ACCESS_TOKEN')
             else:
-                auth_token = self.access_token or os.getenv('TRADIER_ACCESS_TOKEN')
+                auth_token = self._init_access_token or os.getenv('TRADIER_ACCESS_TOKEN')
+        return auth_token
+
+    @property
+    def account_id(self):
+        """Dynamic account ID with session awareness."""
+        acct_id = None
+        try:
+            from flask import has_request_context
+            from services.container import Container
+            if has_request_context():
+                auth_svc = Container.get_auth_service()
+                acct_id = auth_svc.get_account_id(mode=self.trading_mode)
+        except Exception:
+            pass
             
+        if not acct_id:
+            if self.trading_mode == 'live':
+                acct_id = os.getenv('TRADIER_LIVE_ACCOUNT_ID')
+            else:
+                acct_id = self._init_account_id or os.getenv('TRADIER_ACCOUNT_ID')
+        return acct_id
+
+    @property
+    def endpoint(self):
+        """Dynamic endpoint with session awareness."""
+        try:
+            from flask import has_request_context
+            from services.container import Container
+            if has_request_context():
+                auth_svc = Container.get_auth_service()
+                from flask_login import current_user
+                if current_user.is_authenticated:
+                    endpoints = auth_svc.get_endpoints(current_user.id)
+                    return endpoints.get(self.trading_mode, 'https://sandbox.tradier.com/v1' if self.trading_mode == 'paper' else 'https://api.tradier.com/v1')
+        except Exception:
+            pass
+            
+        if self.trading_mode == 'live':
+            return os.getenv('TRADIER_LIVE_ENDPOINT', 'https://api.tradier.com/v1')
+        return self._init_endpoint or os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
+        
+    def update_access_token(self, token: str) -> None:
+        """Deprecated: session-aware properties handle this automatically."""
+        pass
+
+    def update_account_id(self, account_id: str) -> None:
+        """Deprecated: session-aware properties handle this automatically."""
+        pass
+
+    def get_trading_mode(self) -> str:
+        """Return current trading mode: 'paper' or 'live'."""
+        return self.trading_mode
+
+    def set_trading_mode(self, mode: str) -> dict:
+        """Switch between paper and live trading mode."""
+        mode = mode.lower().strip()
+        if mode not in ('paper', 'live'):
+            return {'error': f'Invalid mode: {mode}'}
+        
+        self.trading_mode = mode
+        logger.info(f"🔄 Switched to {mode.upper()} trading mode.")
+        return {'status': 'ok', 'mode': mode, 'endpoint': self.endpoint}
+
+
+    def _get_headers(self) -> dict:
+        """Get headers with bearer token."""
         return {
-            'Authorization': f'Bearer {auth_token or ""}',
+            'Authorization': f'Bearer {self.access_token or ""}',
             'Accept': 'application/json'
         }
 
     def get_quote(self, symbol: str) -> Optional[dict]:
         """Fetch real-time or delayed quote for a symbol."""
-        url = f"{self._get_endpoint()}/markets/quotes"
+        url = f"{self.endpoint}/markets/quotes"
         params = {'symbols': symbol}
         try:
             response = requests.get(url, params=params,
@@ -104,7 +129,7 @@ class TradierService:
 
     def get_option_expirations(self, symbol: str) -> list:
         """Fetch option expirations for a given symbol."""
-        url = f"{self._get_endpoint()}/markets/options/expirations"
+        url = f"{self.endpoint}/markets/options/expirations"
         params = {'symbol': symbol}
         try:
             response = requests.get(url, params=params,
@@ -128,7 +153,7 @@ class TradierService:
 
     def get_option_chains(self, symbol: str, expiration: str) -> Optional[list]:
         """Fetch option chains for a given symbol and expiration date."""
-        url = f"{self._get_endpoint()}/markets/options/chains"
+        url = f"{self.endpoint}/markets/options/chains"
         params = {'symbol': symbol, 'expiration': expiration, 'greeks': 'true'}
         try:
             response = requests.get(url, params=params,
@@ -149,7 +174,7 @@ class TradierService:
     def get_historical_pricing(self, symbol: str, start_date: str,
                                end_date: str, interval: str = 'daily') -> Optional[list]:
         """Fetch historical pricing data."""
-        url = f"{self._get_endpoint()}/markets/history"
+        url = f"{self.endpoint}/markets/history"
         params = {
             'symbol': symbol,
             'start': start_date,
@@ -194,11 +219,10 @@ class TradierService:
 
     def get_account_balances(self) -> Optional[dict]:
         """Fetch account balances including total equity and option buying power."""
-        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
-        if not current_account_id:
+        if not self.account_id:
             logger.error("Cannot fetch account balances: account_id is missing.")
             return None
-        url = f"{self._get_endpoint()}/accounts/{current_account_id}/balances"
+        url = f"{self.endpoint}/accounts/{self.account_id}/balances"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -245,11 +269,10 @@ class TradierService:
 
     def get_positions(self) -> list:
         """Fetch open positions for the account."""
-        current_account_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
-        if not current_account_id:
+        if not self.account_id:
             logger.error("Cannot fetch positions: account_id is missing.")
             return []
-        url = f"{self._get_endpoint()}/accounts/{current_account_id}/positions"
+        url = f"{self.endpoint}/accounts/{self.account_id}/positions"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -277,7 +300,7 @@ class TradierService:
         if not current_account_id:
             logger.error("Cannot fetch orders: account_id is missing.")
             return []
-        url = f"{self._get_endpoint()}/accounts/{current_account_id}/orders"
+        url = f"{self.endpoint}/accounts/{current_account_id}/orders"
         params = {'page': page, 'limit': limit}
         try:
             response = requests.get(url, params=params,
@@ -329,7 +352,7 @@ class TradierService:
             legs: List of leg dicts for multileg orders
             tag: Optional tag for tracking
         """
-        url = f"{self._get_endpoint()}/accounts/{account_id}/orders"
+        url = f"{self.endpoint}/accounts/{account_id}/orders"
         
         data = {
             'class': order_class,
@@ -377,7 +400,7 @@ class TradierService:
 
     def get_clock(self) -> Optional[dict]:
         """Fetch market clock/status."""
-        url = f"{self._get_endpoint()}/markets/clock"
+        url = f"{self.endpoint}/markets/clock"
         try:
             response = requests.get(url, headers=self._get_headers(),
                                     timeout=REQUEST_TIMEOUT)
@@ -400,7 +423,7 @@ class TradierService:
             logger.error("Cannot fetch gain/loss: account_id is missing.")
             return []
             
-        url = f"{self._get_endpoint()}/accounts/{current_account_id}/gainloss"
+        url = f"{self.endpoint}/accounts/{current_account_id}/gainloss"
         params = {
             'page': page,
             'limit': limit,

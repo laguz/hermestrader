@@ -218,11 +218,13 @@ async function refreshStatus() {
         }
 
         // Fetch Balances
-        const balRes = await fetch('/api/trading/balances');
+        const balRes = await fetch('/api/account');
         const balData = await balRes.json();
-        if (balData.balances) {
-            document.getElementById('buying-power-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.balances.option_buying_power);
-            document.getElementById('equity-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.balances.total_equity);
+        
+        // Check if we got valid balance data (not an error and contains expected fields)
+        if (balData && !balData.error && (balData.option_buying_power !== undefined)) {
+            document.getElementById('buying-power-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.option_buying_power);
+            document.getElementById('equity-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.total_equity);
             
             const pill = document.getElementById('connection-status-pill');
             pill.innerHTML = `
@@ -234,14 +236,18 @@ async function refreshStatus() {
             `;
             pill.className = "flex items-center gap-2 px-4 py-2 rounded-xl bg-green-50 dark:bg-green-900/30 text-sm font-bold text-green-600 dark:text-green-400 shadow-sm border border-green-100 dark:border-green-800/50";
         } else {
-             const pill = document.getElementById('connection-status-pill');
-             pill.innerHTML = `
+            const pill = document.getElementById('connection-status-pill');
+            pill.innerHTML = `
                 <span class="relative flex h-3 w-3">
                     <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
                 </span>
                 DISCONNECTED
             `;
             pill.className = "flex items-center gap-2 px-4 py-2 rounded-xl bg-red-50 dark:bg-red-900/30 text-sm font-bold text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800/50";
+            
+            // Clear displays if disconnected
+            document.getElementById('buying-power-display').textContent = "$0.00";
+            document.getElementById('equity-display').textContent = "$0.00";
         }
 
     } catch (e) { console.error(e); }
