@@ -1,4 +1,6 @@
 import logging
+from dataclasses import dataclass
+from typing import Optional
 import os
 logger = logging.getLogger(__name__)
 import base64
@@ -29,6 +31,19 @@ class User(UserMixin):
 
 from nostr_sdk import Keys, PublicKey, SecretKey, nip04_encrypt, init_logger, LogLevel
 
+
+@dataclass
+class UserRegistration:
+    username: str
+    tradier_key: str
+    account_id: str
+    password: Optional[str] = None
+    nostr_pubkey: Optional[str] = None
+    live_tradier_key: Optional[str] = None
+    live_account_id: Optional[str] = None
+    paper_endpoint: str = 'https://sandbox.tradier.com/v1'
+    live_endpoint: str = 'https://api.tradier.com/v1'
+
 class AuthService:
     def __init__(self):
         self.db = Container.get_db()
@@ -58,38 +73,38 @@ class AuthService:
         )
         return base64.urlsafe_b64encode(kdf.derive(password.encode()))
 
-    def create_user(self, username, password, tradier_key, account_id, live_tradier_key=None, live_account_id=None, paper_endpoint='https://sandbox.tradier.com/v1', live_endpoint='https://api.tradier.com/v1'):
+    def create_user(self, reg: UserRegistration):
         """Create a new user with Multi-Key Vault architecture (DEK)."""
         if self.db is None: return None
         
         from pymongo.errors import DuplicateKeyError
         try:
-            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": username})
+            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": reg.username})
         except DuplicateKeyError:
             logger.warning("Registration locked natively: single user lock already exists.")
             return None
             
-        if self.db['users'].find_one({"username": username}): return None
+        if self.db['users'].find_one({"username": reg.username}): return None
 
         # 1. Generate DEK (Data Encryption Key)
         dek = Fernet.generate_key()
         f_dek = Fernet(dek)
 
         # 2. Encrypt Secrets with DEK
-        enc_tradier_key = f_dek.encrypt(tradier_key.encode()).decode('utf-8')
-        enc_account_id = f_dek.encrypt(account_id.encode()).decode('utf-8')
-        enc_live_key = f_dek.encrypt(live_tradier_key.encode()).decode('utf-8') if live_tradier_key else None
-        enc_live_account = f_dek.encrypt(live_account_id.encode()).decode('utf-8') if live_account_id else None
+        enc_tradier_key = f_dek.encrypt(reg.tradier_key.encode()).decode('utf-8')
+        enc_account_id = f_dek.encrypt(reg.account_id.encode()).decode('utf-8')
+        enc_live_key = f_dek.encrypt(reg.live_tradier_key.encode()).decode('utf-8') if reg.live_tradier_key else None
+        enc_live_account = f_dek.encrypt(reg.live_account_id.encode()).decode('utf-8') if reg.live_account_id else None
 
         # 3. Encrypt DEK with Password
         salt = os.urandom(16)
-        password_derived_key = self._derive_key(password, salt)
+        password_derived_key = self._derive_key(reg.password, salt)
         f_pwd = Fernet(password_derived_key)
         enc_dek_by_password = f_pwd.encrypt(dek).decode('utf-8')
 
         user_doc = {
-            "username": username,
-            "password_hash": generate_password_hash(password, method='pbkdf2:sha256'),
+            "username": reg.username,
+            "password_hash": generate_password_hash(reg.password, method='pbkdf2:sha256'),
             "vault": {
                 "version": 2, # DEK architecture
                 "encrypted_tradier_key": enc_tradier_key,
@@ -107,32 +122,32 @@ class AuthService:
         res = self.db['users'].insert_one(user_doc)
         user_doc['_id'] = res.inserted_id
         
-        self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
+        self._unlock_session(reg.tradier_key, reg.account_id, reg.live_tradier_key, reg.live_account_id)
         return User(user_doc)
 
-    def create_user_with_nostr(self, username, nostr_pubkey, tradier_key, account_id, live_tradier_key=None, live_account_id=None, paper_endpoint='https://sandbox.tradier.com/v1', live_endpoint='https://api.tradier.com/v1'):
+    def create_user_with_nostr(self, reg: UserRegistration):
         """Create a new user with Nostr DEK manager."""
         if self.db is None: return None
         
         from pymongo.errors import DuplicateKeyError
         try:
-            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": username})
+            self.db['system_locks'].insert_one({"_id": "single_user_lock", "claimed_by": reg.username})
         except DuplicateKeyError:
             logger.warning("Registration locked natively: single user lock already exists.")
             return None
             
-        if self.db['users'].find_one({"username": username}): return None
-        if self.db['users'].find_one({"nostr_pubkey": nostr_pubkey}): return None
+        if self.db['users'].find_one({"username": reg.username}): return None
+        if self.db['users'].find_one({"nostr_pubkey": reg.nostr_pubkey}): return None
 
         # 1. Generate DEK
         dek = Fernet.generate_key()
         f_dek = Fernet(dek)
 
         # 2. Encrypt Secrets with DEK
-        enc_tradier_key = f_dek.encrypt(tradier_key.encode()).decode('utf-8')
-        enc_account_id = f_dek.encrypt(account_id.encode()).decode('utf-8')
-        enc_live_key = f_dek.encrypt(live_tradier_key.encode()).decode('utf-8') if live_tradier_key else None
-        enc_live_account = f_dek.encrypt(live_account_id.encode()).decode('utf-8') if live_account_id else None
+        enc_tradier_key = f_dek.encrypt(reg.tradier_key.encode()).decode('utf-8')
+        enc_account_id = f_dek.encrypt(reg.account_id.encode()).decode('utf-8')
+        enc_live_key = f_dek.encrypt(reg.live_tradier_key.encode()).decode('utf-8') if reg.live_tradier_key else None
+        enc_live_account = f_dek.encrypt(reg.live_account_id.encode()).decode('utf-8') if reg.live_account_id else None
 
         # 3. Encrypt DEK with Nostr (NIP-04)
         # Server generates ephemeral keys to encrypt TO the user
@@ -140,7 +155,7 @@ class AuthService:
         server_priv = server_keys.secret_key()
         server_pub = server_keys.public_key()
         
-        user_pub_obj = PublicKey.parse(nostr_pubkey)
+        user_pub_obj = PublicKey.parse(reg.nostr_pubkey)
         
         # Encrypt the DEK (bytes -> string -> encrypt)
         # Note: Fernet key 'dek' is bytes. Convert to base64 string first to ensure safe transmission/decryption
@@ -148,9 +163,9 @@ class AuthService:
         encrypted_dek_blob = nip04_encrypt(server_priv, user_pub_obj, dek_str)
         
         user_doc = {
-            "username": username,
+            "username": reg.username,
             "password_hash": "", # No password
-            "nostr_pubkey": nostr_pubkey,
+            "nostr_pubkey": reg.nostr_pubkey,
             "vault": {
                 "version": 2,
                 "encrypted_tradier_key": enc_tradier_key,
@@ -168,7 +183,7 @@ class AuthService:
         res = self.db['users'].insert_one(user_doc)
         user_doc['_id'] = res.inserted_id
         
-        self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
+        self._unlock_session(reg.tradier_key, reg.account_id, reg.live_tradier_key, reg.live_account_id)
         return User(user_doc)
 
     def login(self, username, password):
