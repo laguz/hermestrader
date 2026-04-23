@@ -4,9 +4,8 @@ import sys
 
 class TestBacktestAnalysisImportError(unittest.TestCase):
     def test_analysis_service_import_error(self):
-        # These are modules that the backtest_service and its transitive dependencies
-        # might try to import. We mock them to ensure the test can run in environments
-        # missing these libraries.
+        # We need to ensure we can mock successfully
+        # so let's mock all third party dependencies to be safe.
         required_mocks = {
             'pandas': MagicMock(),
             'numpy': MagicMock(),
@@ -26,21 +25,25 @@ class TestBacktestAnalysisImportError(unittest.TestCase):
             'yfinance': MagicMock(),
             'nostr_sdk': MagicMock(),
             'requests': MagicMock(),
-            # Specifically mock the one we want to fail
-            'services.analysis_service': None
         }
 
-        # We need to remove the target from sys.modules to ensure import triggers the code
         if 'services.backtest_service' in sys.modules:
             del sys.modules['services.backtest_service']
 
-        with patch.dict(sys.modules, required_mocks):
-            # Now import backtest_service which should trigger the try/except
-            import services.backtest_service
+        original_import = __import__
+        def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'services.analysis_service':
+                raise ImportError("Mocked ImportError for services.analysis_service")
+            return original_import(name, globals, locals, fromlist, level)
 
-            # Check if AnalysisService is None as expected
-            self.assertIsNone(services.backtest_service.AnalysisService,
-                             "AnalysisService should be None after import failure")
+        with patch.dict(sys.modules, required_mocks):
+            with patch('builtins.__import__', side_effect=mock_import):
+                # Import the module so the try block gets executed and catches our forced ImportError
+                import services.backtest_service
+
+                # Verify that it caught the error and assigned None
+                self.assertIsNone(services.backtest_service.AnalysisService,
+                                 "AnalysisService should be None after import failure")
 
 if __name__ == '__main__':
     unittest.main()
