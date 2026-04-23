@@ -1,4 +1,5 @@
 import logging
+import re
 import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
@@ -71,6 +72,20 @@ class MLService:
         self.sequence_length = 60 # Lookback for LSTM
         self.default_features = ['close', 'volume', 'rsi', 'upper_bb', 'lower_bb', 'mid_bb', 'macd', 'macd_signal', 'atr', 'sma_50', 'obv', 'vwap']
 
+    def _validate_symbol(self, symbol):
+        """
+        Validates and sanitizes a ticker symbol.
+        Ensures symbol is a string and matches expected format to prevent NoSQL injection.
+        """
+        if not isinstance(symbol, str):
+            raise ValidationError(f"Symbol must be a string, got {type(symbol).__name__}")
+
+        symbol = symbol.strip().upper()
+        if not re.match(r'^[A-Z0-9\-\.]+$', symbol):
+            raise ValidationError(f"Invalid symbol format: {symbol}")
+
+        return symbol
+
     def _get_feature_file_path(self, symbol):
         return os.path.join(self.model_dir, f"{symbol}_features.json")
 
@@ -78,6 +93,7 @@ class MLService:
         """
         Backfill historical data for a symbol.
         """
+        symbol = self._validate_symbol(symbol)
         if self.db is None:
             logger.error("DB unavailable for backfill.")
             return False
@@ -304,6 +320,7 @@ class MLService:
 
     def _fetch_and_prepare_training_data(self, symbol):
         """Helper to fetch and prepare data from DB."""
+        symbol = self._validate_symbol(symbol)
         if self.db is None:
             raise ExternalServiceError("Database not available")
 
@@ -349,10 +366,7 @@ class MLService:
         return df
 
     def train_model(self, symbol, model_type='lstm', express=False, pre_prepared_df=None):
-        symbol = symbol.upper()
-        import re
-        if not re.match(r'^[A-Z0-9\-\.]+$', symbol):
-            raise ValidationError(f"Invalid symbol format: {symbol}")
+        symbol = self._validate_symbol(symbol)
         
         logger.info(f"Starting {model_type.upper()} training for {symbol}...")
         
@@ -562,10 +576,7 @@ except Exception as e:
         }
 
     def predict_next_day(self, symbol, model_type='lstm'):
-        symbol = symbol.upper()
-        import re
-        if not re.match(r'^[A-Z0-9\-\.]+$', symbol):
-            raise ValidationError(f"Invalid symbol format: {symbol}")
+        symbol = self._validate_symbol(symbol)
             
         if self.db is None:
             raise ExternalServiceError("Database not available")
@@ -839,7 +850,7 @@ except Exception as e:
         """
         query = {}
         if symbol:
-            symbol = symbol.upper().strip()
+            symbol = self._validate_symbol(symbol)
             query["symbol"] = symbol
             
         if days:
@@ -1007,7 +1018,7 @@ except Exception as e:
         }
 
     def evaluate_model(self, symbol, days=60, model_type='lstm'):
-        symbol = symbol.upper()
+        symbol = self._validate_symbol(symbol)
         if self.db is None: raise ExternalServiceError("DB Unavailable")
 
         cutoff_date = (datetime.now() - timedelta(days=days + 400)).strftime('%Y-%m-%d')
