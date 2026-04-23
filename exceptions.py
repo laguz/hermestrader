@@ -9,6 +9,7 @@ class AppError(Exception):
     def to_dict(self):
         rv = dict(self.payload or ())
         rv['error'] = self.message
+        rv['message'] = self.message
         return rv
 
 class ValidationError(AppError):

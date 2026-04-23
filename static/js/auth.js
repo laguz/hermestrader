@@ -72,7 +72,7 @@ async function loginWithNostr() {
                 window.location.href = '/';
             }
         } else {
-            alert("Nostr Login Failed: " + (result.message || "Unknown error"));
+            alert("Nostr Login Failed: " + (result.message || result.error || "Unknown error"));
         }
 
     } catch (error) {
@@ -130,7 +130,7 @@ async function registerWithNostr() {
         if (result.success) {
             window.location.href = '/';
         } else {
-            alert("Nostr Registration Failed: " + (result.message || "Unknown error"));
+            alert("Nostr Registration Failed: " + (result.message || result.error || "Unknown error"));
         }
 
     } catch (error) {
@@ -266,7 +266,7 @@ async function loginWithNip46() {
                 window.location.href = '/';
             }
         } else {
-            throw new Error(result.message || "Login failed");
+            throw new Error(result.message || result.error || "Login failed");
         }
 
     } catch (error) {
@@ -407,7 +407,7 @@ async function generateLoginQR() {
                                 window.location.href = '/';
                             }
                         } else {
-                            throw new Error(result.message || "Login failed");
+                            throw new Error(result.message || result.error || "Login failed");
                         }
                     } catch (e) {
                         statusDiv.innerText = "Error: " + e.message;

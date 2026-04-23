@@ -9,6 +9,8 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from services.container import Container
+from exceptions import AppError
+from pymongo.errors import PyMongoError
 
 # Ephemeral in-memory key generated strictly once per application boot.
 _EPHEMERAL_KEY = Fernet.generate_key()
@@ -173,7 +175,12 @@ class AuthService:
         """Login with Password and auto-migrate vault if needed."""
         if self.db is None: return None
         
-        user_doc = self.db['users'].find_one({"username": username})
+        try:
+            user_doc = self.db['users'].find_one({"username": username})
+        except PyMongoError as e:
+            logger.error(f"Database error during login: {e}")
+            raise AppError("Database connection failed. Please ensure MongoDB is running.", status_code=503)
+
         if not user_doc: return None
         
         if not check_password_hash(user_doc.get('password_hash', ''), password):
@@ -201,7 +208,12 @@ class AuthService:
 
         pubkey = event.get('pubkey')
         
-        user_doc = self.db['users'].find_one({"nostr_pubkey": pubkey})
+        try:
+            user_doc = self.db['users'].find_one({"nostr_pubkey": pubkey})
+        except PyMongoError as e:
+            logger.error(f"Database error during Nostr login: {e}")
+            raise AppError("Database connection failed. Please ensure MongoDB is running.", status_code=503)
+
         if not user_doc:
             return None, None 
 

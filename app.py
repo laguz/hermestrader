@@ -86,7 +86,10 @@ def _register_error_handlers(app):
         if isinstance(error, HTTPException):
             return error
         logger.error(f"Unhandled Exception at {request.url}: {error}", exc_info=True)
-        return jsonify({"error": "An internal error occurred"}), 500
+        return jsonify({
+            "error": "An internal error occurred",
+            "message": f"Server Error: {str(error)}"
+        }), 500
 
 
 app = create_app()
