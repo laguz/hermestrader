@@ -257,7 +257,7 @@ class AuthService:
                     tradier_key = f.decrypt(enc_key.encode()).decode('utf-8')
                     if enc_acc_id:
                         account_id = f.decrypt(enc_acc_id.encode()).decode('utf-8') 
-                    self._migrate_to_dek(user_doc['_id'], password, tradier_key, account_id)
+                    dek = self._migrate_to_dek(user_doc['_id'], password, tradier_key, account_id)
                     
             elif version == 2:
                 # --- NEW VAULT (DEK) ---
@@ -289,7 +289,7 @@ class AuthService:
                         account_id = f_dek.decrypt(enc_acc.encode()).decode('utf-8')
 
             if tradier_key:
-                self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id)
+                self._unlock_session(tradier_key, account_id, live_tradier_key, live_account_id, dek=dek)
                 return User(user_doc)
                 
         except Exception as e:
@@ -301,7 +301,7 @@ class AuthService:
         # For now, we return User (so they are logged in) but session key is None.
         return User(user_doc)
 
-    def _unlock_session(self, key, account_id, live_key=None, live_account_id=None):
+    def _unlock_session(self, key, account_id, live_key=None, live_account_id=None, dek=None):
         from flask import session, has_request_context
         if has_request_context():
             enc_key = _F_EPHEMERAL.encrypt(key.encode()).decode('utf-8')
@@ -313,6 +313,8 @@ class AuthService:
                 session['live_tradier_key'] = _F_EPHEMERAL.encrypt(live_key.encode()).decode('utf-8')
             if live_account_id:
                 session['live_account_id'] = _F_EPHEMERAL.encrypt(live_account_id.encode()).decode('utf-8')
+            if dek:
+                session['dek'] = _F_EPHEMERAL.encrypt(dek).decode('utf-8')
         
         # We still update the tradier service, but the tradier service itself 
         # needs to be modified to pull from session instead of storing it on tracking instances.
@@ -351,8 +353,12 @@ class AuthService:
             }
         }
         
-        self.db['users'].update_one({"_id": user_id}, {"$set": {"vault": new_vault}})
+        self.db['users'].update_one(
+            {"_id": user_id},
+            {"$set": {"vault": new_vault}}
+        )
         logger.info("Migration complete.")
+        return dek
 
     def get_api_key(self, mode='paper'):
         from flask import session, has_request_context
@@ -376,7 +382,6 @@ class AuthService:
                 try:
                     return _F_EPHEMERAL.decrypt(enc_acct.encode()).decode('utf-8')
                 except Exception as e:
-                    logger.error("Failed to decrypt ephemeral account id.")
                     return None
         return None
 
@@ -393,17 +398,29 @@ class AuthService:
         pwd_manager = managers.get('password')
 
         dek = None
-        if pwd_manager:
-            salt_b64 = pwd_manager.get('salt')
-            enc_dek_blob = pwd_manager.get('encrypted_dek')
-            salt = base64.b64decode(salt_b64)
-            key = self._derive_key(password, salt)
-            f_pwd = Fernet(key)
-            try:
-                dek = f_pwd.decrypt(enc_dek_blob.encode())
-            except Exception:
-                return False # wrong password
+        if password:
+            if pwd_manager:
+                salt_b64 = pwd_manager.get('salt')
+                enc_dek_blob = pwd_manager.get('encrypted_dek')
+                salt = base64.b64decode(salt_b64)
+                key = self._derive_key(password, salt)
+                f_pwd = Fernet(key)
+                try:
+                    dek = f_pwd.decrypt(enc_dek_blob.encode())
+                except Exception:
+                    return False # wrong password
         else:
+            # Try to get DEK from session
+            from flask import session, has_request_context
+            if has_request_context():
+                enc_dek = session.get('dek')
+                if enc_dek:
+                    try:
+                        dek = _F_EPHEMERAL.decrypt(enc_dek.encode())
+                    except Exception:
+                        logger.error("Failed to decrypt session DEK")
+        
+        if not dek:
             return False
 
         f_dek = Fernet(dek)
@@ -426,7 +443,7 @@ class AuthService:
             }}
         )
 
-        self._unlock_session(paper_key, paper_account, live_key, live_account)
+        self._unlock_session(paper_key, paper_account, live_key, live_account, dek=dek)
         return True
 
     def get_endpoints(self, user_id):

@@ -156,6 +156,23 @@ def settings():
     relays = auth_service.get_nostr_relays(current_user.id)
     return render_template('settings.html', endpoints=endpoints, relays=relays)
 
+@auth_bp.route('/config')
+@login_required
+def config_page():
+    auth_service = Container.get_auth_service()
+    endpoints = auth_service.get_endpoints(current_user.id)
+    relays = auth_service.get_nostr_relays(current_user.id)
+    
+    # Fetch decrypted credentials from session
+    creds = {
+        "paper_key": auth_service.get_api_key(mode='paper'),
+        "paper_account": auth_service.get_account_id(mode='paper'),
+        "live_key": auth_service.get_api_key(mode='live'),
+        "live_account": auth_service.get_account_id(mode='live')
+    }
+    
+    return render_template('config.html', endpoints=endpoints, relays=relays, creds=creds)
+
 @auth_bp.route('/api/auth/update_credentials', methods=['POST'])
 @login_required
 def update_credentials():
@@ -168,8 +185,8 @@ def update_credentials():
     paper_endpoint = data.get('paper_endpoint', 'https://sandbox.tradier.com/v1')
     live_endpoint = data.get('live_endpoint', 'https://api.tradier.com/v1')
 
-    if not password or not paper_key or not paper_account:
-        return {'success': False, 'message': 'Password, Paper Key, and Paper Account are required'}, 400
+    if not paper_key or not paper_account:
+        return {'success': False, 'message': 'Paper Key and Paper Account are required'}, 400
 
     auth_service = Container.get_auth_service()
     success = auth_service.update_vault_credentials(
@@ -182,7 +199,7 @@ def update_credentials():
     if success:
         return {'success': True}
     else:
-        return {'success': False, 'message': 'Failed to update credentials. Check password.'}, 400
+        return {'success': False, 'message': 'Vault is locked or session expired. Please log out and log in again.'}, 401
 
 @auth_bp.route('/api/auth/test_connection', methods=['POST'])
 @login_required

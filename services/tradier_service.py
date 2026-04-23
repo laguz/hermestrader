@@ -31,58 +31,51 @@ class TradierService:
         return self.trading_mode
 
     def set_trading_mode(self, mode: str) -> dict:
-        """
-        Switch between paper and live trading credentials.
-        Paper uses TRADIER_ACCESS_TOKEN / TRADIER_ACCOUNT_ID / TRADIER_ENDPOINT (sandbox).
-        Live uses TRADIER_LIVE_ACCESS_TOKEN / TRADIER_LIVE_ACCOUNT_ID / TRADIER_LIVE_ENDPOINT.
-        Returns a dict with the result status.
-        """
+        """Switch between paper and live trading mode."""
         mode = mode.lower().strip()
         if mode not in ('paper', 'live'):
-            return {'error': f'Invalid mode: {mode}. Must be "paper" or "live".'}
+            return {'error': f'Invalid mode: {mode}'}
+        
+        self.trading_mode = mode
+        logger.info(f"🔄 Switched to {mode.upper()} trading mode.")
+        return {'status': 'ok', 'mode': mode, 'endpoint': self._get_endpoint()}
 
-        if mode == 'live':
-            live_token = os.getenv('TRADIER_LIVE_ACCESS_TOKEN')
-            live_account = os.getenv('TRADIER_LIVE_ACCOUNT_ID')
-            live_endpoint = os.getenv('TRADIER_LIVE_ENDPOINT', 'https://api.tradier.com/v1')
-
-            if not live_token or not live_account:
-                return {'error': 'Live trading credentials not configured. Set TRADIER_LIVE_ACCESS_TOKEN and TRADIER_LIVE_ACCOUNT_ID environment variables.'}
-
-            self.access_token = live_token
-            self.account_id = live_account
-            self.endpoint = live_endpoint
-            self.trading_mode = 'live'
-            logger.info("🔴 Switched to LIVE trading mode.")
-            return {'status': 'ok', 'mode': 'live', 'endpoint': live_endpoint}
-
-        else:  # paper
-            self.access_token = os.getenv('TRADIER_ACCESS_TOKEN')
-            self.account_id = os.getenv('TRADIER_ACCOUNT_ID')
-            self.endpoint = os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
-            self.trading_mode = 'paper'
-            logger.info("📝 Switched to PAPER trading mode.")
-            return {'status': 'ok', 'mode': 'paper', 'endpoint': self._get_endpoint()}
+    def _get_endpoint(self) -> str:
+        """Return the correct endpoint, prioritizing session-based vault config."""
+        try:
+            from flask import has_request_context, session
+            from services.container import Container
+            if has_request_context():
+                auth_svc = Container.get_auth_service()
+                from flask_login import current_user
+                if current_user.is_authenticated:
+                    endpoints = auth_svc.get_endpoints(current_user.id)
+                    return endpoints.get(self.trading_mode, 'https://sandbox.tradier.com/v1' if self.trading_mode == 'paper' else 'https://api.tradier.com/v1')
+        except Exception:
+            pass
+            
+        # Fallback to env or init value
+        if self.trading_mode == 'live':
+            return os.getenv('TRADIER_LIVE_ENDPOINT', 'https://api.tradier.com/v1')
+        return self.endpoint or os.getenv('TRADIER_ENDPOINT', 'https://sandbox.tradier.com/v1')
 
     def _get_headers(self) -> dict:
-        auth_token = self.access_token
-        
+        """Get headers with bearer token, prioritizing session/vault."""
+        auth_token = None
         try:
             from flask import has_request_context
             from services.container import Container
             if has_request_context():
                 auth_svc = Container.get_auth_service()
-                session_key = auth_svc.get_api_key()
-                if session_key:
-                    auth_token = session_key
-        except ImportError:
+                auth_token = auth_svc.get_api_key(mode=self.trading_mode)
+        except Exception:
             pass
             
         if not auth_token:
-            auth_token = os.getenv('TRADIER_ACCESS_TOKEN')
-            
-        if not auth_token:
-            logger.warning("Tradier access_token is missing. Unauthorized error likely.")
+            if self.trading_mode == 'live':
+                auth_token = os.getenv('TRADIER_LIVE_ACCESS_TOKEN')
+            else:
+                auth_token = self.access_token or os.getenv('TRADIER_ACCESS_TOKEN')
             
         return {
             'Authorization': f'Bearer {auth_token or ""}',
@@ -180,21 +173,22 @@ class TradierService:
             return None
 
     def _get_account_id(self) -> Optional[str]:
-        acct_id = getattr(self, 'account_id', None) or os.getenv('TRADIER_ACCOUNT_ID')
+        """Return the active account ID, prioritizing session/vault."""
+        acct_id = None
         try:
             from flask import has_request_context
             from services.container import Container
             if has_request_context():
                 auth_svc = Container.get_auth_service()
-                session_acct = auth_svc.get_account_id()
-                if session_acct:
-                    acct_id = session_acct
-        except ImportError:
+                acct_id = auth_svc.get_account_id(mode=self.trading_mode)
+        except Exception:
             pass
             
         if not acct_id:
-            import os
-            acct_id = os.getenv('TRADIER_ACCOUNT_ID')
+            if self.trading_mode == 'live':
+                acct_id = os.getenv('TRADIER_LIVE_ACCOUNT_ID')
+            else:
+                acct_id = self.account_id or os.getenv('TRADIER_ACCOUNT_ID')
             
         return acct_id
 

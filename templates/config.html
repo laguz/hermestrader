@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+
+{% block main_class %}full-width-layout{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto py-8 px-4">
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+        <div class="flex items-center gap-4">
+            <div class="p-3 bg-indigo-600 rounded-2xl shadow-lg shadow-indigo-500/30">
+                <span class="material-symbols-outlined text-3xl text-white">settings_input_component</span>
+            </div>
+            <div>
+                <h1 class="text-3xl font-extrabold text-gray-900 dark:text-white tracking-tight">API Configuration</h1>
+                <p class="text-gray-500 dark:text-gray-400">Manage connectivity, credentials, and environmental variables.</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center gap-3 bg-white dark:bg-gray-800 p-2 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
+            <div id="connection-status-pill" class="flex items-center gap-2 px-4 py-2 rounded-xl bg-gray-100 dark:bg-gray-700 text-sm font-bold text-gray-600 dark:text-gray-300">
+                <span class="relative flex h-3 w-3">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-gray-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-gray-500"></span>
+                </span>
+                CHECKING STATUS...
+            </div>
+        </div>
+    </div>
+
+    <div id="alert-container" class="mb-8"></div>
+
+    <!-- Dashboard Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        <!-- Sidebar Controls -->
+        <div class="lg:col-span-4 space-y-8">
+            <!-- Account Info Card -->
+            <div class="bg-gradient-to-br from-indigo-600 to-violet-700 rounded-3xl p-6 text-white shadow-xl shadow-indigo-500/20">
+                <div class="flex justify-between items-start mb-6">
+                    <span class="material-symbols-outlined p-2 bg-white/20 rounded-xl">account_balance_wallet</span>
+                    <span class="text-xs font-bold bg-white/20 px-3 py-1 rounded-full uppercase tracking-wider" id="active-mode-badge">PAPER</span>
+                </div>
+                <div class="space-y-1 mb-6">
+                    <div class="text-indigo-100 text-sm font-medium">Option Buying Power</div>
+                    <div class="text-3xl font-black" id="buying-power-display">$0.00</div>
+                </div>
+                <div class="grid grid-cols-2 gap-4 pt-4 border-t border-white/10">
+                    <div>
+                        <div class="text-indigo-200 text-[10px] font-bold uppercase">Total Equity</div>
+                        <div class="text-lg font-bold" id="equity-display">$0.00</div>
+                    </div>
+                    <div>
+                        <div class="text-indigo-200 text-[10px] font-bold uppercase">Account ID</div>
+                        <div class="text-sm font-mono truncate" id="account-id-display">NOT SET</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mode Switcher -->
+            <div class="bg-white dark:bg-gray-800 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-sm">
+                <h3 class="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-widest">
+                    <span class="material-symbols-outlined mr-2 text-orange-500 text-[18px]">rocket_launch</span>
+                    Trading Environment
+                </h3>
+                <div class="grid grid-cols-2 gap-2 p-1 bg-gray-100 dark:bg-gray-900 rounded-2xl">
+                    <button onclick="switchMode('paper')" id="mode-btn-paper"
+                        class="px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 bg-white dark:bg-gray-800 shadow-sm text-blue-600 dark:text-blue-400">
+                        PAPER
+                    </button>
+                    <button onclick="switchMode('live')" id="mode-btn-live"
+                        class="px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 text-gray-500 dark:text-gray-400 hover:text-red-500">
+                        LIVE
+                    </button>
+                </div>
+                <p class="text-[11px] text-gray-400 mt-4 leading-relaxed italic">
+                    * Switching modes will restart the bot's internal tracking for the new environment.
+                </p>
+            </div>
+
+            <!-- Nostr Card -->
+            <div class="bg-white dark:bg-gray-800 rounded-3xl p-6 border border-gray-200 dark:border-gray-700 shadow-sm">
+                <h3 class="text-sm font-bold text-gray-900 dark:text-white mb-4 flex items-center uppercase tracking-widest">
+                    <span class="material-symbols-outlined mr-2 text-purple-500 text-[18px]">hub</span>
+                    Nostr Relays
+                </h3>
+                <div id="relay-list" class="space-y-2 mb-4">
+                    <!-- Relays will be injected here -->
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" id="new-relay" placeholder="wss://..."
+                        class="bg-gray-50 border border-gray-300 text-gray-900 text-xs rounded-xl focus:ring-purple-500 focus:border-purple-500 block w-full p-2.5 dark:bg-gray-900 dark:border-gray-700 dark:text-white">
+                    <button onclick="addRelay()" class="bg-purple-600 hover:bg-purple-700 text-white p-2.5 rounded-xl transition-colors">
+                        <span class="material-symbols-outlined text-[18px]">add</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configuration Forms -->
+        <div class="lg:col-span-8 space-y-8">
+            <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                <div class="p-6 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50/50 dark:bg-gray-900/20">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white flex items-center">
+                        <span class="material-symbols-outlined mr-3 text-indigo-500">vpn_key</span>
+                        Credential Vault
+                    </h2>
+                    <div class="flex items-center text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        <span class="material-symbols-outlined text-[14px] mr-1">encrypted</span>
+                        AES-256 Encrypted
+                    </div>
+                </div>
+
+                <form id="vault-form" class="divide-y divide-gray-100 dark:divide-gray-700">
+
+                    <!-- Paper Section -->
+                    <div class="p-8">
+                        <div class="flex items-center justify-between mb-6">
+                            <h3 class="font-bold text-gray-900 dark:text-white flex items-center">
+                                <span class="w-2 h-2 rounded-full bg-green-500 mr-3"></span>
+                                Paper Credentials
+                            </h3>
+                            <button type="button" onclick="testConn('paper')" 
+                                class="text-xs font-bold px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors flex items-center gap-2">
+                                <span class="material-symbols-outlined text-[16px]">sync_alt</span>
+                                TEST PAPER
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="space-y-2">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Access Token</label>
+                                <input type="password" id="paper_key" value="{{ creds.paper_key or '' }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Account ID</label>
+                                <input type="text" id="paper_account" value="{{ creds.paper_account or '' }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Endpoint URL</label>
+                            <input type="text" id="paper_endpoint" value="{{ endpoints.paper }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                        </div>
+                    </div>
+
+                    <!-- Live Section -->
+                    <div class="p-8">
+                        <div class="flex items-center justify-between mb-6">
+                            <h3 class="font-bold text-gray-900 dark:text-white flex items-center">
+                                <span class="w-2 h-2 rounded-full bg-red-500 mr-3"></span>
+                                Live Credentials
+                            </h3>
+                            <button type="button" onclick="testConn('live')" 
+                                class="text-xs font-bold px-4 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 transition-colors flex items-center gap-2">
+                                <span class="material-symbols-outlined text-[16px]">sync_alt</span>
+                                TEST LIVE
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="space-y-2">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Live Token</label>
+                                <input type="password" id="live_key" value="{{ creds.live_key or '' }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Live Account ID</label>
+                                <input type="text" id="live_account" value="{{ creds.live_account or '' }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <label class="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase ml-1">Live Endpoint URL</label>
+                            <input type="text" id="live_endpoint" value="{{ endpoints.live }}" class="config-input w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 transition-all text-sm font-mono">
+                        </div>
+                    </div>
+
+                    <!-- Actions -->
+                    <div class="p-8 bg-gray-50/50 dark:bg-gray-900/40">
+                        <button type="submit"
+                            class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black py-5 px-8 rounded-2xl transition-all shadow-xl shadow-indigo-500/20 flex items-center justify-center gap-3">
+                            <span class="material-symbols-outlined">save_as</span>
+                            UPDATE SYSTEM CONFIGURATION
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.config-input { outline: none; }
+@keyframes pulse-indigo {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.05); opacity: 0.8; }
+}
+</style>
+
+<script>
+let currentRelays = {{ relays | tojson }};
+let activeMode = 'paper';
+
+async function refreshStatus() {
+    try {
+        const res = await fetch('/api/bot/status');
+        const data = await res.json();
+        activeMode = data.trading_mode || 'paper';
+        
+        // Update Mode UI
+        document.getElementById('active-mode-badge').textContent = activeMode.toUpperCase();
+        document.getElementById('active-mode-badge').className = `text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider ${activeMode === 'live' ? 'bg-red-500 text-white' : 'bg-white/20'}`;
+        
+        const paperBtn = document.getElementById('mode-btn-paper');
+        const liveBtn = document.getElementById('mode-btn-live');
+        
+        if (activeMode === 'paper') {
+            paperBtn.className = "px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 bg-white dark:bg-gray-800 shadow-sm text-blue-600 dark:text-blue-400";
+            liveBtn.className = "px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 text-gray-500 dark:text-gray-400 hover:text-red-500";
+        } else {
+            liveBtn.className = "px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 bg-red-600 text-white shadow-lg shadow-red-500/30";
+            paperBtn.className = "px-4 py-3 rounded-xl text-sm font-bold transition-all duration-200 text-gray-500 dark:text-gray-400 hover:text-blue-500";
+        }
+
+        // Fetch Balances
+        const balRes = await fetch('/api/trading/balances');
+        const balData = await balRes.json();
+        if (balData.balances) {
+            document.getElementById('buying-power-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.balances.option_buying_power);
+            document.getElementById('equity-display').textContent = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(balData.balances.total_equity);
+            
+            const pill = document.getElementById('connection-status-pill');
+            pill.innerHTML = `
+                <span class="relative flex h-3 w-3">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                CONNECTED
+            `;
+            pill.className = "flex items-center gap-2 px-4 py-2 rounded-xl bg-green-50 dark:bg-green-900/30 text-sm font-bold text-green-600 dark:text-green-400 shadow-sm border border-green-100 dark:border-green-800/50";
+        } else {
+             const pill = document.getElementById('connection-status-pill');
+             pill.innerHTML = `
+                <span class="relative flex h-3 w-3">
+                    <span class="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span>
+                </span>
+                DISCONNECTED
+            `;
+            pill.className = "flex items-center gap-2 px-4 py-2 rounded-xl bg-red-50 dark:bg-red-900/30 text-sm font-bold text-red-600 dark:text-red-400 border border-red-100 dark:border-red-800/50";
+        }
+
+    } catch (e) { console.error(e); }
+}
+
+async function switchMode(mode) {
+    if (mode === 'live' && !confirm('WARNING: You are about to switch to LIVE trading. Real capital will be used. Proceed?')) return;
+    
+    try {
+        const res = await fetch('/api/bot/trading_mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode })
+        });
+        const data = await res.json();
+        if (data.error) showAlert(data.error, 'error');
+        else {
+            showAlert(`Successfully switched to ${mode.toUpperCase()} mode.`, 'success');
+            refreshStatus();
+        }
+    } catch (e) { showAlert(e.message, 'error'); }
+}
+
+async function testConn(type) {
+    const key = document.getElementById(type + '_key').value;
+    const account_id = document.getElementById(type + '_account').value;
+    const endpoint = document.getElementById(type + '_endpoint').value;
+
+    if (!key || !account_id) {
+        showAlert('API Key and Account ID are required for testing.', 'error');
+        return;
+    }
+
+    const btn = event.currentTarget;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span> TESTING...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/auth/test_connection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, account_id, endpoint })
+        });
+        const data = await res.json();
+        if (data.success) showAlert(data.message, 'success');
+        else showAlert(data.message, 'error');
+    } catch (e) { showAlert('Test failed: ' + e, 'error'); }
+    finally {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+    }
+}
+
+function renderRelays() {
+    const container = document.getElementById('relay-list');
+    container.innerHTML = currentRelays.map(r => `
+        <div class="flex items-center justify-between p-2.5 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-800">
+            <span class="text-[10px] font-mono text-gray-500 dark:text-gray-400 truncate pr-2">${r}</span>
+            <button onclick="removeRelay('${r}')" class="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 p-1 rounded-lg">
+                <span class="material-symbols-outlined text-[16px]">close</span>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function addRelay() {
+    const input = document.getElementById('new-relay');
+    const url = input.value.trim();
+    if (!url || currentRelays.includes(url)) return;
+    currentRelays.push(url);
+    input.value = '';
+    renderRelays();
+    await saveRelays();
+}
+
+function removeRelay(url) {
+    currentRelays = currentRelays.filter(r => r !== url);
+    renderRelays();
+    saveRelays();
+}
+
+async function saveRelays() {
+    try {
+        await fetch('/api/auth/relays', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ relays: currentRelays })
+        });
+    } catch (e) { console.error(e); }
+}
+
+function showAlert(msg, type) {
+    const container = document.getElementById('alert-container');
+    const bg = type === 'success' ? 'bg-green-600' : 'bg-red-600';
+    container.innerHTML = `
+        <div class="flex items-center p-4 rounded-2xl ${bg} text-white shadow-lg animate-fade-in">
+            <span class="material-symbols-outlined mr-3">${type === 'success' ? 'check_circle' : 'error'}</span>
+            <span class="text-sm font-bold">${msg}</span>
+            <button onclick="this.parentElement.remove()" class="ml-auto opacity-70 hover:opacity-100">
+                <span class="material-symbols-outlined">close</span>
+            </button>
+        </div>
+    `;
+    setTimeout(() => { if (container.firstChild) container.firstChild.remove(); }, 5000);
+}
+
+document.getElementById('vault-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button[type="submit"]');
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="material-symbols-outlined animate-spin">sync</span> UPDATING VAULT...';
+    btn.disabled = true;
+
+    const payload = {
+        paper_key: document.getElementById('paper_key').value,
+        paper_account: document.getElementById('paper_account').value,
+        live_key: document.getElementById('live_key').value,
+        live_account: document.getElementById('live_account').value,
+        paper_endpoint: document.getElementById('paper_endpoint').value,
+        live_endpoint: document.getElementById('live_endpoint').value
+    };
+
+    try {
+        const res = await fetch('/api/auth/update_credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+            showAlert('Configuration updated and re-encrypted successfully.', 'success');
+            refreshStatus();
+        } else {
+            showAlert(data.message || 'Update failed', 'error');
+        }
+    } catch (e) { showAlert(e.message, 'error'); }
+    finally {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+    }
+});
+
+// Init
+renderRelays();
+refreshStatus();
+setInterval(refreshStatus, 30000); // Auto-refresh every 30s
+</script>
+{% endblock %}
