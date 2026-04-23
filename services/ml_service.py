@@ -1018,163 +1018,164 @@ except Exception as e:
         }
 
     def evaluate_model(self, symbol, days=60, model_type='lstm'):
-        symbol = self._validate_symbol(symbol)
-        if self.db is None: raise ExternalServiceError("DB Unavailable")
+        try:
+            symbol = self._validate_symbol(symbol)
+            if self.db is None: raise ExternalServiceError("DB Unavailable")
 
-        cutoff_date = (datetime.now() - timedelta(days=days + 400)).strftime('%Y-%m-%d')
-        collection = self.db['market_data']
-        cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
-        data = list(cursor)
+            cutoff_date = (datetime.now() - timedelta(days=days + 400)).strftime('%Y-%m-%d')
+            collection = self.db['market_data']
+            cursor = collection.find({"symbol": symbol, "date": {"$gte": cutoff_date}}).sort("date", 1)
+            data = list(cursor)
         
-        if not data: raise ValidationError("Not enough data")
+            if not data: raise ValidationError("Not enough data")
 
-        df = pd.DataFrame(data)
-        if '_id' in df.columns: df.drop(columns=['_id'], inplace=True)
-        df['date'] = pd.to_datetime(df['date'])
+            df = pd.DataFrame(data)
+            if '_id' in df.columns: df.drop(columns=['_id'], inplace=True)
+            df['date'] = pd.to_datetime(df['date'])
         
-        df = self.prepare_features(df)
-        df['target'] = df['close'].shift(-1)
-        # For RF evaluation, we need target return validation?
-        # No, evaluate returns actual vs predicted PRICE.
+            df = self.prepare_features(df)
+            df['target'] = df['close'].shift(-1)
+            # For RF evaluation, we need target return validation?
+            # No, evaluate returns actual vs predicted PRICE.
         
-        df.dropna(inplace=True)
+            df.dropna(inplace=True)
         
-        feature_file = self._get_feature_file_path(symbol)
-        if os.path.exists(feature_file):
-            with open(feature_file, 'r') as f:
-                features = json.load(f)
-        else:
-            features = [f for f in self.default_features if f in df.columns]
-
-        # Safety: Ensure no target leakage columns are in features list
-        forbidden = ['target', 'target_return', 'log_return', 'date', 'symbol']
-        features = [f for f in features if f not in forbidden]
-
-        if model_type == 'lstm':
-            if not HAS_TENSORFLOW:
-                raise AppError("LSTM evaluation requires TensorFlow, but it is not installed.", 501)
-            model_path = f"{self.model_dir}/{symbol}_lstm.h5"
-            if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
-            model = load_model(model_path)
-            scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
-            
-            # Prepare data (Need Log Return logic similar to training)
-            # Ensure target is set correctly for prepare_lstm_data
-            df['log_return'] = np.log(df['target'] / df['close'])
-            df['target_for_lstm'] = df['log_return']
-            
-            # Save original target price for validation
-            # We want actual future price (Close T+1) to compare with predicted price
-            df['actual_future_price'] = df['target']
-            
-            # Swap target for prep
-            df['target'] = df['target_for_lstm']
-            
-            X_all, _, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
-            
-            if len(X_all) < days: raise ValidationError("Not enough eval data")
-            
-            # Select last 'days' sequences
-            X = X_all[-days:]
-            
-            # Load Target Scaler
-            target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
-            target_scaler = joblib.load(target_scaler_path) if os.path.exists(target_scaler_path) else None
-
-            # Predict
-            pred_scaled = model(X, training=False).numpy()
-            
-            if target_scaler:
-                 pred_log_returns = target_scaler.inverse_transform(pred_scaled).flatten()
+            feature_file = self._get_feature_file_path(symbol)
+            if os.path.exists(feature_file):
+                with open(feature_file, 'r') as f:
+                    features = json.load(f)
             else:
-                 pred_log_returns = pred_scaled.flatten()
-            
-            # Reconstruct and Align
-            predictions = []
-            actuals = [] 
-            dates = []
-            close_list = [] # Current close (basis for prediction)
-            
-            # Indices logic:
-            # X_all is aligned with df[sequence_length:].
-            # X_all[0] corresponds to sequence ending at index `sequence_length-1`?
-            # No, `prepare_lstm_data` loop:
-            # for i in range(seq_len, len(scaled_data)):
-            #    X.append(scaled_data[i-seq_len:i])
-            #    y.append(target[i])
-            
-            # So X[k] contains data up to index `seq_len + k - 1`.
-            # And predicts target at index `seq_len + k`.
-            
-            # If we take `X_all[-days:]`, let N = len(X_all).
-            # We take indices [N-days, N-days+1, ... N-1].
-            
-            total_samples = len(X_all)
-            start_idx_in_x = total_samples - days
-            
-            for k in range(days):
-                # Map to DataFrame index
-                # X_index = start_idx_in_x + k
-                # Corresponding DF index = sequence_length + X_index
-                df_idx = self.sequence_length + start_idx_in_x + k
-                
-                # Check bounds
-                if df_idx >= len(df): continue
-                
-                # Input Ends at previous row (basis)
-                row_basis = df.iloc[df_idx - 1]
-                row_target = df.iloc[df_idx]
-                
-                basis_close = row_basis['close']
-                
-                # Reconstruct Prediction
-                pred_price = basis_close * np.exp(pred_log_returns[k])
-                
-                # Actual Future Price
-                actual_price = row_basis['actual_future_price'] # = row_target['close']?
-                # df['actual_future_price'][i] = close[i+1].
-                # row_basis is at T. actual_future_price is Close[T+1].
-                # row_target is at T+1? No.
-                # df_idx corresponds to `i` in loop.
-                # X[i] -> target[i].
-                # target[i] depends on construction.
-                # If target was 'log_return' = shift(-1)/close.
-                # Then target[i] is return T->T+1.
-                # But X[i] contains data [i-seq:i]. Last point is i-1.
-                # So X[i] predicts for period starting at i-1?
-                # No.
-                
-                # Let's trust the dates alignment:
-                # date[i] in loop?
-                
-                current_date = row_target['date'].strftime('%Y-%m-%d')
-                # Wait, if target[i] is at row i.
-                # And X[i] ends at i-1.
-                # Then we are predicting for time `i`.
-                
-                predictions.append(pred_price)
-                actuals.append(row_basis['actual_future_price']) # Verify this exists
-                dates.append(current_date)
-                close_list.append(basis_close)
-            
-        elif model_type == 'rl':
-            import subprocess
-            import sys
-            import tempfile
-            
-            recent_df = df.dropna(subset=features + ['close']).copy()
-            if recent_df.empty: raise ValidationError("Not enough clean data for RL evaluation.")
-            
-            if 'actual_future_price' not in recent_df.columns:
-                recent_df['actual_future_price'] = recent_df['target']
-                
-            tmp_dir = tempfile.gettempdir()
-            df_path = os.path.join(tmp_dir, f'eval_tmp_df_{symbol}.pkl')
-            features_path = os.path.join(tmp_dir, f'eval_tmp_features_{symbol}.pkl')
-            worker_path = os.path.join(tmp_dir, f'rl_eval_worker_{symbol}.py')
-            result_path = os.path.join(tmp_dir, f'rl_eval_result_{symbol}.json')
+                features = [f for f in self.default_features if f in df.columns]
 
-            eval_script = """
+            # Safety: Ensure no target leakage columns are in features list
+            forbidden = ['target', 'target_return', 'log_return', 'date', 'symbol']
+            features = [f for f in features if f not in forbidden]
+
+            if model_type == 'lstm':
+                if not HAS_TENSORFLOW:
+                    raise AppError("LSTM evaluation requires TensorFlow, but it is not installed.", 501)
+                model_path = f"{self.model_dir}/{symbol}_lstm.h5"
+                if not os.path.exists(model_path): raise ResourceNotFoundError("Model not found")
+                model = load_model(model_path)
+                scaler = joblib.load(f"{self.model_dir}/{symbol}_lstm_scaler.pkl")
+            
+                # Prepare data (Need Log Return logic similar to training)
+                # Ensure target is set correctly for prepare_lstm_data
+                df['log_return'] = np.log(df['target'] / df['close'])
+                df['target_for_lstm'] = df['log_return']
+            
+                # Save original target price for validation
+                # We want actual future price (Close T+1) to compare with predicted price
+                df['actual_future_price'] = df['target']
+            
+                # Swap target for prep
+                df['target'] = df['target_for_lstm']
+            
+                X_all, _, _ = self._prepare_lstm_data(df, features, fit_scaler=False, scaler=scaler)
+            
+                if len(X_all) < days: raise ValidationError("Not enough eval data")
+            
+                # Select last 'days' sequences
+                X = X_all[-days:]
+            
+                # Load Target Scaler
+                target_scaler_path = f"{self.model_dir}/{symbol}_lstm_target_scaler.pkl"
+                target_scaler = joblib.load(target_scaler_path) if os.path.exists(target_scaler_path) else None
+
+                # Predict
+                pred_scaled = model(X, training=False).numpy()
+            
+                if target_scaler:
+                     pred_log_returns = target_scaler.inverse_transform(pred_scaled).flatten()
+                else:
+                     pred_log_returns = pred_scaled.flatten()
+            
+                # Reconstruct and Align
+                predictions = []
+                actuals = []
+                dates = []
+                close_list = [] # Current close (basis for prediction)
+            
+                # Indices logic:
+                # X_all is aligned with df[sequence_length:].
+                # X_all[0] corresponds to sequence ending at index `sequence_length-1`?
+                # No, `prepare_lstm_data` loop:
+                # for i in range(seq_len, len(scaled_data)):
+                #    X.append(scaled_data[i-seq_len:i])
+                #    y.append(target[i])
+            
+                # So X[k] contains data up to index `seq_len + k - 1`.
+                # And predicts target at index `seq_len + k`.
+            
+                # If we take `X_all[-days:]`, let N = len(X_all).
+                # We take indices [N-days, N-days+1, ... N-1].
+            
+                total_samples = len(X_all)
+                start_idx_in_x = total_samples - days
+            
+                for k in range(days):
+                    # Map to DataFrame index
+                    # X_index = start_idx_in_x + k
+                    # Corresponding DF index = sequence_length + X_index
+                    df_idx = self.sequence_length + start_idx_in_x + k
+                
+                    # Check bounds
+                    if df_idx >= len(df): continue
+                
+                    # Input Ends at previous row (basis)
+                    row_basis = df.iloc[df_idx - 1]
+                    row_target = df.iloc[df_idx]
+                
+                    basis_close = row_basis['close']
+                
+                    # Reconstruct Prediction
+                    pred_price = basis_close * np.exp(pred_log_returns[k])
+                
+                    # Actual Future Price
+                    actual_price = row_basis['actual_future_price'] # = row_target['close']?
+                    # df['actual_future_price'][i] = close[i+1].
+                    # row_basis is at T. actual_future_price is Close[T+1].
+                    # row_target is at T+1? No.
+                    # df_idx corresponds to `i` in loop.
+                    # X[i] -> target[i].
+                    # target[i] depends on construction.
+                    # If target was 'log_return' = shift(-1)/close.
+                    # Then target[i] is return T->T+1.
+                    # But X[i] contains data [i-seq:i]. Last point is i-1.
+                    # So X[i] predicts for period starting at i-1?
+                    # No.
+                
+                    # Let's trust the dates alignment:
+                    # date[i] in loop?
+                
+                    current_date = row_target['date'].strftime('%Y-%m-%d')
+                    # Wait, if target[i] is at row i.
+                    # And X[i] ends at i-1.
+                    # Then we are predicting for time `i`.
+                
+                    predictions.append(pred_price)
+                    actuals.append(row_basis['actual_future_price']) # Verify this exists
+                    dates.append(current_date)
+                    close_list.append(basis_close)
+            
+            elif model_type == 'rl':
+                import subprocess
+                import sys
+                import tempfile
+            
+                recent_df = df.dropna(subset=features + ['close']).copy()
+                if recent_df.empty: raise ValidationError("Not enough clean data for RL evaluation.")
+            
+                if 'actual_future_price' not in recent_df.columns:
+                    recent_df['actual_future_price'] = recent_df['target']
+                
+                tmp_dir = tempfile.gettempdir()
+                df_path = os.path.join(tmp_dir, f'eval_tmp_df_{symbol}.pkl')
+                features_path = os.path.join(tmp_dir, f'eval_tmp_features_{symbol}.pkl')
+                worker_path = os.path.join(tmp_dir, f'rl_eval_worker_{symbol}.py')
+                result_path = os.path.join(tmp_dir, f'rl_eval_result_{symbol}.json')
+
+                eval_script = """
 import pandas as pd
 import joblib
 import os
@@ -1186,115 +1187,118 @@ sys.path.append(os.getcwd())
 from services.rl_price_predictor import RLPricePredictor
 
 try:
-    df_path = sys.argv[1]
-    features_path = sys.argv[2]
-    symbol = sys.argv[3]
-    model_dir = sys.argv[4]
-    days = int(sys.argv[5])
-    result_path = sys.argv[6]
+        df_path = sys.argv[1]
+        features_path = sys.argv[2]
+        symbol = sys.argv[3]
+        model_dir = sys.argv[4]
+        days = int(sys.argv[5])
+        result_path = sys.argv[6]
 
-    recent_df = joblib.load(df_path)
-    features = joblib.load(features_path)
+        recent_df = joblib.load(df_path)
+        features = joblib.load(features_path)
     
-    predictor = RLPricePredictor(symbol, recent_df, features, model_dir)
+        predictor = RLPricePredictor(symbol, recent_df, features, model_dir)
     
-    predictions = []
-    actuals = []
-    dates = []
-    close_list = []
+        predictions = []
+        actuals = []
+        dates = []
+        close_list = []
     
-    eval_start_idx = len(recent_df) - days
-    for i in range(max(0, eval_start_idx), len(recent_df)):
-        basis_df = recent_df.iloc[:i+1]
-        try:
-            pred_price = predictor.predict(basis_df)
-        except Exception as pred_e:
-            import logging
-            logging.error("Prediction failed for index " + str(i) + ": " + str(pred_e))
-            continue
-            
-        predictions.append(pred_price)
-        actual_price = recent_df.iloc[i]['actual_future_price']
-        if pd.isna(actual_price):
-             actual_price = recent_df.iloc[i]['close']
-        actuals.append(float(actual_price))
-        dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
-        close_list.append(float(recent_df.iloc[i]['close']))
-        
-    if not predictions:
-        raise ValueError("RL Predictor failed to generate any predictions. Check observation space shapes.")
-        
-    with open(result_path, 'w') as fh:
-        json.dump({"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}, fh)
-except Exception as e:
-    print(str(e), file=sys.stderr)
-    exit(1)
-"""
-            joblib.dump(recent_df, df_path)
-            joblib.dump(features, features_path)
-            
-            with open(worker_path, 'w') as f:
-                f.write(eval_script)
-                
+        eval_start_idx = len(recent_df) - days
+        for i in range(max(0, eval_start_idx), len(recent_df)):
+            basis_df = recent_df.iloc[:i+1]
             try:
-                result = subprocess.run(
-                    [sys.executable, worker_path, df_path, features_path, symbol, self.model_dir, str(days), result_path],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    error_msg = result.stderr.strip()
-                    raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
+                pred_price = predictor.predict(basis_df)
+            except Exception as pred_e:
+                import logging
+                logging.error("Prediction failed for index " + str(i) + ": " + str(pred_e))
+                continue
+            
+            predictions.append(pred_price)
+            actual_price = recent_df.iloc[i]['actual_future_price']
+            if pd.isna(actual_price):
+                 actual_price = recent_df.iloc[i]['close']
+            actuals.append(float(actual_price))
+            dates.append(recent_df.iloc[i]['date'].strftime('%Y-%m-%d'))
+            close_list.append(float(recent_df.iloc[i]['close']))
+        
+        if not predictions:
+            raise ValueError("RL Predictor failed to generate any predictions. Check observation space shapes.")
+        
+        with open(result_path, 'w') as fh:
+            json.dump({"predictions": predictions, "actuals": actuals, "dates": dates, "close_list": close_list}, fh)
+except Exception as e:
+        print(str(e), file=sys.stderr)
+        exit(1)
+"""
+                joblib.dump(recent_df, df_path)
+                joblib.dump(features, features_path)
+            
+                with open(worker_path, 'w') as f:
+                    f.write(eval_script)
                 
-                with open(result_path, 'r') as fh:
-                    output = json.load(fh)
-                predictions = output['predictions']
-                actuals = output['actuals']
-                dates = output['dates']
-                close_list = output['close_list']
-            finally:
-                for f in [df_path, features_path, worker_path, result_path]:
-                    if os.path.exists(f): os.remove(f)
+                try:
+                    result = subprocess.run(
+                        [sys.executable, worker_path, df_path, features_path, symbol, self.model_dir, str(days), result_path],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode != 0:
+                        error_msg = result.stderr.strip()
+                        raise AppError(f"RL Evaluation failed in subprocess: {error_msg}", 500)
+                
+                    with open(result_path, 'r') as fh:
+                        output = json.load(fh)
+                    predictions = output['predictions']
+                    actuals = output['actuals']
+                    dates = output['dates']
+                    close_list = output['close_list']
+                finally:
+                    for f in [df_path, features_path, worker_path, result_path]:
+                        if os.path.exists(f): os.remove(f)
                     
-        else:
-            raise ValueError(f"Unknown model_type for evaluation: {model_type}")
+            else:
+                raise ValueError(f"Unknown model_type for evaluation: {model_type}")
 
-        results = []
-        squared_errors = []
-        correct_direction = 0
+            results = []
+            squared_errors = []
+            correct_direction = 0
         
-        for i in range(len(predictions)):
-            actual = actuals[i]
-            predicted = predictions[i]
-            current_close = close_list[i]
+            for i in range(len(predictions)):
+                actual = actuals[i]
+                predicted = predictions[i]
+                current_close = close_list[i]
             
-            err = actual - predicted
-            squared_errors.append(err ** 2)
+                err = actual - predicted
+                squared_errors.append(err ** 2)
             
-            actual_move = actual - current_close
-            predicted_move = predicted - current_close
+                actual_move = actual - current_close
+                predicted_move = predicted - current_close
             
-            if (actual_move * predicted_move) > 0:
-                correct_direction += 1
+                if (actual_move * predicted_move) > 0:
+                    correct_direction += 1
                 
-            results.append({
-                "date": pd.to_datetime(dates[i]).strftime('%Y-%m-%d'),
-                "actual": round(actual, 2),
-                "predicted": round(predicted, 2),
-                "error": round(err, 2)
-            })
+                results.append({
+                    "date": pd.to_datetime(dates[i]).strftime('%Y-%m-%d'),
+                    "actual": round(actual, 2),
+                    "predicted": round(predicted, 2),
+                    "error": round(err, 2)
+                })
 
-        mse = np.mean(squared_errors) if squared_errors else 0.0
-        mae = np.mean(np.abs([p['actual'] - p['predicted'] for p in results])) if results else 0.0
-        acc = (correct_direction / len(predictions) * 100) if predictions else 0.0
+            mse = np.mean(squared_errors) if squared_errors else 0.0
+            mae = np.mean(np.abs([p['actual'] - p['predicted'] for p in results])) if results else 0.0
+            acc = (correct_direction / len(predictions) * 100) if predictions else 0.0
         
-        return {
-            "symbol": symbol,
-            "mse": round(mse, 4),
-            "mae": round(mae, 4),
-            "accuracy": round(acc, 2),
-            "predictions": results
-        }
+            return {
+                "symbol": symbol,
+                "mse": round(mse, 4),
+                "mae": round(mae, 4),
+                "accuracy": round(acc, 2),
+                "predictions": results
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
 
     # ---------------------------------------------------------------
     # Batch Operations (called by BotService scheduler)
