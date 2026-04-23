@@ -4,7 +4,6 @@ import numpy as np
 import pandas as pd
 logger = logging.getLogger(__name__)
 from pymongo import UpdateOne
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import MinMaxScaler
 import os
@@ -16,12 +15,11 @@ import pandas as pd
 from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday, nearest_workday, \
     USMartinLutherKingJr, USPresidentsDay, USMemorialDay, USLaborDay, USThanksgivingDay, GoodFriday
 from pandas.tseries.offsets import CustomBusinessDay
-import tempfile
 
 try:
     import tensorflow as tf
     from tensorflow.keras.models import Sequential, load_model
-    from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, Input
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
     from tensorflow.keras.callbacks import EarlyStopping
     HAS_TENSORFLOW = True
 except ImportError:
@@ -59,7 +57,6 @@ class NYSEHolidayCalendar(AbstractHolidayCalendar):
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma, calculate_obv, calculate_vwap
 from services.container import Container
 from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError, AppError
-from concurrent.futures import ThreadPoolExecutor
 
 class MLService:
     def __init__(self, tradier_service):
