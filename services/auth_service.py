@@ -436,3 +436,30 @@ class AuthService:
         if user_doc and "endpoints" in user_doc:
             return user_doc["endpoints"]
         return {"paper": "https://sandbox.tradier.com/v1", "live": "https://api.tradier.com/v1"}
+
+    def test_credentials(self, key, account_id, endpoint):
+        """Test Tradier credentials by initializing a temporary service and checking connection."""
+        from services.tradier_service import TradierService
+        try:
+            # We bypass the singleton and environment variables by passing explicit args
+            test_service = TradierService(access_token=key, account_id=account_id, endpoint=endpoint)
+            # The TradierService.check_connection() calls get_quote('SPY')
+            return test_service.check_connection()
+        except Exception as e:
+            logger.error(f"Credential test failed: {e}")
+            return False
+
+    def get_nostr_relays(self, user_id):
+        if self.db is None: return ['wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nos.lol']
+        from bson.objectid import ObjectId
+        user_doc = self.db['users'].find_one({"_id": ObjectId(user_id)})
+        return user_doc.get("nostr_relays", ['wss://relay.primal.net', 'wss://relay.damus.io', 'wss://nos.lol'])
+
+    def update_nostr_relays(self, user_id, relays):
+        if self.db is None: return False
+        from bson.objectid import ObjectId
+        self.db['users'].update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"nostr_relays": relays}}
+        )
+        return True

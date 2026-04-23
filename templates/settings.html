@@ -1,96 +1,373 @@
 {% extends "base.html" %}
 
+{% block main_class %}full-width-layout{% endblock %}
+
 {% block content %}
-<div class="flex items-center justify-center min-h-[80vh] px-4">
-    <div
-        class="w-full max-w-2xl p-8 bg-white/10 dark:bg-gray-900/80 backdrop-blur-md rounded-3xl border border-gray-200/50 dark:border-gray-700/50 shadow-xl">
-        <div class="text-center mb-8">
-            <span class="material-symbols-outlined text-5xl text-yellow-500 mb-4 inline-block">settings</span>
-            <h2 class="text-2xl font-bold text-gray-900 dark:text-white">API Configuration</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Update your trading credentials and endpoints securely.</p>
+<div class="max-w-4xl mx-auto py-8 px-4">
+    <div class="flex items-center gap-4 mb-8">
+        <span class="material-symbols-outlined text-4xl text-blue-600 bg-blue-50 p-3 rounded-2xl dark:bg-blue-900/30 dark:text-blue-400">settings</span>
+        <div>
+            <h1 class="text-3xl font-bold text-gray-900 dark:text-white">Settings</h1>
+            <p class="text-gray-500 dark:text-gray-400">Manage your API credentials, trading environment, and Nostr relays.</p>
+        </div>
+    </div>
+
+    <div id="alert-container" class="mb-6"></div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <!-- Sidebar Navigation -->
+        <div class="md:col-span-1">
+            <nav class="space-y-1">
+                <button onclick="showSection('api-section')" id="nav-api-section"
+                    class="w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 group">
+                    <span class="material-symbols-outlined mr-3 text-[20px] group-hover:scale-110 transition-transform">api</span>
+                    API Configuration
+                </button>
+                <button onclick="showSection('nostr-section')" id="nav-nostr-section"
+                    class="w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 group">
+                    <span class="material-symbols-outlined mr-3 text-[20px] group-hover:scale-110 transition-transform">hub</span>
+                    Nostr Relays
+                </button>
+                <button onclick="showSection('trading-section')" id="nav-trading-section"
+                    class="w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 group">
+                    <span class="material-symbols-outlined mr-3 text-[20px] group-hover:scale-110 transition-transform">rocket_launch</span>
+                    Trading Mode
+                </button>
+            </nav>
         </div>
 
-        <div id="alert-container"></div>
+        <!-- Main Content Area -->
+        <div class="md:col-span-2 space-y-6">
+            
+            <!-- API CONFIG SECTION -->
+            <section id="api-section" class="space-y-6 animate-fade-in">
+                <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+                    <form id="settings-form">
+                        <div class="p-6 border-b border-gray-100 dark:border-gray-700">
+                            <h2 class="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                                <span class="material-symbols-outlined mr-2 text-blue-500">lock</span>
+                                Authentication
+                            </h2>
+                            <p class="text-sm text-gray-500 mt-1">Required to re-encrypt and save your credentials securely.</p>
+                            <div class="mt-4">
+                                <label for="password" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Vault Password</label>
+                                <input type="password" id="password" required
+                                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:placeholder-gray-400 dark:text-white transition-all"
+                                    placeholder="••••••••">
+                            </div>
+                        </div>
 
-        <form id="settings-form" class="space-y-6">
+                        <!-- Paper Trading -->
+                        <div class="p-6 border-b border-gray-100 dark:border-gray-700 bg-gray-50/30 dark:bg-gray-900/10">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                                    <span class="material-symbols-outlined mr-2 text-green-500">science</span>
+                                    Paper Trading (Sandbox)
+                                </h2>
+                                <button type="button" onclick="testConn('paper')"
+                                    class="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:hover:bg-gray-700 transition-colors flex items-center">
+                                    <span class="material-symbols-outlined text-[16px] mr-1">network_check</span>
+                                    Test Connection
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label for="paper_key" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">API Key</label>
+                                    <input type="password" id="paper_key" required
+                                        class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                        placeholder="Tradier Paper Key">
+                                </div>
+                                <div>
+                                    <label for="paper_account" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Account ID</label>
+                                    <input type="text" id="paper_account" required
+                                        class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                        placeholder="Paper Account ID">
+                                </div>
+                            </div>
+                            <div>
+                                <label for="paper_endpoint" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Endpoint URL</label>
+                                <input type="text" id="paper_endpoint" required value="{{ endpoints.paper }}"
+                                    class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                    placeholder="https://sandbox.tradier.com/v1">
+                            </div>
+                        </div>
 
-            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
-                Authentication
-            </h3>
+                        <!-- Live Trading -->
+                        <div class="p-6">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+                                    <span class="material-symbols-outlined mr-2 text-red-500">payments</span>
+                                    Live Trading (Production)
+                                </h2>
+                                <button type="button" onclick="testConn('live')"
+                                    class="text-xs font-medium px-3 py-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:border-gray-700 dark:hover:bg-gray-700 transition-colors flex items-center">
+                                    <span class="material-symbols-outlined text-[16px] mr-1">network_check</span>
+                                    Test Connection
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label for="live_key" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">API Key</label>
+                                    <input type="password" id="live_key"
+                                        class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                        placeholder="Live Key (Optional)">
+                                </div>
+                                <div>
+                                    <label for="live_account" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Account ID</label>
+                                    <input type="text" id="live_account"
+                                        class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                        placeholder="Live Account ID (Optional)">
+                                </div>
+                            </div>
+                            <div>
+                                <label for="live_endpoint" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Endpoint URL</label>
+                                <input type="text" id="live_endpoint" required value="{{ endpoints.live }}"
+                                    class="bg-white border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                                    placeholder="https://api.tradier.com/v1">
+                            </div>
+                        </div>
 
-            <div>
-                <label for="password" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Vault Password (Required to Re-encrypt)</label>
-                <input type="password" id="password" required
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:placeholder-gray-400 dark:text-white"
-                    placeholder="••••••••">
-            </div>
-
-            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 mt-6">
-                Paper Trading (Sandbox)
-            </h3>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label for="paper_key" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper API Key</label>
-                    <input type="password" id="paper_key" required
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        placeholder="New Paper Key">
+                        <div class="p-6 bg-gray-50 dark:bg-gray-900/30 border-t border-gray-100 dark:border-gray-700">
+                            <button type="submit"
+                                class="w-full flex items-center justify-center text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-bold rounded-xl text-sm px-5 py-4 text-center dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800 transition-all shadow-lg shadow-blue-500/20">
+                                <span class="material-symbols-outlined mr-2">save</span>
+                                Update All API Settings
+                            </button>
+                        </div>
+                    </form>
                 </div>
-                <div>
-                    <label for="paper_account" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper Account ID</label>
-                    <input type="text" id="paper_account" required
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        placeholder="New Paper Account ID">
+            </section>
+
+            <!-- NOSTR SECTION -->
+            <section id="nostr-section" class="hidden space-y-6 animate-fade-in">
+                <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm p-6">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-6 flex items-center">
+                        <span class="material-symbols-outlined mr-2 text-purple-500">hub</span>
+                        Nostr Relay Management
+                    </h2>
+                    
+                    <div id="relay-list" class="space-y-3 mb-6">
+                        {% for relay in relays %}
+                        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-700">
+                            <span class="font-mono text-sm text-gray-700 dark:text-gray-300">{{ relay }}</span>
+                            <button onclick="removeRelay('{{ relay }}')" class="text-red-500 hover:text-red-700 p-1">
+                                <span class="material-symbols-outlined text-[20px]">delete</span>
+                            </button>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="flex gap-3">
+                        <input type="text" id="new-relay"
+                            class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-xl focus:ring-purple-500 focus:border-purple-500 block w-full p-3 dark:bg-gray-900 dark:border-gray-700 dark:text-white transition-all"
+                            placeholder="wss://relay.example.com">
+                        <button onclick="addRelay()"
+                            class="text-white bg-purple-600 hover:bg-purple-700 font-bold rounded-xl text-sm px-6 py-3 transition-all">
+                            Add
+                        </button>
+                    </div>
                 </div>
-            </div>
+            </section>
 
-            <div>
-                <label for="paper_endpoint" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Paper Endpoint URL</label>
-                <input type="text" id="paper_endpoint" required value="{{ endpoints.paper }}"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="https://sandbox.tradier.com/v1">
-            </div>
+            <!-- TRADING MODE SECTION -->
+            <section id="trading-section" class="hidden space-y-6 animate-fade-in">
+                <div class="bg-white dark:bg-gray-800 rounded-3xl border border-gray-200 dark:border-gray-700 shadow-sm p-6">
+                    <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-2 flex items-center">
+                        <span class="material-symbols-outlined mr-2 text-orange-500">rocket_launch</span>
+                        Environment Control
+                    </h2>
+                    <p class="text-sm text-gray-500 mb-6">Switch between simulated Paper trading and real money Live trading.</p>
 
-            <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 mt-6">
-                Live Trading (Production)
-            </h3>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label for="live_key" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live API Key</label>
-                    <input type="password" id="live_key"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        placeholder="New Live Key (Optional)">
+                    <div class="flex items-center justify-between p-6 bg-gray-50 dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-700">
+                        <div>
+                            <div class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-1">Active Mode</div>
+                            <div id="active-mode-display" class="text-2xl font-black text-blue-600 dark:text-blue-400">LOADING...</div>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" id="trading-mode-toggle" class="sr-only peer" onchange="toggleTradingMode(this)">
+                            <div class="w-14 h-7 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all dark:after:border-gray-600 peer-checked:bg-red-600"></div>
+                            <span class="ms-3 text-sm font-bold text-gray-900 dark:text-gray-300">GO LIVE</span>
+                        </label>
+                    </div>
                 </div>
-                <div>
-                    <label for="live_account" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live Account ID</label>
-                    <input type="text" id="live_account"
-                        class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        placeholder="New Live Account ID (Optional)">
-                </div>
-            </div>
+            </section>
 
-            <div>
-                <label for="live_endpoint" class="block mb-2 text-sm font-medium text-gray-900 dark:text-white">Live Endpoint URL</label>
-                <input type="text" id="live_endpoint" required value="{{ endpoints.live }}"
-                    class="bg-gray-50 border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-primary-500 focus:border-primary-500 block w-full p-2.5 dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    placeholder="https://api.tradier.com/v1">
-            </div>
-
-            <button type="submit"
-                class="w-full text-white bg-blue-600 hover:bg-blue-700 focus:ring-4 focus:outline-none focus:ring-blue-300 font-medium rounded-lg text-sm px-5 py-2.5 text-center dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-blue-800 transition-colors mt-6">
-                Save Settings
-            </button>
-        </form>
+        </div>
     </div>
 </div>
 
+<style>
+@keyframes fade-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.animate-fade-in {
+    animation: fade-in 0.3s ease-out forwards;
+}
+</style>
+
 <script>
+let currentRelays = {{ relays | tojson }};
+
+function showSection(sectionId) {
+    // Hide all sections
+    ['api-section', 'nostr-section', 'trading-section'].forEach(id => {
+        document.getElementById(id).classList.add('hidden');
+        document.getElementById('nav-' + id).className = "w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 group";
+    });
+
+    // Show active section
+    document.getElementById(sectionId).classList.remove('hidden');
+    document.getElementById('nav-' + sectionId).className = "w-full flex items-center px-4 py-3 text-sm font-medium rounded-xl transition-all duration-200 bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 group";
+}
+
+async function testConn(type) {
+    const key = document.getElementById(type + '_key').value;
+    const account_id = document.getElementById(type + '_account').value;
+    const endpoint = document.getElementById(type + '_endpoint').value;
+
+    if (!key || !account_id) {
+        showAlert('Please enter API Key and Account ID to test.', 'error');
+        return;
+    }
+
+    const btn = event.currentTarget;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="material-symbols-outlined text-[16px] mr-1 animate-spin">sync</span> Testing...';
+    btn.disabled = true;
+
+    try {
+        const res = await fetch('/api/auth/test_connection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key, account_id, endpoint })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showAlert('Connection to ' + type.toUpperCase() + ' successful!', 'success');
+        } else {
+            showAlert('Connection to ' + type.toUpperCase() + ' failed: ' + data.message, 'error');
+        }
+    } catch (e) {
+        showAlert('Error testing connection: ' + e, 'error');
+    } finally {
+        btn.innerHTML = originalHtml;
+        btn.disabled = false;
+    }
+}
+
+async function saveRelays() {
+    try {
+        await fetch('/api/auth/relays', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ relays: currentRelays })
+        });
+    } catch (e) { console.error("Relay sync failed", e); }
+}
+
+function addRelay() {
+    const input = document.getElementById('new-relay');
+    const url = input.value.trim();
+    if (!url) return;
+    if (currentRelays.includes(url)) {
+        showAlert('Relay already in list', 'error');
+        return;
+    }
+    currentRelays.push(url);
+    input.value = '';
+    renderRelays();
+    saveRelays();
+}
+
+function removeRelay(url) {
+    currentRelays = currentRelays.filter(r => r !== url);
+    renderRelays();
+    saveRelays();
+}
+
+function renderRelays() {
+    const container = document.getElementById('relay-list');
+    container.innerHTML = currentRelays.map(relay => `
+        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-100 dark:border-gray-700">
+            <span class="font-mono text-sm text-gray-700 dark:text-gray-300">${relay}</span>
+            <button onclick="removeRelay('${relay}')" class="text-red-500 hover:text-red-700 p-1">
+                <span class="material-symbols-outlined text-[20px]">delete</span>
+            </button>
+        </div>
+    `).join('');
+}
+
+async function fetchMode() {
+    try {
+        const res = await fetch('/api/bot/trading_mode');
+        const data = await res.json();
+        updateModeUI(data.mode);
+    } catch (e) { console.error(e); }
+}
+
+function updateModeUI(mode) {
+    const display = document.getElementById('active-mode-display');
+    const toggle = document.getElementById('trading-mode-toggle');
+    if (mode === 'live') {
+        display.textContent = '🔴 LIVE';
+        display.className = 'text-2xl font-black text-red-600 dark:text-red-400';
+        toggle.checked = true;
+    } else {
+        display.textContent = '📝 PAPER';
+        display.className = 'text-2xl font-black text-blue-600 dark:text-blue-400';
+        toggle.checked = false;
+    }
+}
+
+async function toggleTradingMode(checkbox) {
+    const newMode = checkbox.checked ? 'live' : 'paper';
+    if (newMode === 'live' && !confirm('WARNING: You are switching to LIVE trading. Real money will be used. Continue?')) {
+        checkbox.checked = false;
+        return;
+    }
+    
+    updateModeUI(newMode); // optimistic
+
+    try {
+        const res = await fetch('/api/bot/trading_mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: newMode })
+        });
+        const data = await res.json();
+        if (data.error) {
+            alert(data.error);
+            fetchMode(); // revert
+        }
+    } catch (e) {
+        alert("Failed to switch mode: " + e);
+        fetchMode();
+    }
+}
+
+function showAlert(msg, type) {
+    const container = document.getElementById('alert-container');
+    const bg = type === 'success' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
+    const icon = type === 'success' ? 'check_circle' : 'error';
+    
+    container.innerHTML = `
+        <div class="flex items-center p-4 mb-4 rounded-2xl ${bg} animate-fade-in shadow-sm">
+            <span class="material-symbols-outlined mr-2">${icon}</span>
+            <span class="text-sm font-medium">${msg}</span>
+            <button onclick="this.parentElement.remove()" class="ml-auto">
+                <span class="material-symbols-outlined text-[20px]">close</span>
+            </button>
+        </div>
+    `;
+    if (type === 'success') setTimeout(() => { if (container.firstChild) container.firstChild.remove(); }, 5000);
+}
+
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const btn = e.target.querySelector('button[type="submit"]');
-    const originalText = btn.innerText;
-    btn.innerText = 'Saving...';
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="material-symbols-outlined mr-2 animate-spin">sync</span> Saving...';
     btn.disabled = true;
 
     const payload = {
@@ -106,27 +383,26 @@ document.getElementById('settings-form').addEventListener('submit', async (e) =>
     try {
         const response = await fetch('/api/auth/update_credentials', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
 
         const result = await response.json();
-        const alertContainer = document.getElementById('alert-container');
-
         if (result.success) {
-            alertContainer.innerHTML = `<div class="p-4 mb-4 text-sm text-green-800 rounded-lg bg-green-50 dark:bg-gray-800 dark:text-green-400">Settings updated successfully!</div>`;
-            document.getElementById('password').value = ''; // clear password
+            showAlert('All settings saved successfully!', 'success');
+            document.getElementById('password').value = '';
         } else {
-            alertContainer.innerHTML = `<div class="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400">${result.message || 'Update failed'}</div>`;
+            showAlert(result.message || 'Update failed', 'error');
         }
     } catch (err) {
-        document.getElementById('alert-container').innerHTML = `<div class="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-50 dark:bg-gray-800 dark:text-red-400">An error occurred while saving.</div>`;
+        showAlert('An error occurred while saving.', 'error');
     } finally {
-        btn.innerText = originalText;
+        btn.innerHTML = originalHtml;
         btn.disabled = false;
     }
 });
+
+// Init
+fetchMode();
 </script>
 {% endblock %}

@@ -153,7 +153,8 @@ def logout():
 def settings():
     auth_service = Container.get_auth_service()
     endpoints = auth_service.get_endpoints(current_user.id)
-    return render_template('settings.html', endpoints=endpoints)
+    relays = auth_service.get_nostr_relays(current_user.id)
+    return render_template('settings.html', endpoints=endpoints, relays=relays)
 
 @auth_bp.route('/api/auth/update_credentials', methods=['POST'])
 @login_required
@@ -182,3 +183,39 @@ def update_credentials():
         return {'success': True}
     else:
         return {'success': False, 'message': 'Failed to update credentials. Check password.'}, 400
+
+@auth_bp.route('/api/auth/test_connection', methods=['POST'])
+@login_required
+def test_connection():
+    data = request.json
+    key = data.get('key')
+    account_id = data.get('account_id')
+    endpoint = data.get('endpoint')
+    
+    if not key or not account_id or not endpoint:
+        return {'success': False, 'message': 'Missing required fields'}, 400
+        
+    auth_service = Container.get_auth_service()
+    is_valid = auth_service.test_credentials(key, account_id, endpoint)
+    
+    if is_valid:
+        return {'success': True, 'message': 'Connection successful!'}
+    else:
+        return {'success': False, 'message': 'Connection failed. Please check your credentials and endpoint.'}
+
+@auth_bp.route('/api/auth/relays', methods=['GET', 'POST'])
+@login_required
+def manage_relays():
+    auth_service = Container.get_auth_service()
+    if request.method == 'GET':
+        relays = auth_service.get_nostr_relays(current_user.id)
+        return {'relays': relays}
+    
+    # POST
+    data = request.json
+    relays = data.get('relays')
+    if not isinstance(relays, list):
+        return {'success': False, 'message': 'Invalid relays format'}, 400
+        
+    success = auth_service.update_nostr_relays(current_user.id, relays)
+    return {'success': success}
