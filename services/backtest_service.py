@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 try:
+    from services.analysis_service import AnalysisService
+except (ImportError, ModuleNotFoundError):
+    AnalysisService = None
+
+
+try:
     from tests.mocks.backtest_mocks import MockTradierService, MockAnalysisService, MockDB
 except (ImportError, ModuleNotFoundError):
     # Fallback to local import if tests is shadowed or not in path
