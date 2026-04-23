@@ -232,6 +232,19 @@ class WheelStrategy(AbstractStrategy):
         if pending_close_symbols:
             self._log(f"📋 Pending BTC orders detected for: {pending_close_symbols}. Will skip these.")
 
+        # Batch fetch quotes for all underlyings in watchlist (or all if watchlist is None)
+        underlyings_to_check = set()
+        for position in positions:
+            u = get_underlying(position.get('symbol', ''))
+            if watchlist is None or u in watchlist:
+                if get_op_type(position) in ['put', 'call'] and position.get('quantity', 0) < 0:
+                    underlyings_to_check.add(u)
+
+        quotes_map = {}
+        if underlyings_to_check:
+            self._log(f"📊 Batch fetching quotes for {len(underlyings_to_check)} underlyings...")
+            quotes_map = self.tradier.get_quotes(list(underlyings_to_check))
+
         for position in positions:
             symbol = position.get('symbol', '')
             underlying = get_underlying(symbol)
@@ -266,7 +279,7 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"🔍 {symbol} management: DTE {dte} < {self.ROLL_TRIGGER_DTE}. Checking ITM status...")
 
             try:
-                quote = self.tradier.get_quote(underlying)
+                quote = quotes_map.get(underlying)
                 if not quote: continue
                 
                 current_price = float(quote.get('last') or 0)

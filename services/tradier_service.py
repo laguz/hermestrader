@@ -109,8 +109,20 @@ class TradierService:
 
     def get_quote(self, symbol: str) -> Optional[dict]:
         """Fetch real-time or delayed quote for a symbol."""
+        quotes = self.get_quotes([symbol])
+        return quotes.get(symbol)
+
+    def get_quotes(self, symbols: list) -> dict:
+        """
+        Fetch real-time or delayed quotes for multiple symbols.
+        Returns a dictionary mapping symbols to their quote data.
+        """
+        if not symbols:
+            return {}
+
         url = f"{self.endpoint}/markets/quotes"
-        params = {'symbols': symbol}
+        # Tradier supports comma-separated symbols
+        params = {'symbols': ','.join(symbols)}
         try:
             response = requests.get(url, params=params,
                                     headers=self._get_headers(),
@@ -119,13 +131,27 @@ class TradierService:
             data = response.json()
             if not isinstance(data, dict):
                 return {}
-            quotes = data.get('quotes', {})
-            if isinstance(quotes, dict):
-                return quotes.get('quote', {})
-            return {}
+
+            quotes_data = data.get('quotes', {})
+            if not quotes_data or quotes_data == 'null':
+                return {}
+
+            quote_entry = quotes_data.get('quote', [])
+
+            # Tradier API returns a dict for a single result, and a list for multiple
+            if isinstance(quote_entry, dict):
+                quote_entry = [quote_entry]
+
+            results = {}
+            for q in quote_entry:
+                sym = q.get('symbol')
+                if sym:
+                    results[sym] = q
+            return results
+
         except requests.RequestException as e:
-            logger.error(f"Error fetching quote for {symbol}: {e}")
-            return None
+            logger.error(f"Error fetching quotes for {symbols}: {e}")
+            return {}
 
     def get_option_expirations(self, symbol: str) -> list:
         """Fetch option expirations for a given symbol."""
