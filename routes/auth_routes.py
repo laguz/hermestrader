@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_user, logout_user, login_required, current_user
 from services.container import Container
+from services.auth_service import UserRegistration
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -90,7 +91,15 @@ def register():
         auth_service = Container.get_auth_service()
         live_key = request.form.get('live_tradier_key')
         live_account_id = request.form.get('live_account_id')
-        user = auth_service.create_user(username, password, key, account_id, live_tradier_key=live_key, live_account_id=live_account_id)
+        reg = UserRegistration(
+            username=username,
+            password=password,
+            tradier_key=key,
+            account_id=account_id,
+            live_tradier_key=live_key,
+            live_account_id=live_account_id
+        )
+        user = auth_service.create_user(reg)
         
         if user:
             login_user(user)
@@ -134,7 +143,15 @@ def register_nostr():
     
     live_key = data.get('live_tradier_key')
     live_account_id = data.get('live_account_id')
-    user = auth_service.create_user_with_nostr(username, pubkey, tradier_key, account_id, live_tradier_key=live_key, live_account_id=live_account_id)
+    reg = UserRegistration(
+        username=username,
+        nostr_pubkey=pubkey,
+        tradier_key=tradier_key,
+        account_id=account_id,
+        live_tradier_key=live_key,
+        live_account_id=live_account_id
+    )
+    user = auth_service.create_user_with_nostr(reg)
     
     if user:
         login_user(user)
