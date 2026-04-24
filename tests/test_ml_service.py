@@ -79,3 +79,27 @@ def test_select_top_features_fewer_features_than_n_top(ml_service):
 
     assert len(top_features) == 1
     assert top_features == ['feat1']
+
+def test_refresh_prediction_actuals_history_exception(ml_service):
+    """Test that exception during get_historical_pricing is caught and doesn't crash the loop."""
+    ml_service.db = {
+        'predictions': MagicMock(),
+        'market_data': MagicMock()
+    }
+
+    # Setup pending predictions
+    ml_service.db['predictions'].find.return_value = [
+        {"symbol": "AAPL", "actual_close_price": None, "prediction_date": "2023-01-01"}
+    ]
+
+    # Make get_historical_pricing raise an exception
+    ml_service.tradier.get_historical_pricing = MagicMock(side_effect=Exception("Simulated HTTPError"))
+
+    # Run the method - should not raise an exception
+    result = ml_service.refresh_prediction_actuals()
+
+    # Assert get_historical_pricing was called
+    ml_service.tradier.get_historical_pricing.assert_called_once()
+
+    # The method finishes running without bubbling up the exception
+    assert result == {"message": "Refreshed 0 symbols. Updated 0 prediction records.", "updated_count": 0}  # method returns None on successful complete execution of the loop
