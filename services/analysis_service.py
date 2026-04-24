@@ -36,31 +36,9 @@ class AnalysisService:
         }
         days = days_map.get(period, 365)
         
-        # Fetch extra data for rolling calculations (e.g. 50 days buffer)
-        # Ensure at least 300 days for SMA 200
-        days_needed = max(days + 60, 300)
-        start_date = end_date - timedelta(days=days_needed)
-        
-        quotes = self.tradier_service.get_historical_pricing(
-            symbol,
-            start_date=start_date.strftime('%Y-%m-%d'),
-            end_date=end_date.strftime('%Y-%m-%d'),
-            interval='daily'
-        )
-        if not quotes:
+        df = self._fetch_and_prepare_data(symbol, end_date, days)
+        if df is None:
             return {"error": "No data found for symbol"}
-
-        df = pd.DataFrame(quotes)
-        df['close'] = df['close'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['volume'] = df['volume'].astype(float)
-        df['date'] = pd.to_datetime(df['date'])
-        
-        # Forward-fill any NaN in OHLCV columns to prevent cascading NaN in indicators
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            if col in df.columns:
-                df[col] = df[col].ffill()
         
         # Filter to requested period for display/levels, but keep history for indicators
         # Actually indicators need history.
@@ -121,16 +99,7 @@ class AnalysisService:
         current_price = latest['close']
 
         # 3. Get AI Prediction
-        prediction_result = {}
-        try:
-            prediction_result = self.ml_service.predict_next_day(symbol)
-        except Exception as e:
-            logger.error(f"Error getting prediction: {e}")
-        
-        predicted_price = prediction_result.get('predicted_price')
-        pred_change_pct = 0
-        if predicted_price:
-            pred_change_pct = (predicted_price - current_price) / current_price
+        predicted_price, pred_change_pct = self._get_prediction_data(symbol, current_price)
 
         # 4. Logic & Scoring
         
@@ -147,23 +116,7 @@ class AnalysisService:
 
 
         # Prepare Chart Data
-        # Use period_df to reflect the requested timeframe
-        chart_df = period_df
-
-        chart_data = {
-            "dates": chart_df['date'].dt.strftime('%Y-%m-%d').tolist(),
-            "close": chart_df['close'].tolist(),
-            "support": chart_df['support'].fillna(0).tolist(),
-            "resistance": chart_df['resistance'].fillna(0).tolist(),
-            "rsi": chart_df['rsi'].fillna(50).tolist(),
-            "macd": chart_df['macd'].fillna(0).tolist(),
-            "signal": chart_df['signal'].fillna(0).tolist(),
-            "bb_upper": chart_df['bb_upper'].fillna(0).tolist(),
-            "bb_middle": chart_df['bb_mid'].fillna(0).tolist(),
-            "bb_lower": chart_df['bb_lower'].fillna(0).tolist(),
-            "sma_200": chart_df['sma_200'].fillna(0).tolist(),
-            "adx": chart_df['adx'].fillna(0).tolist()
-        }
+        chart_data = self._build_chart_data(period_df)
 
         result = {
             "symbol": symbol.upper(),
@@ -205,6 +158,11 @@ class AnalysisService:
         }
 
         # Upsert entry to DB
+        self._save_analysis(symbol, result)
+
+        return result
+
+    def _save_analysis(self, symbol, result):
         if self.db is not None:
             try:
                 # Add timestamp
@@ -218,7 +176,64 @@ class AnalysisService:
             except Exception as e:
                 logger.error(f"Error saving entry to DB: {e}")
 
-        return result
+    def _build_chart_data(self, chart_df):
+        return {
+            "dates": chart_df['date'].dt.strftime('%Y-%m-%d').tolist(),
+            "close": chart_df['close'].tolist(),
+            "support": chart_df['support'].fillna(0).tolist(),
+            "resistance": chart_df['resistance'].fillna(0).tolist(),
+            "rsi": chart_df['rsi'].fillna(50).tolist(),
+            "macd": chart_df['macd'].fillna(0).tolist(),
+            "signal": chart_df['signal'].fillna(0).tolist(),
+            "bb_upper": chart_df['bb_upper'].fillna(0).tolist(),
+            "bb_middle": chart_df['bb_mid'].fillna(0).tolist(),
+            "bb_lower": chart_df['bb_lower'].fillna(0).tolist(),
+            "sma_200": chart_df['sma_200'].fillna(0).tolist(),
+            "adx": chart_df['adx'].fillna(0).tolist()
+        }
+
+    def _get_prediction_data(self, symbol, current_price):
+        prediction_result = {}
+        try:
+            prediction_result = self.ml_service.predict_next_day(symbol)
+        except Exception as e:
+            logger.error(f"Error getting prediction: {e}")
+
+        predicted_price = prediction_result.get('predicted_price')
+        pred_change_pct = 0
+        if predicted_price:
+            pred_change_pct = (predicted_price - current_price) / current_price
+
+        return predicted_price, pred_change_pct
+
+    def _fetch_and_prepare_data(self, symbol, end_date, days):
+        # Fetch extra data for rolling calculations (e.g. 50 days buffer)
+        # Ensure at least 300 days for SMA 200
+        days_needed = max(days + 60, 300)
+        start_date = end_date - timedelta(days=days_needed)
+
+        quotes = self.tradier_service.get_historical_pricing(
+            symbol,
+            start_date=start_date.strftime('%Y-%m-%d'),
+            end_date=end_date.strftime('%Y-%m-%d'),
+            interval='daily'
+        )
+        if not quotes:
+            return None
+
+        df = pd.DataFrame(quotes)
+        df['close'] = df['close'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Forward-fill any NaN in OHLCV columns to prevent cascading NaN in indicators
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = df[col].ffill()
+
+        return df
 
     def _calculate_indicators(self, df):
         # 2. Calculate Indicators
