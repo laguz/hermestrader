@@ -158,11 +158,12 @@ class MLService:
 
         # Volume Momentum
         df['obv'] = calculate_obv(df['close'], df['volume'])
-        df['vwap'] = calculate_vwap(df['high'], df['low'], df['close'], df['volume'], window=14)
         
         if 'high' in df.columns and 'low' in df.columns:
+            df['vwap'] = calculate_vwap(df['high'], df['low'], df['close'], df['volume'], window=14)
             df['atr'] = calculate_atr(df['high'], df['low'], df['close'])
         else:
+            df['vwap'] = 0.0
             df['atr'] = 0.0
 
         # Additional Features for Selection

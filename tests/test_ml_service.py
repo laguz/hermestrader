@@ -155,3 +155,50 @@ def test_select_top_features_filtering(ml_service):
     # We also check that they are ordered correctly
     # Since both perfect pos and perfect neg have absolute correlation of 1.0, their order may vary, but feat_high_pos should be 3rd.
     assert top_features[2] == 'feat_high_pos'
+
+def test_prepare_features_happy_path(ml_service):
+    """Test prepare_features with all expected columns."""
+    import numpy as np
+
+    # Needs at least 50 rows for sma_50
+    np.random.seed(42)
+    df = pd.DataFrame({
+        'open': np.random.uniform(100, 150, 60),
+        'high': np.random.uniform(100, 150, 60),
+        'low': np.random.uniform(100, 150, 60),
+        'close': np.random.uniform(100, 150, 60),
+        'volume': np.random.randint(1000, 10000, 60)
+    })
+
+    # Ensure high >= low
+    df['high'] = df[['high', 'low']].max(axis=1)
+    df['low'] = df[['high', 'low']].min(axis=1)
+
+    result_df = ml_service.prepare_features(df)
+
+    expected_columns = [
+        'rsi', 'upper_bb', 'mid_bb', 'lower_bb', 'macd', 'macd_signal', 'sma_50',
+        'obv', 'vwap', 'atr', 'close_lag_1', 'close_lag_2', 'close_lag_3', 'close_lag_5',
+        'daily_return', 'daily_return_lag_1'
+    ]
+
+    for col in expected_columns:
+        assert col in result_df.columns
+
+def test_prepare_features_missing_columns(ml_service):
+    """Test prepare_features with missing high/low columns, ensuring atr and vwap fallback to 0.0."""
+    import numpy as np
+
+    df = pd.DataFrame({
+        'close': np.random.uniform(100, 150, 60),
+        'volume': np.random.randint(1000, 10000, 60)
+    })
+
+    result_df = ml_service.prepare_features(df)
+
+    assert 'atr' in result_df.columns
+    assert 'vwap' in result_df.columns
+
+    # Check that atr and vwap are set to 0.0
+    assert (result_df['atr'] == 0.0).all()
+    assert (result_df['vwap'] == 0.0).all()
