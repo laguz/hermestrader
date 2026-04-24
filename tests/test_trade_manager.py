@@ -103,6 +103,46 @@ class TestTradeManager(unittest.TestCase):
         self.assertIn("AMZN210101C100", symbols)
         self.assertNotIn("SPY210101C100", symbols)
 
+
+    def test_get_tracked_symbols_legs_info_not_list(self):
+        active_trades_col_mock = MagicMock()
+        auto_trades_col_mock = MagicMock()
+
+        def mock_getitem(key):
+            if key == 'active_trades': return active_trades_col_mock
+            if key == 'auto_trades': return auto_trades_col_mock
+            return MagicMock()
+
+        self.db_mock.__getitem__.side_effect = mock_getitem
+
+        active_trades_col_mock.find.return_value = [
+            {"legs_info": {"option_symbol": "TSLA210101C100"}} # Not a list, should be skipped safely
+        ]
+        auto_trades_col_mock.find.return_value = []
+
+        symbols = self.trade_manager._get_tracked_symbols()
+        self.assertNotIn("TSLA210101C100", symbols)
+        self.assertEqual(len(symbols), 0)
+
+    def test_get_tracked_symbols_missing_strategy(self):
+        active_trades_col_mock = MagicMock()
+        auto_trades_col_mock = MagicMock()
+
+        def mock_getitem(key):
+            if key == 'active_trades': return active_trades_col_mock
+            if key == 'auto_trades': return auto_trades_col_mock
+            return MagicMock()
+
+        self.db_mock.__getitem__.side_effect = mock_getitem
+
+        active_trades_col_mock.find.return_value = [
+            {"status": "OPEN"} # Missing 'strategy', should not raise KeyError
+        ]
+        auto_trades_col_mock.find.return_value = []
+
+        symbols = self.trade_manager._get_tracked_symbols()
+        self.assertEqual(len(symbols), 0)
+
     def test_get_unmanaged_orphans_empty(self):
         self.tradier_mock.get_positions.return_value = []
         self.assertEqual(self.trade_manager.get_unmanaged_orphans(), [])
@@ -119,6 +159,18 @@ class TestTradeManager(unittest.TestCase):
             self.assertEqual(len(orphans), 1)
             self.assertEqual(orphans[0]['symbol'], 'TSLA')
             self.assertEqual(orphans[0]['quantity'], 50)
+
+
+    def test_get_unmanaged_orphans_no_symbol_key(self):
+        self.tradier_mock.get_positions.return_value = [
+            {'quantity': 100, 'cost_basis': 150.0, 'date_acquired': '2021-01-01'} # Missing 'symbol'
+        ]
+
+        with patch.object(self.trade_manager, '_get_tracked_symbols', return_value=set()):
+            orphans = self.trade_manager.get_unmanaged_orphans()
+
+            # Since there is no 'symbol' key, it evaluates to None and is ignored
+            self.assertEqual(len(orphans), 0)
 
     @patch('bot.trade_manager.logger.error')
     def test_get_unmanaged_orphans_exception(self, mock_logger_error):
@@ -165,6 +217,124 @@ class TestTradeManager(unittest.TestCase):
         self.assertEqual(insert_args["order_id"], "ORDER123")
         self.assertEqual(insert_args["short_leg"], "leg1")
         self.assertEqual(insert_args["long_leg"], "leg2")
+
+
+    def test_execute_strategy_order_market_order(self):
+        self.tradier_mock.account_id = "ACC123"
+        self.tradier_mock.place_order.return_value = {"id": "ORDER123", "status": "ok"}
+
+        active_trades_col_mock = MagicMock()
+        self.db_mock.__getitem__.return_value = active_trades_col_mock
+
+        response = self.trade_manager.execute_strategy_order(
+            strategy_id="test_strat",
+            symbol="AAPL",
+            order_class="equity",
+            legs=[],
+            price=None,
+            side="buy",
+            quantity=100
+        )
+
+        self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
+        self.tradier_mock.place_order.assert_called_once_with(
+            account_id="ACC123",
+            symbol="AAPL",
+            side="buy",
+            quantity=100,
+            order_type="market",
+            duration="day",
+            price=None,
+            order_class="equity",
+            legs=[],
+            tag="test_strat"
+        )
+        active_trades_col_mock.insert_one.assert_called_once()
+
+    def test_execute_strategy_order_debit_order(self):
+        self.tradier_mock.account_id = "ACC123"
+        self.tradier_mock.place_order.return_value = {"id": "ORDER123", "status": "ok"}
+
+        active_trades_col_mock = MagicMock()
+        self.db_mock.__getitem__.return_value = active_trades_col_mock
+
+        response = self.trade_manager.execute_strategy_order(
+            strategy_id="test_strat",
+            symbol="AAPL",
+            order_class="equity",
+            legs=[],
+            price=-1.0,
+            side="buy",
+            quantity=100
+        )
+
+        self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
+        self.tradier_mock.place_order.assert_called_once_with(
+            account_id="ACC123",
+            symbol="AAPL",
+            side="buy",
+            quantity=100,
+            order_type="debit",
+            duration="day",
+            price=-1.0,
+            order_class="equity",
+            legs=[],
+            tag="test_strat"
+        )
+        active_trades_col_mock.insert_one.assert_called_once()
+
+    def test_execute_strategy_order_custom_tag(self):
+        self.tradier_mock.account_id = "ACC123"
+        self.tradier_mock.place_order.return_value = {"id": "ORDER123", "status": "ok"}
+
+        active_trades_col_mock = MagicMock()
+        self.db_mock.__getitem__.return_value = active_trades_col_mock
+
+        response = self.trade_manager.execute_strategy_order(
+            strategy_id="test_strat",
+            symbol="AAPL",
+            order_class="equity",
+            legs=[],
+            price=150.0,
+            side="buy",
+            quantity=100,
+            tag="custom_tag"
+        )
+
+        self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
+        self.tradier_mock.place_order.assert_called_once_with(
+            account_id="ACC123",
+            symbol="AAPL",
+            side="buy",
+            quantity=100,
+            order_type="credit",
+            duration="day",
+            price=150.0,
+            order_class="equity",
+            legs=[],
+            tag="custom_tag"
+        )
+        active_trades_col_mock.insert_one.assert_called_once()
+
+    def test_execute_strategy_order_db_none(self):
+        self.tradier_mock.account_id = "ACC123"
+        self.tradier_mock.place_order.return_value = {"id": "ORDER123", "status": "ok"}
+
+        self.trade_manager.db = None
+
+        response = self.trade_manager.execute_strategy_order(
+            strategy_id="test_strat",
+            symbol="AAPL",
+            order_class="equity",
+            legs=[],
+            price=150.0,
+            side="buy",
+            quantity=100
+        )
+
+        self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
+        self.tradier_mock.place_order.assert_called_once()
+        self.db_mock.__getitem__.assert_not_called()
 
     def test_execute_strategy_order_error_response(self):
         self.tradier_mock.account_id = "ACC123"
