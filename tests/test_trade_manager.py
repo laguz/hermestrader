@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch, call
-from bot.trade_manager import TradeManager
+from bot.trade_manager import TradeManager, TradeAction
 
 class TestTradeManager(unittest.TestCase):
     def setUp(self):
@@ -185,7 +185,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock = MagicMock()
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -195,6 +195,7 @@ class TestTradeManager(unittest.TestCase):
             quantity=100,
             strategy_params={"short_leg": "leg1", "long_leg": "leg2"}
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
         self.tradier_mock.place_order.assert_called_once_with(
@@ -226,7 +227,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock = MagicMock()
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -235,6 +236,7 @@ class TestTradeManager(unittest.TestCase):
             side="buy",
             quantity=100
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
         self.tradier_mock.place_order.assert_called_once_with(
@@ -258,7 +260,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock = MagicMock()
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -267,6 +269,7 @@ class TestTradeManager(unittest.TestCase):
             side="buy",
             quantity=100
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
         self.tradier_mock.place_order.assert_called_once_with(
@@ -290,7 +293,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock = MagicMock()
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -300,6 +303,7 @@ class TestTradeManager(unittest.TestCase):
             quantity=100,
             tag="custom_tag"
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
         self.tradier_mock.place_order.assert_called_once_with(
@@ -322,7 +326,7 @@ class TestTradeManager(unittest.TestCase):
 
         self.trade_manager.db = None
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -331,6 +335,7 @@ class TestTradeManager(unittest.TestCase):
             side="buy",
             quantity=100
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"id": "ORDER123", "status": "ok"})
         self.tradier_mock.place_order.assert_called_once()
@@ -343,7 +348,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock = MagicMock()
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        response = self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -352,6 +357,7 @@ class TestTradeManager(unittest.TestCase):
             side="buy",
             quantity=100
         )
+        response = self.trade_manager.execute_strategy_order(action)
 
         self.assertEqual(response, {"error": "Invalid order"})
         active_trades_col_mock.insert_one.assert_not_called()
@@ -365,7 +371,7 @@ class TestTradeManager(unittest.TestCase):
         active_trades_col_mock.insert_one.side_effect = Exception("Test Exception")
         self.db_mock.__getitem__.return_value = active_trades_col_mock
 
-        self.trade_manager.execute_strategy_order(
+        action = TradeAction(
             strategy_id="test_strat",
             symbol="AAPL",
             order_class="equity",
@@ -374,6 +380,7 @@ class TestTradeManager(unittest.TestCase):
             side="buy",
             quantity=100
         )
+        self.trade_manager.execute_strategy_order(action)
 
         mock_logger_error.assert_called_once()
 

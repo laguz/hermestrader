@@ -5,6 +5,7 @@ import statistics
 from datetime import datetime, timedelta
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors
+from bot.trade_manager import TradeAction
 
 class TastyTrade45Strategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):
@@ -320,17 +321,18 @@ class TastyTrade45Strategy(AbstractStrategy):
             response = {'id': 'mock_order_id', 'status': 'ok'}
         else:
             if getattr(self, 'trade_manager', None):
-                response = self.trade_manager.execute_strategy_order(
+                action = TradeAction(
                     strategy_id=self.strategy_id,
                     symbol=symbol,
-                    side='sell',
-                    quantity=1,
-                    price=net_credit,
                     order_class='multileg',
                     legs=legs,
+                    price=net_credit,
+                    side='sell',
+                    quantity=1,
                     tag=self.strategy_id,
                     strategy_params={'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
                 )
+                response = self.trade_manager.execute_strategy_order(action)
             else:
                 response = self.tradier.place_order(
                     account_id=self.tradier.account_id,
@@ -539,17 +541,18 @@ class TastyTrade45Strategy(AbstractStrategy):
         
         self._log(f"🛡️ TT45 Rolling -> {symbol} new {side_name} at {short_strike} Strike | Delta: {valid_shorts[0]['abs_delta']:.2f}")
         if getattr(self, 'trade_manager', None):
-            response = self.trade_manager.execute_strategy_order(
+            action = TradeAction(
                 strategy_id=self.strategy_id,
                 symbol=symbol,
-                side='sell',
-                quantity=1, 
-                price=net_credit if net_credit > 0 else None,
                 order_class='multileg',
                 legs=legs,
+                price=net_credit if net_credit > 0 else None,
+                side='sell',
+                quantity=1,
                 tag=self.strategy_id,
                 strategy_params={'short_leg': best_short['symbol'], 'long_leg': long_leg['symbol']}
             )
+            response = self.trade_manager.execute_strategy_order(action)
         else:
             response = self.tradier.place_order(
                 account_id=self.tradier.account_id,
