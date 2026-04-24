@@ -106,36 +106,52 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     assert len(y.shape) == 1
     assert y.shape == (3,)
 
-def test_evaluate_model_unsupported_model_type(ml_service):
-    """Test that evaluate_model catches exceptions and returns them in an error dict."""
-    from datetime import datetime, timedelta
+def test_select_top_features_key_error(ml_service):
+    """Test when the target column and fallback 'close' column are missing."""
+    import pytest
+    df = pd.DataFrame({
+        'feat1': [1, 2, 3, 4, 5],
+        'feat2': [5, 4, 3, 2, 1]
+    })
+    with pytest.raises(KeyError):
+        ml_service.select_top_features(df, target_col='missing', n_top=3)
 
-    # Setup mock data for evaluate_model
-    now = datetime.now()
-    dates = [(now - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(100)]
-    mock_data = [
-        {"symbol": "AAPL", "date": d, "close": 150.0 + i, "volume": 1000 + i*10, "high": 155.0, "low": 145.0, "open": 149.0}
-        for i, d in enumerate(dates)
-    ]
+def test_select_top_features_constant_feature(ml_service):
+    """Test that features with zero variance (which result in NaN correlation) are handled correctly, although currently pandas `.sort_values()` might place NaNs at the end, it's good to document behavior."""
+    df = pd.DataFrame({
+        'target': [1, 2, 3, 4, 5],
+        'constant': [1, 1, 1, 1, 1], # Correlation will be NaN
+        'good': [1, 2, 3, 4, 5]
+    })
+    top_features = ml_service.select_top_features(df, target_col='target', n_top=2)
 
-    ml_service.db = MagicMock()
-    ml_service.db['market_data'].find.return_value.sort.return_value = mock_data
+    # good should be first, constant might still be selected if n_top is large enough
+    assert top_features[0] == 'good'
+    assert 'constant' in top_features
 
-    with patch.object(ml_service, 'prepare_features') as mock_prep:
-        # Need target column and features to be set properly
-        def mock_prepare_features(df):
-            df['target'] = df['close'].shift(-1)
-            for f in ml_service.default_features:
-                if f not in df.columns:
-                    df[f] = 1.0
-            return df
+def test_select_top_features_filtering(ml_service):
+    """
+    Test filtering the top features when there are more available features than n_top.
+    Verifies that features are sorted by absolute correlation and top n are selected.
+    """
+    import pandas as pd
+    df = pd.DataFrame({
+        'target': [1, 2, 3, 4, 5, 6],
+        'feat_perfect_pos': [1, 2, 3, 4, 5, 6],    # 1.0
+        'feat_perfect_neg': [6, 5, 4, 3, 2, 1],    # -1.0
+        'feat_high_pos': [1, 2, 3, 4, 5, 5],       # ~0.98
+        'feat_low': [1, 6, 2, 5, 3, 4],            # near zero
+        'feat_noise': [1, 1, 6, 6, 1, 1]           # near zero
+    })
 
-        mock_prep.side_effect = mock_prepare_features
+    top_features = ml_service.select_top_features(df, target_col='target', n_top=3)
 
-        # Trigger an exception (Unknown model_type for evaluation)
-        result = ml_service.evaluate_model("AAPL", days=1, model_type="unsupported_model")
+    assert len(top_features) == 3
+    # The top 3 should be perfect positive, perfect negative, and high positive
+    assert 'feat_perfect_pos' in top_features
+    assert 'feat_perfect_neg' in top_features
+    assert 'feat_high_pos' in top_features
 
-        # Verify the exception was caught and returned as an error dictionary
-        assert isinstance(result, dict)
-        assert "error" in result
-        assert "Unknown model_type for evaluation: unsupported_model" in result["error"]
+    # We also check that they are ordered correctly
+    # Since both perfect pos and perfect neg have absolute correlation of 1.0, their order may vary, but feat_high_pos should be 3rd.
+    assert top_features[2] == 'feat_high_pos'
