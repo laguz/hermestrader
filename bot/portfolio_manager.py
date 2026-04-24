@@ -25,18 +25,26 @@ class PortfolioManager:
         """
         if self.db is None: return 0
         try:
-            # 1. Fetch Current Tradier Positions
-            t_positions = self.tradier.get_positions()
-            if t_positions is None: t_positions = []
-            
-            # 2. Fetch DB 'OPEN' Positions
-            db_open = list(self.db['open_positions'].find({"status": "OPEN"}))
-            
+            t_positions, db_open = self._fetch_positions()
             return self._sync_state(t_positions, db_open, log_func)
         except Exception as e:
             log_func(f"Error syncing positions: {e}")
             traceback.print_exc()
             return 0
+
+    def _fetch_positions(self):
+        """
+        Helper method to fetch current Tradier positions and DB 'OPEN' positions.
+        Returns a tuple of (t_positions, db_open).
+        """
+        # 1. Fetch Current Tradier Positions
+        t_positions = self.tradier.get_positions()
+        if t_positions is None: t_positions = []
+
+        # 2. Fetch DB 'OPEN' Positions
+        db_open = list(self.db['open_positions'].find({"status": "OPEN"}))
+
+        return t_positions, db_open
 
     def _sync_state(self, t_positions, db_open, log_func):
         """
