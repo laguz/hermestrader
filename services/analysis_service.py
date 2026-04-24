@@ -67,36 +67,7 @@ class AnalysisService:
         # Let's calculate indicators on full DF then slice for "Key Levels" calculation if we want levels ONLY from that period.
         # Yes, user said "use ... data to create a list ... for the selected period".
         
-        # 2. Calculate Indicators
-        # RSI
-        df['rsi'] = calculate_rsi(df['close'], period=14)
-        
-        # EMA 50
-        df['ema_50'] = calculate_ema(df['close'], span=50)
-        
-        # MACD
-        df['macd'], df['signal'], df['hist'] = calculate_macd(df['close'])
-        
-        # Support & Resistance (Rolling 20 - Dynamic)
-        df['support'], df['resistance'] = calculate_support_resistance(df['close'], window=20)
-        
-        # Volume SMA
-        df['vol_sma'] = calculate_sma(df['volume'], window=20)
-
-        # ADX (14)
-        df['adx'] = calculate_adx(df['high'], df['low'], df['close'], period=14)
-
-        # ATR (14)
-        df['atr'] = calculate_atr(df['high'], df['low'], df['close'], window=14)
-
-        # HV Rank (Percentile of 30-day Vol over last year)
-        hv_rank = calculate_hv_rank(df['close'], window=30, lookback=252)
-
-        # Bollinger Bands (20, 2)
-        df['bb_upper'], df['bb_mid'], df['bb_lower'] = calculate_bollinger_bands(df['close'], window=20, num_std=2)
-
-        # SMA 200
-        df['sma_200'] = calculate_sma(df['close'], window=200)
+        df, hv_rank = self._calculate_indicators(df)
         
         # Slice for the specific period analysis (visualization and key levels)
         # However, ML prediction might rely on latest? 
@@ -135,91 +106,13 @@ class AnalysisService:
         current_price = df.iloc[-1]['close']
 
         # --- NEW: Retrieve Implied Volatility (IV) Proxy ---
-        implied_vol = None
-        try:
-            expirations = self.tradier_service.get_option_expirations(symbol)
-            if expirations:
-                # Find expiry closest to 30 days
-                today = datetime.now().date()
-                target_date = today + timedelta(days=30)
-                best_exp = min(expirations, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_date).days))
-                
-                chain = self.tradier_service.get_option_chains(symbol, best_exp)
-                if chain:
-                    # Filter for ATM options
-                    atm_options = [o for o in chain if abs(o['strike'] - current_price) / current_price < 0.05]
-                    ivs = [o.get('greeks', {}).get('mid_iv', 0) for o in atm_options if o.get('greeks', {}).get('mid_iv', 0) > 0]
-                    if ivs:
-                        implied_vol = sum(ivs) / len(ivs)
-                        logger.debug(f"Calculated blended IV for {symbol} at {best_exp}: {implied_vol:.4f}")
-        except Exception as e:
-            logger.warning(f"Error fetching IV for {symbol}: {e}")
+        implied_vol = self._get_implied_volatility(symbol, current_price)
 
         # Use IV if available, otherwise fallback to HV
         calc_vol = implied_vol if implied_vol else volatility
 
         # Calculate Entry Points (Rounded Key Levels)
-        put_entry_points = []
-        call_entry_points = []
-        
-        seen_put_prices = set()
-        seen_call_prices = set()
-        
-        for level in key_levels:
-            price = level['price']
-            level_type = level['type']
-            
-            if price > 100:
-                rounded_price = 5 * round(price / 5)
-            else:
-                rounded_price = round(price)
-            
-            rounded_price = int(rounded_price)
-
-            if level_type == 'support':
-                 if rounded_price not in seen_put_prices:
-                    seen_put_prices.add(rounded_price)
-                    put_entry_points.append({
-                        'price': rounded_price,
-                        'type': 'support',
-                        'strength': level.get('strength', 1)
-                    })
-            elif level_type == 'resistance':
-                 if rounded_price not in seen_call_prices:
-                    seen_call_prices.add(rounded_price)
-                    call_entry_points.append({
-                        'price': rounded_price,
-                        'type': 'resistance',
-                        'strength': level.get('strength', 1)
-                    })
-                    
-        # Calculate PoP and POT for all entry points (assuming 30 DTE)
-        # Use calc_vol (IV or HV fallback)
-        # from utils.indicators import calculate_prob_of_touch
-        
-        for ep in put_entry_points:
-            # Shift break-even by estimated credit (approx 1/3 of width)
-            # Entry points are key levels, so we assume we sell at/near them.
-            # Simplified: assuming $5 wide spread, credit approx $1.50
-            est_credit = 1.0 if ep['price'] < 100 else 2.5
-            
-            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
-            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
-            
-            ep['pop'] = round(pop * 100, 1)
-            ep['pot'] = round(pot * 100, 1)
-            
-        for ep in call_entry_points:
-            est_credit = 1.0 if ep['price'] < 100 else 2.5
-            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
-            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
-            
-            ep['pop'] = round(pop * 100, 1)
-            ep['pot'] = round(pot * 100, 1)
-        
-        # Sort entry points by price
-        put_entry_points.sort(key=lambda x: x['price'])
-        call_entry_points.sort(key=lambda x: x['price'])
+        put_entry_points, call_entry_points = self._calculate_entry_points(key_levels, current_price, calc_vol)
 
         # Get latest data point
         latest = df.iloc[-1]
@@ -326,6 +219,126 @@ class AnalysisService:
                 logger.error(f"Error saving entry to DB: {e}")
 
         return result
+
+    def _calculate_indicators(self, df):
+        # 2. Calculate Indicators
+        # RSI
+        df['rsi'] = calculate_rsi(df['close'], period=14)
+
+        # EMA 50
+        df['ema_50'] = calculate_ema(df['close'], span=50)
+
+        # MACD
+        df['macd'], df['signal'], df['hist'] = calculate_macd(df['close'])
+
+        # Support & Resistance (Rolling 20 - Dynamic)
+        df['support'], df['resistance'] = calculate_support_resistance(df['close'], window=20)
+
+        # Volume SMA
+        df['vol_sma'] = calculate_sma(df['volume'], window=20)
+
+        # ADX (14)
+        df['adx'] = calculate_adx(df['high'], df['low'], df['close'], period=14)
+
+        # ATR (14)
+        df['atr'] = calculate_atr(df['high'], df['low'], df['close'], window=14)
+
+        # HV Rank (Percentile of 30-day Vol over last year)
+        hv_rank = calculate_hv_rank(df['close'], window=30, lookback=252)
+
+        # Bollinger Bands (20, 2)
+        df['bb_upper'], df['bb_mid'], df['bb_lower'] = calculate_bollinger_bands(df['close'], window=20, num_std=2)
+
+        # SMA 200
+        df['sma_200'] = calculate_sma(df['close'], window=200)
+
+        return df, hv_rank
+
+    def _get_implied_volatility(self, symbol, current_price):
+        implied_vol = None
+        try:
+            expirations = self.tradier_service.get_option_expirations(symbol)
+            if expirations:
+                # Find expiry closest to 30 days
+                today = datetime.now().date()
+                target_date = today + timedelta(days=30)
+                best_exp = min(expirations, key=lambda x: abs((datetime.strptime(x, "%Y-%m-%d").date() - target_date).days))
+
+                chain = self.tradier_service.get_option_chains(symbol, best_exp)
+                if chain:
+                    # Filter for ATM options
+                    atm_options = [o for o in chain if abs(o['strike'] - current_price) / current_price < 0.05]
+                    ivs = [o.get('greeks', {}).get('mid_iv', 0) for o in atm_options if o.get('greeks', {}).get('mid_iv', 0) > 0]
+                    if ivs:
+                        implied_vol = sum(ivs) / len(ivs)
+                        logger.debug(f"Calculated blended IV for {symbol} at {best_exp}: {implied_vol:.4f}")
+        except Exception as e:
+            logger.warning(f"Error fetching IV for {symbol}: {e}")
+        return implied_vol
+
+    def _calculate_entry_points(self, key_levels, current_price, calc_vol):
+        put_entry_points = []
+        call_entry_points = []
+
+        seen_put_prices = set()
+        seen_call_prices = set()
+
+        for level in key_levels:
+            price = level['price']
+            level_type = level['type']
+
+            if price > 100:
+                rounded_price = 5 * round(price / 5)
+            else:
+                rounded_price = round(price)
+
+            rounded_price = int(rounded_price)
+
+            if level_type == 'support':
+                 if rounded_price not in seen_put_prices:
+                    seen_put_prices.add(rounded_price)
+                    put_entry_points.append({
+                        'price': rounded_price,
+                        'type': 'support',
+                        'strength': level.get('strength', 1)
+                    })
+            elif level_type == 'resistance':
+                 if rounded_price not in seen_call_prices:
+                    seen_call_prices.add(rounded_price)
+                    call_entry_points.append({
+                        'price': rounded_price,
+                        'type': 'resistance',
+                        'strength': level.get('strength', 1)
+                    })
+
+        # Calculate PoP and POT for all entry points (assuming 30 DTE)
+        # Use calc_vol (IV or HV fallback)
+
+        for ep in put_entry_points:
+            # Shift break-even by estimated credit (approx 1/3 of width)
+            # Entry points are key levels, so we assume we sell at/near them.
+            # Simplified: assuming $5 wide spread, credit approx $1.50
+            est_credit = 1.0 if ep['price'] < 100 else 2.5
+
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
+            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
+
+            ep['pop'] = round(pop * 100, 1)
+            ep['pot'] = round(pot * 100, 1)
+
+        for ep in call_entry_points:
+            est_credit = 1.0 if ep['price'] < 100 else 2.5
+            pop = calculate_prob_it_expires_otm(current_price, ep['price'], calc_vol, days_to_expiry=30, credit=est_credit)
+            pot = calculate_prob_of_touch(current_price, ep['price'], calc_vol, days_to_expiry=30)
+
+            ep['pop'] = round(pop * 100, 1)
+            ep['pot'] = round(pot * 100, 1)
+
+        # Sort entry points by price
+        put_entry_points.sort(key=lambda x: x['price'])
+        call_entry_points.sort(key=lambda x: x['price'])
+
+        return put_entry_points, call_entry_points
 
     def _evaluate_sell_put(self, current_price, latest, prev, hv_rank, pred_change_pct):
         sp_score = 0
