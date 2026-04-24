@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import logging
 
 def calculate_growth_rate(series, periods):

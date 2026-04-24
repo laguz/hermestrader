@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import patch
 from services.ml_service import MLService
-import os
 
 class MockTradier:
     pass
@@ -40,7 +39,6 @@ def test_secure_tmp_files_train_model(ml_service):
                                         ml_service.train_model(malicious_symbol, model_type='rl', express=True)
                                     except Exception as e:
                                         print(f"Caught expected exception or validation error: {e}")
-                                        pass
 
                                     # Let's see what subprocess.run was called with
                                     if mock_run.called:

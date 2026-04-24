@@ -1,4 +1,3 @@
-import re
 
 with open('services/ml_service.py', 'r') as f:
     content = f.read()

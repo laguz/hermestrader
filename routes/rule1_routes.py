@@ -5,7 +5,6 @@ import yfinance as yf
 from logic.edgar_client import get_company_facts
 from logic.parser import extract_financials
 from logic.calculator import analyze_stock
-import time
 
 rule1_bp = Blueprint('rule1', __name__, url_prefix='/rule1')
 

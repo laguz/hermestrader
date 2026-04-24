@@ -7,7 +7,6 @@ A PPO agent from `stable_baselines3` is trained to minimise the error.
 import os
 import numpy as np
 import pandas as pd
-import gymnasium as gym
 from gymnasium import Env
 from gymnasium.spaces import Box
 from stable_baselines3 import PPO

@@ -1,4 +1,3 @@
-import unittest
 import pytest
 import pandas as pd
 import numpy as np
@@ -110,7 +109,6 @@ def test_build_lstm_model_happy_path(ml_service):
     Test that the _build_lstm_model function returns a compiled Keras Sequential
     model with the expected configuration.
     """
-    import tensorflow as tf
     from tensorflow.keras.models import Sequential
     from tensorflow.keras.layers import LSTM, Dense, Dropout, InputLayer
 

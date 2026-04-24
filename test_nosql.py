@@ -1,9 +1,6 @@
 from unittest.mock import patch, MagicMock
 from exceptions import ValidationError
 from services.ml_service import MLService
-import datetime
-import pytest
-import pymongo
 
 class MockTradier:
     pass

@@ -1,6 +1,4 @@
-import pytest
 from unittest.mock import patch, Mock
-import sys
 
 def test_get_company_facts_happy_path():
     mock_requests = Mock()

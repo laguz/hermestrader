@@ -29,7 +29,7 @@ class User(UserMixin):
     def get_id(self):
         return self.id
 
-from nostr_sdk import Keys, PublicKey, SecretKey, nip04_encrypt, init_logger, LogLevel
+from nostr_sdk import Keys, PublicKey, nip04_encrypt, init_logger, LogLevel
 
 
 @dataclass
@@ -332,7 +332,6 @@ class AuthService:
                 session['dek'] = _F_EPHEMERAL.encrypt(dek).decode('utf-8')
         
         # TradierService now uses dynamic session-aware properties
-        pass
 
     def _migrate_to_dek(self, user_id, password, tradier_key, account_id):
         """Migrate legacy vault to DEK vault."""

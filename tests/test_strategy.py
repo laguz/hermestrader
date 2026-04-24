@@ -2,7 +2,6 @@ from services.tradier_service import TradierService
 from services.backtest_service import BacktestService
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-import pytest
 
 def test_credit_spread_backtest():
     load_dotenv()

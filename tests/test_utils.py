@@ -1,4 +1,3 @@
-import pytest
 from bot.utils import get_expiry_str
 
 def test_get_expiry_str_valid_call():

@@ -1,5 +1,4 @@
 from unittest.mock import patch, MagicMock
-import sys
 
 # Mock pandas before importing logic.parser to avoid ModuleNotFoundError
 mock_pd = MagicMock()
