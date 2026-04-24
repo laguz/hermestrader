@@ -169,8 +169,39 @@ class CreditSpreads7Strategy(AbstractStrategy):
 
     def _process_side(self, symbol, current_price, analysis, expiry, is_put, config=None):
         config = config or {}
-        # 1. Select the POP level
         side_name = "Put" if is_put else "Call"
+
+        # 1. Select the POP level
+        short_strike, pop = self._select_entry_point(symbol, current_price, analysis, is_put, side_name)
+        if short_strike is None:
+            return
+
+        # Get options and short leg
+        options, short_leg = self._get_options_and_short_leg(symbol, expiry, short_strike, is_put, side_name)
+        if not options or not short_leg:
+            return
+
+        # 2. Universal Dynamic Width
+        dynamic_width = self._determine_dynamic_width(symbol, options, short_strike, side_name)
+        if dynamic_width is None:
+            return
+
+        # 3. Find Long Leg and calculate 12% Rule
+        long_leg, current_width, net_credit = self._find_long_leg_and_credit(
+            symbol, options, short_strike, is_put, dynamic_width, side_name, short_leg
+        )
+        if not long_leg:
+            return
+
+        # 4. Determine Capital Risk & BP Verification
+        dynamic_lots = self._determine_lots_and_verify_bp(symbol, expiry, current_width, config, side_name)
+        if dynamic_lots is None:
+            return
+
+        # 5. Place the order
+        self._place_order(symbol, short_strike, current_width, net_credit, dynamic_lots, short_leg, long_leg, side_name)
+
+    def _select_entry_point(self, symbol, current_price, analysis, is_put, side_name):
         entry_key = 'put_entry_points' if is_put else 'call_entry_points'
         entry_points = analysis.get(entry_key, [])
         
@@ -189,7 +220,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
                     
         if not valid_points:
             self._log(f"Skipping {symbol} {side_name}: No support/resistance levels with strict POP > 75%. (Aborted)")
-            return
+            return None, None
             
         # Find closest to 75%
         target_ep = min(valid_points, key=lambda x: abs(x['pop'] - 75))
@@ -197,30 +228,35 @@ class CreditSpreads7Strategy(AbstractStrategy):
         pop = target_ep['pop']
         
         self._log(f"Targeting {symbol} {side_name} at exactly 7DTE | Strike: {short_strike} | POP: {pop:.2f}% | Nearest to 75% limit.")
+        return short_strike, pop
 
+    def _get_options_and_short_leg(self, symbol, expiry, short_strike, is_put, side_name):
         chain = self.tradier.get_option_chains(symbol, expiry)
         if not chain:
             self._log(f"Skipping {symbol}: Failed to fetch option chain for {expiry}.")
-            return
+            return None, None
             
         opt_type = 'put' if is_put else 'call'
         options = [o for o in chain if o['option_type'] == opt_type]
         if not options:
             self._log(f"Skipping {symbol}: No {opt_type}s available in chain for {expiry}.")
-            return
+            return None, None
 
         # Check if short strike is available
         short_leg = next((o for o in options if o['strike'] == short_strike), None)
         if not short_leg:
             self._log(f"Skipping {symbol} {side_name}: Target short strike {short_strike} is not available in the chain.")
-            return
+            return None, None
 
+        return options, short_leg
+
+    def _determine_dynamic_width(self, symbol, options, short_strike, side_name):
         # 2. Universal Dynamic Width
         # Find minimal width from strikes in the chain around the target
         strikes = sorted(set([o['strike'] for o in options]))
         if len(strikes) < 2:
             self._log(f"Skipping {symbol} {side_name}: Not enough strikes available to determine dynamic width.")
-            return
+            return None
             
         # Find the gap near the short strike
         idx = -1
@@ -239,10 +275,11 @@ class CreditSpreads7Strategy(AbstractStrategy):
             
         if dynamic_width is None or dynamic_width <= 0:
             self._log(f"Skipping {symbol} {side_name}: Invalid dynamic width detected.")
-            return
+            return None
             
-        dynamic_width = round(dynamic_width, 2)
-        
+        return round(dynamic_width, 2)
+
+    def _find_long_leg_and_credit(self, symbol, options, short_strike, is_put, dynamic_width, side_name, short_leg):
         # 3. Find Long Leg and calculate 12% Rule (incorporating expansion logic up to max 10 wide)
         long_leg = None
         current_width = dynamic_width
@@ -251,7 +288,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
         while True:
             if current_width > MAX_WIDTH:
                 self._log(f"Skipping {symbol} {side_name}: Expanded width {current_width} exceeds maximum allowed width of {MAX_WIDTH}.")
-                return
+                return None, None, None
 
             expected_long_strike = short_strike - current_width if is_put else short_strike + current_width
             expected_long_strike = round(expected_long_strike, 2) # Prevent float comparison issues
@@ -271,7 +308,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
             # If quotes are 0 (bad chain), abort or skip
             if short_leg['bid'] == 0 and short_leg['ask'] == 0:
                 self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
-                return
+                return None, None, None
                 
             net_credit = round(short_price - long_price, 2)
             min_required_credit = round(current_width * 0.12, 2)
@@ -283,8 +320,9 @@ class CreditSpreads7Strategy(AbstractStrategy):
                 continue
             else:
                 # Passes all filters!
-                break
-                
+                return long_leg, current_width, net_credit
+
+    def _determine_lots_and_verify_bp(self, symbol, expiry, current_width, config, side_name):
         # 4. Determine Capital Risk & BP Verification
         requirement_per_lot = current_width * 100
         available_bp = self._get_available_bp(config)
@@ -293,7 +331,7 @@ class CreditSpreads7Strategy(AbstractStrategy):
         
         if dynamic_lots < 1:
             self._log(f"Skipping {symbol}: Spread req (${requirement_per_lot:,.2f}) > BP (${available_bp:,.2f}).")
-            return
+            return None
             
         dynamic_lots = min(dynamic_lots, max_lots_config)
 
@@ -302,14 +340,18 @@ class CreditSpreads7Strategy(AbstractStrategy):
         dynamic_lots = min(dynamic_lots, max_lots_config - existing)
         if dynamic_lots < 1:
             self._log(f"ℹ️ {symbol} {side_name}: Chain {expiry} already at max ({existing}/{max_lots_config}). Skipping.")
-            return
+            return None
         self._log(f"📦 {symbol} {side_name}: Chain {expiry} has {existing}/{max_lots_config} lots. Opening {dynamic_lots} more.")
 
         total_requirement = requirement_per_lot * dynamic_lots
         if not self._is_bp_sufficient(total_requirement, config):
             self._log(f"Skipping {symbol}: BP insufficient for {dynamic_lots} lots.")
-            return
+            return None
             
+        return dynamic_lots
+
+    def _place_order(self, symbol, short_strike, current_width, net_credit, dynamic_lots, short_leg, long_leg, side_name):
+        min_required_credit = round(current_width * 0.12, 2)
         self._log(f"✅ Placing {symbol} {side_name} Spread | Short: {short_strike} | Long: {long_leg['strike']} | Width: {current_width} | Lots: {dynamic_lots} | Credit: {net_credit} (Req: {min_required_credit})")
         
         legs = [
@@ -357,7 +399,6 @@ class CreditSpreads7Strategy(AbstractStrategy):
                      'long_leg': long_leg['symbol']
                  }
                  self._record_trade(symbol, f"Credit Spreads 7 {side_name}", net_credit, response, legs_info)
-
     def manage_positions(self, simulation_mode=False):
         """
         Check open positions for exit conditions.
