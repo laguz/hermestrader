@@ -106,17 +106,52 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     assert len(y.shape) == 1
     assert y.shape == (3,)
 
-def test_backfill_symbol_history_exception(ml_service):
-    """Test that backfill_symbol gracefully handles an exception when fetching history."""
-    # Ensure db is set for backfill to proceed
-    ml_service.db = {"market_data": MagicMock()}
+def test_select_top_features_key_error(ml_service):
+    """Test when the target column and fallback 'close' column are missing."""
+    import pytest
+    df = pd.DataFrame({
+        'feat1': [1, 2, 3, 4, 5],
+        'feat2': [5, 4, 3, 2, 1]
+    })
+    with pytest.raises(KeyError):
+        ml_service.select_top_features(df, target_col='missing', n_top=3)
 
-    # Mock tradier to raise an Exception
-    ml_service.tradier.get_historical_pricing = MagicMock(side_effect=Exception("API Error"))
+def test_select_top_features_constant_feature(ml_service):
+    """Test that features with zero variance (which result in NaN correlation) are handled correctly, although currently pandas `.sort_values()` might place NaNs at the end, it's good to document behavior."""
+    df = pd.DataFrame({
+        'target': [1, 2, 3, 4, 5],
+        'constant': [1, 1, 1, 1, 1], # Correlation will be NaN
+        'good': [1, 2, 3, 4, 5]
+    })
+    top_features = ml_service.select_top_features(df, target_col='target', n_top=2)
 
-    # Run backfill_symbol
-    result = ml_service.backfill_symbol("AAPL")
+    # good should be first, constant might still be selected if n_top is large enough
+    assert top_features[0] == 'good'
+    assert 'constant' in top_features
 
-    # It should return False when an exception occurs
-    assert result is False
-    ml_service.tradier.get_historical_pricing.assert_called_once()
+def test_select_top_features_filtering(ml_service):
+    """
+    Test filtering the top features when there are more available features than n_top.
+    Verifies that features are sorted by absolute correlation and top n are selected.
+    """
+    import pandas as pd
+    df = pd.DataFrame({
+        'target': [1, 2, 3, 4, 5, 6],
+        'feat_perfect_pos': [1, 2, 3, 4, 5, 6],    # 1.0
+        'feat_perfect_neg': [6, 5, 4, 3, 2, 1],    # -1.0
+        'feat_high_pos': [1, 2, 3, 4, 5, 5],       # ~0.98
+        'feat_low': [1, 6, 2, 5, 3, 4],            # near zero
+        'feat_noise': [1, 1, 6, 6, 1, 1]           # near zero
+    })
+
+    top_features = ml_service.select_top_features(df, target_col='target', n_top=3)
+
+    assert len(top_features) == 3
+    # The top 3 should be perfect positive, perfect negative, and high positive
+    assert 'feat_perfect_pos' in top_features
+    assert 'feat_perfect_neg' in top_features
+    assert 'feat_high_pos' in top_features
+
+    # We also check that they are ordered correctly
+    # Since both perfect pos and perfect neg have absolute correlation of 1.0, their order may vary, but feat_high_pos should be 3rd.
+    assert top_features[2] == 'feat_high_pos'

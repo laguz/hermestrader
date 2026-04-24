@@ -4,12 +4,6 @@ import pandas as pd
 
 from datetime import datetime, timedelta
 
-from bot.strategies.wheel import WheelStrategy
-from utils.indicators import (
-    calculate_rsi, 
-    find_key_levels
-)
-
 logger = logging.getLogger(__name__)
 
 
@@ -132,20 +126,11 @@ class BacktestService:
 
         
         # Key Level Caching Mechanism
-        # K-Means clustering is CPU intensive. Rather than calculating 
-        # Support/Resistance every single simulated day, we'll recalculate every 5 trading days.
         cached_key_levels = []
         days_since_last_level_calc = 999
-        from utils.indicators import find_key_levels
-        # -----------------------------------------
         
-        # 2. Setup Mocks
-        mock_tradier = MockTradierService()
-        mock_analysis = MockAnalysisService()
-        mock_db = MockDB()
-        
-        # 3. Setup Strategy (Dynamic Injection)
-        strategy = self._setup_strategy(strategy_type, mock_tradier, mock_db, mock_analysis)
+        # 2. Setup Mocks and Strategy
+        mock_tradier, mock_analysis, mock_db, strategy = self._setup_simulation_environment(strategy_type)
         if not strategy:
             return {"error": f"Strategy '{strategy_type}' not supported in Backtester."}
             
@@ -170,36 +155,17 @@ class BacktestService:
                 continue  # Skip warmup days
             
             current_date_str = row['date'].strftime("%Y-%m-%d")
-            price = row['close']
 
             # Initialize benchmark
             if benchmark_start_price is None:
-                benchmark_start_price = price
-            benchmark_values.append(starting_cash * (price / benchmark_start_price))
+                benchmark_start_price = row['close']
+            benchmark_values.append(starting_cash * (row['close'] / benchmark_start_price))
             
-            # 1. Fetch Vectorized Indicators
-            # Lookups are near-instantaneous
-            price = row['close']
-            volatility = row['hv'] if not pd.isna(row['hv']) else 0.5
-            implied_vol = volatility * iv_mult
-            rsi = row['rsi']
-            sma_200 = row['sma_200']
-            hv_rank = row['hv_rank']
-
-            # 2. Key Level Caching
-            # Recalculate support/resistance nodes every 5 trading days
-            if days_since_last_level_calc >= 5:
-                # We still need a window of data for the clustering
-                window_df = df.iloc[max(0, index-90):index+1]
-                if len(window_df) >= 30:
-                    cached_key_levels = find_key_levels(
-                        window_df['close'], 
-                        window_df['volume'],
-                        n_clusters=6
-                    )
-                days_since_last_level_calc = 0
-            else:
-                days_since_last_level_calc += 1
+            # 1 & 2. Fetch Vectorized Indicators and Key Level Caching
+            price, implied_vol, rsi, sma_200, hv_rank = self._fetch_indicators(row, iv_mult)
+            cached_key_levels, days_since_last_level_calc = self._update_key_levels(
+                index, df, days_since_last_level_calc, cached_key_levels
+            )
             
             # 3. Update Mock Context
             mock_tradier.cash = cash
@@ -282,6 +248,41 @@ class BacktestService:
         return self._wrap_up_backtest(
             portfolio_values, benchmark_values, dates, trades_log, starting_cash, total_commissions
         )
+
+    def _fetch_indicators(self, row, iv_mult):
+        """Extract vectorized indicators for the current row."""
+        price = row['close']
+        volatility = row['hv'] if not pd.isna(row['hv']) else 0.5
+        implied_vol = volatility * iv_mult
+        rsi = row['rsi']
+        sma_200 = row['sma_200']
+        hv_rank = row['hv_rank']
+        return price, implied_vol, rsi, sma_200, hv_rank
+
+    def _update_key_levels(self, index, df, days_since_last_level_calc, cached_key_levels):
+        """Update cached key support/resistance levels every 5 trading days."""
+        from utils.indicators import find_key_levels
+
+        if days_since_last_level_calc >= 5:
+            window_df = df.iloc[max(0, index-90):index+1]
+            if len(window_df) >= 30:
+                cached_key_levels = find_key_levels(
+                    window_df['close'],
+                    window_df['volume'],
+                    n_clusters=6
+                )
+            return cached_key_levels, 0
+        return cached_key_levels, days_since_last_level_calc + 1
+
+    def _setup_simulation_environment(self, strategy_type):
+        # Mocks are already imported globally
+        mock_tradier = MockTradierService()
+        mock_analysis = MockAnalysisService()
+        mock_db = MockDB()
+
+        strategy = self._setup_strategy(strategy_type, mock_tradier, mock_db, mock_analysis)
+
+        return mock_tradier, mock_analysis, mock_db, strategy
 
     def _setup_strategy(self, strategy_type, mock_tradier, mock_db, mock_analysis):
         from bot.strategies.wheel import WheelStrategy
