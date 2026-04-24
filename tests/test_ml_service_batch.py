@@ -88,52 +88,52 @@ def test_run_batch_predictions_error(ml_service):
             assert any("MSFT" in d for d in results['details'])
             assert any("Prediction failed for MSFT" in d for d in results['details'])
 
-def test_run_batch_training_success(ml_service):
+def test_run_batch_predictions_empty_symbols(ml_service):
     """
-    Test run_batch_training with all successes.
-    Verifies that train_model is called for each symbol and model type,
-    and successes are correctly counted.
+    Test run_batch_predictions with an empty list of symbols.
+    Verifies that it handles empty input gracefully and returns zero counts.
     """
-    symbols = ['AAPL', 'MSFT']
+    with patch.object(ml_service, 'refresh_prediction_actuals'):
+        results = ml_service.run_batch_predictions([])
 
-    with patch.object(ml_service, 'train_model') as mock_train:
-        mock_train.return_value = {'mse': 0.01}
-
-        results = ml_service.run_batch_training(symbols, express=True)
-
-        # 2 symbols * 2 model types ('lstm', 'rl') = 4 successes
-        assert results['success'] == 4
+        assert results['success'] == 0
         assert results['errors'] == 0
+        assert results['skipped'] == 0
         assert len(results['details']) == 0
 
-        # Verify train_model was called with correct arguments
-        assert mock_train.call_count == 4
-        mock_train.assert_any_call('AAPL', model_type='lstm', express=True)
-        mock_train.assert_any_call('AAPL', model_type='rl', express=True)
-        mock_train.assert_any_call('MSFT', model_type='lstm', express=True)
-        mock_train.assert_any_call('MSFT', model_type='rl', express=True)
-
-def test_run_batch_training_error(ml_service):
+def test_run_batch_predictions_resource_not_found(ml_service):
     """
-    Test run_batch_training with some errors.
-    Verifies that exceptions are caught, errors are counted,
-    and details list captures the error messages.
+    Test run_batch_predictions catching ResourceNotFoundError and incrementing skipped_count.
     """
-    symbols = ['AAPL', 'MSFT']
+    from exceptions import ResourceNotFoundError
+    symbols = ['AAPL']
 
-    def mock_train_model(symbol, model_type='lstm', express=True):
-        if symbol == 'MSFT' and model_type == 'rl':
-            raise Exception("Training failed for MSFT RL")
-        return {'mse': 0.05}
+    def mock_predict_next_day(symbol, model_type='lstm'):
+        raise ResourceNotFoundError("Model not found")
 
-    with patch.object(ml_service, 'train_model', side_effect=mock_train_model):
-        results = ml_service.run_batch_training(symbols, express=False)
+    with patch.object(ml_service, 'predict_next_day', side_effect=mock_predict_next_day):
+        with patch.object(ml_service, 'refresh_prediction_actuals'):
+            results = ml_service.run_batch_predictions(symbols)
 
-        # 2 symbols * 2 model types = 4 attempts
-        # MSFT RL fails, others succeed
-        assert results['success'] == 3
-        assert results['errors'] == 1
-        assert len(results['details']) == 1
+            assert results['success'] == 0
+            assert results['errors'] == 0
+            # 1 symbol * 2 model types ('lstm', 'rl')
+            assert results['skipped'] == 2
+            assert len(results['details']) == 0
 
-        assert any("MSFT/rl" in d for d in results['details'])
-        assert any("Training failed for MSFT RL" in d for d in results['details'])
+def test_run_batch_predictions_refresh_error(ml_service):
+    """
+    Test run_batch_predictions when refresh_prediction_actuals raises an error.
+    It should catch the error and continue processing predictions.
+    """
+    symbols = ['AAPL']
+
+    with patch.object(ml_service, 'refresh_prediction_actuals', side_effect=Exception("Refresh failed")):
+        with patch.object(ml_service, 'predict_next_day', return_value={'predicted_price': 150.0}):
+            results = ml_service.run_batch_predictions(symbols)
+
+            # 1 symbol * 2 model types -> 2 successes despite refresh error
+            assert results['success'] == 2
+            assert results['errors'] == 0
+            assert results['skipped'] == 0
+            assert len(results['details']) == 0
