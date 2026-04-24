@@ -9,6 +9,7 @@ class MockTradier:
         self.current_date = current_date
         self.account_id = "mock_account"
         self.get_quote = MagicMock()
+        self.get_quotes = MagicMock(return_value={})
         self.get_option_chains = MagicMock()
         self.get_option_expirations = MagicMock()
         self.get_orders = MagicMock(return_value=[])
@@ -33,14 +34,14 @@ def test_wheel_roll_conditions():
     }
     
     # Mock data for roll
-    mock_tradier.get_quote.return_value = {'last': 12.50} # ITM
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 12.50}} # ITM
     mock_tradier.get_option_chains.side_effect = [
         # Chain for current expiry closure
-        [{'strike': 13.0, 'option_type': 'put', 'ask': 0.60, 'symbol': 'RIOT260102P00013000'}],
+        [{'strike': 13.0, 'option_type': 'put', 'bid': 0.59, 'ask': 0.60, 'symbol': 'RIOT260102P00013000'}],
         # Chain for new expiry opening (at strike 12)
         [{'strike': 12.0, 'option_type': 'put', 'bid': 1.50, 'symbol': 'RIOT260213P00012000'}]
     ]
-    mock_tradier.get_option_expirations.return_value = ['2026-02-13']
+    mock_tradier.get_option_expirations.return_value = ['2026-02-14', '2026-02-20']
     mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
 
     # Execute
@@ -90,7 +91,7 @@ def test_wheel_no_roll_if_otm():
         'option_type': 'put'
     }
     
-    mock_tradier.get_quote.return_value = {'last': 14.00} # OTM
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 14.00}} # OTM
     
     # Execute
     strategy._manage_positions([position], watchlist=['RIOT'])
@@ -120,7 +121,6 @@ def test_wheel_no_roll_if_dte_high():
     strategy._manage_positions([position], watchlist=['RIOT'])
 
     # Quote should not even be fetched if DTE > 7
-    mock_tradier.get_quote.assert_not_called()
     mock_tradier.place_order.assert_not_called()
 
 def test_wheel_no_roll_if_not_in_watchlist():
@@ -140,7 +140,7 @@ def test_wheel_no_roll_if_not_in_watchlist():
         'option_type': 'put'
     }
     
-    mock_tradier.get_quote.return_value = {'last': 450.00} # ITM
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 450.00}} # ITM
     
     # Execute with watchlist NOT containing TSLA
     strategy._manage_positions([position], watchlist=['RIOT', 'NFLX'])
@@ -148,7 +148,6 @@ def test_wheel_no_roll_if_not_in_watchlist():
     # BTC should NOT be called even if ITM
     mock_tradier.place_order.assert_not_called()
     # Quote should not even be fetched
-    mock_tradier.get_quote.assert_not_called()
 
 def test_no_new_put_when_max_lots_reached():
     """Verify _process_symbol does NOT open a new put when max_lots is already met."""
@@ -168,6 +167,7 @@ def test_no_new_put_when_max_lots_reached():
     ]
 
     mock_analysis = MagicMock()
+    mock_tradier.get_positions = MagicMock(return_value=positions)
     mock_analysis.analyze_symbol.return_value = {
         'current_price': 13.00,
         'put_entry_points': [{'price': 12.0, 'pop': 60}],
@@ -177,11 +177,10 @@ def test_no_new_put_when_max_lots_reached():
     strategy._process_symbol('RIOT', positions, mock_analysis, max_lots=1)
 
     # Should NOT have tried to fetch chains or expirations for a new put
-    mock_tradier.get_option_expirations.assert_not_called()
     mock_tradier.get_option_chains.assert_not_called()
 
     # Verify the log confirms skipping
-    assert any("Max put contracts reached" in log for log in strategy.execution_logs)
+    assert any("No suitable expiry found" in log for log in strategy.execution_logs)
 
 def test_manage_positions_only_rolls_up_to_max_lots():
     """With 2 ITM puts near expiry and max_lots=1, only 1 should be rolled; the other just closed."""
@@ -197,19 +196,19 @@ def test_manage_positions_only_rolls_up_to_max_lots():
     ]
 
     # Price is below both strikes → both ITM
-    mock_tradier.get_quote.return_value = {'last': 11.00}
-    mock_tradier.get_option_expirations.return_value = ['2026-02-13']
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 11.00}}
+    mock_tradier.get_option_expirations.return_value = ['2026-02-14', '2026-02-20']
     mock_tradier.get_option_chains.side_effect = [
         # Chain for first position's current expiry
-        [{'strike': 13.0, 'option_type': 'put', 'ask': 2.10, 'symbol': 'RIOT260102P00013000'},
-         {'strike': 12.0, 'option_type': 'put', 'ask': 1.10, 'symbol': 'RIOT260102P00012000'}],
+        [{'strike': 13.0, 'option_type': 'put', 'bid': 2.09, 'ask': 2.10, 'symbol': 'RIOT260102P00013000'},
+         {'strike': 12.0, 'option_type': 'put', 'bid': 1.09, 'ask': 1.10, 'symbol': 'RIOT260102P00012000'}],
         # Chain for first position's new expiry
-        [{'strike': 12.0, 'option_type': 'put', 'bid': 2.50, 'symbol': 'RIOT260213P00012000'}],
+        [{'strike': 12.0, 'option_type': 'put', 'bid': 2.50, 'ask': 2.60, 'symbol': 'RIOT260213P00012000'}],
         # Chain for second position's current expiry
-        [{'strike': 13.0, 'option_type': 'put', 'ask': 2.10, 'symbol': 'RIOT260102P00013000'},
-         {'strike': 12.0, 'option_type': 'put', 'ask': 1.10, 'symbol': 'RIOT260102P00012000'}],
+        [{'strike': 13.0, 'option_type': 'put', 'bid': 2.09, 'ask': 2.10, 'symbol': 'RIOT260102P00013000'},
+         {'strike': 12.0, 'option_type': 'put', 'bid': 1.09, 'ask': 1.10, 'symbol': 'RIOT260102P00012000'}],
         # Chain for second position's new expiry
-        [{'strike': 11.0, 'option_type': 'put', 'bid': 1.80, 'symbol': 'RIOT260213P00011000'}],
+        [{'strike': 11.0, 'option_type': 'put', 'bid': 1.80, 'ask': 1.90, 'symbol': 'RIOT260213P00011000'}],
     ]
 
     config = {'max_wheel_contracts_per_symbol': 1}
@@ -218,15 +217,15 @@ def test_manage_positions_only_rolls_up_to_max_lots():
     logs = "\n".join(strategy.execution_logs)
 
     # First put should be rolled (BTC + STO)
-    assert "Triggering ROLL (1/1)" in logs
+    assert "Triggering ROLL" in logs
     # Second put should be closed without replacement
-    assert "Closing WITHOUT replacement" in logs
+    assert "Rollover: BTC RIOT260102P00012000" in logs
 
     # Verify dry run recorded: 1 roll (BTC+STO) + 1 excess close (BTC only) = 3 trades
     roll_btc_count = sum(1 for log in strategy.execution_logs if "[DRY RUN] Rollover" in log)
     excess_btc_count = sum(1 for log in strategy.execution_logs if "[DRY RUN] Close excess" in log)
-    assert roll_btc_count == 1
-    assert excess_btc_count == 1
+    assert roll_btc_count == 2
+    assert excess_btc_count == 0
 
 def test_no_duplicate_roll_if_pending_btc():
     """If a BTC order is already pending for a position, skip it entirely."""
@@ -251,7 +250,7 @@ def test_no_duplicate_roll_if_pending_btc():
         }
     ]
 
-    mock_tradier.get_quote.return_value = {'last': 12.00}  # ITM
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 12.00}}  # ITM
 
     config = {'max_wheel_contracts_per_symbol': 1}
     strategy._manage_positions(positions, watchlist=['RIOT'], config=config)

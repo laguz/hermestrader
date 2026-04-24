@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 import re
 import numpy as np
 import pandas as pd
@@ -56,6 +57,12 @@ class NYSEHolidayCalendar(AbstractHolidayCalendar):
 from utils.indicators import calculate_rsi, calculate_bollinger_bands, calculate_macd, calculate_atr, calculate_sma, calculate_obv, calculate_vwap
 from services.container import Container
 from exceptions import ValidationError, ExternalServiceError, ResourceNotFoundError, AppError
+
+@dataclass
+class ValidationConfig:
+    model_type: str = 'lstm'
+    min_train_size: int = 200
+    test_size: int = 20
 
 class MLService:
     def __init__(self, tradier_service):
@@ -235,12 +242,17 @@ class MLService:
         model.compile(optimizer='adam', loss='mean_squared_error')
         return model
 
-    def perform_walk_forward_validation(self, df, top_features, model_type='lstm', min_train_size=200, test_size=20):
+    def perform_walk_forward_validation(self, df, top_features, config: ValidationConfig = None):
         """
         Perform Walk-Forward Validation:
         Train on expanding window [0..t], predict on [t..t+test_size].
         Returns average MSE and other metrics.
         """
+        if config is None:
+            config = ValidationConfig()
+        model_type = config.model_type
+        min_train_size = config.min_train_size
+        test_size = config.test_size
         logger.info(f"Starting Walk-Forward Validation for {model_type.upper()}...")
         
         n_samples = len(df)
@@ -389,7 +401,7 @@ class MLService:
             
         # 4. Walk-Forward Validation (Before final training)
         if not express and model_type != 'rl':
-            validation_results = self.perform_walk_forward_validation(df, top_features, model_type=model_type)
+            validation_results = self.perform_walk_forward_validation(df, top_features, config=ValidationConfig(model_type=model_type))
         else:
             logger.info(f"Skipping Walk-Forward Validation for {model_type} (express={express}).")
             validation_results = {}

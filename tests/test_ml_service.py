@@ -202,3 +202,33 @@ def test_prepare_features_missing_columns(ml_service):
     # Check that atr and vwap are set to 0.0
     assert (result_df['atr'] == 0.0).all()
     assert (result_df['vwap'] == 0.0).all()
+
+def test_build_lstm_model(ml_service):
+    """Test the structure of the built LSTM model."""
+    from services.ml_service import HAS_TENSORFLOW
+    if not HAS_TENSORFLOW:
+        pytest.skip("TensorFlow not available")
+
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+
+    input_shape = (10, 5)
+    model = ml_service._build_lstm_model(input_shape)
+
+    assert isinstance(model, Sequential)
+
+    # Check layer types (Tensorflow >= 2.11 treats Input as separate from Sequential.layers sometimes, but layers list contains others)
+    # The expected structure: LSTM, Dropout, LSTM, Dropout, Dense, Dense
+    layer_types = [type(layer) for layer in model.layers]
+
+    assert layer_types.count(LSTM) == 2
+    assert layer_types.count(Dropout) == 2
+    assert layer_types.count(Dense) == 2
+
+    # Also verify optimizer and loss exist and match roughly
+    # the name might be 'adam' or Adam object
+    assert model.optimizer is not None
+    assert getattr(model.optimizer, 'name', '').lower() == 'adam' or 'adam' in str(type(model.optimizer)).lower()
+
+    assert model.loss is not None
+    assert 'mean_squared_error' in str(model.loss) or model.loss == 'mean_squared_error' or getattr(model.loss, 'name', '') == 'mean_squared_error'
