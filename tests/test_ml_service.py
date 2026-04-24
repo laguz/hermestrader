@@ -232,3 +232,54 @@ def test_build_lstm_model(ml_service):
 
     assert model.loss is not None
     assert 'mean_squared_error' in str(model.loss) or model.loss == 'mean_squared_error' or getattr(model.loss, 'name', '') == 'mean_squared_error'
+
+def test_backfill_symbol_db_none(ml_service):
+    """Test backfill_symbol returns False when db is None."""
+    ml_service.db = None
+    assert ml_service.backfill_symbol("AAPL") is False
+
+def test_backfill_symbol_tradier_error(ml_service):
+    """Test backfill_symbol returns False when tradier API raises Exception."""
+    ml_service.db = MagicMock()
+    ml_service.tradier.get_historical_pricing = MagicMock(side_effect=Exception("API Error"))
+    assert ml_service.backfill_symbol("AAPL") is False
+    ml_service.tradier.get_historical_pricing.assert_called_once()
+
+def test_backfill_symbol_no_data(ml_service):
+    """Test backfill_symbol returns False when tradier API returns empty data."""
+    ml_service.db = MagicMock()
+    ml_service.tradier.get_historical_pricing = MagicMock(return_value=[])
+    assert ml_service.backfill_symbol("AAPL") is False
+    ml_service.tradier.get_historical_pricing.assert_called_once()
+
+def test_backfill_symbol_success(ml_service):
+    """Test backfill_symbol successfully fetches data and writes to DB."""
+    ml_service.db = MagicMock()
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_bulk_write_result = MagicMock()
+    mock_bulk_write_result.upserted_count = 2
+    mock_bulk_write_result.modified_count = 0
+    mock_collection.bulk_write.return_value = mock_bulk_write_result
+
+    mock_history = [
+        {"date": "2023-01-01", "open": "100.0", "high": "105.0", "low": "99.0", "close": "104.0", "volume": "1000"},
+        {"date": "2023-01-02", "open": "104.0", "high": "106.0", "low": "103.0", "close": "105.0", "volume": "2000"}
+    ]
+    ml_service.tradier.get_historical_pricing = MagicMock(return_value=mock_history)
+
+    assert ml_service.backfill_symbol("AAPL", years=1) is True
+    ml_service.tradier.get_historical_pricing.assert_called_once()
+    mock_collection.bulk_write.assert_called_once()
+
+    # Verify the contents of bulk_write call
+    operations = mock_collection.bulk_write.call_args[0][0]
+    assert len(operations) == 2
+
+    # Check that update values are parsed correctly
+    first_op = operations[0]
+    doc = first_op._doc["$set"]
+    assert doc["symbol"] == "AAPL"
+    assert doc["date"] == "2023-01-01"
+    assert doc["open"] == 100.0
+    assert doc["volume"] == 1000.0
