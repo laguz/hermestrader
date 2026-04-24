@@ -38,6 +38,22 @@ class BacktestState:
     starting_cash: float
     total_commissions: float
 
+from typing import Any
+
+@dataclass
+class BacktestContext:
+    mock_tradier: Any
+    current_date_str: str
+    risk_pct: float
+    slippage_rate: float
+    commission_per: float
+    trades_log: list
+    open_trade_credits: dict
+    cash: float
+    total_commissions: float
+    portfolio_values: list
+    starting_cash: float
+
 class BacktestService:
     # Default configuration
     COMMISSION_PER_CONTRACT = 0.50   # $0.50 per contract
@@ -226,22 +242,22 @@ class BacktestService:
                 all_entry_orders = list(mock_tradier.new_orders) + wheel_entry_orders
                 mock_tradier.new_orders = [] # Clear new orders after processing
                 
-                # Update cash and commissions
-                cash, total_commissions = self._process_open_orders(
-                    mock_tradier=mock_tradier, 
-                    current_date_str=current_date_str, 
-                    risk_pct=risk_pct, 
-                    # Removed num_legs as it is calculated per order
-                    slippage_rate=slippage_rate, 
-                    commission_per=commission_per, 
-                    trades_log=trades_log, 
+                context = BacktestContext(
+                    mock_tradier=mock_tradier,
+                    current_date_str=current_date_str,
+                    risk_pct=risk_pct,
+                    slippage_rate=slippage_rate,
+                    commission_per=commission_per,
+                    trades_log=trades_log,
                     open_trade_credits=open_trade_credits,
-                    entry_orders=all_entry_orders,
                     cash=cash,
                     total_commissions=total_commissions,
                     portfolio_values=portfolio_values,
                     starting_cash=starting_cash
                 )
+
+                # Update cash and commissions
+                cash, total_commissions = self._process_open_orders(context, all_entry_orders)
             except Exception as e:
                 logger.error(f"{current_date_str} - {strategy_type} Strategy Exception: {e}", exc_info=True)
                             
@@ -403,24 +419,23 @@ class BacktestService:
 
 
 
-    def _process_open_orders(self, mock_tradier, current_date_str, risk_pct, slippage_rate, 
-                             commission_per, trades_log, open_trade_credits, entry_orders, cash, total_commissions, portfolio_values, starting_cash):
+    def _process_open_orders(self, context: BacktestContext, entry_orders):
         """Processes new orders, applying slippage, calculating position sizing, and deducting commissions."""
         if not entry_orders:
-            return cash, total_commissions
+            return context.cash, context.total_commissions
             
-        current_pv = portfolio_values[-1] if portfolio_values else starting_cash
+        current_pv = context.portfolio_values[-1] if context.portfolio_values else context.starting_cash
             
         for order in entry_orders:
             # Calculate fill price with slippage
             fill_price = order.get('price', 0)
             if 'sell' in order.get('side', ''):
-                fill_price -= slippage_rate  # Worse fill on sell
+                fill_price -= context.slippage_rate  # Worse fill on sell
             else:
-                fill_price += slippage_rate  # Worse fill on buy
+                fill_price += context.slippage_rate  # Worse fill on buy
                 
             num_legs_order = len(order.get('legs') or []) or 1
-            slippage = slippage_rate * num_legs_order
+            slippage = context.slippage_rate * num_legs_order
             
             # Position Sizing
             qty = order.get('quantity', 1)
@@ -428,20 +443,20 @@ class BacktestService:
             
             # Very basic risk sizing approximation for credit spreads
             if 'credit' in order.get('action', '').lower() or order.get('class') == 'multileg':
-                risk_amount = current_pv * risk_pct
+                risk_amount = current_pv * context.risk_pct
                 trade_risk = 0
                 if order.get('legs') and len(order['legs']) >= 2:
                     short_strike_sym = order['legs'][0]['option_symbol']
                     long_strike_sym = order['legs'][1]['option_symbol']
-                    s_det = mock_tradier._parse_option_symbol(short_strike_sym)
-                    l_det = mock_tradier._parse_option_symbol(long_strike_sym)
+                    s_det = context.mock_tradier._parse_option_symbol(short_strike_sym)
+                    l_det = context.mock_tradier._parse_option_symbol(long_strike_sym)
                     if s_det and l_det:
                         width = abs(s_det['strike'] - l_det['strike'])
                         trade_risk = (width - fill_price) * 100
                 
                 if trade_risk <= 0:
                     pos_sym = order.get('option_symbol') or order['symbol']
-                    details = mock_tradier._parse_option_symbol(pos_sym)
+                    details = context.mock_tradier._parse_option_symbol(pos_sym)
                     if details:
                         trade_risk = max(0.01, abs(details['strike'] - fill_price) * 100)
                     else:
@@ -451,21 +466,21 @@ class BacktestService:
                     qty = max(1, int(risk_amount / trade_risk))
             
             # Commission
-            commission_cost = commission_per * qty * num_legs_order
-            total_commissions += commission_cost
+            commission_cost = context.commission_per * qty * num_legs_order
+            context.total_commissions += commission_cost
             
-            cash += (fill_price * qty * multiplier) - commission_cost
+            context.cash += (fill_price * qty * multiplier) - commission_cost
 
             # Track entry credit for P&L calculation on close
-            open_trade_credits[order['symbol']] = {
+            context.open_trade_credits[order['symbol']] = {
                 'credit': fill_price,
-                'date': current_date_str,
+                'date': context.current_date_str,
                 'contracts': qty
             }
             
             leg_desc = order['legs'][0]['option_symbol'] if order.get('legs') else ''
-            trades_log.append({
-                'date': current_date_str,
+            context.trades_log.append({
+                'date': context.current_date_str,
                 'action': f"OPEN {order['symbol']} ({leg_desc})",
                 'credit': round(fill_price, 4),
                 'slippage': slippage,
@@ -476,22 +491,22 @@ class BacktestService:
             # Create Position Object
             if order.get('legs'):
                 for leg in order['legs']:
-                    mock_tradier.positions.append({
+                    context.mock_tradier.positions.append({
                         'symbol': leg['option_symbol'],
                         'quantity': -qty if 'sell' in leg['side'] else qty, # Fixed qty assignment
                         'cost_basis': 0, 
-                        'date_acquired': current_date_str
+                        'date_acquired': context.current_date_str
                     })
             else:
                 pos_symbol = order.get('option_symbol') or order['symbol']
-                mock_tradier.positions.append({
+                context.mock_tradier.positions.append({
                     'symbol': pos_symbol,
                     'quantity': -qty if 'sell' in order.get('side', '') else qty,
                     'cost_basis': fill_price,
-                    'date_acquired': current_date_str
+                    'date_acquired': context.current_date_str
                 })
         
-        return cash, total_commissions
+        return context.cash, context.total_commissions
 
     def _mark_to_market(self, mock_tradier, cash):
         """Calculates the Net Liquidation Value (NLV) of the portfolio."""
