@@ -105,3 +105,37 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     assert X.shape == (3, 5, 2)
     assert len(y.shape) == 1
     assert y.shape == (3,)
+
+def test_evaluate_model_unsupported_model_type(ml_service):
+    """Test that evaluate_model catches exceptions and returns them in an error dict."""
+    from datetime import datetime, timedelta
+
+    # Setup mock data for evaluate_model
+    now = datetime.now()
+    dates = [(now - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(100)]
+    mock_data = [
+        {"symbol": "AAPL", "date": d, "close": 150.0 + i, "volume": 1000 + i*10, "high": 155.0, "low": 145.0, "open": 149.0}
+        for i, d in enumerate(dates)
+    ]
+
+    ml_service.db = MagicMock()
+    ml_service.db['market_data'].find.return_value.sort.return_value = mock_data
+
+    with patch.object(ml_service, 'prepare_features') as mock_prep:
+        # Need target column and features to be set properly
+        def mock_prepare_features(df):
+            df['target'] = df['close'].shift(-1)
+            for f in ml_service.default_features:
+                if f not in df.columns:
+                    df[f] = 1.0
+            return df
+
+        mock_prep.side_effect = mock_prepare_features
+
+        # Trigger an exception (Unknown model_type for evaluation)
+        result = ml_service.evaluate_model("AAPL", days=1, model_type="unsupported_model")
+
+        # Verify the exception was caught and returned as an error dictionary
+        assert isinstance(result, dict)
+        assert "error" in result
+        assert "Unknown model_type for evaluation: unsupported_model" in result["error"]
