@@ -536,97 +536,109 @@ class BacktestService:
                     is_short = qty < 0
                     
                     if is_short and not is_call:  # Short Put ITM → Assignment
-                        context.mock_tradier.positions.remove(pos)
-                        num_shares = abs(qty) * 100
-                        stock_cost = strike * num_shares
-                        context.cash -= stock_cost
-                        
-                        context.mock_tradier.positions.append({
-                            'symbol': details['root'],
-                            'quantity': num_shares,
-                            'cost_basis': strike,
-                            'date_acquired': context.current_date_str
-                        })
-                        
-                        # Realize P&L from the option itself
-                        entry = context.open_trade_credits.pop(pos['symbol'], None)
-                        option_pnl = 0
-                        if entry:
-                            # Put expired ITM: the option is worth intrinsic
-                            intrinsic = strike - price
-                            option_pnl = round((entry['credit'] - intrinsic) * abs(qty) * 100, 2)
-                        
-                        context.trades_log.append({
-                            'date': context.current_date_str,
-                            'action': f"ASSIGNED (PUT) {pos['symbol']}: Bought {num_shares} {details['root']} @ {strike}",
-                            'debit': strike,
-                            'pnl': option_pnl
-                        })
+                        self._handle_short_put_assignment(context, pos, details, strike, price, qty)
                         
                     elif is_short and is_call:  # Short Call ITM → Called Away
-                        context.mock_tradier.positions.remove(pos)
-                        shares_needed = abs(qty) * 100
-                        stock_found = False
-                        
-                        for sp in list(context.mock_tradier.positions):
-                            if sp['symbol'] == details['root'] and sp['quantity'] > 0:
-                                context.cash += (strike * shares_needed)
-                                sp['quantity'] -= shares_needed
-                                if sp['quantity'] <= 0:
-                                    context.mock_tradier.positions.remove(sp)
-                                
-                                stock_found = True
-                                
-                                # Realize stock P&L
-                                stock_pnl = round((strike - sp.get('cost_basis', strike)) * shares_needed, 2)
-                                entry = context.open_trade_credits.pop(pos['symbol'], None)
-                                call_credit_pnl = 0
-                                if entry:
-                                    call_credit_pnl = round(entry['credit'] * abs(qty) * 100, 2)
-                                
-                                context.trades_log.append({
-                                    'date': context.current_date_str,
-                                    'action': f"CALLED AWAY {pos['symbol']}: Sold {shares_needed} {details['root']} @ {strike}",
-                                    'credit': strike,
-                                    'pnl': stock_pnl + call_credit_pnl
-                                })
-                                break
-                        
-                        if not stock_found:
-                            # Naked Call Assignment → Short Stock
-                            context.cash += (strike * shares_needed)
-                            context.mock_tradier.positions.append({
-                                'symbol': details['root'],
-                                'quantity': -shares_needed,
-                                'cost_basis': strike,
-                                'date_acquired': context.current_date_str
-                            })
+                        self._handle_short_call_assignment(context, pos, details, strike, qty)
 
                     else:
                         # Long Option ITM → Cash Settle
-                        intrinsic = abs(price - strike)
-                        cash_impact = intrinsic * pos['quantity'] * 100
-                        context.cash += cash_impact
-                        context.trades_log.append({
-                            'date': context.current_date_str,
-                            'action': f"EXERCISED ITM {pos['symbol']}",
-                            'pnl': round(cash_impact, 2)
-                        })
-                        context.mock_tradier.positions.remove(pos)
+                        self._handle_long_option_exercise(context, pos, strike, price)
 
                 else:
                     # Expired OTM — full credit kept
-                    entry = context.open_trade_credits.pop(pos['symbol'], None)
-                    expired_pnl = 0
-                    if entry:
-                        expired_pnl = round(entry['credit'] * entry['contracts'] * 100, 2)
-                    
-                    context.trades_log.append({
-                        'date': context.current_date_str,
-                        'action': f"EXPIRED OTM {pos['symbol']}",
-                        'pnl': expired_pnl
-                    })
-                    context.mock_tradier.positions.remove(pos)
+                    self._handle_otm_expiration(context, pos)
+
+    def _handle_short_put_assignment(self, context, pos, details, strike, price, qty):
+        context.mock_tradier.positions.remove(pos)
+        num_shares = abs(qty) * 100
+        stock_cost = strike * num_shares
+        context.cash -= stock_cost
+
+        context.mock_tradier.positions.append({
+            'symbol': details['root'],
+            'quantity': num_shares,
+            'cost_basis': strike,
+            'date_acquired': context.current_date_str
+        })
+
+        # Realize P&L from the option itself
+        entry = context.open_trade_credits.pop(pos['symbol'], None)
+        option_pnl = 0
+        if entry:
+            # Put expired ITM: the option is worth intrinsic
+            intrinsic = strike - price
+            option_pnl = round((entry['credit'] - intrinsic) * abs(qty) * 100, 2)
+
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"ASSIGNED (PUT) {pos['symbol']}: Bought {num_shares} {details['root']} @ {strike}",
+            'debit': strike,
+            'pnl': option_pnl
+        })
+
+    def _handle_short_call_assignment(self, context, pos, details, strike, qty):
+        context.mock_tradier.positions.remove(pos)
+        shares_needed = abs(qty) * 100
+        stock_found = False
+
+        for sp in list(context.mock_tradier.positions):
+            if sp['symbol'] == details['root'] and sp['quantity'] > 0:
+                context.cash += (strike * shares_needed)
+                sp['quantity'] -= shares_needed
+                if sp['quantity'] <= 0:
+                    context.mock_tradier.positions.remove(sp)
+
+                stock_found = True
+
+                # Realize stock P&L
+                stock_pnl = round((strike - sp.get('cost_basis', strike)) * shares_needed, 2)
+                entry = context.open_trade_credits.pop(pos['symbol'], None)
+                call_credit_pnl = 0
+                if entry:
+                    call_credit_pnl = round(entry['credit'] * abs(qty) * 100, 2)
+
+                context.trades_log.append({
+                    'date': context.current_date_str,
+                    'action': f"CALLED AWAY {pos['symbol']}: Sold {shares_needed} {details['root']} @ {strike}",
+                    'credit': strike,
+                    'pnl': stock_pnl + call_credit_pnl
+                })
+                break
+
+        if not stock_found:
+            # Naked Call Assignment → Short Stock
+            context.cash += (strike * shares_needed)
+            context.mock_tradier.positions.append({
+                'symbol': details['root'],
+                'quantity': -shares_needed,
+                'cost_basis': strike,
+                'date_acquired': context.current_date_str
+            })
+
+    def _handle_long_option_exercise(self, context, pos, strike, price):
+        intrinsic = abs(price - strike)
+        cash_impact = intrinsic * pos['quantity'] * 100
+        context.cash += cash_impact
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"EXERCISED ITM {pos['symbol']}",
+            'pnl': round(cash_impact, 2)
+        })
+        context.mock_tradier.positions.remove(pos)
+
+    def _handle_otm_expiration(self, context, pos):
+        entry = context.open_trade_credits.pop(pos['symbol'], None)
+        expired_pnl = 0
+        if entry:
+            expired_pnl = round(entry['credit'] * entry['contracts'] * 100, 2)
+
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"EXPIRED OTM {pos['symbol']}",
+            'pnl': expired_pnl
+        })
+        context.mock_tradier.positions.remove(pos)
 
     @staticmethod
     def _compute_metrics(state: BacktestState):
