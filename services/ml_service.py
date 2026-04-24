@@ -98,7 +98,11 @@ class MLService:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=365 * years)).strftime('%Y-%m-%d')
         
-        history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
+        try:
+            history = self.tradier.get_historical_pricing(symbol, start_date, end_date)
+        except Exception as e:
+            print(f"Error fetching history for {symbol}: {e}")
+            return False
         
         if not history:
             logger.warning("No data returned from Tradier.")
