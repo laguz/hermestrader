@@ -87,3 +87,53 @@ def test_run_batch_predictions_error(ml_service):
             # Check if details list captured the errors
             assert any("MSFT" in d for d in results['details'])
             assert any("Prediction failed for MSFT" in d for d in results['details'])
+
+def test_run_batch_training_success(ml_service):
+    """
+    Test run_batch_training with all successes.
+    Verifies that train_model is called for each symbol and model type,
+    and successes are correctly counted.
+    """
+    symbols = ['AAPL', 'MSFT']
+
+    with patch.object(ml_service, 'train_model') as mock_train:
+        mock_train.return_value = {'mse': 0.01}
+
+        results = ml_service.run_batch_training(symbols, express=True)
+
+        # 2 symbols * 2 model types ('lstm', 'rl') = 4 successes
+        assert results['success'] == 4
+        assert results['errors'] == 0
+        assert len(results['details']) == 0
+
+        # Verify train_model was called with correct arguments
+        assert mock_train.call_count == 4
+        mock_train.assert_any_call('AAPL', model_type='lstm', express=True)
+        mock_train.assert_any_call('AAPL', model_type='rl', express=True)
+        mock_train.assert_any_call('MSFT', model_type='lstm', express=True)
+        mock_train.assert_any_call('MSFT', model_type='rl', express=True)
+
+def test_run_batch_training_error(ml_service):
+    """
+    Test run_batch_training with some errors.
+    Verifies that exceptions are caught, errors are counted,
+    and details list captures the error messages.
+    """
+    symbols = ['AAPL', 'MSFT']
+
+    def mock_train_model(symbol, model_type='lstm', express=True):
+        if symbol == 'MSFT' and model_type == 'rl':
+            raise Exception("Training failed for MSFT RL")
+        return {'mse': 0.05}
+
+    with patch.object(ml_service, 'train_model', side_effect=mock_train_model):
+        results = ml_service.run_batch_training(symbols, express=False)
+
+        # 2 symbols * 2 model types = 4 attempts
+        # MSFT RL fails, others succeed
+        assert results['success'] == 3
+        assert results['errors'] == 1
+        assert len(results['details']) == 1
+
+        assert any("MSFT/rl" in d for d in results['details'])
+        assert any("Training failed for MSFT RL" in d for d in results['details'])
