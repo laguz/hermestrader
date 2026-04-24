@@ -3,6 +3,7 @@ import traceback
 from datetime import datetime, timedelta
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors
+from bot.trade_manager import TradeAction
 
 class CreditSpreads75Strategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):
@@ -314,17 +315,18 @@ class CreditSpreads75Strategy(AbstractStrategy):
             response = {'id': 'mock_order_id', 'status': 'ok'}
         else:
             if getattr(self, 'trade_manager', None):
-                response = self.trade_manager.execute_strategy_order(
+                action = TradeAction(
                     strategy_id=self.strategy_id,
                     symbol=symbol,
-                    side='sell',
-                    quantity=1,
-                    price=net_credit,
                     order_class='multileg',
                     legs=legs,
+                    price=net_credit,
+                    side='sell',
+                    quantity=1,
                     tag=self.strategy_id,
                     strategy_params={'short_leg': short_leg['symbol'], 'long_leg': long_leg['symbol']}
                 )
+                response = self.trade_manager.execute_strategy_order(action)
             else:
                 response = self.tradier.place_order(
                     account_id=self.tradier.account_id,

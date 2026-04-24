@@ -2,8 +2,22 @@ import traceback
 import threading
 import logging
 from datetime import datetime
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class TradeAction:
+    strategy_id: str
+    symbol: str
+    order_class: str
+    legs: List[Dict[str, Any]]
+    price: Optional[float]
+    side: str
+    quantity: int = 1
+    tag: Optional[str] = None
+    strategy_params: Optional[Dict[str, Any]] = None
 
 class TradeManager:
     """
@@ -112,26 +126,26 @@ class TradeManager:
             logger.error(f"Error computing live orphans: {e}")
             return []
 
-    def execute_strategy_order(self, strategy_id, symbol, order_class, legs, price, side, quantity=1, tag=None, strategy_params=None):
+    def execute_strategy_order(self, action: TradeAction):
         """
         Wraps tradier.place_order to strictly enforce tracking metadata isolation. 
         Logs execution to `active_trades` directly (replacing legacy tracking logs).
         """
-        if not tag: 
-            tag = strategy_id
+        if not action.tag:
+            action.tag = action.strategy_id
 
         # 1. Place order on Tradier natively
         response = self.tradier.place_order(
             account_id=self.tradier.account_id,
-            symbol=symbol,
-            side=side,
-            quantity=quantity,
-            order_type='credit' if price and price > 0 else 'market' if not price else 'debit',
+            symbol=action.symbol,
+            side=action.side,
+            quantity=action.quantity,
+            order_type='credit' if action.price and action.price > 0 else 'market' if not action.price else 'debit',
             duration='day',
-            price=price,
-            order_class=order_class,
-            legs=legs,
-            tag=tag
+            price=action.price,
+            order_class=action.order_class,
+            legs=action.legs,
+            tag=action.tag
         )
         
         # 2. Persist the state log safely
@@ -139,26 +153,26 @@ class TradeManager:
             with self.lock:
                 try:
                     trade_record = {
-                        "symbol": symbol,
-                        "strategy": strategy_id,
+                        "symbol": action.symbol,
+                        "strategy": action.strategy_id,
                         "status": "OPEN",
-                        "price": price,
-                        "quantity": quantity,
+                        "price": action.price,
+                        "quantity": action.quantity,
                         "order_id": response.get('id'),
                         "timestamp": datetime.now(),
-                        "strategy_params": strategy_params or {},
+                        "strategy_params": action.strategy_params or {},
                         # In multileg strategies, legs is a list of dictionaries normally. 
                         # Legacy compatibility usually wrote short_leg and long_leg explicitly.
-                        "legs_info": legs
+                        "legs_info": action.legs
                     }
                     # Map legacy quick-keys if passed via strategy_params
-                    if strategy_params:
-                        if 'short_leg' in strategy_params: trade_record['short_leg'] = strategy_params['short_leg']
-                        if 'long_leg' in strategy_params: trade_record['long_leg'] = strategy_params['long_leg']
+                    if action.strategy_params:
+                        if 'short_leg' in action.strategy_params: trade_record['short_leg'] = action.strategy_params['short_leg']
+                        if 'long_leg' in action.strategy_params: trade_record['long_leg'] = action.strategy_params['long_leg']
                         
                     self.db['active_trades'].insert_one(trade_record)
                 except Exception as e:
-                    logger.error(f"Failed logging trade to active_trades for {strategy_id}: {e}")
+                    logger.error(f"Failed logging trade to active_trades for {action.strategy_id}: {e}")
                     
         return response
         

@@ -4,6 +4,7 @@ from datetime import datetime
 from services.container import Container
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import is_match, get_op_type, get_expiry_str, get_underlying
+from bot.trade_manager import TradeAction
 
 class WheelStrategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):
@@ -344,17 +345,18 @@ class WheelStrategy(AbstractStrategy):
                 else:
                     # BTC
                     if getattr(self, 'trade_manager', None):
-                        btc_res = self.trade_manager.execute_strategy_order(
+                        btc_action = TradeAction(
                             strategy_id=self.strategy_id,
                             symbol=underlying,
-                            side='buy_to_close',
-                            quantity=abs(int(position['quantity'])),
-                            price=close_price,
                             order_class='option',
                             legs=[{'option_symbol': symbol, 'side': 'buy_to_close', 'quantity': 1}],
+                            price=close_price,
+                            side='buy_to_close',
+                            quantity=abs(int(position['quantity'])),
                             tag=self.strategy_id,
                             strategy_params={'option_symbol': symbol}
                         )
+                        btc_res = self.trade_manager.execute_strategy_order(btc_action)
                     else:
                         btc_res = self.tradier.place_order(
                             account_id=self.tradier.account_id,
@@ -378,17 +380,18 @@ class WheelStrategy(AbstractStrategy):
                     # STO only if under max_lots
                     if should_roll:
                         if getattr(self, 'trade_manager', None):
-                            sto_res = self.trade_manager.execute_strategy_order(
+                            sto_action = TradeAction(
                                 strategy_id=self.strategy_id,
                                 symbol=underlying,
-                                side='sell_to_open',
-                                quantity=abs(int(position['quantity'])),
-                                price=open_price,
                                 order_class='option',
                                 legs=[{'option_symbol': new_option['symbol'], 'side': 'sell_to_open', 'quantity': 1}],
+                                price=open_price,
+                                side='sell_to_open',
+                                quantity=abs(int(position['quantity'])),
                                 tag=self.strategy_id,
                                 strategy_params={'option_symbol': new_option['symbol']}
                             )
+                            sto_res = self.trade_manager.execute_strategy_order(sto_action)
                         else:
                             sto_res = self.tradier.place_order(
                                 account_id=self.tradier.account_id,
@@ -465,17 +468,18 @@ class WheelStrategy(AbstractStrategy):
             self._record_trade(symbol, f"Wheel {side}", price, {'id': 'dry_run_id'}, {'option_symbol': option['symbol']})
         else:
             if getattr(self, 'trade_manager', None):
-                res = self.trade_manager.execute_strategy_order(
+                action = TradeAction(
                     strategy_id=self.strategy_id,
                     symbol=symbol,
-                    side=side,
-                    quantity=int(quantity),
-                    price=price,
                     order_class='option',
                     legs=[{'option_symbol': option['symbol'], 'side': side, 'quantity': 1}],
+                    price=price,
+                    side=side,
+                    quantity=int(quantity),
                     tag=self.strategy_id,
                     strategy_params={'option_symbol': option['symbol']}
                 )
+                res = self.trade_manager.execute_strategy_order(action)
             else:
                 res = self.tradier.place_order(
                     account_id=self.tradier.account_id,
