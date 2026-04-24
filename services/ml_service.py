@@ -396,21 +396,24 @@ class MLService:
         
         mse = 0
         if model_type in ['lstm', 'rl']:
-            # Training for both LSTM and RL is now isolated in subprocesses for safety
-            import subprocess
-            import sys
-            import tempfile
-            import joblib
-            
-            tmp_dir = tempfile.gettempdir()
-            
-            df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}_{model_type}.pkl')
-            features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}_{model_type}.pkl')
-            worker_path = os.path.join(tmp_dir, f'ml_train_worker_{symbol}_{model_type}.py')
-            
-            try:
-                if model_type == 'lstm':
-                    train_script = """
+            mse = self._run_training_worker(symbol, model_type, df, top_features)
+        logger.info(f"Model ({model_type}) MSE: {mse}")
+
+        return {
+            "status": "trained",
+            "symbol": symbol,
+            "type": model_type,
+            "data_points": len(df),
+            "data_points": len(df),
+            "mse": round(mse, 6), # Train/Test Split MSE (Last Fold)
+            "val_mse": round(validation_results.get('val_mse', 0), 6), # Walk-Forward MSE
+            "val_accuracy": round(validation_results.get('val_accuracy', 0), 4),
+            "features": top_features
+        }
+
+
+    def _get_lstm_worker_script(self):
+        return """
 import os
 import sys
 import pandas as pd
@@ -493,8 +496,9 @@ except Exception as e:
     logger.error(f"LSTM training failed: {e}")
     sys.exit(1)
 """
-                elif model_type == 'rl':
-                    train_script = """
+
+    def _get_rl_worker_script(self):
+        return """
 import os
 import sys
 import pandas as pd
@@ -526,55 +530,61 @@ except Exception as e:
     logger.error(f"RL training subprocess failed: {e}")
     sys.exit(1)
 """
-                else:
-                    raise ValueError(f"Unknown model_type for subprocess: {model_type}")
 
-                # Save temporary data and script
-                joblib.dump(df.dropna(subset=top_features + ['close']), df_path)
-                joblib.dump(top_features, features_path)
-                
-                with open(worker_path, 'w') as f:
-                    f.write(train_script)
-                
-                try:
-                    # Run the subprocess with a 30-minute timeout for safety
-                    result = subprocess.run(
-                        [sys.executable, worker_path, symbol, self.model_dir, df_path, features_path], 
-                        capture_output=True, text=True, timeout=1800
-                    )
-                    if result.returncode != 0:
-                        logger.error(f"{model_type.upper()} Subprocess failed: {result.stderr}")
-                        raise AppError(f"{model_type.upper()} Training failed in subprocess: {result.stderr}", 500)
-                    
-                    logger.info(f"{model_type.upper()} model trained via subprocess")
-                    mse = 0.0
-                except subprocess.TimeoutExpired:
-                    logger.error(f"{model_type.upper()} Training subprocess for {symbol} timed out after 30 minutes.")
-                    raise AppError(f"{model_type.upper()} Training for {symbol} timed out", 504)
-                finally:
-                    # Cleanup
-                    for f in [df_path, features_path, worker_path]:
-                        if os.path.exists(f): os.remove(f)
-                
-            except Exception as e:
-                if not isinstance(e, AppError):
-                    logger.error(f"Error orchestrating {model_type} training: {e}", exc_info=True)
-                    raise AppError(f"Training orchestration error: {e}", 500)
-                raise e
+
+    def _run_training_worker(self, symbol, model_type, df, top_features):
+        import subprocess
+        import sys
+        import tempfile
+        import joblib
+        import os
         
-        logger.info(f"Model ({model_type}) MSE: {mse}")
+        tmp_dir = tempfile.gettempdir()
         
-        return {
-            "status": "trained", 
-            "symbol": symbol, 
-            "type": model_type,
-            "data_points": len(df),
-            "data_points": len(df),
-            "mse": round(mse, 6), # Train/Test Split MSE (Last Fold)
-            "val_mse": round(validation_results.get('val_mse', 0), 6), # Walk-Forward MSE
-            "val_accuracy": round(validation_results.get('val_accuracy', 0), 4),
-            "features": top_features
-        }
+        df_path = os.path.join(tmp_dir, f'ml_tmp_df_{symbol}_{model_type}.pkl')
+        features_path = os.path.join(tmp_dir, f'ml_tmp_features_{symbol}_{model_type}.pkl')
+        worker_path = os.path.join(tmp_dir, f'ml_train_worker_{symbol}_{model_type}.py')
+
+        try:
+            if model_type == 'lstm':
+                train_script = self._get_lstm_worker_script()
+            elif model_type == 'rl':
+                train_script = self._get_rl_worker_script()
+            else:
+                raise ValueError(f"Unknown model_type for subprocess: {model_type}")
+
+            # Save temporary data and script
+            joblib.dump(df.dropna(subset=top_features + ['close']), df_path)
+            joblib.dump(top_features, features_path)
+
+            with open(worker_path, 'w') as f:
+                f.write(train_script)
+
+            try:
+                # Run the subprocess with a 30-minute timeout for safety
+                result = subprocess.run(
+                    [sys.executable, worker_path, symbol, self.model_dir, df_path, features_path],
+                    capture_output=True, text=True, timeout=1800
+                )
+                if result.returncode != 0:
+                    logger.error(f"{model_type.upper()} Subprocess failed: {result.stderr}")
+                    raise AppError(f"{model_type.upper()} Training failed in subprocess: {result.stderr}", 500)
+
+                logger.info(f"{model_type.upper()} model trained via subprocess")
+                return 0.0 # mse
+            except subprocess.TimeoutExpired:
+                logger.error(f"{model_type.upper()} Training subprocess for {symbol} timed out after 30 minutes.")
+                raise AppError(f"{model_type.upper()} Training for {symbol} timed out", 504)
+            finally:
+                # Cleanup
+                for f in [df_path, features_path, worker_path]:
+                    if os.path.exists(f): os.remove(f)
+
+        except Exception as e:
+            if not isinstance(e, AppError):
+                logger.error(f"Error orchestrating {model_type} training: {e}", exc_info=True)
+                raise AppError(f"Training orchestration error: {e}", 500)
+            raise e
 
     def predict_next_day(self, symbol, model_type='lstm'):
         symbol = self._validate_symbol(symbol)
