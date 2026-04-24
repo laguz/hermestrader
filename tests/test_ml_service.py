@@ -203,6 +203,43 @@ def test_prepare_features_missing_columns(ml_service):
     assert (result_df['atr'] == 0.0).all()
     assert (result_df['vwap'] == 0.0).all()
 
+
+def test_prepare_features_empty_df(ml_service):
+    """Test prepare_features with an empty DataFrame."""
+    df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
+    result_df = ml_service.prepare_features(df)
+
+    expected_columns = [
+        'rsi', 'upper_bb', 'mid_bb', 'lower_bb', 'macd', 'macd_signal', 'sma_50',
+        'obv', 'vwap', 'atr', 'close_lag_1', 'close_lag_2', 'close_lag_3', 'close_lag_5',
+        'daily_return', 'daily_return_lag_1'
+    ]
+
+    assert len(result_df) == 0
+    for col in expected_columns:
+        assert col in result_df.columns
+
+def test_prepare_features_single_row(ml_service):
+    """Test prepare_features with a single-row DataFrame."""
+    df = pd.DataFrame({
+        'open': [100.0],
+        'high': [105.0],
+        'low': [95.0],
+        'close': [102.0],
+        'volume': [1000.0]
+    })
+    result_df = ml_service.prepare_features(df)
+
+    expected_columns = [
+        'rsi', 'upper_bb', 'mid_bb', 'lower_bb', 'macd', 'macd_signal', 'sma_50',
+        'obv', 'vwap', 'atr', 'close_lag_1', 'close_lag_2', 'close_lag_3', 'close_lag_5',
+        'daily_return', 'daily_return_lag_1'
+    ]
+
+    assert len(result_df) == 1
+    for col in expected_columns:
+        assert col in result_df.columns
+
 def test_build_lstm_model(ml_service):
     """Test the structure of the built LSTM model."""
     from services.ml_service import HAS_TENSORFLOW
