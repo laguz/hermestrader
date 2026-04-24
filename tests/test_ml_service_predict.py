@@ -98,3 +98,135 @@ def test_predict_next_day_lstm_happy_path(ml_service):
 
         # Ensure DB update was called for persistence
         ml_service.db['predictions'].update_one.assert_called_once()
+
+
+def test_predict_next_day_rl_happy_path(ml_service):
+    # Setup mock DB data
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_collection.find.return_value.sort.return_value = [{"date": "2023-01-01", "close": 150.0}]
+
+    dummy_df = pd.DataFrame({
+        'date': pd.date_range(start='2023-01-01', periods=10, freq='D'),
+        'close': [150.0] * 10,
+        'feat1': [1.0] * 10
+    })
+
+    with patch.object(ml_service, 'prepare_features', return_value=dummy_df), \
+         patch('os.path.exists', return_value=True), \
+         patch('builtins.open', new_callable=MagicMock) as mock_open, \
+         patch('json.load') as mock_json_load, \
+         patch('services.ml_service.joblib.dump') as mock_joblib_dump, \
+         patch('subprocess.run') as mock_subprocess_run, \
+         patch('os.remove') as mock_os_remove, \
+         patch('services.ml_service.CustomBusinessDay') as mock_cbd:
+
+        # json.load is called twice: once for features (list), once for RL output (dict)
+        def json_load_side_effect(fh):
+            if hasattr(fh, 'name') and 'result' in getattr(fh, 'name', ''):
+                return {"prediction": 155.0}
+            elif isinstance(fh, MagicMock): # from mocked open
+                # By looking at the code, it uses open for feature file, and later for result file
+                # The first mock_json_load call is for feature file, returning list
+                if mock_json_load.call_count == 1:
+                    return ['feat1']
+                else:
+                    return {"prediction": 155.0}
+            return ['feat1']
+
+        mock_json_load.side_effect = json_load_side_effect
+
+        mock_subprocess_result = MagicMock()
+        mock_subprocess_result.returncode = 0
+        mock_subprocess_run.return_value = mock_subprocess_result
+
+        mock_cbd.return_value = pd.Timedelta(days=1)
+
+        result = ml_service.predict_next_day("AAPL", model_type="rl")
+
+        assert result['symbol'] == "AAPL"
+        assert result['model'] == "rl"
+        assert result['predicted_price'] == 155.0
+        assert result['last_close'] == 150.0
+        assert result['change'] == 5.0
+        assert result['percent_change_str'] == "3.33%"
+        assert 'prediction_date' in result
+        assert result['used_features'] == ['feat1']
+
+def test_predict_next_day_rl_model_not_found(ml_service):
+    # Setup mock DB data
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_collection.find.return_value.sort.return_value = [{"date": "2023-01-01", "close": 150.0}]
+
+    dummy_df = pd.DataFrame({
+        'date': pd.date_range(start='2023-01-01', periods=10, freq='D'),
+        'close': [150.0] * 10,
+        'feat1': [1.0] * 10
+    })
+
+    with patch.object(ml_service, 'prepare_features', return_value=dummy_df), \
+         patch('os.path.exists', return_value=True), \
+         patch('builtins.open', new_callable=MagicMock) as mock_open, \
+         patch('json.load', return_value=['feat1']), \
+         patch('services.ml_service.joblib.dump') as mock_joblib_dump, \
+         patch('subprocess.run') as mock_subprocess_run, \
+         patch('os.remove') as mock_os_remove:
+
+        mock_subprocess_result = MagicMock()
+        mock_subprocess_result.returncode = 1
+        mock_subprocess_result.stderr = "Model file not found in path"
+        mock_subprocess_run.return_value = mock_subprocess_result
+
+        with pytest.raises(ResourceNotFoundError, match="RL model for AAPL not found."):
+            ml_service.predict_next_day("AAPL", model_type="rl")
+
+def test_predict_next_day_rl_subprocess_error(ml_service):
+    # Setup mock DB data
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_collection.find.return_value.sort.return_value = [{"date": "2023-01-01", "close": 150.0}]
+
+    dummy_df = pd.DataFrame({
+        'date': pd.date_range(start='2023-01-01', periods=10, freq='D'),
+        'close': [150.0] * 10,
+        'feat1': [1.0] * 10
+    })
+
+    with patch.object(ml_service, 'prepare_features', return_value=dummy_df), \
+         patch('os.path.exists', return_value=True), \
+         patch('builtins.open', new_callable=MagicMock) as mock_open, \
+         patch('json.load', return_value=['feat1']), \
+         patch('services.ml_service.joblib.dump') as mock_joblib_dump, \
+         patch('subprocess.run') as mock_subprocess_run, \
+         patch('os.remove') as mock_os_remove:
+
+        mock_subprocess_result = MagicMock()
+        mock_subprocess_result.returncode = 1
+        mock_subprocess_result.stderr = "Some generic exception occurred"
+        mock_subprocess_run.return_value = mock_subprocess_result
+
+        # AppError is imported from exceptions but maybe we should use match
+        from exceptions import AppError
+        with pytest.raises(AppError, match="RL Prediction failed in subprocess"):
+            ml_service.predict_next_day("AAPL", model_type="rl")
+
+def test_predict_next_day_unknown_model_type(ml_service):
+    # Setup mock DB data
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_collection.find.return_value.sort.return_value = [{"date": "2023-01-01", "close": 150.0}]
+
+    dummy_df = pd.DataFrame({
+        'date': pd.date_range(start='2023-01-01', periods=10, freq='D'),
+        'close': [150.0] * 10,
+        'feat1': [1.0] * 10
+    })
+
+    with patch.object(ml_service, 'prepare_features', return_value=dummy_df), \
+         patch('os.path.exists', return_value=True), \
+         patch('builtins.open', new_callable=MagicMock) as mock_open, \
+         patch('json.load', return_value=['feat1']):
+
+        with pytest.raises(ValueError, match="Unknown model_type: unknown"):
+            ml_service.predict_next_day("AAPL", model_type="unknown")
