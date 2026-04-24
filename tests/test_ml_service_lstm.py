@@ -120,16 +120,29 @@ def test_build_lstm_model_happy_path(ml_service):
     assert isinstance(model, Sequential)
 
     # Check that model has the correct number of layers (LSTM, Dropout, LSTM, Dropout, Dense, Dense)
-    # Plus InputLayer which is implicit or explicit depending on TF version.
-    # The current ml_service uses `model.add(Input(shape=input_shape))` which adds an InputLayer in recent TF.
-    # We will verify some specific layers are present
-    assert len(model.layers) >= 6
+    assert len(model.layers) == 6
+
+    # Verify specific layers are present and configured correctly
+    assert isinstance(model.layers[0], LSTM)
+    assert isinstance(model.layers[1], Dropout)
+    assert isinstance(model.layers[2], LSTM)
+    assert isinstance(model.layers[3], Dropout)
+    assert isinstance(model.layers[4], Dense)
+    assert isinstance(model.layers[5], Dense)
 
     # The last layer should predict a single continuous value directly (1 unit, linear/no activation specifically set)
-    assert isinstance(model.layers[-1], Dense)
     assert model.layers[-1].units == 1
 
     # It should have an optimizer and loss function since it's compiled
     assert model.optimizer is not None
     assert model.loss is not None
     assert model.loss == 'mean_squared_error'
+
+def test_build_lstm_model_invalid_shape(ml_service):
+    """
+    Test that the _build_lstm_model function raises ValueError when provided with
+    an invalid input shape format (e.g., empty tuple or incompatible dimensions).
+    """
+    # An empty tuple is invalid for Input shape
+    with pytest.raises(ValueError):
+        ml_service._build_lstm_model(())
