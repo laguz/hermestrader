@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from exceptions import ValidationError
 import numpy as np
 import pytest
@@ -270,6 +271,39 @@ def test_build_lstm_model(ml_service):
 
     assert model.loss is not None
     assert 'mean_squared_error' in str(model.loss) or model.loss == 'mean_squared_error' or getattr(model.loss, 'name', '') == 'mean_squared_error'
+
+@patch('services.ml_service.datetime')
+def test_backfill_symbol_date_calculation(mock_datetime, ml_service):
+    """Test backfill_symbol correctly calculates start and end dates."""
+    fixed_date = datetime(2023, 10, 10)
+    mock_datetime.now.return_value = fixed_date
+    mock_datetime.strftime = datetime.strftime
+
+    ml_service.db = MagicMock()
+    mock_collection = MagicMock()
+    ml_service.db.__getitem__.return_value = mock_collection
+    mock_bulk_write_result = MagicMock()
+    mock_bulk_write_result.upserted_count = 1
+    mock_bulk_write_result.modified_count = 0
+    mock_collection.bulk_write.return_value = mock_bulk_write_result
+
+    mock_history = [
+        {"date": "2023-10-09", "open": "100.0", "high": "105.0", "low": "99.0", "close": "104.0", "volume": "1000"}
+    ]
+    ml_service.tradier.get_historical_pricing = MagicMock(return_value=mock_history)
+
+    assert ml_service.backfill_symbol("AAPL", years=2) is True
+
+    expected_end_date = "2023-10-10"
+    expected_start_date = "2021-10-10" # 2023-10-10 - 2 * 365 days = 2021-10-10
+
+    ml_service.tradier.get_historical_pricing.assert_called_once_with("AAPL", expected_start_date, expected_end_date)
+
+
+def test_backfill_symbol_invalid_symbol(ml_service):
+    """Test backfill_symbol raises ValidationError for invalid symbols."""
+    with pytest.raises(ValidationError):
+        ml_service.backfill_symbol("123INVALID!")
 
 def test_backfill_symbol_db_none(ml_service):
     """Test backfill_symbol returns False when db is None."""
