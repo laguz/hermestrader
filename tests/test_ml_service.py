@@ -86,7 +86,6 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     a 2D input array (samples, features) into a 3D output array
     (samples - sequence_length, sequence_length, features) for LSTM ingestion.
     """
-    import numpy as np
 
     ml_service.sequence_length = 5
 

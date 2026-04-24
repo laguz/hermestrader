@@ -1,10 +1,8 @@
 import re
-import math
 import traceback
-import pytz
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from bot.strategies.base_strategy import AbstractStrategy
-from bot.utils import Colors, get_expiry_str, get_underlying
+from bot.utils import Colors
 
 class CreditSpreads75Strategy(AbstractStrategy):
     def __init__(self, tradier_service, db, dry_run=False, analysis_service=None, trade_manager=None):

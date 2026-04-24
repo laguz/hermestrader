@@ -1,16 +1,13 @@
 
 import os
 import sys
-import pandas as pd
 import numpy as np
 import joblib
 import logging
-import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_squared_error
 
 # Setup simple logging
 logging.basicConfig(level=logging.INFO)

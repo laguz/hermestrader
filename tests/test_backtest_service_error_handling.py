@@ -1,7 +1,5 @@
-import pytest
 from unittest.mock import MagicMock, patch
 from services.backtest_service import BacktestService
-from datetime import datetime
 
 class DummyStrategy:
     def execute(self, *args, **kwargs):

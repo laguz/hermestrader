@@ -1,6 +1,5 @@
 import unittest
 import pandas as pd
-import numpy as np
 
 # Import the function to test
 import sys

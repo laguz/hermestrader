@@ -1,7 +1,6 @@
 import re
 import traceback
-import pytz
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import Colors
 
@@ -152,7 +151,6 @@ class CreditSpreads7Strategy(AbstractStrategy):
         today = self._get_current_date()
         target_date = today + timedelta(days=7)
         
-        from datetime import date
         for e in expirations:
             if isinstance(e, str):
                 try:

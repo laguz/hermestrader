@@ -1,6 +1,5 @@
 import unittest
 from app import app
-from services.container import Container
 
 class TestAuthProtection(unittest.TestCase):
     def setUp(self):

@@ -9,7 +9,6 @@ sys.path.append(os.getcwd())
 from services.tradier_service import TradierService
 from bot.strategies.wheel import WheelStrategy
 from services.bot_service import BotService
-from services.container import Container
 
 class TestBPSafety(unittest.TestCase):
     def setUp(self):
