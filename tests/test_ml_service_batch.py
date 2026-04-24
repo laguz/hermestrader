@@ -137,3 +137,73 @@ def test_run_batch_predictions_refresh_error(ml_service):
             assert results['errors'] == 0
             assert results['skipped'] == 0
             assert len(results['details']) == 0
+
+def test_run_batch_training_success(ml_service):
+    """
+    Test run_batch_training with successful training for all symbols.
+    """
+    symbols = ['AAPL', 'MSFT']
+
+    with patch.object(ml_service, 'train_model', return_value={'mse': 0.1}) as mock_train:
+        results = ml_service.run_batch_training(symbols)
+
+        assert results['success'] == 4  # 2 symbols * 2 model types ('lstm', 'rl')
+        assert results['errors'] == 0
+        assert len(results['details']) == 0
+
+        # Verify train_model was called with correct arguments
+        assert mock_train.call_count == 4
+        mock_train.assert_any_call('AAPL', model_type='lstm', express=True)
+        mock_train.assert_any_call('AAPL', model_type='rl', express=True)
+        mock_train.assert_any_call('MSFT', model_type='lstm', express=True)
+        mock_train.assert_any_call('MSFT', model_type='rl', express=True)
+
+def test_run_batch_training_error(ml_service):
+    """
+    Test run_batch_training when train_model raises an exception.
+    """
+    symbols = ['AAPL', 'MSFT']
+
+    def mock_train_model(symbol, model_type, express):
+        if symbol == 'MSFT':
+            raise Exception("Training failed for MSFT")
+        return {'mse': 0.1}
+
+    with patch.object(ml_service, 'train_model', side_effect=mock_train_model) as mock_train:
+        results = ml_service.run_batch_training(symbols)
+
+        assert results['success'] == 2  # AAPL succeeds for both
+        assert results['errors'] == 2   # MSFT fails for both
+        assert len(results['details']) == 2
+
+        assert any("MSFT" in d for d in results['details'])
+        assert any("Training failed for MSFT" in d for d in results['details'])
+
+def test_run_batch_training_empty_symbols(ml_service):
+    """
+    Test run_batch_training with empty list of symbols.
+    """
+    with patch.object(ml_service, 'train_model') as mock_train:
+        results = ml_service.run_batch_training([])
+
+        assert results['success'] == 0
+        assert results['errors'] == 0
+        assert len(results['details']) == 0
+        mock_train.assert_not_called()
+
+def test_run_batch_training_express_false(ml_service):
+    """
+    Test run_batch_training with express=False.
+    """
+    symbols = ['AAPL']
+
+    with patch.object(ml_service, 'train_model', return_value={'mse': 0.1}) as mock_train:
+        results = ml_service.run_batch_training(symbols, express=False)
+
+        assert results['success'] == 2  # 1 symbol * 2 model types
+        assert results['errors'] == 0
+
+        # Verify train_model was called with express=False
+        assert mock_train.call_count == 2
+        mock_train.assert_any_call('AAPL', model_type='lstm', express=False)
+        mock_train.assert_any_call('AAPL', model_type='rl', express=False)
