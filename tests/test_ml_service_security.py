@@ -55,3 +55,15 @@ def test_secure_tmp_files_train_model(ml_service):
 
                                         assert "etc" not in worker_path
                                         assert "passwd" not in worker_path
+
+def test_nosql_injection_fetch_and_prepare(ml_service):
+    from exceptions import ValidationError
+    from unittest.mock import MagicMock
+
+    ml_service.db = MagicMock()
+    malicious_payload = {"$ne": "invalid"}
+
+    with pytest.raises(ValidationError) as exc_info:
+        ml_service._fetch_and_prepare_training_data(malicious_payload)
+
+    assert "Symbol must be a string" in str(exc_info.value)
