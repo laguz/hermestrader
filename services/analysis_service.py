@@ -242,6 +242,92 @@ class AnalysisService:
         # 4. Logic & Scoring
         
         # --- Sell Put Entry (Bullish) ---
+        sp_score, sp_confidence, sp_reasons = self._evaluate_sell_put(
+            current_price, latest, prev, hv_rank, pred_change_pct
+        )
+
+
+        # --- Sell Call Entry (Bearish) ---
+        sc_score, sc_confidence, sc_reasons = self._evaluate_sell_call(
+            current_price, latest, prev, hv_rank, pred_change_pct
+        )
+
+
+        # Prepare Chart Data
+        # Use period_df to reflect the requested timeframe
+        chart_df = period_df
+
+        chart_data = {
+            "dates": chart_df['date'].dt.strftime('%Y-%m-%d').tolist(),
+            "close": chart_df['close'].tolist(),
+            "support": chart_df['support'].fillna(0).tolist(),
+            "resistance": chart_df['resistance'].fillna(0).tolist(),
+            "rsi": chart_df['rsi'].fillna(50).tolist(),
+            "macd": chart_df['macd'].fillna(0).tolist(),
+            "signal": chart_df['signal'].fillna(0).tolist(),
+            "bb_upper": chart_df['bb_upper'].fillna(0).tolist(),
+            "bb_middle": chart_df['bb_mid'].fillna(0).tolist(),
+            "bb_lower": chart_df['bb_lower'].fillna(0).tolist(),
+            "sma_200": chart_df['sma_200'].fillna(0).tolist(),
+            "adx": chart_df['adx'].fillna(0).tolist()
+        }
+
+        result = {
+            "symbol": symbol.upper(),
+            "current_price": current_price,
+            "key_levels": key_levels,
+            "put_entry_points": put_entry_points,
+            "call_entry_points": call_entry_points,
+            "prediction": {
+                "price": predicted_price,
+                "change_pct": round(pred_change_pct * 100, 2)
+            },
+            "sell_put_entry": {
+                "score": sp_score,
+                "confidence": sp_confidence,
+                "reasons": sp_reasons
+            },
+            "sell_call_entry": {
+                "score": sc_score,
+                "confidence": sc_confidence,
+                "reasons": sc_reasons
+            },
+            "indicators": {
+                "ema_50": round(latest['ema_50'], 2),
+                "macd": round(latest['macd'], 2),
+                "support": round(latest['support'], 2),
+                "resistance": round(latest['resistance'], 2),
+                "resistance": round(latest['resistance'], 2),
+                "bb_upper": round(latest['bb_upper'], 2),
+                "bb_lower": round(latest['bb_lower'], 2),
+                "sma_200": round(latest['sma_200'], 2) if not np.isnan(latest['sma_200']) else None,
+                "adx": round(latest['adx'], 2),
+                "atr": round(latest['atr'], 2) if not np.isnan(latest['atr']) else None,
+                "hv_rank": round(hv_rank, 1),
+                "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
+                "volatility": round(volatility * 100, 1),
+                "implied_volatility": round(implied_vol * 100, 1) if implied_vol else None
+            },
+            "chart_data": chart_data
+        }
+
+        # Upsert entry to DB
+        if self.db is not None:
+            try:
+                # Add timestamp
+                result['updated_at'] = datetime.now()
+                self.db.entries.update_one(
+                    {'symbol': symbol.upper()},
+                    {'$set': result},
+                    upsert=True
+                )
+                logger.info(f"Saved analysis for {symbol} to entries collection.")
+            except Exception as e:
+                logger.error(f"Error saving entry to DB: {e}")
+
+        return result
+
+    def _evaluate_sell_put(self, current_price, latest, prev, hv_rank, pred_change_pct):
         sp_score = 0
         sp_reasons = []
         
@@ -316,8 +402,9 @@ class AnalysisService:
         if sp_score >= 7: sp_confidence = "High"
         elif sp_score >= 4: sp_confidence = "Medium"
 
+        return sp_score, sp_confidence, sp_reasons
 
-        # --- Sell Call Entry (Bearish) ---
+    def _evaluate_sell_call(self, current_price, latest, prev, hv_rank, pred_change_pct):
         sc_score = 0
         sc_reasons = []
 
@@ -391,78 +478,5 @@ class AnalysisService:
         sc_confidence = "Low"
         if sc_score >= 7: sc_confidence = "High"
         elif sc_score >= 4: sc_confidence = "Medium"
-
-
-        # Prepare Chart Data
-        # Use period_df to reflect the requested timeframe
-        chart_df = period_df
         
-        chart_data = {
-            "dates": chart_df['date'].dt.strftime('%Y-%m-%d').tolist(),
-            "close": chart_df['close'].tolist(),
-            "support": chart_df['support'].fillna(0).tolist(),
-            "resistance": chart_df['resistance'].fillna(0).tolist(),
-            "rsi": chart_df['rsi'].fillna(50).tolist(),
-            "macd": chart_df['macd'].fillna(0).tolist(),
-            "signal": chart_df['signal'].fillna(0).tolist(),
-            "bb_upper": chart_df['bb_upper'].fillna(0).tolist(),
-            "bb_middle": chart_df['bb_mid'].fillna(0).tolist(),
-            "bb_lower": chart_df['bb_lower'].fillna(0).tolist(),
-            "sma_200": chart_df['sma_200'].fillna(0).tolist(),
-            "adx": chart_df['adx'].fillna(0).tolist()
-        }
-
-        result = {
-            "symbol": symbol.upper(),
-            "current_price": current_price,
-            "key_levels": key_levels,
-            "put_entry_points": put_entry_points,
-            "call_entry_points": call_entry_points,
-            "prediction": {
-                "price": predicted_price,
-                "change_pct": round(pred_change_pct * 100, 2)
-            },
-            "sell_put_entry": {
-                "score": sp_score,
-                "confidence": sp_confidence,
-                "reasons": sp_reasons
-            },
-            "sell_call_entry": {
-                "score": sc_score,
-                "confidence": sc_confidence,
-                "reasons": sc_reasons
-            },
-            "indicators": {
-                "ema_50": round(latest['ema_50'], 2),
-                "macd": round(latest['macd'], 2),
-                "support": round(latest['support'], 2),
-                "resistance": round(latest['resistance'], 2),
-                "resistance": round(latest['resistance'], 2),
-                "bb_upper": round(latest['bb_upper'], 2),
-                "bb_lower": round(latest['bb_lower'], 2),
-                "sma_200": round(latest['sma_200'], 2) if not np.isnan(latest['sma_200']) else None,
-                "adx": round(latest['adx'], 2),
-                "atr": round(latest['atr'], 2) if not np.isnan(latest['atr']) else None,
-                "hv_rank": round(hv_rank, 1),
-                "volume_rel": round(latest['volume'] / latest['vol_sma'], 2),
-                "volatility": round(volatility * 100, 1),
-                "implied_volatility": round(implied_vol * 100, 1) if implied_vol else None
-            },
-            "chart_data": chart_data
-        }
-
-        # Upsert entry to DB
-        if self.db is not None:
-            try:
-                # Add timestamp
-                result['updated_at'] = datetime.now()
-                self.db.entries.update_one(
-                    {'symbol': symbol.upper()},
-                    {'$set': result},
-                    upsert=True
-                )
-                logger.info(f"Saved analysis for {symbol} to entries collection.")
-            except Exception as e:
-                logger.error(f"Error saving entry to DB: {e}")
-        
-        return result
+        return sc_score, sc_confidence, sc_reasons
