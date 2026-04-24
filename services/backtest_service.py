@@ -527,27 +527,30 @@ class BacktestService:
         for pos in list(context.mock_tradier.positions):
             details = context.mock_tradier._parse_option_symbol(pos['symbol'])
             if details and details['expiry'].date() <= current_date_obj:
-                strike = details['strike']
-                is_call = details['type'] == 'call'
-                is_itm = (is_call and price > strike) or (not is_call and price < strike)
+                self._handle_expiration_scenario(context, pos, details, price)
+
+    def _handle_expiration_scenario(self, context, pos, details, price):
+        strike = details['strike']
+        is_call = details['type'] == 'call'
+        is_itm = (is_call and price > strike) or (not is_call and price < strike)
+
+        if is_itm:
+            qty = pos['quantity']
+            is_short = qty < 0
+
+            if is_short and not is_call:  # Short Put ITM → Assignment
+                self._handle_short_put_assignment(context, pos, details, strike, price, qty)
                 
-                if is_itm:
-                    qty = pos['quantity']
-                    is_short = qty < 0
-                    
-                    if is_short and not is_call:  # Short Put ITM → Assignment
-                        self._handle_short_put_assignment(context, pos, details, strike, price, qty)
-                        
-                    elif is_short and is_call:  # Short Call ITM → Called Away
-                        self._handle_short_call_assignment(context, pos, details, strike, qty)
+            elif is_short and is_call:  # Short Call ITM → Called Away
+                self._handle_short_call_assignment(context, pos, details, strike, qty)
 
-                    else:
-                        # Long Option ITM → Cash Settle
-                        self._handle_long_option_exercise(context, pos, strike, price)
+            else:
+                # Long Option ITM → Cash Settle
+                self._handle_long_option_exercise(context, pos, strike, price)
 
-                else:
-                    # Expired OTM — full credit kept
-                    self._handle_otm_expiration(context, pos)
+        else:
+            # Expired OTM — full credit kept
+            self._handle_otm_expiration(context, pos)
 
     def _handle_short_put_assignment(self, context, pos, details, strike, price, qty):
         context.mock_tradier.positions.remove(pos)
