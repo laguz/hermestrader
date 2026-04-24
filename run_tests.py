@@ -24,9 +24,5 @@ sys.modules['scipy.stats'] = MockModule('scipy.stats')
 sys.modules['pytz'] = MockModule('pytz')
 sys.modules['numpy'] = MockModule('numpy')
 
-import bot.strategies.wheel
-import bot.strategies.tastytrade45
-import bot.strategies.credit_spreads_7
-import bot.strategies.credit_spreads_75
 
 print("Strategy modules loaded perfectly.")

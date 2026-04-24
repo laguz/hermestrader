@@ -1,7 +1,5 @@
 
 import requests
-import json
-import time
 
 def test_live_api():
     url = "http://localhost:8080/api/bot/dry_run"

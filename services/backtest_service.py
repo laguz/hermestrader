@@ -227,11 +227,21 @@ class BacktestService:
                     logger.debug(f"[BT Strategy] {log_entry}")
                 strategy.execution_logs = []
 
-            
-            cash, total_commissions = self._process_exit_orders(
-                exit_orders, mock_tradier, slippage_rate, commission_per,
-                cash, total_commissions, open_trade_credits, trades_log, current_date_str
+            context = BacktestContext(
+                mock_tradier=mock_tradier,
+                current_date_str=current_date_str,
+                risk_pct=risk_pct,
+                slippage_rate=slippage_rate,
+                commission_per=commission_per,
+                trades_log=trades_log,
+                open_trade_credits=open_trade_credits,
+                cash=cash,
+                total_commissions=total_commissions,
+                portfolio_values=portfolio_values,
+                starting_cash=starting_cash
             )
+
+            self._process_exit_orders(exit_orders, context)
             
             # 4. Run Strategy: Execute (Entries) — skip for Wheel (already called above)
             # Wheel entries already captured in wheel_entry_orders from step 3
@@ -242,32 +252,22 @@ class BacktestService:
                 all_entry_orders = list(mock_tradier.new_orders) + wheel_entry_orders
                 mock_tradier.new_orders = [] # Clear new orders after processing
                 
-                context = BacktestContext(
-                    mock_tradier=mock_tradier,
-                    current_date_str=current_date_str,
-                    risk_pct=risk_pct,
-                    slippage_rate=slippage_rate,
-                    commission_per=commission_per,
-                    trades_log=trades_log,
-                    open_trade_credits=open_trade_credits,
-                    cash=cash,
-                    total_commissions=total_commissions,
-                    portfolio_values=portfolio_values,
-                    starting_cash=starting_cash
-                )
-
                 # Update cash and commissions
-                cash, total_commissions = self._process_open_orders(context, all_entry_orders)
+                self._process_open_orders(context, all_entry_orders)
             except Exception as e:
                 logger.error(f"{current_date_str} - {strategy_type} Strategy Exception: {e}", exc_info=True)
                             
             # 6. Mark to Market Portfolio Value
-            total_val = self._mark_to_market(mock_tradier, cash)
+            total_val = self._mark_to_market(mock_tradier, context.cash)
             dates.append(current_date_str)
             portfolio_values.append(total_val)
             
             # 7. Expiry Check — Assignment Logic
-            cash = self._process_expirations(mock_tradier, row['date'].date(), price, cash, open_trade_credits, trades_log, current_date_str)
+            self._process_expirations(context, row['date'].date(), price)
+
+            # Update local loop variables from context
+            cash = context.cash
+            total_commissions = context.total_commissions
 
         # ---------------------------------------------------------------
         # Summary Metrics
@@ -335,7 +335,7 @@ class BacktestService:
             analysis_service=mock_analysis
         )
 
-    def _process_exit_orders(self, exit_orders, mock_tradier, slippage_rate, commission_per, cash, total_commissions, open_trade_credits, trades_log, current_date_str):
+    def _process_exit_orders(self, exit_orders, context: BacktestContext):
         for order in exit_orders:
             if 'close' in order['side'] or order['side'] == 'buy_to_close':
                 # Determine Fill Price
@@ -346,19 +346,19 @@ class BacktestService:
                     if order.get('legs'):
                         for leg in order['legs']:
                             opt_sym = leg['option_symbol']
-                            qs = mock_tradier.get_quotes([opt_sym])
+                            qs = context.mock_tradier.get_quotes([opt_sym])
                             if qs:
                                 q = qs[0]
                                 leg_price = q['ask'] if 'buy' in leg['side'] else q['bid']
                                 fill_price += leg_price
                     else:
-                        qs = mock_tradier.get_quotes([order['symbol']])
+                        qs = context.mock_tradier.get_quotes([order['symbol']])
                         if qs:
                             fill_price = qs[0]['ask']
 
                 # Slippage (Debit = paying more)
                 num_legs = len(order.get('legs') or []) or 1
-                slippage = slippage_rate * num_legs
+                slippage = context.slippage_rate * num_legs
                 final_price = fill_price + slippage
 
                 qty = abs(order['quantity'])
@@ -366,20 +366,20 @@ class BacktestService:
                 cost = final_price * qty * multiplier
 
                 # Commission
-                commission_cost = commission_per * qty * num_legs
-                total_commissions += commission_cost
+                commission_cost = context.commission_per * qty * num_legs
+                context.total_commissions += commission_cost
 
-                cash -= (cost + commission_cost)
+                context.cash -= (cost + commission_cost)
 
                 # Compute per-trade realized P&L
                 close_symbol = order['symbol']
-                entry_info = open_trade_credits.pop(close_symbol, None)
+                entry_info = context.open_trade_credits.pop(close_symbol, None)
                 realized_pnl = 0
                 if entry_info:
                     realized_pnl = round((entry_info['credit'] - final_price) * qty * multiplier, 2)
 
-                trades_log.append({
-                    'date': current_date_str,
+                context.trades_log.append({
+                    'date': context.current_date_str,
                     'action': f"CLOSE {close_symbol}",
                     'debit': round(final_price, 4),
                     'slippage': slippage,
@@ -391,17 +391,16 @@ class BacktestService:
                 if order.get('legs'):
                     for leg in order['legs']:
                         symbol_to_remove = leg['option_symbol']
-                        for i in range(len(mock_tradier.positions)):
-                            if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
-                                del mock_tradier.positions[i]
+                        for i in range(len(context.mock_tradier.positions)):
+                            if context.mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                                del context.mock_tradier.positions[i]
                                 break
                 else:
                     symbol_to_remove = order['symbol']
-                    for i in range(len(mock_tradier.positions)):
-                        if mock_tradier.positions[i]['symbol'] == symbol_to_remove:
-                            del mock_tradier.positions[i]
+                    for i in range(len(context.mock_tradier.positions)):
+                        if context.mock_tradier.positions[i]['symbol'] == symbol_to_remove:
+                            del context.mock_tradier.positions[i]
                             break
-        return cash, total_commissions
 
     def _wrap_up_backtest(self, state: BacktestState):
         if not state.portfolio_values:
@@ -422,7 +421,7 @@ class BacktestService:
     def _process_open_orders(self, context: BacktestContext, entry_orders):
         """Processes new orders, applying slippage, calculating position sizing, and deducting commissions."""
         if not entry_orders:
-            return context.cash, context.total_commissions
+            return
             
         current_pv = context.portfolio_values[-1] if context.portfolio_values else context.starting_cash
             
@@ -506,7 +505,7 @@ class BacktestService:
                     'date_acquired': context.current_date_str
                 })
         
-        return context.cash, context.total_commissions
+        pass
 
     def _mark_to_market(self, mock_tradier, cash):
         """Calculates the Net Liquidation Value (NLV) of the portfolio."""
@@ -523,10 +522,10 @@ class BacktestService:
                 
         return cash + nlv
 
-    def _process_expirations(self, mock_tradier, current_date_obj, price, cash, open_trade_credits, trades_log, current_date_str):
+    def _process_expirations(self, context: BacktestContext, current_date_obj, price):
         """Handles option assignment, exercise, and expiration."""
-        for pos in list(mock_tradier.positions):
-            details = mock_tradier._parse_option_symbol(pos['symbol'])
+        for pos in list(context.mock_tradier.positions):
+            details = context.mock_tradier._parse_option_symbol(pos['symbol'])
             if details and details['expiry'].date() <= current_date_obj:
                 strike = details['strike']
                 is_call = details['type'] == 'call'
@@ -537,98 +536,109 @@ class BacktestService:
                     is_short = qty < 0
                     
                     if is_short and not is_call:  # Short Put ITM → Assignment
-                        mock_tradier.positions.remove(pos)
-                        num_shares = abs(qty) * 100
-                        stock_cost = strike * num_shares
-                        cash -= stock_cost
-                        
-                        mock_tradier.positions.append({
-                            'symbol': details['root'],
-                            'quantity': num_shares,
-                            'cost_basis': strike,
-                            'date_acquired': current_date_str
-                        })
-                        
-                        # Realize P&L from the option itself
-                        entry = open_trade_credits.pop(pos['symbol'], None)
-                        option_pnl = 0
-                        if entry:
-                            # Put expired ITM: the option is worth intrinsic
-                            intrinsic = strike - price
-                            option_pnl = round((entry['credit'] - intrinsic) * abs(qty) * 100, 2)
-                        
-                        trades_log.append({
-                            'date': current_date_str,
-                            'action': f"ASSIGNED (PUT) {pos['symbol']}: Bought {num_shares} {details['root']} @ {strike}",
-                            'debit': strike,
-                            'pnl': option_pnl
-                        })
+                        self._handle_short_put_assignment(context, pos, details, strike, price, qty)
                         
                     elif is_short and is_call:  # Short Call ITM → Called Away
-                        mock_tradier.positions.remove(pos)
-                        shares_needed = abs(qty) * 100
-                        stock_found = False
-                        
-                        for sp in list(mock_tradier.positions):
-                            if sp['symbol'] == details['root'] and sp['quantity'] > 0:
-                                cash += (strike * shares_needed)
-                                sp['quantity'] -= shares_needed
-                                if sp['quantity'] <= 0:
-                                    mock_tradier.positions.remove(sp)
-                                
-                                stock_found = True
-                                
-                                # Realize stock P&L
-                                stock_pnl = round((strike - sp.get('cost_basis', strike)) * shares_needed, 2)
-                                entry = open_trade_credits.pop(pos['symbol'], None)
-                                call_credit_pnl = 0
-                                if entry:
-                                    call_credit_pnl = round(entry['credit'] * abs(qty) * 100, 2)
-                                
-                                trades_log.append({
-                                    'date': current_date_str,
-                                    'action': f"CALLED AWAY {pos['symbol']}: Sold {shares_needed} {details['root']} @ {strike}",
-                                    'credit': strike,
-                                    'pnl': stock_pnl + call_credit_pnl
-                                })
-                                break
-                        
-                        if not stock_found:
-                            # Naked Call Assignment → Short Stock
-                            cash += (strike * shares_needed)
-                            mock_tradier.positions.append({
-                                'symbol': details['root'],
-                                'quantity': -shares_needed,
-                                'cost_basis': strike,
-                                'date_acquired': current_date_str
-                            })
+                        self._handle_short_call_assignment(context, pos, details, strike, qty)
 
                     else:
                         # Long Option ITM → Cash Settle
-                        intrinsic = abs(price - strike)
-                        cash_impact = intrinsic * pos['quantity'] * 100
-                        cash += cash_impact
-                        trades_log.append({
-                            'date': current_date_str,
-                            'action': f"EXERCISED ITM {pos['symbol']}",
-                            'pnl': round(cash_impact, 2)
-                        })
-                        mock_tradier.positions.remove(pos)
+                        self._handle_long_option_exercise(context, pos, strike, price)
 
                 else:
                     # Expired OTM — full credit kept
-                    entry = open_trade_credits.pop(pos['symbol'], None)
-                    expired_pnl = 0
-                    if entry:
-                        expired_pnl = round(entry['credit'] * entry['contracts'] * 100, 2)
-                    
-                    trades_log.append({
-                        'date': current_date_str,
-                        'action': f"EXPIRED OTM {pos['symbol']}",
-                        'pnl': expired_pnl
-                    })
-                    mock_tradier.positions.remove(pos)
-        return cash
+                    self._handle_otm_expiration(context, pos)
+
+    def _handle_short_put_assignment(self, context, pos, details, strike, price, qty):
+        context.mock_tradier.positions.remove(pos)
+        num_shares = abs(qty) * 100
+        stock_cost = strike * num_shares
+        context.cash -= stock_cost
+
+        context.mock_tradier.positions.append({
+            'symbol': details['root'],
+            'quantity': num_shares,
+            'cost_basis': strike,
+            'date_acquired': context.current_date_str
+        })
+
+        # Realize P&L from the option itself
+        entry = context.open_trade_credits.pop(pos['symbol'], None)
+        option_pnl = 0
+        if entry:
+            # Put expired ITM: the option is worth intrinsic
+            intrinsic = strike - price
+            option_pnl = round((entry['credit'] - intrinsic) * abs(qty) * 100, 2)
+
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"ASSIGNED (PUT) {pos['symbol']}: Bought {num_shares} {details['root']} @ {strike}",
+            'debit': strike,
+            'pnl': option_pnl
+        })
+
+    def _handle_short_call_assignment(self, context, pos, details, strike, qty):
+        context.mock_tradier.positions.remove(pos)
+        shares_needed = abs(qty) * 100
+        stock_found = False
+
+        for sp in list(context.mock_tradier.positions):
+            if sp['symbol'] == details['root'] and sp['quantity'] > 0:
+                context.cash += (strike * shares_needed)
+                sp['quantity'] -= shares_needed
+                if sp['quantity'] <= 0:
+                    context.mock_tradier.positions.remove(sp)
+
+                stock_found = True
+
+                # Realize stock P&L
+                stock_pnl = round((strike - sp.get('cost_basis', strike)) * shares_needed, 2)
+                entry = context.open_trade_credits.pop(pos['symbol'], None)
+                call_credit_pnl = 0
+                if entry:
+                    call_credit_pnl = round(entry['credit'] * abs(qty) * 100, 2)
+
+                context.trades_log.append({
+                    'date': context.current_date_str,
+                    'action': f"CALLED AWAY {pos['symbol']}: Sold {shares_needed} {details['root']} @ {strike}",
+                    'credit': strike,
+                    'pnl': stock_pnl + call_credit_pnl
+                })
+                break
+
+        if not stock_found:
+            # Naked Call Assignment → Short Stock
+            context.cash += (strike * shares_needed)
+            context.mock_tradier.positions.append({
+                'symbol': details['root'],
+                'quantity': -shares_needed,
+                'cost_basis': strike,
+                'date_acquired': context.current_date_str
+            })
+
+    def _handle_long_option_exercise(self, context, pos, strike, price):
+        intrinsic = abs(price - strike)
+        cash_impact = intrinsic * pos['quantity'] * 100
+        context.cash += cash_impact
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"EXERCISED ITM {pos['symbol']}",
+            'pnl': round(cash_impact, 2)
+        })
+        context.mock_tradier.positions.remove(pos)
+
+    def _handle_otm_expiration(self, context, pos):
+        entry = context.open_trade_credits.pop(pos['symbol'], None)
+        expired_pnl = 0
+        if entry:
+            expired_pnl = round(entry['credit'] * entry['contracts'] * 100, 2)
+
+        context.trades_log.append({
+            'date': context.current_date_str,
+            'action': f"EXPIRED OTM {pos['symbol']}",
+            'pnl': expired_pnl
+        })
+        context.mock_tradier.positions.remove(pos)
 
     @staticmethod
     def _compute_metrics(state: BacktestState):

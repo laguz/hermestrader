@@ -1,5 +1,3 @@
-import logging
-import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, date, timedelta
 from bot.utils import Colors, get_expiry_str

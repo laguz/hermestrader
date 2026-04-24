@@ -1,7 +1,6 @@
-import logging
 import traceback
 import re
-from datetime import datetime, timedelta, date
+from datetime import datetime
 from services.container import Container
 from bot.strategies.base_strategy import AbstractStrategy
 from bot.utils import is_match, get_op_type, get_expiry_str, get_underlying

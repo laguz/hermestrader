@@ -79,11 +79,9 @@ class TradierService:
         
     def update_access_token(self, token: str) -> None:
         """Deprecated: session-aware properties handle this automatically."""
-        pass
 
     def update_account_id(self, account_id: str) -> None:
         """Deprecated: session-aware properties handle this automatically."""
-        pass
 
     def get_trading_mode(self) -> str:
         """Return current trading mode: 'paper' or 'live'."""

@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from bot.portfolio_manager import PortfolioManager
 import hashlib
 

@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 def main():
     try:
         import sklearn
-        import numpy as np
         print(f"✅ Scikit-learn {sklearn.__version__} installed.")
     except ImportError as e:
         print(f"❌ Dependency Error: {e}")

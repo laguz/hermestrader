@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import patch
 from services.ml_service import MLService
-import os
 
 class MockTradier:
     pass
@@ -40,7 +39,6 @@ def test_secure_tmp_files_train_model(ml_service):
                                         ml_service.train_model(malicious_symbol, model_type='rl', express=True)
                                     except Exception as e:
                                         print(f"Caught expected exception or validation error: {e}")
-                                        pass
 
                                     # Let's see what subprocess.run was called with
                                     if mock_run.called:
@@ -55,3 +53,15 @@ def test_secure_tmp_files_train_model(ml_service):
 
                                         assert "etc" not in worker_path
                                         assert "passwd" not in worker_path
+
+def test_nosql_injection_fetch_and_prepare(ml_service):
+    from exceptions import ValidationError
+    from unittest.mock import MagicMock
+
+    ml_service.db = MagicMock()
+    malicious_payload = {"$ne": "invalid"}
+
+    with pytest.raises(ValidationError) as exc_info:
+        ml_service._fetch_and_prepare_training_data(malicious_payload)
+
+    assert "Symbol must be a string" in str(exc_info.value)

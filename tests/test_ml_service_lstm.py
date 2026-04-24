@@ -1,4 +1,3 @@
-import unittest
 import pytest
 import pandas as pd
 import numpy as np
@@ -110,7 +109,6 @@ def test_build_lstm_model_happy_path(ml_service):
     Test that the _build_lstm_model function returns a compiled Keras Sequential
     model with the expected configuration.
     """
-    import tensorflow as tf
     from tensorflow.keras.models import Sequential
     from tensorflow.keras.layers import LSTM, Dense, Dropout, InputLayer
 
@@ -120,19 +118,22 @@ def test_build_lstm_model_happy_path(ml_service):
     # Check that model is a Keras Sequential model
     assert isinstance(model, Sequential)
 
-    # Check that model has the correct number of layers (LSTM, Dropout, LSTM, Dropout, Dense, Dense)
-    assert len(model.layers) == 6
+    # Filter out InputLayer which may or may not be included in model.layers depending on TensorFlow version
+    core_layers = [layer for layer in model.layers if not isinstance(layer, InputLayer)]
+
+    # Check that model has the correct number of core layers (LSTM, Dropout, LSTM, Dropout, Dense, Dense)
+    assert len(core_layers) == 6
 
     # Verify specific layers are present and configured correctly
-    assert isinstance(model.layers[0], LSTM)
-    assert isinstance(model.layers[1], Dropout)
-    assert isinstance(model.layers[2], LSTM)
-    assert isinstance(model.layers[3], Dropout)
-    assert isinstance(model.layers[4], Dense)
-    assert isinstance(model.layers[5], Dense)
+    assert isinstance(core_layers[0], LSTM)
+    assert isinstance(core_layers[1], Dropout)
+    assert isinstance(core_layers[2], LSTM)
+    assert isinstance(core_layers[3], Dropout)
+    assert isinstance(core_layers[4], Dense)
+    assert isinstance(core_layers[5], Dense)
 
     # The last layer should predict a single continuous value directly (1 unit, linear/no activation specifically set)
-    assert model.layers[-1].units == 1
+    assert core_layers[-1].units == 1
 
     # It should have an optimizer and loss function since it's compiled
     assert model.optimizer is not None

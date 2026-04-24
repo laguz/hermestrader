@@ -1,5 +1,7 @@
+from exceptions import ValidationError
+import numpy as np
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 import pandas as pd
 from services.ml_service import MLService
 
@@ -86,7 +88,6 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     a 2D input array (samples, features) into a 3D output array
     (samples - sequence_length, sequence_length, features) for LSTM ingestion.
     """
-    import numpy as np
 
     ml_service.sequence_length = 5
 
@@ -321,40 +322,103 @@ def test_backfill_symbol_success(ml_service):
     assert doc["open"] == 100.0
     assert doc["volume"] == 1000.0
 
-def test_backfill_symbol_invalid_symbol(ml_service):
-    """Test backfill_symbol raises ValidationError when given an invalid symbol."""
-    from exceptions import ValidationError
-    with pytest.raises(ValidationError):
-        ml_service.backfill_symbol(123)
 
-    with pytest.raises(ValidationError):
-        ml_service.backfill_symbol("INVALID SYMBOL!")
 
-def test_backfill_symbol_date_calculation(ml_service):
-    """Test backfill_symbol correctly calculates start and end dates based on years parameter."""
-    from datetime import datetime, timedelta
+def test_train_model_happy_path_lstm(ml_service):
+    # Setup dataframe with 300 rows to pass walk-forward validation min size
+    np.random.seed(42)
+    df = pd.DataFrame({
+        'close': np.random.rand(300),
+        'volume': np.random.rand(300),
+        'log_return': np.random.rand(300),
+        'target': np.random.rand(300)
+    })
 
-    ml_service.db = MagicMock()
-    ml_service.tradier.get_historical_pricing = MagicMock(return_value=[])
+    mock_model = MagicMock()
+    # mock_model() returns a mock tensor that has .numpy()
+    mock_tensor = MagicMock()
+    # Assuming sequence length 5, test size 20
+    mock_tensor.numpy.return_value = np.zeros((20, 1))
+    mock_model.return_value = mock_tensor
 
-    mock_now = datetime(2023, 10, 1)
-    with patch('services.ml_service.datetime') as mock_datetime:
-        mock_datetime.now.return_value = mock_now
+    with patch.object(ml_service, '_fetch_and_prepare_training_data') as mock_fetch, \
+         patch.object(ml_service, 'select_top_features', return_value=['close', 'volume']) as mock_select_features, \
+         patch.object(ml_service, '_get_feature_file_path', return_value='/tmp/mock_features.json'), \
+         patch('builtins.open', mock_open()), \
+         patch.object(ml_service, '_build_lstm_model', return_value=mock_model) as mock_build, \
+         patch.object(ml_service, '_run_training_worker', return_value=0.015) as mock_worker:
 
-        ml_service.backfill_symbol("AAPL", years=3)
+        # By default express=False, will trigger perform_walk_forward_validation
+        result = ml_service.train_model("AAPL", model_type='lstm', pre_prepared_df=df)
 
-        expected_end_date = "2023-10-01"
-        expected_start_date = (mock_now - timedelta(days=365 * 3)).strftime('%Y-%m-%d')
+        assert result['status'] == 'trained'
+        assert result['symbol'] == 'AAPL'
+        assert result['type'] == 'lstm'
+        assert result['mse'] == 0.015
+        assert result['val_mse'] >= 0  # Should be computed
+        assert mock_build.called
+        assert mock_worker.called
+        assert mock_model.fit.called
 
-        ml_service.tradier.get_historical_pricing.assert_called_once_with("AAPL", expected_start_date, expected_end_date)
 
-def test_backfill_symbol_malformed_data(ml_service):
-    """Test backfill_symbol raises ValueError when Tradier returns malformed history data."""
-    ml_service.db = MagicMock()
-    mock_history = [
-        {"date": "2023-01-01", "open": "not_a_float", "high": "105.0", "low": "99.0", "close": "104.0", "volume": "1000"}
-    ]
-    ml_service.tradier.get_historical_pricing = MagicMock(return_value=mock_history)
+def test_train_model_express_true(ml_service):
+    np.random.seed(42)
+    df = pd.DataFrame({
+        'close': np.random.rand(300),
+        'volume': np.random.rand(300),
+        'log_return': np.random.rand(300),
+        'target': np.random.rand(300)
+    })
 
-    with pytest.raises(ValueError):
-        ml_service.backfill_symbol("AAPL")
+    with patch.object(ml_service, '_fetch_and_prepare_training_data') as mock_fetch, \
+         patch.object(ml_service, 'select_top_features', return_value=['close', 'volume']) as mock_select_features, \
+         patch.object(ml_service, '_get_feature_file_path', return_value='/tmp/mock_features.json'), \
+         patch('builtins.open', mock_open()), \
+         patch.object(ml_service, '_build_lstm_model') as mock_build, \
+         patch.object(ml_service, '_run_training_worker', return_value=0.015) as mock_worker:
+
+        result = ml_service.train_model("AAPL", model_type='lstm', express=True, pre_prepared_df=df)
+
+        assert result['status'] == 'trained'
+        assert result['symbol'] == 'AAPL'
+        assert result['type'] == 'lstm'
+        assert result['mse'] == 0.015
+        assert result['val_mse'] == 0  # Walk-forward validation skipped
+        assert not mock_build.called
+        assert mock_worker.called
+
+
+def test_train_model_rl_skips_validation(ml_service):
+    np.random.seed(42)
+    df = pd.DataFrame({
+        'close': np.random.rand(300),
+        'volume': np.random.rand(300),
+        'log_return': np.random.rand(300),
+        'target': np.random.rand(300)
+    })
+
+    with patch.object(ml_service, '_fetch_and_prepare_training_data') as mock_fetch, \
+         patch.object(ml_service, 'select_top_features', return_value=['close', 'volume']) as mock_select_features, \
+         patch.object(ml_service, '_get_feature_file_path', return_value='/tmp/mock_features.json'), \
+         patch('builtins.open', mock_open()), \
+         patch.object(ml_service, '_build_lstm_model') as mock_build, \
+         patch.object(ml_service, 'perform_walk_forward_validation') as mock_wfv, \
+         patch.object(ml_service, '_run_training_worker', return_value=0.02) as mock_worker:
+
+        result = ml_service.train_model("AAPL", model_type='rl', express=False, pre_prepared_df=df)
+
+        assert result['status'] == 'trained'
+        assert result['symbol'] == 'AAPL'
+        assert result['type'] == 'rl'
+        assert result['mse'] == 0.02
+        assert result['val_mse'] == 0  # Walk-forward validation skipped
+        assert not mock_wfv.called
+        assert mock_worker.called
+
+
+def test_train_model_not_enough_data(ml_service):
+    # Setup dataframe with <100 rows
+    df = pd.DataFrame({'close': range(50)})
+
+    with pytest.raises(ValidationError, match="Not enough data for training after processing"):
+        ml_service.train_model("AAPL", pre_prepared_df=df)

@@ -1,6 +1,5 @@
 from services.container import Container
 from dotenv import load_dotenv
-import pprint
 
 load_dotenv()
 

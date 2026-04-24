@@ -1,5 +1,5 @@
 try:
-    from nostr_sdk import Event, Keys, PublicKey
+    from nostr_sdk import Event
     print("nostr_sdk imported successfully")
     
     # Test creating an event from JSON
