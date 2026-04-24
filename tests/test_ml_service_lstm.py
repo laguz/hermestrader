@@ -85,3 +85,21 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     assert X.shape == (3, 5, 2)
     assert len(y.shape) == 1
     assert y.shape == (3,)
+
+def test_prepare_lstm_data_insufficient_data(ml_service):
+    """
+    Test that _prepare_lstm_data returns empty arrays if the input
+    data has fewer rows than the sequence_length.
+    """
+    df = pd.DataFrame({
+        'close': [1, 2, 3],
+        'volume': [10, 20, 30],
+        'target': [0, 1, 0]
+    })
+    features = ['close', 'volume']
+
+    # ML service has sequence_length = 5
+    X, y, scaler = ml_service._prepare_lstm_data(df, features, fit_scaler=True)
+
+    assert X.size == 0
+    assert y.size == 0
