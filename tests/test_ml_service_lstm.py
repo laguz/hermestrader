@@ -103,3 +103,33 @@ def test_prepare_lstm_data_insufficient_data(ml_service):
 
     assert X.size == 0
     assert y.size == 0
+
+def test_build_lstm_model_happy_path(ml_service):
+    """
+    Test that the _build_lstm_model function returns a compiled Keras Sequential
+    model with the expected configuration.
+    """
+    import tensorflow as tf
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout, InputLayer
+
+    input_shape = (5, 2)
+    model = ml_service._build_lstm_model(input_shape)
+
+    # Check that model is a Keras Sequential model
+    assert isinstance(model, Sequential)
+
+    # Check that model has the correct number of layers (LSTM, Dropout, LSTM, Dropout, Dense, Dense)
+    # Plus InputLayer which is implicit or explicit depending on TF version.
+    # The current ml_service uses `model.add(Input(shape=input_shape))` which adds an InputLayer in recent TF.
+    # We will verify some specific layers are present
+    assert len(model.layers) >= 6
+
+    # The last layer should predict a single continuous value directly (1 unit, linear/no activation specifically set)
+    assert isinstance(model.layers[-1], Dense)
+    assert model.layers[-1].units == 1
+
+    # It should have an optimizer and loss function since it's compiled
+    assert model.optimizer is not None
+    assert model.loss is not None
+    assert model.loss == 'mean_squared_error'
