@@ -159,7 +159,7 @@ class PortfolioManager:
                 
                 # Generate determinist ID
                 raw_id = f"{sym}_{o_date}_{c_date}_{qty}"
-                doc_id = hashlib.md5(raw_id.encode()).hexdigest()
+                doc_id = hashlib.sha256(raw_id.encode()).hexdigest()
                 
                 # Check if exists
                 if self.db['open_positions'].find_one({"_id": doc_id}):
