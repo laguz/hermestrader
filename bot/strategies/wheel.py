@@ -501,7 +501,7 @@ class WheelStrategy(AbstractStrategy):
         """
         try:
             positions = self.tradier.get_positions() or []
-        except: return []
+        except: return [], {}
         
         expiry_counts = {}
 

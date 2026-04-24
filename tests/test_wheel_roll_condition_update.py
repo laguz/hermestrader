@@ -9,6 +9,7 @@ class MockTradier:
         self.current_date = current_date
         self.account_id = "mock_account"
         self.get_quote = MagicMock()
+        self.get_quotes = MagicMock(return_value={})
         self.get_option_chains = MagicMock()
         self.get_option_expirations = MagicMock()
         self.get_orders = MagicMock(return_value=[])
@@ -32,7 +33,7 @@ def test_wheel_no_roll_if_dte_7():
     }
     
     # Even if ITM, it should NOT roll at DTE 7
-    mock_tradier.get_quote.return_value = {'last': 12.00} 
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 12.00}}
     
     # Execute
     strategy._manage_positions([position], watchlist=['RIOT'])
@@ -58,14 +59,14 @@ def test_wheel_roll_if_dte_6():
     }
     
     # Mock data for roll
-    mock_tradier.get_quote.return_value = {'last': 12.00} # ITM
+    mock_tradier.get_quotes.return_value = {'RIOT': {'last': 12.00}} # ITM
     mock_tradier.get_option_chains.side_effect = [
         # Chain for current expiry closure
-        [{'strike': 13.0, 'option_type': 'put', 'ask': 1.00, 'symbol': 'RIOT260107P00013000'}],
+        [{'strike': 13.0, 'option_type': 'put', 'bid': 0.99, 'ask': 1.00, 'symbol': 'RIOT260107P00013000'}],
         # Chain for new expiry opening (at strike 12)
         [{'strike': 12.0, 'option_type': 'put', 'bid': 1.50, 'symbol': 'RIOT260213P00012000'}]
     ]
-    mock_tradier.get_option_expirations.return_value = ['2026-02-13']
+    mock_tradier.get_option_expirations.return_value = ['2026-02-14', '2026-02-20']
     mock_tradier.place_order.return_value = {'id': 'order_id', 'status': 'ok'}
 
     # Execute
