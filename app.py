@@ -21,11 +21,10 @@ def create_app():
     """Application factory pattern."""
     app = Flask(__name__)
     
-    secret_key = os.getenv('FLASK_SECRET_KEY')
-    if not secret_key:
+    app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
+    if not app.config['SECRET_KEY']:
         raise RuntimeError("FLASK_SECRET_KEY is required but missing from environment variables.")
         
-    app.config['SECRET_KEY'] = secret_key
     app.config['SESSION_COOKIE_SAMESITE'] = 'Strict'
     app.config['SESSION_COOKIE_SECURE'] = True # Strongly recommended if behind HTTPS
 
