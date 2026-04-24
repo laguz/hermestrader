@@ -21,7 +21,7 @@ def create_app():
     """Application factory pattern."""
     app = Flask(__name__)
     
-    app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY')
+    app.config['SECRET_KEY'] = os.environ.pop('FLASK_SECRET_KEY', None)
     if not app.config['SECRET_KEY']:
         raise RuntimeError("FLASK_SECRET_KEY is required but missing from environment variables.")
         
