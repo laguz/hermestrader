@@ -202,3 +202,19 @@ def test_prepare_features_missing_columns(ml_service):
     # Check that atr and vwap are set to 0.0
     assert (result_df['atr'] == 0.0).all()
     assert (result_df['vwap'] == 0.0).all()
+
+def test_prepare_features_empty_dataframe(ml_service):
+    """Test prepare_features handles an empty dataframe gracefully."""
+    df = pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
+
+    result_df = ml_service.prepare_features(df)
+
+    expected_columns = [
+        'rsi', 'upper_bb', 'mid_bb', 'lower_bb', 'macd', 'macd_signal', 'sma_50',
+        'obv', 'vwap', 'atr', 'close_lag_1', 'close_lag_2', 'close_lag_3', 'close_lag_5',
+        'daily_return', 'daily_return_lag_1'
+    ]
+
+    assert len(result_df) == 0
+    for col in expected_columns:
+        assert col in result_df.columns
