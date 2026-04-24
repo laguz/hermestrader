@@ -105,3 +105,18 @@ def test_prepare_lstm_data_matrix_transformation(ml_service):
     assert X.shape == (3, 5, 2)
     assert len(y.shape) == 1
     assert y.shape == (3,)
+
+def test_backfill_symbol_history_exception(ml_service):
+    """Test that backfill_symbol gracefully handles an exception when fetching history."""
+    # Ensure db is set for backfill to proceed
+    ml_service.db = {"market_data": MagicMock()}
+
+    # Mock tradier to raise an Exception
+    ml_service.tradier.get_historical_pricing = MagicMock(side_effect=Exception("API Error"))
+
+    # Run backfill_symbol
+    result = ml_service.backfill_symbol("AAPL")
+
+    # It should return False when an exception occurs
+    assert result is False
+    ml_service.tradier.get_historical_pricing.assert_called_once()
