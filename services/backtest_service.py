@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import logging
 import numpy as np
 import pandas as pd
@@ -26,6 +27,16 @@ from utils.data_generator import generate_synthetic_history
 # ---------------------------------------------------------------------------
 # Backtest Engine
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class BacktestState:
+    portfolio_values: list
+    benchmark_values: list
+    dates: list
+    trades_log: list
+    starting_cash: float
+    total_commissions: float
 
 class BacktestService:
     # Default configuration
@@ -273,9 +284,15 @@ class BacktestService:
         # ---------------------------------------------------------------
         # Summary Metrics
         # ---------------------------------------------------------------
-        return self._wrap_up_backtest(
-            portfolio_values, benchmark_values, dates, trades_log, starting_cash, total_commissions
+        state = BacktestState(
+            portfolio_values=portfolio_values,
+            benchmark_values=benchmark_values,
+            dates=dates,
+            trades_log=trades_log,
+            starting_cash=starting_cash,
+            total_commissions=total_commissions
         )
+        return self._wrap_up_backtest(state)
 
     def _setup_strategy(self, strategy_type, mock_tradier, mock_db, mock_analysis):
         from bot.strategies.wheel import WheelStrategy
@@ -363,22 +380,21 @@ class BacktestService:
                             break
         return cash, total_commissions
 
-    def _wrap_up_backtest(self, portfolio_values, benchmark_values, dates, trades_log, starting_cash, total_commissions):
-        if not portfolio_values:
+    def _wrap_up_backtest(self, state: BacktestState):
+        if not state.portfolio_values:
             return {"error": "No simulation steps"}
 
-        metrics = self._compute_metrics(
-            portfolio_values, benchmark_values, dates,
-            trades_log, starting_cash, total_commissions
-        )
+        metrics = self._compute_metrics(state)
         
         return {
-            "dates": dates,
-            "values": [float(x) for x in portfolio_values],
-            "benchmark_values": [float(x) for x in benchmark_values],
-            "trades": trades_log,
+            "dates": state.dates,
+            "values": [float(x) for x in state.portfolio_values],
+            "benchmark_values": [float(x) for x in state.benchmark_values],
+            "trades": state.trades_log,
             "metrics": metrics
         }
+
+
 
     def _process_open_orders(self, mock_tradier, current_date_str, risk_pct, slippage_rate, 
                              commission_per, trades_log, open_trade_credits, entry_orders, cash, total_commissions, portfolio_values, starting_cash):
@@ -593,9 +609,15 @@ class BacktestService:
         return cash
 
     @staticmethod
-    def _compute_metrics(portfolio_values, benchmark_values, dates,
-                         trades_log, starting_cash, total_commissions):
+    def _compute_metrics(state: BacktestState):
         """Compute comprehensive risk and performance metrics."""
+        portfolio_values = state.portfolio_values
+        benchmark_values = state.benchmark_values
+        dates = state.dates
+        trades_log = state.trades_log
+        starting_cash = state.starting_cash
+        total_commissions = state.total_commissions
+
         pv = np.array(portfolio_values, dtype=float)
 
         # --- Return metrics ---
