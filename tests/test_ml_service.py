@@ -320,3 +320,41 @@ def test_backfill_symbol_success(ml_service):
     assert doc["date"] == "2023-01-01"
     assert doc["open"] == 100.0
     assert doc["volume"] == 1000.0
+
+def test_backfill_symbol_invalid_symbol(ml_service):
+    """Test backfill_symbol raises ValidationError when given an invalid symbol."""
+    from exceptions import ValidationError
+    with pytest.raises(ValidationError):
+        ml_service.backfill_symbol(123)
+
+    with pytest.raises(ValidationError):
+        ml_service.backfill_symbol("INVALID SYMBOL!")
+
+def test_backfill_symbol_date_calculation(ml_service):
+    """Test backfill_symbol correctly calculates start and end dates based on years parameter."""
+    from datetime import datetime, timedelta
+
+    ml_service.db = MagicMock()
+    ml_service.tradier.get_historical_pricing = MagicMock(return_value=[])
+
+    mock_now = datetime(2023, 10, 1)
+    with patch('services.ml_service.datetime') as mock_datetime:
+        mock_datetime.now.return_value = mock_now
+
+        ml_service.backfill_symbol("AAPL", years=3)
+
+        expected_end_date = "2023-10-01"
+        expected_start_date = (mock_now - timedelta(days=365 * 3)).strftime('%Y-%m-%d')
+
+        ml_service.tradier.get_historical_pricing.assert_called_once_with("AAPL", expected_start_date, expected_end_date)
+
+def test_backfill_symbol_malformed_data(ml_service):
+    """Test backfill_symbol raises ValueError when Tradier returns malformed history data."""
+    ml_service.db = MagicMock()
+    mock_history = [
+        {"date": "2023-01-01", "open": "not_a_float", "high": "105.0", "low": "99.0", "close": "104.0", "volume": "1000"}
+    ]
+    ml_service.tradier.get_historical_pricing = MagicMock(return_value=mock_history)
+
+    with pytest.raises(ValueError):
+        ml_service.backfill_symbol("AAPL")
