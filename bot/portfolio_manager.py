@@ -41,89 +41,11 @@ class PortfolioManager:
             now = datetime.now()
             
             # 3. Process Tradier Positions (Upsert OPEN)
-            for p in t_positions:
-                pid = str(p.get('id'))
-                # Prepare document
-                doc = p.copy()
-                doc['status'] = "OPEN"
-                doc['last_updated'] = now
-                doc['_id'] = pid # Use Tradier ID as MongoDB _id for uniqueness
-                
-                # Upsert
-                self.db['open_positions'].update_one(
-                    {"_id": pid},
-                    {"$set": doc},
-                    upsert=True
-                )
-                synced_count += 1
+            synced_count = self._upsert_open_positions(t_positions, now)
                 
             # 4. Detect Closures (In DB OPEN but not in Tradier)
-            # Keys in DB matching current Tradier set are kept OPEN (already updated above).
-            # Keys NOT in Tradier set are CLOSED.
-            
             t_ids = set(str(p.get('id')) for p in t_positions if 'id' in p)
-            
-            for db_p in db_open:
-                db_id = str(db_p.get('_id'))
-                if db_id not in t_ids:
-                    # MARK AS CLOSED
-                    log_func(f"Position Closed: {db_p.get('symbol')} ({db_id})")
-                    
-                    # Fetch Gain/Loss to get Exit details
-                    # We look for a recent closed position for this symbol/qty
-                    # Since we don't have the exact close transaction ID easily mapping to position ID from GainLoss endpoint,
-                    # We heuristic match: Symbol + Qty + Date ~= Now?
-                    # GainLoss endpoint returns 'close_date'.
-                    
-                    symbol = db_p.get('symbol')
-                    qty = db_p.get('quantity') # This is the position qty (e.g. -1 for short).
-                    # Close Qty in GainLoss is positive? Or matching?
-                    # Tradier GainLoss 'quantity' usually matches order size (positive).
-                    
-                    # Try to fetch recent gainloss for this symbol
-                    gl_data = self.tradier.get_gainloss(limit=20, symbol=symbol)
-                    
-                    # Find match: 
-                    # For a closed position, we expect an entry in gainloss with 'close_date' very recent.
-                    # And 'open_date' matching our position 'date_acquired'.
-                    
-                    matched_gl = None
-                    pos_acquired = db_p.get('date_acquired')
-                    # Tradier date format: 2025-12-15T18:45:55.340Z
-                    # GainLoss open_date: 2025-12-15T18:45:55.000Z (might vary slightly on millis)
-                    
-                    for gl in gl_data:
-                        # Simple Heuristic: Match Open Date (as best as possible)
-                        # Or just take the most recent for this symbol if confident?
-                        # Let's try Open Date prefix match (YYYY-MM-DDTHH:MM)
-                        gl_open = gl.get('open_date', '')
-                        if pos_acquired and gl_open and pos_acquired[:16] == gl_open[:16]:
-                            matched_gl = gl
-                            break
-                    
-                    exit_price = 0
-                    realized_pnl = 0
-                    exit_date = now
-                    
-                    if matched_gl:
-                        exit_price = matched_gl.get('close_price')
-                        realized_pnl = matched_gl.get('gain_loss')
-                        exit_date = matched_gl.get('close_date')
-                        log_func(f"Found GL match for {symbol}: P&L {realized_pnl}")
-                    else:
-                         log_func(f"Warning: No GL match found for {symbol}. using defaults.")
-                    
-                    # Update DB
-                    self.db['open_positions'].update_one(
-                        {"_id": db_id},
-                        {"$set": {
-                            "status": "CLOSED",
-                            "last_updated": now,
-                            "exit_price": exit_price,
-                            "realized_pnl": realized_pnl,
-                            "exit_date": exit_date
-                        }}
-                    )
+            self._detect_and_handle_closures(db_open, t_ids, now, log_func)
 
             # 5. Backfill History (Gain/Loss)
             # Fetch last 100 closed positions to ensure we catch anything missed or pre-existing
@@ -134,6 +56,97 @@ class PortfolioManager:
             log_func(f"Error syncing positions: {e}")
             traceback.print_exc()
             return 0
+
+    def _upsert_open_positions(self, t_positions, now):
+        """
+        Helper method to upsert OPEN positions from Tradier to the DB.
+        """
+        synced_count = 0
+        for p in t_positions:
+            pid = str(p.get('id'))
+            # Prepare document
+            doc = p.copy()
+            doc['status'] = "OPEN"
+            doc['last_updated'] = now
+            doc['_id'] = pid # Use Tradier ID as MongoDB _id for uniqueness
+
+            # Upsert
+            self.db['open_positions'].update_one(
+                {"_id": pid},
+                {"$set": doc},
+                upsert=True
+            )
+            synced_count += 1
+        return synced_count
+
+    def _detect_and_handle_closures(self, db_open, t_ids, now, log_func):
+        """
+        Helper method to detect positions that are OPEN in the DB but missing from Tradier,
+        marking them as CLOSED and fetching gain/loss details.
+        """
+        # Keys in DB matching current Tradier set are kept OPEN (already updated above).
+        # Keys NOT in Tradier set are CLOSED.
+        for db_p in db_open:
+            db_id = str(db_p.get('_id'))
+            if db_id not in t_ids:
+                # MARK AS CLOSED
+                log_func(f"Position Closed: {db_p.get('symbol')} ({db_id})")
+
+                # Fetch Gain/Loss to get Exit details
+                # We look for a recent closed position for this symbol/qty
+                # Since we don't have the exact close transaction ID easily mapping to position ID from GainLoss endpoint,
+                # We heuristic match: Symbol + Qty + Date ~= Now?
+                # GainLoss endpoint returns 'close_date'.
+
+                symbol = db_p.get('symbol')
+                qty = db_p.get('quantity') # This is the position qty (e.g. -1 for short).
+                # Close Qty in GainLoss is positive? Or matching?
+                # Tradier GainLoss 'quantity' usually matches order size (positive).
+
+                # Try to fetch recent gainloss for this symbol
+                gl_data = self.tradier.get_gainloss(limit=20, symbol=symbol)
+
+                # Find match:
+                # For a closed position, we expect an entry in gainloss with 'close_date' very recent.
+                # And 'open_date' matching our position 'date_acquired'.
+
+                matched_gl = None
+                pos_acquired = db_p.get('date_acquired')
+                # Tradier date format: 2025-12-15T18:45:55.340Z
+                # GainLoss open_date: 2025-12-15T18:45:55.000Z (might vary slightly on millis)
+
+                for gl in gl_data:
+                    # Simple Heuristic: Match Open Date (as best as possible)
+                    # Or just take the most recent for this symbol if confident?
+                    # Let's try Open Date prefix match (YYYY-MM-DDTHH:MM)
+                    gl_open = gl.get('open_date', '')
+                    if pos_acquired and gl_open and pos_acquired[:16] == gl_open[:16]:
+                        matched_gl = gl
+                        break
+
+                exit_price = 0
+                realized_pnl = 0
+                exit_date = now
+
+                if matched_gl:
+                    exit_price = matched_gl.get('close_price')
+                    realized_pnl = matched_gl.get('gain_loss')
+                    exit_date = matched_gl.get('close_date')
+                    log_func(f"Found GL match for {symbol}: P&L {realized_pnl}")
+                else:
+                     log_func(f"Warning: No GL match found for {symbol}. using defaults.")
+
+                # Update DB
+                self.db['open_positions'].update_one(
+                    {"_id": db_id},
+                    {"$set": {
+                        "status": "CLOSED",
+                        "last_updated": now,
+                        "exit_price": exit_price,
+                        "realized_pnl": realized_pnl,
+                        "exit_date": exit_date
+                    }}
+                )
 
     def _backfill_history(self, log_func=logger.info):
         """
