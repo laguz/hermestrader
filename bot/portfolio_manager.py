@@ -29,33 +29,33 @@ class PortfolioManager:
             t_positions = self.tradier.get_positions()
             if t_positions is None: t_positions = []
             
-            # Key Tradier positions by Symbol + ID (if available, else index?)
-            # Tradier ID is unique per position leg.
-            t_pos_map = {str(p['id']): p for p in t_positions if 'id' in p}
-            # Fallback if ID missing? (Unlikely for Tradier, but robust check)
-            
             # 2. Fetch DB 'OPEN' Positions
             db_open = list(self.db['open_positions'].find({"status": "OPEN"}))
             
-            synced_count = 0
-            now = datetime.now()
-            
-            # 3. Process Tradier Positions (Upsert OPEN)
-            synced_count = self._upsert_open_positions(t_positions, now)
-                
-            # 4. Detect Closures (In DB OPEN but not in Tradier)
-            t_ids = set(str(p.get('id')) for p in t_positions if 'id' in p)
-            self._detect_and_handle_closures(db_open, t_ids, now, log_func)
-
-            # 5. Backfill History (Gain/Loss)
-            # Fetch last 100 closed positions to ensure we catch anything missed or pre-existing
-            self._backfill_history(log_func)
-
-            return synced_count
+            return self._sync_state(t_positions, db_open, log_func)
         except Exception as e:
             log_func(f"Error syncing positions: {e}")
             traceback.print_exc()
             return 0
+
+    def _sync_state(self, t_positions, db_open, log_func):
+        """
+        Internal method to synchronize state between fetched positions and database.
+        """
+        now = datetime.now()
+
+        # 3. Process Tradier Positions (Upsert OPEN)
+        synced_count = self._upsert_open_positions(t_positions, now)
+
+        # 4. Detect Closures (In DB OPEN but not in Tradier)
+        t_ids = set(str(p.get('id')) for p in t_positions if 'id' in p)
+        self._detect_and_handle_closures(db_open, t_ids, now, log_func)
+
+        # 5. Backfill History (Gain/Loss)
+        # Fetch last 100 closed positions to ensure we catch anything missed or pre-existing
+        self._backfill_history(log_func)
+
+        return synced_count
 
     def _upsert_open_positions(self, t_positions, now):
         """
