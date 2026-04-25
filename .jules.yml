@@ -1,0 +1,19 @@
+# Google Jules Configuration
+# Documentation: https://jules.google
+
+version: "1.0"
+
+features:
+  # Enable the CI Fixer to autonomously analyze and fix failing CI runs
+  ci_fixer:
+    enabled: true
+    # Provide hints to Jules on how to reproduce the CI environment locally
+    build_command: "pip install -r requirements.txt"
+    test_command: "pytest tests/ --junitxml=junit.xml"
+
+  # Optional: Let Jules know which paths to ignore when analyzing the repo
+  ignore_paths:
+    - "venv/"
+    - "venv_new/"
+    - "*.log"
+    - "tmp/"

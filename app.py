@@ -36,9 +36,14 @@ def create_app():
     def require_login():
         from flask_login import current_user
         if not current_user.is_authenticated:
-            # Allow static files and auth routes
-            if request.endpoint and request.endpoint != 'static' and not request.endpoint.startswith('auth.'):
+            # Allow static files, auth routes, and health check
+            if request.endpoint and request.endpoint not in ('static', 'health') and not request.endpoint.startswith('auth.'):
                 return app.login_manager.unauthorized()
+
+    @app.route('/health')
+    def health():
+        """Health check endpoint for monitoring."""
+        return jsonify({"status": "ok", "message": "Bot is running"}), 200
 
     return app
 
