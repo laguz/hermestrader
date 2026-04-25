@@ -213,7 +213,11 @@ class BacktestService:
             if strategy_type == "wheel":
                 # Wheel handles management inside execute(), but we also
                 # need to process any management-only orders separately
-                strategy.execute([symbol])
+                try:
+                    strategy.execute([symbol])
+                except Exception as e:
+                    print(f"Backtest failed: {e}")
+                    return {"error": f"Backtest failed: {e}"}
 
             # Split orders into exits vs entries
             all_orders = list(mock_tradier.new_orders)
