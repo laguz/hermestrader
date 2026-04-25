@@ -102,13 +102,13 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"No suitable expiry found for {symbol} (Target: 6 weeks, Limits Applied).")
             return
 
-        # Per-chain quantity: max_lots minus what's already on this chain
-        existing_on_chain = expiry_counts.get(target_expiry, 0)
-        quantity = max_lots - existing_on_chain
+        # Per-symbol quantity: max_lots minus total across all chains
+        total_existing = sum(expiry_counts.values())
+        quantity = max_lots - total_existing
         if quantity <= 0:
-            self._log(f"ℹ️ {symbol}: Chain {target_expiry} already at max ({existing_on_chain}/{max_lots}).")
+            self._log(f"ℹ️ {symbol}: Symbol already at max ({total_existing}/{max_lots}).")
             return
-        self._log(f"📦 {symbol}: Chain {target_expiry} has {existing_on_chain}/{max_lots} contracts. Opening {quantity} more.")
+        self._log(f"📦 {symbol}: Symbol has {total_existing}/{max_lots} contracts. Opening {quantity} more on chain {target_expiry}.")
 
         target_strike = None
         target_reason = ""
@@ -163,11 +163,11 @@ class WheelStrategy(AbstractStrategy):
         target_expiry = self._find_expiry(symbol, target_dte=38, min_dte=38, max_dte=120, exclude_dates=exclusions, method='min')
         if not target_expiry: return
 
-        # Per-chain quantity: cap by what's already on this chain
-        existing_on_chain = expiry_counts.get(target_expiry, 0)
-        quantity = min(quantity, max_lots - existing_on_chain)
+        # Per-symbol quantity: cap by total across all chains
+        total_existing = sum(expiry_counts.values())
+        quantity = min(quantity, max_lots - total_existing)
         if quantity <= 0:
-            self._log(f"ℹ️ {symbol}: Call chain {target_expiry} at max ({existing_on_chain}/{max_lots}).")
+            self._log(f"ℹ️ {symbol}: Call symbol already at max ({total_existing}/{max_lots}).")
             return
 
         target_strike = None
