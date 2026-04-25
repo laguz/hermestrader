@@ -286,13 +286,13 @@ class CreditSpreads75Strategy(AbstractStrategy):
             
         dynamic_lots = min(dynamic_lots, max_lots_config)
 
-        # Per-chain limit: subtract existing positions on this expiry
-        existing = self._count_existing_on_expiry(symbol, expiry)
+        # Per-symbol limit: subtract existing positions on this symbol across all expiries
+        existing = self._count_existing_on_symbol(symbol)
         dynamic_lots = min(dynamic_lots, max_lots_config - existing)
         if dynamic_lots < 1:
-            self._log(f"ℹ️ {symbol} {side_name}: Chain {expiry} at max ({existing}/{max_lots_config}). Skipping.")
+            self._log(f"ℹ️ {symbol} {side_name}: Symbol already at max ({existing}/{max_lots_config}). Skipping.")
             return None
-        self._log(f"📦 {symbol} {side_name}: Chain {expiry} has {existing}/{max_lots_config} lots. Opening {dynamic_lots} more.")
+        self._log(f"📦 {symbol} {side_name}: Symbol has {existing}/{max_lots_config} lots. Opening {dynamic_lots} more.")
 
         total_requirement = requirement_per_lot * dynamic_lots
         if not self._is_bp_sufficient(total_requirement, config):

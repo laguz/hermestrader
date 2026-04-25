@@ -296,13 +296,13 @@ class TastyTrade45Strategy(AbstractStrategy):
             
         dynamic_lots = min(dynamic_lots, max_lots_config)
 
-        # Per-chain limit: subtract existing positions on this expiry
-        existing = self._count_existing_on_expiry(symbol, expiry)
+        # Per-symbol limit: subtract existing positions on this symbol across all expiries
+        existing = self._count_existing_on_symbol(symbol)
         dynamic_lots = min(dynamic_lots, max_lots_config - existing)
         if dynamic_lots < 1:
-            self._log(f"ℹ️ {symbol}: TT45 chain {expiry} at max ({existing}/{max_lots_config}). Skipping.")
+            self._log(f"ℹ️ {symbol}: TT45 symbol already at max ({existing}/{max_lots_config}). Skipping.")
             return
-        self._log(f"📦 {symbol}: TT45 chain {expiry} has {existing}/{max_lots_config} lots. Opening {dynamic_lots} more.")
+        self._log(f"📦 {symbol}: TT45 symbol has {existing}/{max_lots_config} lots. Opening {dynamic_lots} more on chain {expiry}.")
 
         total_requirement = requirement_per_lot * dynamic_lots
         if not self._is_bp_sufficient(total_requirement, config):

@@ -84,8 +84,8 @@ class WheelStrategy(AbstractStrategy):
             else:
                 self._log(f"ℹ️ {symbol}: Shares fully covered. ({shares_held} shares, {open_call_contracts} calls).")
         
-        # 2. Evaluate Cash Secured Puts (per-chain limit)
-        self._log(f"🟢 {symbol}: Evaluating put entries (max {max_lots} per chain)...")
+        # 2. Evaluate Cash Secured Puts (per-symbol limit)
+        self._log(f"🟢 {symbol}: Evaluating put entries (max {max_lots} per symbol)...")
         self._entry_sell_put(symbol, current_price, analysis, max_lots=max_lots, quantity=max_lots)
 
 
@@ -537,6 +537,7 @@ class WheelStrategy(AbstractStrategy):
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + qty
                 self._log(f"📝 Pending Order detected: {qty} lot(s) for {exp_str} ({osym})")
         
+        # Exclude chains that are individually at max (prevents stacking on one date)
         full_expiries = [exp for exp, count in expiry_counts.items() if count >= max_lots]
         if full_expiries:
             self._log(f"⚠️ Weekly Limits: Excluding {full_expiries} (Max {max_lots} contract/week met).")
