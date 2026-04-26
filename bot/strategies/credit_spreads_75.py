@@ -15,8 +15,8 @@ class CreditSpreads75Strategy(AbstractStrategy):
     def execute(self, watchlist, config=None):
         config = config or {}
         """
-        Execute 45DTE/75POP Credit Spreads strategy.
-        Mode A: Initial Open (no open spreads, exact 45DTE)
+        Execute 39-45 DTE / 75POP Credit Spreads strategy.
+        Mode A: Initial Open (no open spreads, 39-45 DTE range)
         Mode B: Iron Condor Completion (1 side open, 21-45 DTE)
         """
         for symbol in watchlist:
@@ -43,7 +43,7 @@ class CreditSpreads75Strategy(AbstractStrategy):
                 if not open_info:
                     # Mode A: Initial Open
                     self._log(f"ℹ️ {symbol}: No open positions. Attempting Initial Open.")
-                    expiry = self._find_exact_dte_expiry(symbol, 45)
+                    expiry = self._find_dte_range_expiry(symbol, min_dte=39, max_dte=45)
                     if not expiry:
                         continue
 
@@ -143,15 +143,18 @@ class CreditSpreads75Strategy(AbstractStrategy):
             'dte': latest_dte
         }
 
-    def _find_exact_dte_expiry(self, symbol, target_dte):
+    def _find_dte_range_expiry(self, symbol, min_dte=39, max_dte=45):
+        """Find the best expiry within a DTE range, preferring the closest to max_dte."""
         expirations = self.tradier.get_option_expirations(symbol)
         if not expirations:
             self._log(f"No expirations found for {symbol}.")
             return None
         
         today = self._get_current_date()
-        target_date = today + timedelta(days=target_dte)
+        min_date = today + timedelta(days=min_dte)
+        max_date = today + timedelta(days=max_dte)
         
+        candidates = []
         for e in expirations:
             if isinstance(e, str):
                 try:
@@ -161,11 +164,18 @@ class CreditSpreads75Strategy(AbstractStrategy):
             else:
                 d = e.date() if hasattr(e, 'date') else e
             
-            if d == target_date:
-                return target_date.strftime("%Y-%m-%d")
-                
-        self._log(f"Skipping {symbol}: Exact {target_dte}DTE ({target_date}) not available.")
-        return None
+            if min_date <= d <= max_date:
+                candidates.append(d)
+        
+        if not candidates:
+            self._log(f"Skipping {symbol}: No expiry in {min_dte}-{max_dte} DTE range ({min_date} to {max_date}).")
+            return None
+        
+        # Pick the expiry closest to max_dte (prefer longer duration)
+        best = max(candidates)
+        dte = (best - today).days
+        self._log(f"📅 {symbol}: Selected expiry {best} ({dte} DTE) from {min_dte}-{max_dte} range.")
+        return best.strftime("%Y-%m-%d")
 
     def _process_side(self, symbol, current_price, analysis, expiry, is_put, config=None):
         config = config or {}
