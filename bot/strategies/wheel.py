@@ -513,6 +513,11 @@ class WheelStrategy(AbstractStrategy):
             if get_underlying(p['symbol']) != symbol or p['symbol'] == symbol:
                 continue
 
+            # Only count short legs (quantity < 0) so that credit spreads (sell to open + buy to open)
+            # are correctly counted as 1 lot rather than double-counting both legs.
+            if p.get('quantity', 0) >= 0:
+                continue
+
             exp_str = get_expiry_str(p['symbol'])
             if exp_str:
                 expiry_counts[exp_str] = expiry_counts.get(exp_str, 0) + abs(p.get('quantity', 1))

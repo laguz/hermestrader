@@ -85,7 +85,7 @@ class AbstractStrategy(ABC):
         """Returns the True Available Option Buying Power (OBP - min_obp_reserve)."""
         if config is None:
              config = getattr(self, 'config', {}) or {}
-        min_reserve = config.get('min_obp_reserve', 1000)
+        min_reserve = config.get('min_obp_reserve', 0)
         
         balances = self.tradier.get_account_balances()
         if not balances:
@@ -98,7 +98,7 @@ class AbstractStrategy(ABC):
         """Check if Option Buying Power is sufficient after reserve."""
         if config is None:
              config = getattr(self, 'config', {}) or {}
-        min_reserve = config.get('min_obp_reserve', 1000)
+        min_reserve = config.get('min_obp_reserve', 0)
         
         balances = self.tradier.get_account_balances()
         if not balances:
