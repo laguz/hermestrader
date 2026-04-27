@@ -395,11 +395,21 @@
 
         // Update Logs
         if (status.logs && status.logs.length > 0) {
-            logsContainer.innerHTML = status.logs.map(log => {
+            const newHtml = status.logs.map(log => {
                 const time = new Date(log.timestamp).toLocaleTimeString();
                 return `<div><span class="text-gray-500">[${time}]</span> ${log.message}</div>`;
             }).join('');
-            logsContainer.scrollTop = logsContainer.scrollHeight;
+
+            if (logsContainer.innerHTML !== newHtml) {
+                // Determine if we should scroll (if user is within 100px of bottom)
+                const isAtBottom = logsContainer.scrollHeight - logsContainer.scrollTop <= logsContainer.clientHeight + 100;
+                
+                logsContainer.innerHTML = newHtml;
+
+                if (isAtBottom) {
+                    logsContainer.scrollTop = logsContainer.scrollHeight;
+                }
+            }
         }
 
         // Update Configuration Inputs
