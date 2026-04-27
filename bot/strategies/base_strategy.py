@@ -227,16 +227,24 @@ class AbstractStrategy(ABC):
             return list(self.db['active_trades'].find({"strategy": self.strategy_id, "status": "OPEN"}))
         return []
 
-    def _count_existing_on_symbol(self, symbol):
-        """Count total open spread lots for this strategy on a specific symbol across all expiries."""
+    def _count_existing_on_symbol(self, symbol, side=None):
+        """Count total open spread lots for this strategy on a specific symbol.
+           If side is 'put' or 'call', only counts trades containing that side.
+        """
+        from bot.utils import get_op_type
         open_trades = self.get_open_trades()
         count = 0
         for trade in open_trades:
             if trade.get('symbol') != symbol:
                 continue
             
-            # Get lots from legs_info or quantity
             legs = trade.get('legs_info', [])
+            if side and legs:
+                # If side is specified, only count if at least one leg matches that side
+                if not any(get_op_type(l) == side.lower() for l in legs):
+                    continue
+            
+            # Get lots from legs_info or quantity
             if isinstance(legs, list) and legs:
                 count += abs(legs[0].get('quantity', 1))
             else:

@@ -47,7 +47,7 @@ def get_op_type(pos):
     if otype in ['put', 'call']:
         return otype
         
-    symbol = pos.get('symbol', '')
+    symbol = pos.get('symbol') or pos.get('option_symbol') or ''
     # Match YYMMDD followed by C or P
     match = re.search(r'\d{6}([CP])', symbol)
     if match:

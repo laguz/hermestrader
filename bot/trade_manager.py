@@ -134,15 +134,30 @@ class TradeManager:
         if not action.tag:
             action.tag = action.strategy_id
 
-        # 1. Place order on Tradier natively
+        # 1. Determine order type and extract option symbol if needed
+        order_type = 'market'
+        option_symbol = None
+
+        if not action.price:
+            order_type = 'market'
+        elif action.order_class in ['equity', 'option']:
+            order_type = 'limit'
+            if action.order_class == 'option' and action.legs:
+                option_symbol = action.legs[0].get('option_symbol')
+        else:
+            # For multileg, use credit/debit based on side
+            order_type = 'credit' if 'sell' in action.side.lower() else 'debit'
+
+        # 2. Place order on Tradier natively
         response = self.tradier.place_order(
             account_id=self.tradier.account_id,
             symbol=action.symbol,
             side=action.side,
             quantity=action.quantity,
-            order_type='credit' if action.price and action.price > 0 else 'market' if not action.price else 'debit',
+            order_type=order_type,
             duration='day',
             price=action.price,
+            option_symbol=option_symbol,
             order_class=action.order_class,
             legs=action.legs,
             tag=action.tag

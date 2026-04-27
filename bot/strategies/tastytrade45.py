@@ -296,8 +296,8 @@ class TastyTrade45Strategy(AbstractStrategy):
             
         dynamic_lots = min(dynamic_lots, max_lots_config)
 
-        # Per-symbol limit: subtract existing positions on this symbol across all expiries
-        existing = self._count_existing_on_symbol(symbol)
+        # Per-symbol limit: subtract existing positions on this symbol FOR THIS SIDE
+        existing = self._count_existing_on_symbol(symbol, side=side_name.lower())
         dynamic_lots = min(dynamic_lots, max_lots_config - existing)
         if dynamic_lots < 1:
             self._log(f"ℹ️ {symbol}: TT45 symbol already at max ({existing}/{max_lots_config}). Skipping.")
