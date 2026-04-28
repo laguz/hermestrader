@@ -182,25 +182,21 @@ class CreditSpreads7Strategy(AbstractStrategy):
         if not options or not short_leg:
             return
 
-        # 2. Universal Dynamic Width
-        dynamic_width = self._determine_dynamic_width(symbol, options, short_strike, side_name)
-        if dynamic_width is None:
-            return
-
-        # 3. Find Long Leg and calculate 12% Rule
-        long_leg, current_width, net_credit = self._find_long_leg_and_credit(
-            symbol, options, short_strike, is_put, dynamic_width, side_name, short_leg
+        # 3. Fixed Width 1.0 and Long Leg Check
+        target_width = 1.00
+        long_leg, net_credit = self._find_long_leg_and_credit(
+            symbol, options, short_strike, is_put, target_width, side_name, short_leg
         )
         if not long_leg:
             return
 
-        # 4. Determine Capital Risk & BP Verification
-        dynamic_lots = self._determine_lots_and_verify_bp(symbol, expiry, current_width, config, side_name)
+        # 4. BP and Allocation Check
+        dynamic_lots = self._determine_lots_and_verify_bp(symbol, expiry, target_width, config, side_name)
         if dynamic_lots is None:
             return
 
         # 5. Place the order
-        self._place_order(symbol, short_strike, current_width, net_credit, dynamic_lots, short_leg, long_leg, side_name)
+        self._place_order(symbol, short_strike, target_width, net_credit, dynamic_lots, short_leg, long_leg, side_name)
 
     def _select_entry_point(self, symbol, current_price, analysis, is_put, side_name):
         entry_key = 'put_entry_points' if is_put else 'call_entry_points'
@@ -251,77 +247,34 @@ class CreditSpreads7Strategy(AbstractStrategy):
 
         return options, short_leg
 
-    def _determine_dynamic_width(self, symbol, options, short_strike, side_name):
-        # 2. Universal Dynamic Width
-        # Find minimal width from strikes in the chain around the target
-        strikes = sorted(set([o['strike'] for o in options]))
-        if len(strikes) < 2:
-            self._log(f"Skipping {symbol} {side_name}: Not enough strikes available to determine dynamic width.")
-            return None
-            
-        # Find the gap near the short strike
-        idx = -1
-        try:
-            idx = strikes.index(short_strike)
-        except ValueError:
-            pass # We already verified it exists so this shouldn't happen
-            
-        dynamic_width = None
-        if idx > 0 and idx < len(strikes) - 1:
-            dynamic_width = min(strikes[idx] - strikes[idx-1], strikes[idx+1] - strikes[idx])
-        elif idx == 0:
-            dynamic_width = strikes[1] - strikes[0]
-        elif idx == len(strikes) - 1:
-            dynamic_width = strikes[idx] - strikes[idx-1]
-            
-        if dynamic_width is None or dynamic_width <= 0:
-            self._log(f"Skipping {symbol} {side_name}: Invalid dynamic width detected.")
-            return None
-            
-        return round(dynamic_width, 2)
 
-    def _find_long_leg_and_credit(self, symbol, options, short_strike, is_put, dynamic_width, side_name, short_leg):
-        # 3. Find Long Leg and calculate 12% Rule (incorporating expansion logic up to max 10 wide)
-        long_leg = None
-        current_width = dynamic_width
-        MAX_WIDTH = 10.0
+    def _find_long_leg_and_credit(self, symbol, options, short_strike, is_put, target_width, side_name, short_leg):
+        expected_long_strike = short_strike - target_width if is_put else short_strike + target_width
+        expected_long_strike = round(expected_long_strike, 2)
         
-        while True:
-            if current_width > MAX_WIDTH:
-                self._log(f"Skipping {symbol} {side_name}: Expanded width {current_width} exceeds maximum allowed width of {MAX_WIDTH}.")
-                return None, None, None
+        long_leg = next((o for o in options if abs(o['strike'] - expected_long_strike) < 0.01), None)
 
-            expected_long_strike = short_strike - current_width if is_put else short_strike + current_width
-            expected_long_strike = round(expected_long_strike, 2) # Prevent float comparison issues
+        if not long_leg:
+             self._log(f"Skipping {symbol} {side_name}: Required Long Leg {expected_long_strike} for {target_width} parameter width is missing in chain.")
+             return None, None
             
-            long_leg = next((o for o in options if abs(o['strike'] - expected_long_strike) < 0.01), None)
+        short_price = round((short_leg['bid'] + short_leg['ask']) / 2, 2)
+        long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
+
+        if short_leg['bid'] == 0 and short_leg['ask'] == 0:
+            self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
+            return None, None
             
-            if not long_leg:
-                # Expand to next available strike width
-                self._log(f"Long strike {expected_long_strike} missing. Expanding width from {current_width} to {current_width + dynamic_width}...")
-                current_width = round(current_width + dynamic_width, 2)
-                continue
-                
-            # For a safer fill check, we use natural debit or mid
-            short_price = round((short_leg['bid'] + short_leg['ask']) / 2, 2)
-            long_price = round((long_leg['bid'] + long_leg['ask']) / 2, 2)
-            
-            # If quotes are 0 (bad chain), abort or skip
-            if short_leg['bid'] == 0 and short_leg['ask'] == 0:
-                self._log(f"Skipping {symbol} {side_name}: Options have 0.0 pricing.")
-                return None, None, None
-                
-            net_credit = round(short_price - long_price, 2)
-            min_required_credit = round(current_width * 0.12, 2)
-            
-            if net_credit < min_required_credit:
-                self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 12% limit ({min_required_credit}) for width {current_width}.")
-                # Expand width and try again for better credit
-                current_width = round(current_width + dynamic_width, 2)
-                continue
-            else:
-                # Passes all filters!
-                return long_leg, current_width, net_credit
+        net_credit = round(short_price - long_price, 2)
+
+        # The 12% Rule: Min Credit = Width * 0.12
+        min_required_credit = round(target_width * 0.12, 2)
+
+        if net_credit < min_required_credit:
+            self._log(f"Skipping {symbol} {side_name}: Net Credit {net_credit} < 12% limit ({min_required_credit}) for width {target_width}.")
+            return None, None
+
+        return long_leg, net_credit
 
     def _determine_lots_and_verify_bp(self, symbol, expiry, current_width, config, side_name):
         # 4. Determine Capital Risk & BP Verification
