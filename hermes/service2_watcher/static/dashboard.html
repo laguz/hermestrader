@@ -22,6 +22,22 @@
   .pill { display:inline-block; padding:2px 6px; border-radius:8px; font-size:11px;
           background:#1f2630; color:#7eb6ff; margin-right:4px; }
   .small { color:#9aa1ac; font-size:12px; }
+  .wl-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:14px; }
+  .wl-panel { background:#0f1116; border:1px solid #232730; border-radius:8px; padding:12px; }
+  .wl-panel header { display:flex; justify-content:space-between; align-items:center;
+                     margin-bottom:8px; }
+  .wl-panel h3 { margin:0; font-size:13px; letter-spacing:.5px; color:#e7e7ea; }
+  .wl-panel .meta { font-size:11px; color:#9aa1ac; }
+  .wl-tag { display:inline-flex; align-items:center; gap:6px; background:#1f2630;
+            border-radius:14px; padding:3px 4px 3px 10px; font-size:12px; margin:2px; }
+  .wl-tag button { background:transparent; border:0; color:#ff6f7d; cursor:pointer;
+                   font-size:14px; padding:0 6px; }
+  .wl-form { display:flex; gap:6px; margin-top:10px; }
+  .wl-form input { flex:1; background:#0a0b0e; border:1px solid #232730; color:#e7e7ea;
+                   padding:6px 8px; border-radius:6px; font-size:12px; text-transform:uppercase; }
+  .wl-form button { background:#1f2630; border:1px solid #303644; color:#7eb6ff; cursor:pointer;
+                    padding:6px 10px; border-radius:6px; font-size:12px; }
+  .wl-empty { color:#6a6f7a; font-size:12px; font-style:italic; }
 </style>
 </head>
 <body>
@@ -36,6 +52,11 @@
     <div class="card">
       <h2>Daily realised PnL</h2>
       <canvas id="pnlChart" height="200"></canvas>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>Strategy watchlists <span class="small">— per-strategy; empty list falls back to default</span></h2>
+      <div id="watchlists" class="wl-grid"></div>
     </div>
 
     <div class="card" style="grid-column: span 2;">
@@ -130,11 +151,95 @@ function streamLogs() {
   ws.onclose = () => setTimeout(streamLogs, 2000);
 }
 
+// ---------------------------------------------------------------------
+// Per-strategy watchlist management
+// ---------------------------------------------------------------------
+const STRATEGIES = ["CS75", "CS7", "TT45", "WHEEL"];
+let DEFAULT_WL = [];
+
+async function loadHealth() {
+  try {
+    const h = await fetch("/api/health").then(r => r.json());
+    DEFAULT_WL = h.default_watchlist || [];
+  } catch (e) { /* ignore */ }
+}
+
+async function refreshWatchlists() {
+  const data = await fetch("/api/watchlists").then(r => r.json());
+  const root = $("#watchlists"); root.innerHTML = "";
+  for (const sid of STRATEGIES) {
+    const symbols = data[sid] || [];
+    const usingDefault = symbols.length === 0;
+    const effective = usingDefault ? DEFAULT_WL : symbols;
+    const panel = document.createElement("div");
+    panel.className = "wl-panel";
+    panel.innerHTML = `
+      <header>
+        <h3>${sid}</h3>
+        <span class="meta">${effective.length} effective${usingDefault ? " (default)" : ""}</span>
+      </header>
+      <div class="wl-symbols"></div>
+      <form class="wl-form" data-sid="${sid}">
+        <input type="text" placeholder="Add symbol e.g. SPY" maxlength="16" required />
+        <button type="submit">Add</button>
+      </form>
+    `;
+    const tags = panel.querySelector(".wl-symbols");
+    if (symbols.length === 0) {
+      tags.innerHTML = `<div class="wl-empty">Using default: ${DEFAULT_WL.join(", ") || "—"}</div>`;
+    } else {
+      for (const sym of symbols) {
+        const tag = document.createElement("span");
+        tag.className = "wl-tag";
+        tag.innerHTML = `${sym} <button title="remove" data-sid="${sid}" data-sym="${sym}">×</button>`;
+        tags.appendChild(tag);
+      }
+    }
+    root.appendChild(panel);
+  }
+}
+
+document.addEventListener("submit", async (e) => {
+  if (!e.target.classList.contains("wl-form")) return;
+  e.preventDefault();
+  const sid = e.target.dataset.sid;
+  const input = e.target.querySelector("input");
+  const symbol = (input.value || "").trim().toUpperCase();
+  if (!symbol) return;
+  const r = await fetch(`/api/watchlists/${sid}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol }),
+  });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    alert(`Add failed: ${detail.detail || r.statusText}`);
+    return;
+  }
+  input.value = "";
+  refreshWatchlists();
+});
+
+document.addEventListener("click", async (e) => {
+  if (e.target.tagName !== "BUTTON" || !e.target.dataset.sym) return;
+  const { sid, sym } = e.target.dataset;
+  if (!confirm(`Remove ${sym} from ${sid}?`)) return;
+  const r = await fetch(`/api/watchlists/${sid}/${sym}`, { method: "DELETE" });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    alert(`Remove failed: ${detail.detail || r.statusText}`);
+    return;
+  }
+  refreshWatchlists();
+});
+
 streamLogs();
+loadHealth().then(refreshWatchlists);
 refreshPositions(); refreshEntries(); refreshPnl();
 setInterval(refreshPositions, 10_000);
 setInterval(refreshEntries, 15_000);
 setInterval(refreshPnl, 30_000);
+setInterval(refreshWatchlists, 20_000);
 </script>
 </body>
 </html>

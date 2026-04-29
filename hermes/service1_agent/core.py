@@ -303,12 +303,25 @@ class CascadingEngine:
         return actions
 
     # 4
+    def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
+        """Per-strategy watchlist with fallback to the engine-level default."""
+        getter = getattr(self.db, "list_watchlist", None)
+        if getter is None:
+            return list(default)
+        try:
+            wl = getter(strategy_id) or []
+        except Exception as exc:                          # noqa: BLE001
+            logger.exception("watchlist read failed for %s: %s", strategy_id, exc)
+            return list(default)
+        return wl or list(default)
+
     def process_entries(self, watchlist: Sequence[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         for s in self.strategies:
             try:
+                wl = self._watchlist_for(s.strategy_id, watchlist)
                 # Drain entire watchlist for THIS strategy before moving on.
-                actions.extend(s.execute_entries(list(watchlist)))
+                actions.extend(s.execute_entries(wl))
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
         return actions

@@ -12,9 +12,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from hermes.db.models import HermesDB
 from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
@@ -22,7 +23,26 @@ from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
 logger = logging.getLogger("hermes.watcher.api")
 
 DSN = os.environ.get("HERMES_DSN", "postgresql+psycopg://hermes:hermes@localhost:5432/hermes")
-WATCHLIST = os.environ.get("HERMES_WATCHLIST", "AAPL,SPY,QQQ,NVDA,AMD,KO").split(",")
+WATCHLIST = [s.strip().upper() for s in
+             os.environ.get("HERMES_WATCHLIST", "AAPL,SPY,QQQ,NVDA,AMD,KO").split(",") if s.strip()]
+
+# Canonical strategy registry mirrored from service1_agent/strategies.py
+STRATEGIES = ("CS75", "CS7", "TT45", "WHEEL")
+
+
+def _require_strategy(strategy_id: str) -> str:
+    sid = strategy_id.upper()
+    if sid not in STRATEGIES:
+        raise HTTPException(status_code=404,
+                            detail=f"unknown strategy {strategy_id!r}; allowed: {list(STRATEGIES)}")
+    return sid
+
+
+def _clean_symbol(sym: str) -> str:
+    s = (sym or "").strip().upper()
+    if not s or not all(c.isalnum() or c in "._-" for c in s) or len(s) > 16:
+        raise HTTPException(status_code=400, detail=f"invalid symbol {sym!r}")
+    return s
 
 db = HermesDB(DSN)
 feat = FeatureEngineer()
@@ -52,7 +72,76 @@ def index() -> FileResponse:
 
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
-    return {"ok": True, "service": "human-watcher", "watchlist": WATCHLIST}
+    return {
+        "ok": True,
+        "service": "human-watcher",
+        "default_watchlist": WATCHLIST,
+        "strategies": list(STRATEGIES),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Watchlist management — the watcher's only write surface. Each strategy has
+# its own list; an empty list falls back to the default watchlist at tick time.
+# ---------------------------------------------------------------------------
+class WatchlistBody(BaseModel):
+    symbols: List[str] = Field(default_factory=list)
+
+
+class SymbolBody(BaseModel):
+    symbol: str
+
+
+@app.get("/api/watchlists")
+def get_all_watchlists() -> Dict[str, List[str]]:
+    stored = db.list_all_watchlists()
+    return {sid: stored.get(sid, []) for sid in STRATEGIES}
+
+
+@app.get("/api/watchlists/{strategy_id}")
+def get_watchlist(strategy_id: str) -> Dict[str, Any]:
+    sid = _require_strategy(strategy_id)
+    symbols = db.list_watchlist(sid)
+    return {
+        "strategy_id": sid,
+        "symbols": symbols,
+        "effective": symbols or WATCHLIST,
+        "using_default": not symbols,
+    }
+
+
+@app.put("/api/watchlists/{strategy_id}")
+def replace_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]:
+    sid = _require_strategy(strategy_id)
+    symbols = [_clean_symbol(s) for s in body.symbols]
+    saved = db.set_watchlist(sid, symbols)
+    db.write_log(sid, f"watchlist replaced: {saved}")
+    return {"strategy_id": sid, "symbols": saved}
+
+
+@app.post("/api/watchlists/{strategy_id}")
+def add_watchlist_symbol(strategy_id: str, body: SymbolBody) -> Dict[str, Any]:
+    sid = _require_strategy(strategy_id)
+    sym = _clean_symbol(body.symbol)
+    inserted = db.add_to_watchlist(sid, sym)
+    if inserted:
+        db.write_log(sid, f"watchlist add: {sym}")
+    return {
+        "strategy_id": sid, "symbol": sym, "added": inserted,
+        "symbols": db.list_watchlist(sid),
+    }
+
+
+@app.delete("/api/watchlists/{strategy_id}/{symbol}")
+def remove_watchlist_symbol(strategy_id: str, symbol: str) -> Dict[str, Any]:
+    sid = _require_strategy(strategy_id)
+    sym = _clean_symbol(symbol)
+    removed = db.remove_from_watchlist(sid, sym)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"{sym} not in {sid} watchlist")
+    db.write_log(sid, f"watchlist remove: {sym}")
+    return {"strategy_id": sid, "symbol": sym, "removed": True,
+            "symbols": db.list_watchlist(sid)}
 
 
 @app.get("/api/logs")

@@ -29,6 +29,14 @@ class Strategy(Base):
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class StrategyWatchlist(Base):
+    __tablename__ = "strategy_watchlists"
+    strategy_id = Column(String, ForeignKey("strategies.strategy_id", ondelete="CASCADE"),
+                         primary_key=True)
+    symbol = Column(String, primary_key=True)
+    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class Trade(Base):
     __tablename__ = "trades"
     id = Column(BigInteger, autoincrement=True)
@@ -162,6 +170,58 @@ class HermesDB:
                 s.add(BotLog(strategy_id="ENGINE", level="WARN",
                              message=f"orphan position: {sym}"))
             s.commit()
+
+    # ---- watchlist CRUD ---------------------------------------------------
+    def list_watchlist(self, strategy_id: str) -> List[str]:
+        with self.Session() as s:
+            rows = (s.query(StrategyWatchlist)
+                    .filter_by(strategy_id=strategy_id)
+                    .order_by(StrategyWatchlist.symbol).all())
+            return [r.symbol for r in rows]
+
+    def list_all_watchlists(self) -> Dict[str, List[str]]:
+        with self.Session() as s:
+            rows = s.query(StrategyWatchlist).order_by(
+                StrategyWatchlist.strategy_id, StrategyWatchlist.symbol).all()
+            out: Dict[str, List[str]] = {}
+            for r in rows:
+                out.setdefault(r.strategy_id, []).append(r.symbol)
+            return out
+
+    def add_to_watchlist(self, strategy_id: str, symbol: str) -> bool:
+        """Insert a single symbol. Returns True when inserted, False if it already existed."""
+        sym = (symbol or "").strip().upper()
+        if not sym:
+            raise ValueError("symbol must be non-empty")
+        with self.Session() as s:
+            exists = (s.query(StrategyWatchlist)
+                      .filter_by(strategy_id=strategy_id, symbol=sym).first())
+            if exists:
+                return False
+            s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
+            s.commit()
+            return True
+
+    def remove_from_watchlist(self, strategy_id: str, symbol: str) -> bool:
+        sym = (symbol or "").strip().upper()
+        with self.Session() as s:
+            row = (s.query(StrategyWatchlist)
+                   .filter_by(strategy_id=strategy_id, symbol=sym).first())
+            if not row:
+                return False
+            s.delete(row)
+            s.commit()
+            return True
+
+    def set_watchlist(self, strategy_id: str, symbols: List[str]) -> List[str]:
+        """Replace the entire watchlist for `strategy_id`. Returns the canonicalised list."""
+        clean = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
+        with self.Session() as s:
+            s.query(StrategyWatchlist).filter_by(strategy_id=strategy_id).delete()
+            for sym in clean:
+                s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
+            s.commit()
+        return clean
 
     # ---- reads ------------------------------------------------------------
     def open_trades(self, strategy_id: str) -> List[Dict[str, Any]]:

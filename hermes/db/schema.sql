@@ -15,6 +15,17 @@ CREATE TABLE IF NOT EXISTS strategies (
 );
 
 -- ---------------------------------------------------------------------
+-- Per-strategy watchlists — managed from the Human Watcher UI
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS strategy_watchlists (
+    strategy_id TEXT NOT NULL REFERENCES strategies(strategy_id) ON DELETE CASCADE,
+    symbol      TEXT NOT NULL,
+    added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (strategy_id, symbol)
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_watchlists_sid ON strategy_watchlists(strategy_id);
+
+-- ---------------------------------------------------------------------
 -- Trades — one row per opened structure (single leg, vertical, IC, etc.)
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS trades (
