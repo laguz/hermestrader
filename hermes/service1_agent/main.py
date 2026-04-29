@@ -58,3 +58,26 @@ def run(broker, llm_client, chart_provider, config: Dict[str, Any]) -> None:
         except Exception as exc:                                       # noqa: BLE001
             log.exception("tick failed: %s", exc)
         time.sleep(interval_s)
+
+
+if __name__ == "__main__":
+    # Docker/CLI entry point
+    import json
+    from hermes.service1_agent.mock_broker import MockBroker, MockLLM
+
+    # Basic config from env
+    conf = {
+        "watchlist": os.environ.get("HERMES_WATCHLIST", "AAPL,SPY,QQQ").split(","),
+        "min_obp_reserve": float(os.environ.get("HERMES_MIN_OBP_RESERVE", 5000.0)),
+        "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
+        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
+    }
+
+    # In production, you'd initialize your real TradierBroker/GemmaLLM here.
+    # For now, we use the Mock implementations to ensure the container starts.
+    broker = MockBroker(conf)
+    llm = MockLLM()
+    charts = None  # Mock chart provider not implemented
+
+    run(broker, llm, charts, conf)
