@@ -39,9 +39,23 @@ services:
       - HERMES_TICK_INTERVAL=300
       - HERMES_AI_AUTONOMY=advisory
       - HERMES_DRY_RUN=true
+      - TRADIER_ACCESS_TOKEN=${TRADIER_ACCESS_TOKEN:-}
+      - TRADIER_ACCOUNT_ID=${TRADIER_ACCOUNT_ID:-}
+      - TRADIER_BASE_URL=${TRADIER_BASE_URL:-https://api.tradier.com/v1}
     depends_on:
       db:
         condition: service_healthy
+
+  mcp:
+    build: .
+    command: python -m hermes.mcp.server
+    stdin_open: true
+    tty: true
+    environment:
+      - TRADIER_ACCESS_TOKEN=${TRADIER_ACCESS_TOKEN:-}
+      - TRADIER_ACCOUNT_ID=${TRADIER_ACCOUNT_ID:-}
+      - TRADIER_BASE_URL=${TRADIER_BASE_URL:-https://api.tradier.com/v1}
+      - HERMES_DRY_RUN=${HERMES_DRY_RUN:-true}
 
 volumes:
   hermes_db_data:

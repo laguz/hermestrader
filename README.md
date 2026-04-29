@@ -19,11 +19,70 @@ hermes/
 ├── service2_watcher/
 │   ├── api.py         # FastAPI backend (read-only)
 │   └── static/dashboard.html
+├── broker/
+│   └── tradier.py     # TradierBroker — REST client conforming to Hermes broker contract
+├── mcp/
+│   └── server.py      # MCP server exposing TradierBroker tools (FastMCP, stdio)
 ├── ml/
 │   └── xgb_features.py  # 10-feature engineer + threaded XGB predictor + HV Rank
 └── db/
     ├── schema.sql     # TimescaleDB hypertables, compression, continuous aggregates
     └── models.py      # SQLAlchemy ORM + HermesDB repository
+```
+
+## Tradier broker
+
+`hermes/broker/tradier.py` is a synchronous REST client for [Tradier
+Brokerage](https://documentation.tradier.com/brokerage-api). It implements the
+same surface the strategies already call (`get_account_balances`,
+`get_positions`, `get_option_expirations`, `get_option_chains`, `get_quote`,
+`get_delta`, `analyze_symbol`, `place_order_from_action`,
+`roll_to_next_month`).
+
+Configuration (env or constructor `config`):
+
+- `TRADIER_ACCESS_TOKEN` — bearer token
+- `TRADIER_ACCOUNT_ID` — account number
+- `TRADIER_BASE_URL` — `https://api.tradier.com/v1` (live) or
+  `https://sandbox.tradier.com/v1` (paper). Default: live.
+- `HERMES_DRY_RUN=true` — orders are routed through Tradier's preview endpoint
+  instead of being placed.
+
+`hermes/service1_agent/main.py` auto-selects `TradierBroker` when the token
+and account id are set; otherwise it falls back to `MockBroker`.
+
+## Tradier MCP server
+
+`hermes/mcp/server.py` exposes the Tradier broker as an MCP server (FastMCP,
+stdio). Any MCP client (Claude Desktop, Cowork, custom agents) can call:
+`get_account_balances`, `get_positions`, `get_orders`, `cancel_order`,
+`get_quote`, `get_option_expirations`, `get_option_chain`, `get_delta`,
+`get_history`, `analyze_symbol`, `place_multileg_order`,
+`place_single_option_order`, `place_equity_order`, `roll_to_next_month`.
+
+```bash
+pip install "mcp[cli]" requests
+export TRADIER_ACCESS_TOKEN=... TRADIER_ACCOUNT_ID=... HERMES_DRY_RUN=true
+python -m hermes.mcp.server
+```
+
+Claude Desktop / Cowork config snippet:
+
+```json
+{
+  "mcpServers": {
+    "tradier": {
+      "command": "python",
+      "args": ["-m", "hermes.mcp.server"],
+      "env": {
+        "TRADIER_ACCESS_TOKEN": "...",
+        "TRADIER_ACCOUNT_ID": "...",
+        "TRADIER_BASE_URL": "https://sandbox.tradier.com/v1",
+        "HERMES_DRY_RUN": "true"
+      }
+    }
+  }
+}
 ```
 
 ## Quick start

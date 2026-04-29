@@ -22,7 +22,9 @@ RUN pip install --no-cache-dir \
     psycopg[binary] \
     xgboost \
     pandas \
-    numpy
+    numpy \
+    requests \
+    "mcp[cli]"
 
 # Set environment variables
 ENV PYTHONPATH=/app

@@ -60,12 +60,22 @@ def run(broker, llm_client, chart_provider, config: Dict[str, Any]) -> None:
         time.sleep(interval_s)
 
 
-if __name__ == "__main__":
-    # Docker/CLI entry point
-    import json
-    from hermes.service1_agent.mock_broker import MockBroker, MockLLM
+def _build_broker(conf: Dict[str, Any]):
+    """Use the real Tradier broker when credentials are present, else fall back to the mock."""
+    if os.environ.get("TRADIER_ACCESS_TOKEN") and os.environ.get("TRADIER_ACCOUNT_ID"):
+        from hermes.broker.tradier import TradierBroker
+        log.info("Initializing TradierBroker (base=%s, dry_run=%s)",
+                 os.environ.get("TRADIER_BASE_URL", "https://api.tradier.com/v1"),
+                 conf.get("dry_run"))
+        return TradierBroker(conf)
+    from hermes.service1_agent.mock_broker import MockBroker
+    log.warning("TRADIER_ACCESS_TOKEN/TRADIER_ACCOUNT_ID not set — using MockBroker")
+    return MockBroker(conf)
 
-    # Basic config from env
+
+if __name__ == "__main__":
+    from hermes.service1_agent.mock_broker import MockLLM
+
     conf = {
         "watchlist": os.environ.get("HERMES_WATCHLIST", "AAPL,SPY,QQQ").split(","),
         "min_obp_reserve": float(os.environ.get("HERMES_MIN_OBP_RESERVE", 5000.0)),
@@ -74,10 +84,8 @@ if __name__ == "__main__":
         "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
     }
 
-    # In production, you'd initialize your real TradierBroker/GemmaLLM here.
-    # For now, we use the Mock implementations to ensure the container starts.
-    broker = MockBroker(conf)
+    broker = _build_broker(conf)
     llm = MockLLM()
-    charts = None  # Mock chart provider not implemented
+    charts = None
 
     run(broker, llm, charts, conf)
