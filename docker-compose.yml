@@ -23,9 +23,9 @@ services:
     command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8081
     ports:
       - "8081:8081"
+    env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
-      - HERMES_WATCHLIST=AAPL,SPY,QQQ,NVDA,AMD,KO
     depends_on:
       db:
         condition: service_healthy
@@ -33,15 +33,9 @@ services:
   agent:
     build: .
     command: python -m hermes.service1_agent.main
+    env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
-      - HERMES_WATCHLIST=AAPL,SPY,QQQ,NVDA,AMD,KO
-      - HERMES_TICK_INTERVAL=300
-      - HERMES_AI_AUTONOMY=advisory
-      - HERMES_DRY_RUN=true
-      - TRADIER_ACCESS_TOKEN=${TRADIER_ACCESS_TOKEN:-}
-      - TRADIER_ACCOUNT_ID=${TRADIER_ACCOUNT_ID:-}
-      - TRADIER_BASE_URL=${TRADIER_BASE_URL:-https://api.tradier.com/v1}
     depends_on:
       db:
         condition: service_healthy
@@ -51,11 +45,7 @@ services:
     command: python -m hermes.mcp.server
     stdin_open: true
     tty: true
-    environment:
-      - TRADIER_ACCESS_TOKEN=${TRADIER_ACCESS_TOKEN:-}
-      - TRADIER_ACCOUNT_ID=${TRADIER_ACCOUNT_ID:-}
-      - TRADIER_BASE_URL=${TRADIER_BASE_URL:-https://api.tradier.com/v1}
-      - HERMES_DRY_RUN=${HERMES_DRY_RUN:-true}
+    env_file: .env
 
 volumes:
   hermes_db_data:
