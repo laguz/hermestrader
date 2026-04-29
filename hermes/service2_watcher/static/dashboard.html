@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hermes Human Watcher</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; background:#0e0f12; color:#e7e7ea;
+         margin:0; padding:24px; }
+  h1 { margin:0 0 16px; font-size:20px; letter-spacing:.5px; }
+  .grid { display:grid; grid-template-columns: 1.4fr 1fr; gap:24px; }
+  .card { background:#15171c; border:1px solid #232730; border-radius:10px; padding:16px;
+          box-shadow:0 1px 0 #0006 inset; }
+  .card h2 { margin:0 0 12px; font-size:14px; color:#9aa1ac; text-transform:uppercase;
+             letter-spacing:1px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { padding:6px 8px; border-bottom:1px solid #232730; text-align:left; }
+  th { color:#9aa1ac; font-weight:500; }
+  .pos { color:#7be0a3; } .neg { color:#ff6f7d; }
+  #logs { background:#0a0b0e; padding:10px; border-radius:6px; height:340px;
+          overflow:auto; font-family: ui-monospace, monospace; font-size:12px; line-height:1.5; }
+  .pill { display:inline-block; padding:2px 6px; border-radius:8px; font-size:11px;
+          background:#1f2630; color:#7eb6ff; margin-right:4px; }
+  .small { color:#9aa1ac; font-size:12px; }
+</style>
+</head>
+<body>
+  <h1>HERMES — Human Watcher <span class="small">read-only command center</span></h1>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Live execution log</h2>
+      <div id="logs"></div>
+    </div>
+
+    <div class="card">
+      <h2>Daily realised PnL</h2>
+      <canvas id="pnlChart" height="200"></canvas>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>Open positions</h2>
+      <table id="positions">
+        <thead><tr>
+          <th>Strategy</th><th>Symbol</th><th>Type</th><th>Lots</th><th>Short</th>
+          <th>Long</th><th>Width</th><th>Credit</th><th>Expiry</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>Entry-point view (rule + AI prediction)</h2>
+      <table id="entries">
+        <thead><tr>
+          <th>Symbol</th><th>Spot</th><th>Predicted</th><th>Δ%</th>
+          <th>Direction</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const fmt = (n, d=2) => (n == null ? "—" : Number(n).toFixed(d));
+
+async function refreshPositions() {
+  const r = await fetch("/api/positions").then(r => r.json());
+  const tbody = $("#positions tbody"); tbody.innerHTML = "";
+  for (const p of r) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td><span class="pill">${p.strategy_id}</span></td>
+      <td>${p.symbol}</td><td>${p.side_type}</td><td>${p.lots}</td>
+      <td>${p.short_leg ?? ""}</td><td>${p.long_leg ?? ""}</td>
+      <td>${fmt(p.width)}</td><td>${fmt(p.entry_credit)}</td>
+      <td>${p.expiry ?? ""}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function refreshEntries() {
+  const r = await fetch("/api/predictions").then(r => r.json());
+  const tbody = $("#entries tbody"); tbody.innerHTML = "";
+  for (const p of r) {
+    const ret = (p.predicted_return ?? 0) * 100;
+    const dir = ret >= 0 ? "▲ bullish" : "▼ bearish";
+    const cls = ret >= 0 ? "pos" : "neg";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${p.symbol}</td>
+      <td>${fmt(p.spot)}</td><td>${fmt(p.predicted_price)}</td>
+      <td class="${cls}">${fmt(ret, 2)}%</td>
+      <td class="${cls}">${dir}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+let pnlChart;
+async function refreshPnl() {
+  const data = await fetch("/api/pnl").then(r => r.json());
+  const labels = data.map(d => d.day);
+  const values = data.map(d => Number(d.realized_pnl ?? 0));
+  if (!pnlChart) {
+    pnlChart = new Chart($("#pnlChart"), {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Realised", data: values,
+        backgroundColor: values.map(v => v >= 0 ? "#7be0a3" : "#ff6f7d") }] },
+      options: { plugins: { legend: { display: false } },
+        scales: { x: { ticks: { color: "#9aa1ac" } }, y: { ticks: { color: "#9aa1ac" } } } }
+    });
+  } else {
+    pnlChart.data.labels = labels;
+    pnlChart.data.datasets[0].data = values;
+    pnlChart.data.datasets[0].backgroundColor =
+      values.map(v => v >= 0 ? "#7be0a3" : "#ff6f7d");
+    pnlChart.update();
+  }
+}
+
+function streamLogs() {
+  const ws = new WebSocket(`ws://${location.host}/ws/logs`);
+  ws.onmessage = (e) => {
+    const box = $("#logs");
+    const div = document.createElement("div");
+    div.textContent = e.data;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  };
+  ws.onclose = () => setTimeout(streamLogs, 2000);
+}
+
+streamLogs();
+refreshPositions(); refreshEntries(); refreshPnl();
+setInterval(refreshPositions, 10_000);
+setInterval(refreshEntries, 15_000);
+setInterval(refreshPnl, 30_000);
+</script>
+</body>
+</html>
