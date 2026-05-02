@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: timescale/timescaledb:latest-pg15
@@ -20,12 +18,20 @@ services:
 
   watcher:
     build: .
+    # --reload picks up Python edits automatically; static HTML/CSS/JS under
+    # hermes/service2_watcher/static is served fresh on every request, so the
+    # bind mount alone makes those visible without any restart.
     command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8081
+             --reload --reload-dir /app/hermes
     ports:
       - "8081:8081"
     env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+    volumes:
+      # Live-mount the source so host edits appear inside the container
+      # without rebuilding the image. Read-only — the watcher never writes here.
+      - ./hermes:/app/hermes:ro
     depends_on:
       db:
         condition: service_healthy
@@ -36,6 +42,10 @@ services:
     env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+    volumes:
+      # Same live-mount as the watcher. The agent is a long-running tick loop,
+      # so Python edits require `docker compose restart agent` to take effect.
+      - ./hermes:/app/hermes:ro
     depends_on:
       db:
         condition: service_healthy
@@ -46,6 +56,8 @@ services:
     stdin_open: true
     tty: true
     env_file: .env
+    volumes:
+      - ./hermes:/app/hermes:ro
 
 volumes:
   hermes_db_data:

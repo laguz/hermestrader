@@ -99,8 +99,10 @@ export HERMES_DSN="postgresql+psycopg://hermes:hermes@localhost:5432/hermes"
 export HERMES_WATCHLIST="AAPL,SPY,QQQ,NVDA,AMD,KO"
 uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8081
 
-# 4. Run the agent (separate process; bring your own broker + LLM client)
-python -c "from hermes.service1_agent.main import run; run(broker, llm, charts, config)"
+# 4. Run the agent (separate process). The broker is auto-built from the
+#    Tradier env vars and the live/paper mode stored in `system_settings`,
+#    which the watcher's toggle writes to.
+python -m hermes.service1_agent.main
 ```
 
 ## Strategy rules at a glance

@@ -19,7 +19,7 @@ logger = logging.getLogger("hermes.agent.overseer")
 class HermesOverseer:
     """Visual + statistical override layer above the rules engine."""
 
-    SYSTEM_PROMPT = (
+    BASE_SYSTEM_PROMPT = (
         "You are HERMES, a quantitative options-trading overseer. "
         "You review trade actions produced by rule-based strategies and decide: "
         "APPROVE / VETO / MODIFY. You also propose new trades when chart context "
@@ -28,17 +28,37 @@ class HermesOverseer:
     )
 
     def __init__(self, llm_client, db, *, vision_enabled: bool = True,
-                 chart_provider=None, autonomy: str = "advisory"):
+                 chart_provider=None, autonomy: str = "advisory",
+                 soul: Optional[str] = None):
         """
         autonomy: 'advisory'  → log decisions, never block (default for new deployments)
                   'enforcing' → veto/modify takes effect
                   'autonomous'→ may also originate new actions
+
+        soul: free-text operator doctrine (typically the contents of a
+              soul.md the user maintains in the watcher). When non-empty it
+              is appended to the base system prompt on every LLM call, so
+              the overseer is shaped by both the base instructions and the
+              operator's current preferences without anyone touching code.
         """
         self.llm = llm_client
         self.db = db
         self.vision_enabled = vision_enabled
         self.chart_provider = chart_provider
         self.autonomy = autonomy
+        self.soul = (soul or "").strip()
+
+    @property
+    def SYSTEM_PROMPT(self) -> str:                              # noqa: N802
+        """Base instructions plus operator doctrine, when present."""
+        if not self.soul:
+            return self.BASE_SYSTEM_PROMPT
+        return (
+            f"{self.BASE_SYSTEM_PROMPT}\n\n"
+            "--- OPERATOR DOCTRINE (soul.md) ---\n"
+            f"{self.soul}\n"
+            "--- END DOCTRINE ---"
+        )
 
     # -- review existing rule-driven actions ---------------------------------
     def review(self, action: TradeAction) -> Optional[TradeAction]:

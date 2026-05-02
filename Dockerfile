@@ -18,6 +18,7 @@ COPY . /app
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
+    watchfiles \
     sqlalchemy \
     psycopg[binary] \
     xgboost \

@@ -38,12 +38,319 @@
   .wl-form button { background:#1f2630; border:1px solid #303644; color:#7eb6ff; cursor:pointer;
                     padding:6px 10px; border-radius:6px; font-size:12px; }
   .wl-empty { color:#6a6f7a; font-size:12px; font-style:italic; }
+
+  /* Status strip ------------------------------------------------------- */
+  .status-bar { display:flex; align-items:center; gap:18px; flex-wrap:wrap;
+                background:#15171c; border:1px solid #232730; border-radius:10px;
+                padding:10px 14px; margin-bottom:18px; }
+  .status-item { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .status-item .label { color:#9aa1ac; text-transform:uppercase; font-size:11px;
+                        letter-spacing:1px; }
+  .status-item .detail { color:#6a6f7a; font-size:11px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block;
+         box-shadow:0 0 8px currentColor; }
+  .dot.ok    { background:#7be0a3; color:#7be0a3; }
+  .dot.bad   { background:#ff6f7d; color:#ff6f7d; }
+  .dot.warn  { background:#f0c674; color:#f0c674; }
+  .mode-switch { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .mode-toggle { position:relative; width:96px; height:28px; background:#0a0b0e;
+                 border:1px solid #303644; border-radius:14px; cursor:pointer;
+                 user-select:none; }
+  .mode-toggle .knob { position:absolute; top:2px; left:2px; width:46px; height:22px;
+                       border-radius:11px; background:#1f2630; transition:left .18s,
+                       background .18s; display:flex; align-items:center;
+                       justify-content:center; font-size:11px; color:#e7e7ea;
+                       letter-spacing:.5px; }
+  .mode-toggle.live  .knob { left:46px; background:#552028; color:#ffd1d6; }
+  .mode-toggle.paper .knob { left:2px;  background:#1f3a2a; color:#bff1d3; }
+  .mode-toggle .track-label { position:absolute; top:6px; font-size:10px;
+                              color:#6a6f7a; letter-spacing:1px; }
+  .mode-toggle .track-label.l { left:10px; }
+  .mode-toggle .track-label.r { right:10px; }
+  .mode-toggle.busy { opacity:.5; pointer-events:none; }
+
+  /* System health card ------------------------------------------------- */
+  .health-grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+  .health-panel { background:#0f1116; border:1px solid #232730; border-radius:8px;
+                  padding:12px 14px; }
+  .health-panel header { display:flex; justify-content:space-between; align-items:center;
+                          margin-bottom:8px; }
+  .health-panel h3 { margin:0; font-size:13px; letter-spacing:.5px; color:#e7e7ea; }
+  .health-row { display:flex; justify-content:space-between; gap:12px;
+                font-size:12px; padding:3px 0; border-bottom:1px dashed #232730; }
+  .health-row:last-child { border-bottom:0; }
+  .health-row .k { color:#9aa1ac; }
+  .health-row .v { color:#e7e7ea; font-family: ui-monospace, monospace; text-align:right;
+                   word-break:break-all; }
+  .health-row.err .v { color:#ff6f7d; }
+  .badge { display:inline-flex; align-items:center; gap:6px; padding:2px 8px;
+           border-radius:10px; font-size:11px; letter-spacing:.5px; text-transform:uppercase; }
+  .badge.ok   { background:#143924; color:#7be0a3; border:1px solid #1f5a3a; }
+  .badge.bad  { background:#3a1820; color:#ff6f7d; border:1px solid #5a2630; }
+  .badge.warn { background:#3a2e14; color:#f0c674; border:1px solid #5a4a1f; }
+
+  /* Doctrine + agent control cards ----------------------------------- */
+  textarea.soul-area {
+    width:100%; min-height:240px; box-sizing:border-box;
+    background:#0a0b0e; border:1px solid #232730; color:#e7e7ea;
+    padding:10px 12px; border-radius:6px; font-size:12px; line-height:1.55;
+    font-family: ui-monospace, monospace; resize:vertical;
+  }
+  .ctrl-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+              margin-bottom:10px; }
+  .ctrl-row .label { color:#9aa1ac; text-transform:uppercase; font-size:11px;
+                     letter-spacing:1px; }
+  .ctrl-row .seg { display:inline-flex; gap:0; border:1px solid #303644;
+                   border-radius:6px; overflow:hidden; }
+  .ctrl-row .seg button { background:#0a0b0e; border:0; color:#9aa1ac;
+                          padding:6px 12px; font-size:12px; cursor:pointer;
+                          letter-spacing:.4px; }
+  .ctrl-row .seg button.active { background:#1f2630; color:#7eb6ff; }
+  .pause-toggle { width:96px; }
+  .pause-toggle.paused .knob { left:46px; background:#552028; color:#ffd1d6; }
+  .pause-toggle.running .knob { left:2px;  background:#1f3a2a; color:#bff1d3; }
+  .save-row { display:flex; gap:8px; align-items:center; margin-top:10px; }
+  .save-row button { background:#1f2630; border:1px solid #303644; color:#7eb6ff;
+                     cursor:pointer; padding:6px 14px; border-radius:6px;
+                     font-size:12px; }
+  .save-row button.primary { color:#bff1d3; border-color:#1f5a3a; }
+  .save-row .note { color:#9aa1ac; font-size:11px; }
+  .save-row .note.ok  { color:#7be0a3; }
+  .save-row .note.bad { color:#ff6f7d; }
+
+  /* LLM management card ----------------------------------------------- */
+  .llm-form { display:grid; grid-template-columns: max-content 1fr;
+              gap:8px 14px; align-items:center; }
+  .llm-form label { color:#9aa1ac; font-size:12px; letter-spacing:.4px; }
+  .llm-form input, .llm-form select {
+    background:#0a0b0e; border:1px solid #232730; color:#e7e7ea;
+    padding:6px 8px; border-radius:6px; font-size:12px;
+    font-family: ui-monospace, monospace;
+  }
+  .llm-form input[type="checkbox"] { width:auto; margin:0; }
+  .llm-form .row-actions { grid-column: 2; display:flex; gap:8px; margin-top:6px; }
+  .llm-form button {
+    background:#1f2630; border:1px solid #303644; color:#7eb6ff; cursor:pointer;
+    padding:6px 14px; border-radius:6px; font-size:12px;
+  }
+  .llm-form button.primary { color:#bff1d3; border-color:#1f5a3a; }
+  .llm-form button:disabled { opacity:.5; cursor:not-allowed; }
+  .llm-status { font-size:11px; color:#9aa1ac; grid-column: 2; padding-top:4px; }
+  .llm-status.ok  { color:#7be0a3; }
+  .llm-status.bad { color:#ff6f7d; }
 </style>
 </head>
 <body>
-  <h1>HERMES — Human Watcher <span class="small">read-only command center</span></h1>
+  <h1>HERMES — Human Watcher
+    <span class="small">read-only command center</span>
+    <!-- BUILD MARKER: bump this string whenever the dashboard changes so you
+         can verify in-browser that the container is serving the new HTML.
+         If the page does not show "build: 2026-05-01-c", you are on cached
+         or old container HTML. -->
+    <span class="small" style="margin-left:14px;color:#5a6271;">build: 2026-05-01-l (model refresh from server)</span>
+  </h1>
+
+  <div class="status-bar" id="statusBar">
+    <div class="status-item">
+      <span class="dot warn" id="hermesDot"></span>
+      <div>
+        <div class="label">Hermes Agent</div>
+        <div class="detail" id="hermesDetail">checking…</div>
+      </div>
+    </div>
+    <div class="status-item">
+      <span class="dot warn" id="tradierDot"></span>
+      <div>
+        <div class="label">Tradier API</div>
+        <div class="detail" id="tradierDetail">checking…</div>
+      </div>
+    </div>
+    <div class="mode-switch">
+      <span class="label" style="color:#9aa1ac;font-size:11px;letter-spacing:1px;">MODE</span>
+      <div id="modeToggle" class="mode-toggle paper" role="switch"
+           aria-checked="false" tabindex="0" title="Toggle paper/live">
+        <span class="track-label l">PAPER</span>
+        <span class="track-label r">LIVE</span>
+        <span class="knob" id="modeKnob">PAPER</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================================================================
+       Strategy watchlists — rendered as static HTML so the section is
+       ALWAYS visible, even if /api/watchlists fails or JS errors out.
+       The JS below only fills in the symbol tags; the structure and the
+       four "Add symbol" forms work regardless.
+       ================================================================== -->
+  <div class="card" style="margin-bottom:18px;">
+    <h2>Strategy watchlists <span class="small">— per-strategy; empty list falls back to default</span></h2>
+    <div id="watchlists" class="wl-grid">
+      <div class="wl-panel" data-sid="CS75">
+        <header><h3>CS75</h3><span class="meta" data-meta="CS75">—</span></header>
+        <div class="wl-symbols" data-symbols="CS75">
+          <div class="wl-empty">loading…</div>
+        </div>
+        <form class="wl-form" data-sid="CS75" autocomplete="off">
+          <input type="text" placeholder="Add symbol(s) — e.g. SPY or AAPL,NVDA"
+                 maxlength="64" required />
+          <button type="submit">Add</button>
+        </form>
+      </div>
+      <div class="wl-panel" data-sid="CS7">
+        <header><h3>CS7</h3><span class="meta" data-meta="CS7">—</span></header>
+        <div class="wl-symbols" data-symbols="CS7">
+          <div class="wl-empty">loading…</div>
+        </div>
+        <form class="wl-form" data-sid="CS7" autocomplete="off">
+          <input type="text" placeholder="Add symbol(s) — e.g. SPY or AAPL,NVDA"
+                 maxlength="64" required />
+          <button type="submit">Add</button>
+        </form>
+      </div>
+      <div class="wl-panel" data-sid="TT45">
+        <header><h3>TT45</h3><span class="meta" data-meta="TT45">—</span></header>
+        <div class="wl-symbols" data-symbols="TT45">
+          <div class="wl-empty">loading…</div>
+        </div>
+        <form class="wl-form" data-sid="TT45" autocomplete="off">
+          <input type="text" placeholder="Add symbol(s) — e.g. SPY or AAPL,NVDA"
+                 maxlength="64" required />
+          <button type="submit">Add</button>
+        </form>
+      </div>
+      <div class="wl-panel" data-sid="WHEEL">
+        <header><h3>WHEEL</h3><span class="meta" data-meta="WHEEL">—</span></header>
+        <div class="wl-symbols" data-symbols="WHEEL">
+          <div class="wl-empty">loading…</div>
+        </div>
+        <form class="wl-form" data-sid="WHEEL" autocomplete="off">
+          <input type="text" placeholder="Add symbol(s) — e.g. SPY or AAPL,NVDA"
+                 maxlength="64" required />
+          <button type="submit">Add</button>
+        </form>
+      </div>
+    </div>
+  </div>
 
   <div class="grid">
+    <div class="card" style="grid-column: span 2;">
+      <h2>System health</h2>
+      <div class="health-grid">
+        <div class="health-panel">
+          <header>
+            <h3>Hermes Agent</h3>
+            <span id="hermesBadge" class="badge warn">CHECKING</span>
+          </header>
+          <div class="health-row"><span class="k">Status</span><span class="v" id="hHStatus">—</span></div>
+          <div class="health-row"><span class="k">Mode</span><span class="v" id="hHMode">—</span></div>
+          <div class="health-row"><span class="k">Last tick</span><span class="v" id="hHLast">—</span></div>
+          <div class="health-row"><span class="k">Uptime</span><span class="v" id="hHUptime">—</span></div>
+          <div class="health-row"><span class="k">Started at</span><span class="v" id="hHStarted">—</span></div>
+          <div class="health-row"><span class="k">Tick interval</span><span class="v" id="hHTick">—</span></div>
+        </div>
+        <div class="health-panel">
+          <header>
+            <h3>Tradier API</h3>
+            <span id="tradierBadge" class="badge warn">CHECKING</span>
+          </header>
+          <div class="health-row"><span class="k">Status</span><span class="v" id="tHStatus">—</span></div>
+          <div class="health-row"><span class="k">Endpoint</span><span class="v" id="tHUrl">—</span></div>
+          <div class="health-row"><span class="k">Account</span><span class="v" id="tHAccount">—</span></div>
+          <div class="health-row"><span class="k">Last successful call</span><span class="v" id="tHLastOk">—</span></div>
+          <div class="health-row err" id="tHErrRow" style="display:none;">
+            <span class="k">Last error</span><span class="v" id="tHErr">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>Agent control <span class="small">— autonomy level + pause/resume; applies on next tick</span></h2>
+      <div class="ctrl-row">
+        <span class="label">Autonomy</span>
+        <div class="seg" id="autonomySeg">
+          <button type="button" data-autonomy="advisory">Advisory</button>
+          <button type="button" data-autonomy="enforcing">Enforcing</button>
+          <button type="button" data-autonomy="autonomous">Autonomous</button>
+        </div>
+        <span class="small" id="autonomyHint">log only — overseer does not block trades</span>
+      </div>
+      <div class="ctrl-row">
+        <span class="label">Engine</span>
+        <div id="pauseToggle" class="mode-toggle pause-toggle running" role="switch"
+             aria-checked="false" tabindex="0" title="Toggle pause/resume">
+          <span class="track-label l">RUN</span>
+          <span class="track-label r">PAUSE</span>
+          <span class="knob" id="pauseKnob">RUN</span>
+        </div>
+        <span class="small" id="pauseHint">engine ticking normally</span>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>Hermes Doctrine <span class="small">— soul.md, prepended to the overseer's system prompt</span></h2>
+      <textarea id="soulArea" class="soul-area"
+                placeholder="# HERMES soul.md&#10;&#10;Operator-defined doctrine the overseer reads on every LLM call. Markdown is fine. Examples:&#10;- Avoid earnings-week entries on AAPL/NVDA.&#10;- Treat WHEEL covered calls as primary income; don't roll into earnings.&#10;- VETO any TT45 trade with |Δ_short| > 0.30 regardless of model output."></textarea>
+      <div class="save-row">
+        <button type="button" id="soulSave" class="primary">Save doctrine</button>
+        <span class="note" id="soulStatus">loading…</span>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: span 2;">
+      <h2>LLM Overseer <span class="small">— local model that reviews and may modify trades</span></h2>
+      <form class="llm-form" id="llmForm" autocomplete="off">
+        <label for="llmProvider">Provider</label>
+        <select id="llmProvider" name="provider">
+          <option value="mock">Mock (no LLM — pass-through)</option>
+          <option value="local">Local (OpenAI-compatible)</option>
+        </select>
+
+        <label for="llmBaseUrl">Base URL</label>
+        <input id="llmBaseUrl" name="base_url" type="text"
+               placeholder="http://host.docker.internal:1234/v1" />
+
+        <label for="llmModel">Model</label>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <input id="llmModel" name="model" type="text"
+                 list="llmModelList" style="flex:1;"
+                 placeholder="(click Refresh to list loaded models)" />
+          <datalist id="llmModelList"></datalist>
+          <button type="button" id="llmRefreshModels"
+                  title="GET /v1/models from the configured server"
+                  style="background:#1f2630; border:1px solid #303644; color:#7eb6ff;
+                         cursor:pointer; padding:6px 10px; border-radius:6px; font-size:12px;">
+            Refresh
+          </button>
+        </div>
+
+        <label for="llmApiKey">API key</label>
+        <input id="llmApiKey" name="api_key" type="password"
+               placeholder="(leave blank for LM Studio / Ollama)" />
+
+        <label for="llmTemperature">Temperature</label>
+        <input id="llmTemperature" name="temperature" type="number"
+               step="0.1" min="0" max="2" value="0.2" />
+
+        <label for="llmTimeout">Timeout (s)</label>
+        <input id="llmTimeout" name="timeout_s" type="number"
+               step="5" min="5" max="600" value="120"
+               title="HTTP read timeout. LM Studio cold-loads can take 60-90s." />
+
+        <label for="llmVision">Vision</label>
+        <div>
+          <input id="llmVision" name="vision" type="checkbox" checked />
+          <span class="small">attach chart images to prompts when available</span>
+        </div>
+
+        <div class="row-actions">
+          <button type="submit" class="primary" id="llmSave">Save</button>
+          <button type="button" id="llmTest">Test connection</button>
+        </div>
+        <div class="llm-status" id="llmStatus">loading…</div>
+      </form>
+    </div>
+
     <div class="card">
       <h2>Live execution log</h2>
       <div id="logs"></div>
@@ -52,11 +359,6 @@
     <div class="card">
       <h2>Daily realised PnL</h2>
       <canvas id="pnlChart" height="200"></canvas>
-    </div>
-
-    <div class="card" style="grid-column: span 2;">
-      <h2>Strategy watchlists <span class="small">— per-strategy; empty list falls back to default</span></h2>
-      <div id="watchlists" class="wl-grid"></div>
     </div>
 
     <div class="card" style="grid-column: span 2;">
@@ -165,28 +467,41 @@ async function loadHealth() {
 }
 
 async function refreshWatchlists() {
-  const data = await fetch("/api/watchlists").then(r => r.json());
-  const root = $("#watchlists"); root.innerHTML = "";
+  // The four panels are already in the DOM as static HTML. We only update
+  // the symbol tags + meta label inside each. If the API call fails, the
+  // panels stay visible with a friendly message instead of disappearing.
+  let data = {};
+  let failed = false;
+  try {
+    const r = await fetch("/api/watchlists");
+    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    data = await r.json();
+  } catch (e) {
+    failed = true;
+    console.warn("refreshWatchlists: /api/watchlists failed:", e);
+  }
+
   for (const sid of STRATEGIES) {
+    const tags = document.querySelector(`.wl-symbols[data-symbols="${sid}"]`);
+    const meta = document.querySelector(`.meta[data-meta="${sid}"]`);
+    if (!tags || !meta) continue;
+
+    if (failed) {
+      tags.innerHTML = `<div class="wl-empty">cannot reach watcher API — try reloading</div>`;
+      meta.textContent = "—";
+      continue;
+    }
+
     const symbols = data[sid] || [];
     const usingDefault = symbols.length === 0;
     const effective = usingDefault ? DEFAULT_WL : symbols;
-    const panel = document.createElement("div");
-    panel.className = "wl-panel";
-    panel.innerHTML = `
-      <header>
-        <h3>${sid}</h3>
-        <span class="meta">${effective.length} effective${usingDefault ? " (default)" : ""}</span>
-      </header>
-      <div class="wl-symbols"></div>
-      <form class="wl-form" data-sid="${sid}">
-        <input type="text" placeholder="Add symbol e.g. SPY" maxlength="16" required />
-        <button type="submit">Add</button>
-      </form>
-    `;
-    const tags = panel.querySelector(".wl-symbols");
+    meta.textContent = `${effective.length} effective${usingDefault ? " (default)" : ""}`;
+
+    tags.innerHTML = "";
     if (symbols.length === 0) {
-      tags.innerHTML = `<div class="wl-empty">Using default: ${DEFAULT_WL.join(", ") || "—"}</div>`;
+      const fallback = (DEFAULT_WL && DEFAULT_WL.length)
+        ? DEFAULT_WL.join(", ") : "—";
+      tags.innerHTML = `<div class="wl-empty">Using default: ${fallback}</div>`;
     } else {
       for (const sym of symbols) {
         const tag = document.createElement("span");
@@ -195,7 +510,6 @@ async function refreshWatchlists() {
         tags.appendChild(tag);
       }
     }
-    root.appendChild(panel);
   }
 }
 
@@ -204,17 +518,23 @@ document.addEventListener("submit", async (e) => {
   e.preventDefault();
   const sid = e.target.dataset.sid;
   const input = e.target.querySelector("input");
-  const symbol = (input.value || "").trim().toUpperCase();
-  if (!symbol) return;
+  const raw = (input.value || "").trim();
+  if (!raw) return;
+  // Server accepts a comma-separated list under the same `symbol` field.
   const r = await fetch(`/api/watchlists/${sid}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol }),
+    body: JSON.stringify({ symbol: raw.toUpperCase() }),
   });
   if (!r.ok) {
     const detail = await r.json().catch(() => ({}));
     alert(`Add failed: ${detail.detail || r.statusText}`);
     return;
+  }
+  const data = await r.json().catch(() => ({}));
+  if (data && data.skipped_existing && data.skipped_existing.length) {
+    // Soft notice — already in the watchlist isn't an error.
+    console.info(`${sid} already had: ${data.skipped_existing.join(", ")}`);
   }
   input.value = "";
   refreshWatchlists();
@@ -233,13 +553,496 @@ document.addEventListener("click", async (e) => {
   refreshWatchlists();
 });
 
+// ---------------------------------------------------------------------
+// Status strip — Hermes liveness, Tradier API health, mode toggle
+// ---------------------------------------------------------------------
+function fmtAge(seconds) {
+  if (seconds == null) return "never";
+  if (seconds < 60) return `${Math.round(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${(seconds / 3600).toFixed(1)}h ago`;
+}
+
+function fmtDuration(seconds) {
+  if (seconds == null) return "—";
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+  return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+}
+
+function fmtIso(iso) {
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleString(); } catch { return iso; }
+}
+
+function setBadge(el, state, text) {
+  el.classList.remove("ok", "bad", "warn");
+  el.classList.add(state);
+  el.textContent = text;
+}
+
+function paintDot(el, state) {
+  el.classList.remove("ok", "bad", "warn");
+  el.classList.add(state);
+}
+
+function paintToggle(mode, busy = false) {
+  const t = $("#modeToggle");
+  t.classList.toggle("paper", mode === "paper");
+  t.classList.toggle("live", mode === "live");
+  t.classList.toggle("busy", busy);
+  t.setAttribute("aria-checked", mode === "live" ? "true" : "false");
+  $("#modeKnob").textContent = mode === "live" ? "LIVE" : "PAPER";
+}
+
+async function refreshStatus() {
+  try {
+    const s = await fetch("/api/status").then(r => r.json());
+
+    // Strip dots ----------------------------------------------------------
+    paintDot($("#hermesDot"), s.hermes_running ? "ok" : "bad");
+    $("#hermesDetail").textContent = s.hermes_running
+      ? `running · last tick ${fmtAge(s.hermes_last_seen_age_s)}`
+      : (s.hermes_last_seen
+          ? `stale · last seen ${fmtAge(s.hermes_last_seen_age_s)}`
+          : "no heartbeat seen");
+
+    if (s.tradier_error) {
+      paintDot($("#tradierDot"), "bad");
+      $("#tradierDetail").textContent = `error: ${s.tradier_error}`;
+    } else if (s.tradier_ok) {
+      paintDot($("#tradierDot"), "ok");
+      $("#tradierDetail").textContent = `OK · last call ${fmtAge(s.tradier_last_ok_age_s)}`;
+    } else {
+      paintDot($("#tradierDot"), s.tradier_last_ok ? "warn" : "bad");
+      $("#tradierDetail").textContent = s.tradier_last_ok
+        ? `stale · last OK ${fmtAge(s.tradier_last_ok_age_s)}`
+        : "no successful call yet";
+    }
+
+    // Mode toggle ---------------------------------------------------------
+    paintToggle(s.mode);
+
+    // Health card — Hermes ------------------------------------------------
+    const hermesBadge = $("#hermesBadge");
+    if (s.hermes_running) setBadge(hermesBadge, "ok", "RUNNING");
+    else if (s.hermes_last_seen) setBadge(hermesBadge, "warn", "STALE");
+    else setBadge(hermesBadge, "bad", "STOPPED");
+
+    $("#hHStatus").textContent = s.hermes_running
+      ? `running (last tick ${fmtAge(s.hermes_last_seen_age_s)})`
+      : (s.hermes_last_seen ? `stale (${fmtAge(s.hermes_last_seen_age_s)})` : "no heartbeat");
+    $("#hHMode").textContent = (s.mode || "—").toUpperCase();
+    $("#hHLast").textContent = fmtIso(s.hermes_last_seen);
+    $("#hHUptime").textContent = fmtDuration(s.uptime_s);
+    $("#hHStarted").textContent = fmtIso(s.agent_started_at);
+    $("#hHTick").textContent = s.tick_interval_s ? `${s.tick_interval_s}s` : "—";
+
+    // Health card — Tradier ----------------------------------------------
+    const tradierBadge = $("#tradierBadge");
+    if (s.tradier_error) setBadge(tradierBadge, "bad", "ERROR");
+    else if (s.tradier_ok) setBadge(tradierBadge, "ok", "OK");
+    else if (s.tradier_last_ok) setBadge(tradierBadge, "warn", "STALE");
+    else setBadge(tradierBadge, "bad", "NO CALLS");
+
+    $("#tHStatus").textContent = s.tradier_error
+      ? "error"
+      : (s.tradier_ok ? "reachable" :
+         (s.tradier_last_ok ? "stale" : "never reached"));
+    $("#tHUrl").textContent = s.tradier_base_url || "—";
+    $("#tHAccount").textContent = s.tradier_account_masked || "—";
+    $("#tHLastOk").textContent = s.tradier_last_ok
+      ? `${fmtIso(s.tradier_last_ok)} (${fmtAge(s.tradier_last_ok_age_s)})`
+      : "—";
+    if (s.tradier_error) {
+      $("#tHErrRow").style.display = "";
+      $("#tHErr").textContent = s.tradier_error;
+    } else {
+      $("#tHErrRow").style.display = "none";
+    }
+  } catch (e) {
+    paintDot($("#hermesDot"), "bad");
+    paintDot($("#tradierDot"), "bad");
+    $("#hermesDetail").textContent = "watcher cannot reach DB";
+    $("#tradierDetail").textContent = "—";
+    setBadge($("#hermesBadge"), "bad", "OFFLINE");
+    setBadge($("#tradierBadge"), "bad", "OFFLINE");
+  }
+}
+
+async function toggleMode() {
+  const t = $("#modeToggle");
+  if (t.classList.contains("busy")) return;
+  const current = t.classList.contains("live") ? "live" : "paper";
+  const next = current === "live" ? "paper" : "live";
+  if (next === "live" &&
+      !confirm("Switch Hermes to LIVE trading? Real orders will be placed.")) {
+    return;
+  }
+  paintToggle(next, true);
+  try {
+    const r = await fetch("/api/mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: next }),
+    });
+    if (!r.ok) {
+      const detail = await r.json().catch(() => ({}));
+      alert(`Mode change failed: ${detail.detail || r.statusText}`);
+      paintToggle(current, false);
+      return;
+    }
+    const data = await r.json();
+    // The agent applies on its next tick; surface the wait window.
+    $("#hermesDetail").textContent =
+      `mode → ${data.mode}; agent picks up within ${data.applies_within_s}s`;
+  } finally {
+    paintToggle(next, false);
+    refreshStatus();
+  }
+}
+
+document.getElementById("modeToggle").addEventListener("click", toggleMode);
+document.getElementById("modeToggle").addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleMode(); }
+});
+
+// ---------------------------------------------------------------------
+// LLM Overseer config — load, save, test
+// ---------------------------------------------------------------------
+function paintLlmStatus(state, text) {
+  const el = $("#llmStatus");
+  el.classList.remove("ok", "bad");
+  if (state === "ok") el.classList.add("ok");
+  if (state === "bad") el.classList.add("bad");
+  el.textContent = text;
+}
+
+async function loadLlmConfig() {
+  try {
+    const c = await fetch("/api/llm").then(r => r.json());
+    $("#llmProvider").value = c.provider || "mock";
+    $("#llmBaseUrl").value = c.base_url || c.default_base_url || "";
+    $("#llmModel").value = c.model || "";
+    $("#llmApiKey").value = "";   // never echo the saved key back to the page
+    $("#llmTemperature").value = c.temperature ?? 0.2;
+    $("#llmTimeout").value = c.timeout_s ?? c.default_timeout_s ?? 120;
+    $("#llmVision").checked = c.vision !== false;
+    if (c.last_error) {
+      paintLlmStatus("bad", `last error: ${c.last_error}`);
+    } else if (c.last_ok) {
+      paintLlmStatus("ok",
+        `last successful call ${new Date(c.last_ok).toLocaleString()}` +
+        (c.has_api_key ? " · key set" : ""));
+    } else {
+      paintLlmStatus("", c.has_api_key ? "configured · key set" : "no calls yet");
+    }
+  } catch (e) {
+    paintLlmStatus("bad", `cannot load config: ${e}`);
+  }
+}
+
+async function saveLlmConfig(ev) {
+  ev.preventDefault();
+  const body = {
+    provider: $("#llmProvider").value,
+    base_url: $("#llmBaseUrl").value.trim(),
+    model: $("#llmModel").value.trim(),
+    temperature: parseFloat($("#llmTemperature").value || "0.2"),
+    timeout_s: parseFloat($("#llmTimeout").value || "120"),
+    vision: $("#llmVision").checked,
+  };
+  // Only include api_key if the user actually typed one — empty string would
+  // CLEAR the saved key (useful, but only when intentional).
+  const k = $("#llmApiKey").value;
+  if (k !== "") body.api_key = k;
+
+  // Guardrail: if the user picked Local but left required fields blank, save
+  // would silently degrade to "Local with no creds → Mock at runtime". Stop
+  // and tell them what's missing instead.
+  if (body.provider === "local") {
+    const missing = [];
+    if (!body.base_url) missing.push("Base URL");
+    if (!body.model)    missing.push("Model");
+    if (missing.length) {
+      paintLlmStatus("bad",
+        `cannot save Local without: ${missing.join(", ")}`);
+      return;
+    }
+  }
+
+  $("#llmSave").disabled = true;
+  paintLlmStatus("", `saving (provider=${body.provider})…`);
+  try {
+    const r = await fetch("/api/llm", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      paintLlmStatus("bad", `save failed: ${data.detail || r.statusText}`);
+      return;
+    }
+    // Echo back what actually got persisted, so the operator can see the
+    // server's view of the current config rather than guessing.
+    const persisted = `provider=${data.provider} model="${data.model || "-"}" `
+      + `base=${data.base_url || "-"} vision=${data.vision} `
+      + (data.has_api_key ? "key=set" : "key=none");
+    paintLlmStatus("ok", `saved · ${persisted} · agent picks up next tick`);
+    // Refresh the form ONCE from the saved state so we know the round trip
+    // landed correctly.
+    $("#llmApiKey").value = "";
+    $("#llmProvider").value = data.provider || "mock";
+    $("#llmBaseUrl").value = data.base_url || "";
+    $("#llmModel").value = data.model || "";
+    $("#llmTemperature").value = data.temperature ?? 0.2;
+    $("#llmTimeout").value = data.timeout_s ?? 120;
+    $("#llmVision").checked = data.vision !== false;
+  } finally {
+    $("#llmSave").disabled = false;
+  }
+}
+
+async function testLlmConfig() {
+  // Send the FORM state (not the saved settings) so the user can validate
+  // a config before clicking Save. Empty fields fall back to whatever is
+  // already saved on the server side.
+  const body = {
+    provider: $("#llmProvider").value,
+    base_url: $("#llmBaseUrl").value.trim(),
+    model: $("#llmModel").value.trim(),
+    temperature: parseFloat($("#llmTemperature").value || "0.2"),
+    timeout_s: parseFloat($("#llmTimeout").value || "120"),
+  };
+  const k = $("#llmApiKey").value;
+  if (k !== "") body.api_key = k;
+
+  $("#llmTest").disabled = true;
+  paintLlmStatus("", "testing…");
+  try {
+    const r = await fetch("/api/llm/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      paintLlmStatus("bad", `test failed: ${data.detail || r.statusText}`);
+      return;
+    }
+    paintLlmStatus("ok",
+      `OK · model="${data.model}" replied: ${JSON.stringify(data.reply)}`);
+  } catch (e) {
+    paintLlmStatus("bad", `test failed: ${e}`);
+  } finally {
+    $("#llmTest").disabled = false;
+  }
+}
+
+document.getElementById("llmForm").addEventListener("submit", saveLlmConfig);
+document.getElementById("llmTest").addEventListener("click", testLlmConfig);
+
+// ---------------------------------------------------------------------
+// Refresh model list from the configured server (LM Studio / Ollama).
+// Use this when Nous Research releases a new Hermes build, you load it
+// in LM Studio, and need to point the watcher at the new model id.
+// ---------------------------------------------------------------------
+async function refreshLlmModels() {
+  const body = {
+    base_url: $("#llmBaseUrl").value.trim(),
+    timeout_s: parseFloat($("#llmTimeout").value || "120"),
+  };
+  const k = $("#llmApiKey").value;
+  if (k !== "") body.api_key = k;
+
+  const btn = $("#llmRefreshModels");
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Refreshing…";
+  paintLlmStatus("", "querying server for models…");
+  try {
+    const r = await fetch("/api/llm/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      paintLlmStatus("bad", `model list failed: ${data.detail || r.statusText}`);
+      return;
+    }
+    // Populate the datalist so the Model field becomes a proper combobox.
+    const list = $("#llmModelList");
+    list.innerHTML = "";
+    for (const m of (data.models || [])) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      if (m.owned_by) opt.label = `${m.id} · ${m.owned_by}`;
+      list.appendChild(opt);
+    }
+    // If the saved model isn't in the list anymore (e.g., LM Studio unloaded
+    // an older Hermes version), surface that — the agent will fall back to
+    // MockLLM until the operator picks a current id and saves.
+    const ids = (data.models || []).map(m => m.id);
+    const current = $("#llmModel").value.trim();
+    const stale = current && !ids.includes(current);
+    paintLlmStatus(stale ? "bad" : "ok",
+      `${data.count} model${data.count === 1 ? "" : "s"} loaded on server` +
+      (stale ? ` — saved model "${current}" is NOT in the list (server unloaded it?)`
+             : (current ? ` · current "${current}" available` : "")));
+  } catch (e) {
+    paintLlmStatus("bad", `model list failed: ${e}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
+document.getElementById("llmRefreshModels").addEventListener("click", refreshLlmModels);
+
+// ---------------------------------------------------------------------
+// Hermes doctrine (soul.md)
+// ---------------------------------------------------------------------
+function paintSoulStatus(state, text) {
+  const el = $("#soulStatus");
+  el.classList.remove("ok", "bad");
+  if (state === "ok") el.classList.add("ok");
+  if (state === "bad") el.classList.add("bad");
+  el.textContent = text;
+}
+
+async function loadSoul() {
+  try {
+    const r = await fetch("/api/soul").then(r => r.json());
+    $("#soulArea").value = r.content || "";
+    paintSoulStatus("",
+      r.updated_at
+        ? `${r.bytes} bytes · saved ${new Date(r.updated_at).toLocaleString()}`
+        : `${r.bytes} bytes · never saved`);
+  } catch (e) {
+    paintSoulStatus("bad", `cannot load: ${e}`);
+  }
+}
+
+async function saveSoul() {
+  const content = $("#soulArea").value;
+  paintSoulStatus("", "saving…");
+  $("#soulSave").disabled = true;
+  try {
+    const r = await fetch("/api/soul", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      paintSoulStatus("bad", `save failed: ${data.detail || r.statusText}`);
+      return;
+    }
+    paintSoulStatus("ok",
+      `saved · ${data.bytes} bytes · agent picks up next tick`);
+  } finally {
+    $("#soulSave").disabled = false;
+  }
+}
+
+document.getElementById("soulSave").addEventListener("click", saveSoul);
+
+// ---------------------------------------------------------------------
+// Agent control — autonomy + pause/resume
+// ---------------------------------------------------------------------
+const AUTONOMY_HINTS = {
+  advisory:   "log only — overseer does not block trades",
+  enforcing:  "overseer may VETO or MODIFY rule-driven trades",
+  autonomous: "overseer may also originate new trades",
+};
+
+function paintAutonomy(level) {
+  for (const b of document.querySelectorAll("#autonomySeg button")) {
+    b.classList.toggle("active", b.dataset.autonomy === level);
+  }
+  $("#autonomyHint").textContent = AUTONOMY_HINTS[level] || "";
+}
+
+function paintPause(paused) {
+  const t = $("#pauseToggle");
+  t.classList.toggle("paused", paused);
+  t.classList.toggle("running", !paused);
+  t.setAttribute("aria-checked", paused ? "true" : "false");
+  $("#pauseKnob").textContent = paused ? "PAUSE" : "RUN";
+  $("#pauseHint").textContent = paused
+    ? "engine SKIPS ticks — heartbeat continues so it stays visibly alive"
+    : "engine ticking normally";
+}
+
+let CTRL_BUSY = false;
+
+async function loadControl() {
+  try {
+    const c = await fetch("/api/control").then(r => r.json());
+    paintAutonomy(c.autonomy);
+    paintPause(!!c.paused);
+  } catch (e) {
+    /* leave UI in current state — System health card already flags watcher down */
+  }
+}
+
+async function setControl(patch) {
+  if (CTRL_BUSY) return;
+  CTRL_BUSY = true;
+  try {
+    const r = await fetch("/api/control", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) {
+      const detail = await r.json().catch(() => ({}));
+      alert(`control change failed: ${detail.detail || r.statusText}`);
+      return;
+    }
+    const c = await r.json();
+    paintAutonomy(c.autonomy);
+    paintPause(!!c.paused);
+  } finally {
+    CTRL_BUSY = false;
+  }
+}
+
+for (const b of document.querySelectorAll("#autonomySeg button")) {
+  b.addEventListener("click", () => setControl({ autonomy: b.dataset.autonomy }));
+}
+
+function togglePause() {
+  const isPaused = $("#pauseToggle").classList.contains("paused");
+  if (!isPaused &&
+      !confirm("Pause Hermes? The agent will stop placing or managing orders until you resume.")) {
+    return;
+  }
+  setControl({ paused: !isPaused });
+}
+document.getElementById("pauseToggle").addEventListener("click", togglePause);
+document.getElementById("pauseToggle").addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); togglePause(); }
+});
+
 streamLogs();
 loadHealth().then(refreshWatchlists);
-refreshPositions(); refreshEntries(); refreshPnl();
+refreshPositions(); refreshEntries(); refreshPnl(); refreshStatus();
+loadLlmConfig();
+loadSoul();
+loadControl();
 setInterval(refreshPositions, 10_000);
 setInterval(refreshEntries, 15_000);
 setInterval(refreshPnl, 30_000);
 setInterval(refreshWatchlists, 20_000);
+setInterval(refreshStatus, 5_000);
+// NOTE: deliberately not auto-refreshing the LLM form on a timer — it would
+// clobber unsaved user input (in particular the provider dropdown). The
+// status line is updated after every Save / Test, which is enough.
 </script>
 </body>
 </html>

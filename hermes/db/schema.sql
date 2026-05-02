@@ -139,6 +139,15 @@ SELECT create_hypertable('predictions', 'ts', if_not_exists => TRUE);
 CREATE INDEX IF NOT EXISTS idx_predictions_symbol_ts ON predictions(symbol, ts DESC);
 
 -- ---------------------------------------------------------------------
+-- System settings (shared agent/watcher state — mode toggle, health pings)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS system_settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL DEFAULT '',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------
 -- Compression / retention policies (TimescaleDB best-practice)
 -- ---------------------------------------------------------------------
 ALTER TABLE bot_logs       SET (timescaledb.compress, timescaledb.compress_segmentby='strategy_id');
@@ -149,15 +158,22 @@ SELECT add_compression_policy('bars_intraday', INTERVAL '14 days', if_not_exists
 SELECT add_compression_policy('predictions',   INTERVAL '30 days', if_not_exists => TRUE);
 
 -- ---------------------------------------------------------------------
--- Continuous aggregate — Daily PnL roll-up for the Watcher dashboard
+-- Daily PnL roll-up for the Watcher dashboard.
+-- This was originally a TimescaleDB continuous aggregate, but those require
+-- time_bucket() to reference the hypertable's primary time dimension. The
+-- `trades` hypertable is partitioned by opened_at, while PnL needs to be
+-- bucketed by closed_at — so a plain view is the right call here. The data
+-- volume (closed trades only) is small enough that the unmaterialized
+-- aggregate is fine; if it ever isn't, switch this to a refresh-on-demand
+-- materialized view (CREATE MATERIALIZED VIEW … WITH NO DATA) and refresh
+-- it from the agent's tick loop.
 -- ---------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS pnl_daily
-WITH (timescaledb.continuous) AS
-SELECT time_bucket('1 day', closed_at) AS day,
+CREATE OR REPLACE VIEW pnl_daily AS
+SELECT date_trunc('day', closed_at)::timestamptz AS day,
        strategy_id,
        symbol,
        SUM(pnl) FILTER (WHERE status = 'CLOSED') AS realized_pnl,
        COUNT(*) FILTER (WHERE status = 'CLOSED') AS closed_trades
 FROM trades
 WHERE closed_at IS NOT NULL
-GROUP BY day, strategy_id, symbol;
+GROUP BY 1, strategy_id, symbol;

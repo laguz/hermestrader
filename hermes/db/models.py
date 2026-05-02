@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, String, Text, create_engine,
+    Numeric, PrimaryKeyConstraint, Sequence, String, Text, create_engine,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -39,8 +39,15 @@ class StrategyWatchlist(Base):
 
 class Trade(Base):
     __tablename__ = "trades"
-    id = Column(BigInteger, autoincrement=True)
-    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    # `id` belongs to the schema's `BIGSERIAL` (sequence `trades_id_seq`).
+    # Both this column AND `opened_at` form the composite PK because the
+    # underlying TimescaleDB hypertable partitions by `opened_at`.
+    # Marking the Sequence here is what tells SQLAlchemy to fetch a value
+    # via RETURNING instead of inserting NULL.
+    id = Column(BigInteger, Sequence("trades_id_seq"), primary_key=True,
+                autoincrement=True)
+    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                       primary_key=True)
     strategy_id = Column(String, ForeignKey("strategies.strategy_id"), nullable=False)
     symbol = Column(String, nullable=False)
     side_type = Column(String, nullable=False)
@@ -62,14 +69,17 @@ class Trade(Base):
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
-        {"primary_key": ("id", "opened_at")},
     )
 
 
 class PendingOrder(Base):
     __tablename__ = "pending_orders"
-    id = Column(BigInteger, autoincrement=True)
-    submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    # Same shape as Trade: composite PK over the BIGSERIAL id and the
+    # hypertable's partitioning column.
+    id = Column(BigInteger, Sequence("pending_orders_id_seq"), primary_key=True,
+                autoincrement=True)
+    submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                          primary_key=True)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
     side = Column(String, nullable=False)
@@ -105,6 +115,20 @@ class Prediction(Base):
     model_tag = Column(String, default="xgb-10feat-v1")
 
 
+class SystemSetting(Base):
+    """Small key/value table the agent and watcher both read.
+
+    Used for shared runtime state that the watcher must be able to flip
+    without restarting the agent, e.g. the live/paper trading mode and the
+    rolling Tradier API health timestamps the agent writes after each tick.
+    """
+    __tablename__ = "system_settings"
+    key = Column(String, primary_key=True)
+    value = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                        onupdate=datetime.utcnow)
+
+
 # ---------------------------------------------------------------------------
 # Repository — the only place SQL lives.
 # ---------------------------------------------------------------------------
@@ -114,6 +138,21 @@ class HermesDB:
     def __init__(self, dsn: str):
         self.engine = create_engine(dsn, pool_pre_ping=True, future=True)
         self.Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
+        # Defensive: create any ORM-mapped tables that don't already exist.
+        # schema.sql is the source of truth (TimescaleDB hypertables, indexes,
+        # compression policies, continuous aggregates), but if it was never
+        # applied — typical when a Postgres data volume predates the
+        # schema-init mount — the watcher would 500 on every read. This call
+        # ensures the bare relations exist so basic CRUD still works; running
+        # `psql -f schema.sql` afterwards layers the Timescale-specific
+        # features on top.
+        # `checkfirst=True` is built into create_all and makes it a no-op for
+        # tables that already exist.
+        try:
+            Base.metadata.create_all(self.engine, checkfirst=True)
+        except Exception:                                       # noqa: BLE001
+            # Don't crash on import — the next real query surfaces the cause.
+            pass
 
     def init_schema(self, schema_sql_path: str) -> None:
         with open(schema_sql_path, "r", encoding="utf-8") as fh:
@@ -171,6 +210,26 @@ class HermesDB:
                              message=f"orphan position: {sym}"))
             s.commit()
 
+    # ---- strategies registry (must be populated before watchlists) -------
+    # The `strategies` table is referenced by FK from `strategy_watchlists`,
+    # so the row for a given strategy_id must exist before any symbol can be
+    # added to that strategy's watchlist. Both services seed this on startup.
+    def ensure_strategies(self, strategies: Dict[str, int]) -> None:
+        """Idempotently upsert the canonical strategy registry.
+
+        `strategies` maps strategy_id (e.g. 'CS75') -> priority (e.g. 1).
+        Existing rows are left untouched; missing rows are inserted with
+        status='ACTIVE'. Safe to call on every boot.
+        """
+        with self.Session() as s:
+            existing = {r.strategy_id for r in s.query(Strategy).all()}
+            for sid, priority in strategies.items():
+                if sid in existing:
+                    continue
+                s.add(Strategy(strategy_id=sid, priority=int(priority),
+                               status="ACTIVE"))
+            s.commit()
+
     # ---- watchlist CRUD ---------------------------------------------------
     def list_watchlist(self, strategy_id: str) -> List[str]:
         with self.Session() as s:
@@ -188,12 +247,27 @@ class HermesDB:
                 out.setdefault(r.strategy_id, []).append(r.symbol)
             return out
 
+    # Hardcoded so add_to_watchlist is self-sufficient — a watchlist write
+    # cannot fail an FK check just because the strategies table is empty.
+    _DEFAULT_STRATEGY_PRIORITIES = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4}
+
     def add_to_watchlist(self, strategy_id: str, symbol: str) -> bool:
-        """Insert a single symbol. Returns True when inserted, False if it already existed."""
+        """Insert a single symbol. Returns True when inserted, False if it already existed.
+
+        Self-heals the strategies table: if the row for `strategy_id` is
+        missing the FK from strategy_watchlists.strategy_id would reject the
+        insert, so we upsert it inline in the same transaction.
+        """
         sym = (symbol or "").strip().upper()
         if not sym:
             raise ValueError("symbol must be non-empty")
         with self.Session() as s:
+            # Ensure the parent row exists (FK requirement).
+            if not s.query(Strategy).filter_by(strategy_id=strategy_id).first():
+                priority = self._DEFAULT_STRATEGY_PRIORITIES.get(strategy_id, 99)
+                s.add(Strategy(strategy_id=strategy_id, priority=priority,
+                               status="ACTIVE"))
+                s.flush()
             exists = (s.query(StrategyWatchlist)
                       .filter_by(strategy_id=strategy_id, symbol=sym).first())
             if exists:
@@ -217,6 +291,13 @@ class HermesDB:
         """Replace the entire watchlist for `strategy_id`. Returns the canonicalised list."""
         clean = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
         with self.Session() as s:
+            # Same self-heal as add_to_watchlist — required before we can
+            # write any row referencing this strategy_id.
+            if not s.query(Strategy).filter_by(strategy_id=strategy_id).first():
+                priority = self._DEFAULT_STRATEGY_PRIORITIES.get(strategy_id, 99)
+                s.add(Strategy(strategy_id=strategy_id, priority=priority,
+                               status="ACTIVE"))
+                s.flush()
             s.query(StrategyWatchlist).filter_by(strategy_id=strategy_id).delete()
             for sym in clean:
                 s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
@@ -267,6 +348,33 @@ class HermesDB:
             row = (s.query(Trade).filter_by(symbol=symbol, side_type="equity", status="OPEN")
                    .order_by(Trade.opened_at.desc()).first())
             return int(row.lots) if row else 0
+
+    # ---- runtime settings (shared agent/watcher state) -------------------
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self.Session() as s:
+            row = s.query(SystemSetting).filter_by(key=key).first()
+            return row.value if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.Session() as s:
+            row = s.query(SystemSetting).filter_by(key=key).first()
+            if row is None:
+                s.add(SystemSetting(key=key, value=str(value)))
+            else:
+                row.value = str(value)
+                row.updated_at = datetime.utcnow()
+            s.commit()
+
+    def setting_updated_at(self, key: str) -> Optional[datetime]:
+        with self.Session() as s:
+            row = s.query(SystemSetting).filter_by(key=key).first()
+            return row.updated_at if row else None
+
+    def latest_log_ts(self) -> Optional[datetime]:
+        """Most recent bot_logs timestamp — used as the agent's liveness signal."""
+        with self.Session() as s:
+            row = s.query(BotLog).order_by(BotLog.ts.desc()).first()
+            return row.ts if row else None
 
     def recent_logs(self, limit: int = 200) -> str:
         with self.Session() as s:

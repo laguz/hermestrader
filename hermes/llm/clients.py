@@ -1,0 +1,233 @@
+"""
+OpenAI-compatible chat client used by the HermesOverseer.
+
+Supports any backend that speaks the OpenAI Chat Completions API:
+    - LM Studio          → http://host.docker.internal:1234/v1
+    - Ollama             → http://host.docker.internal:11434/v1
+    - vLLM               → http://host.docker.internal:8000/v1
+    - llama.cpp server   → http://host.docker.internal:8080/v1
+    - hosted OpenAI      → https://api.openai.com/v1   (with api_key)
+
+Vision: image attachments are passed through OpenAI's multipart content
+format. If the local model is text-only it will simply ignore them; if the
+model rejects them the rejection bubbles up as `LLMConnectionError`.
+"""
+from __future__ import annotations
+
+import base64
+import logging
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+import requests
+
+logger = logging.getLogger("hermes.llm.openai_compat")
+
+
+class LLMConnectionError(RuntimeError):
+    """Raised when the configured local model can't be reached or rejects."""
+
+
+def _image_to_data_url(img: Any) -> Optional[str]:
+    """Coerce whatever the chart_provider returns into a `data:` URL.
+
+    Accepts:
+      - bytes / bytearray         → assumes PNG, base64-encodes
+      - str starting with 'http'  → passed through (Tradier-hosted chart, etc.)
+      - str starting with 'data:' → passed through unchanged
+      - dict with 'b64'/'mime'    → flexible escape hatch for richer providers
+    """
+    if img is None:
+        return None
+    if isinstance(img, (bytes, bytearray)):
+        b64 = base64.b64encode(bytes(img)).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    if isinstance(img, str):
+        if img.startswith("http://") or img.startswith("https://") or img.startswith("data:"):
+            return img
+    if isinstance(img, dict):
+        b64 = img.get("b64") or img.get("base64")
+        mime = img.get("mime") or img.get("content_type") or "image/png"
+        if b64:
+            return f"data:{mime};base64,{b64}"
+        url = img.get("url")
+        if url:
+            return url
+    return None
+
+
+class OpenAICompatibleLLM:
+    """Minimal sync chat client. Matches the surface HermesOverseer calls."""
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        *,
+        api_key: Optional[str] = None,
+        temperature: float = 0.2,
+        timeout_s: float = 60.0,
+        max_tokens: Optional[int] = 1024,
+    ):
+        if not base_url or not model:
+            raise ValueError("OpenAICompatibleLLM requires base_url and model")
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.api_key = api_key or None
+        self.temperature = float(temperature)
+        self.timeout_s = float(timeout_s)
+        self.max_tokens = max_tokens
+
+    # ------------------------------------------------------------------ HTTP
+    def _headers(self) -> Dict[str, str]:
+        h = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
+        return h
+
+    def _attach_images(
+        self,
+        messages: Sequence[Dict[str, Any]],
+        images: Iterable[Any],
+    ) -> List[Dict[str, Any]]:
+        urls = [u for u in (_image_to_data_url(i) for i in images) if u]
+        if not urls:
+            return list(messages)
+        # OpenAI's vision format wraps the user message content as an array of
+        # parts. We attach to the LAST user message in the conversation.
+        out = [dict(m) for m in messages]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i].get("role") == "user":
+                text = out[i].get("content") or ""
+                if not isinstance(text, str):
+                    # Already in parts form — append images to it.
+                    parts = list(text)
+                else:
+                    parts = [{"type": "text", "text": text}]
+                for url in urls:
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": url},
+                    })
+                out[i] = {"role": out[i].get("role", "user"), "content": parts}
+                return out
+        # No user message? Append a fresh one carrying the images alone.
+        out.append({"role": "user",
+                    "content": [{"type": "image_url", "image_url": {"url": u}} for u in urls]})
+        return out
+
+    # ---------------------------------------------------------------- Public
+    def chat(self,
+             messages: Sequence[Dict[str, Any]],
+             images: Optional[Iterable[Any]] = None,
+             *,
+             max_tokens: Optional[int] = None,
+             timeout_s: Optional[float] = None) -> str:
+        """Run a chat completion. Returns the assistant's text content.
+
+        `max_tokens` and `timeout_s` override the instance defaults for this
+        single call — used by `ping()` to keep validation round-trips fast
+        even when the configured chat timeout is generous.
+
+        Raises `LLMConnectionError` for any transport / 4xx / 5xx failure so
+        the overseer's `_safe_json` fallback can decide what to do.
+        """
+        body: Dict[str, Any] = {
+            "model": self.model,
+            "messages": self._attach_images(messages, images or []),
+            "temperature": self.temperature,
+        }
+        effective_max = max_tokens if max_tokens is not None else self.max_tokens
+        if effective_max is not None:
+            body["max_tokens"] = effective_max
+
+        url = f"{self.base_url}/chat/completions"
+        try:
+            r = requests.post(url, json=body, headers=self._headers(),
+                              timeout=timeout_s if timeout_s is not None else self.timeout_s)
+        except requests.RequestException as exc:
+            raise LLMConnectionError(f"unreachable: {exc}") from exc
+
+        if not r.ok:
+            try:
+                detail = r.json()
+            except Exception:                                   # noqa: BLE001
+                detail = r.text
+            raise LLMConnectionError(
+                f"{r.status_code} {r.reason} from {url}: {detail}"
+            )
+
+        try:
+            data = r.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as exc:                                # noqa: BLE001
+            raise LLMConnectionError(
+                f"malformed completion response: {exc}; body={r.text[:400]!r}"
+            ) from exc
+
+    # --------------------------------------------------------------- Helpers
+    def list_models(self, *, timeout_s: Optional[float] = None) -> List[Dict[str, Any]]:
+        """List models the configured server is currently serving.
+
+        Standard OpenAI shape: GET /models returns {data: [{id, ...}, ...]}.
+        Used by the watcher's "Refresh models" button so the operator can
+        pick a freshly-loaded model id instead of typing it by hand — e.g.
+        when Nous Research ships a new Hermes revision and you load it in
+        LM Studio, this populates the dropdown without a code change.
+        """
+        url = f"{self.base_url}/models"
+        try:
+            r = requests.get(url, headers=self._headers(),
+                             timeout=timeout_s if timeout_s is not None else 15.0)
+        except requests.RequestException as exc:
+            raise LLMConnectionError(f"unreachable: {exc}") from exc
+        if not r.ok:
+            try:
+                detail = r.json()
+            except Exception:                                   # noqa: BLE001
+                detail = r.text
+            raise LLMConnectionError(
+                f"{r.status_code} {r.reason} from {url}: {detail}"
+            )
+        try:
+            data = r.json()
+        except Exception as exc:                                # noqa: BLE001
+            raise LLMConnectionError(
+                f"malformed /models response: {exc}; body={r.text[:400]!r}"
+            ) from exc
+        # Some backends wrap the list in `data`, others return a bare list.
+        items = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            return []
+        return [
+            {
+                "id": (m.get("id") or "").strip(),
+                "owned_by": m.get("owned_by"),
+                "created": m.get("created"),
+            }
+            for m in items if isinstance(m, dict) and m.get("id")
+        ]
+
+    def ping(self, *, timeout_s: Optional[float] = None) -> Dict[str, Any]:
+        """Cheap connectivity check used by /api/llm/test in the watcher.
+
+        Sends a tiny prompt with max_tokens=32 so a healthy round-trip
+        finishes in seconds. The instance's timeout still applies — LM
+        Studio's cold-load of a fresh GGUF can take a long time on the
+        first request, so the operator should give the test endpoint a
+        generous timeout (120s+ is reasonable on consumer hardware).
+        """
+        reply = self.chat(
+            [
+                {"role": "system", "content": "Respond with exactly: OK"},
+                {"role": "user",   "content": "ping"},
+            ],
+            images=None,
+            max_tokens=32,
+            timeout_s=timeout_s,
+        )
+        return {
+            "ok": True,
+            "base_url": self.base_url,
+            "model": self.model,
+            "reply": (reply or "").strip()[:200],
+        }

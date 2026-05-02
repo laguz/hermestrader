@@ -36,9 +36,18 @@ logger = logging.getLogger("hermes.broker.tradier")
 
 OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
-# Map Hermes leg side → Tradier OCC option side. The leg may carry an explicit
-# `action` ('buy_to_open' / 'sell_to_close' / ...) which wins; otherwise we
-# infer opening intent from `side`.
+# Map Hermes leg side → Tradier OCC option side. A leg may carry the action
+# in one of three shapes — handled in this priority order by `_leg_action`:
+#   1. An explicit `action` field with the full Tradier name
+#      ('buy_to_open' / 'sell_to_close' / ...).
+#   2. A `side` field that already contains the full Tradier name (some
+#      strategies build legs that way; the early hermestrader strategy code
+#      pre-dates the `action` field and stores the full name in `side`).
+#   3. A short `side` of 'buy'/'sell' — combined with `default_open` to
+#      pick the matching open or close action.
+_TRADIER_OPTION_ACTIONS = {
+    "buy_to_open", "sell_to_open", "buy_to_close", "sell_to_close",
+}
 _OPENING_BY_SIDE = {"buy": "buy_to_open", "sell": "sell_to_open"}
 _CLOSING_BY_SIDE = {"buy": "buy_to_close", "sell": "sell_to_close"}
 
@@ -69,16 +78,39 @@ class TradierBroker:
         self._timeout = float(self.config.get("tradier_timeout_s", 10.0))
 
     # ------------------------------------------------------------------ HTTP
+    def _raise_with_body(self, r: "requests.Response", method: str, url: str,
+                         data: Optional[Dict[str, Any]] = None) -> None:
+        """Raise an HTTPError that includes Tradier's response body.
+
+        Tradier returns the actual rejection reason in the JSON body
+        (e.g. {"errors":{"error":["type is invalid for class option"]}}).
+        Without including it, every 400 looks identical and you cannot tell
+        whether it was a bad symbol, bad type, bad side, missing price, etc.
+        """
+        try:
+            body = r.json()
+        except Exception:                                          # noqa: BLE001
+            body = r.text
+        # Log the failing request so we can correlate against strategy intent.
+        logger.error("Tradier %s %s -> %d  body=%s  data=%s",
+                     method, url, r.status_code, body, data)
+        raise requests.HTTPError(
+            f"{r.status_code} {r.reason} for {method} {url} :: {body}",
+            response=r,
+        )
+
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         r = self._session.get(url, params=params, timeout=self._timeout)
-        r.raise_for_status()
+        if not r.ok:
+            self._raise_with_body(r, "GET", url, params)
         return r.json() or {}
 
     def _post(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         r = self._session.post(url, data=data, timeout=self._timeout)
-        r.raise_for_status()
+        if not r.ok:
+            self._raise_with_body(r, "POST", url, data)
         return r.json() or {}
 
     # ----------------------------------------------------------------- Account
@@ -255,9 +287,14 @@ class TradierBroker:
 
     def _leg_action(self, leg: Dict[str, Any], default_open: bool = True) -> str:
         explicit = (leg.get("action") or "").lower().strip()
-        if explicit in {"buy_to_open", "sell_to_open", "buy_to_close", "sell_to_close"}:
+        if explicit in _TRADIER_OPTION_ACTIONS:
             return explicit
-        side = (leg.get("side") or "").lower()
+        side = (leg.get("side") or "").lower().strip()
+        # Some strategies put the full Tradier action ("sell_to_open" etc.)
+        # directly in `side`; accept that without forcing every strategy to
+        # use the canonical `action` field.
+        if side in _TRADIER_OPTION_ACTIONS:
+            return side
         table = _OPENING_BY_SIDE if default_open else _CLOSING_BY_SIDE
         if side not in table:
             raise ValueError(f"Cannot map leg side={side!r} action={explicit!r}")
@@ -272,8 +309,9 @@ class TradierBroker:
         }
         if action.price is not None:
             data["price"] = f"{float(action.price):.2f}"
-        if action.tag:
-            data["tag"] = action.tag
+        clean_tag = self._sanitize_tag(action.tag)
+        if clean_tag:
+            data["tag"] = clean_tag
 
         for i, leg in enumerate(action.legs):
             data[f"option_symbol[{i}]"] = leg["option_symbol"]
@@ -285,38 +323,79 @@ class TradierBroker:
 
         return self._post(f"/accounts/{self.account_id}/orders", data)
 
+    # Tradier's `type` field is class-scoped:
+    #   class=multileg → credit | debit | even | market
+    #   class=option   → market | limit | stop | stop_limit
+    #   class=equity   → market | limit | stop | stop_limit
+    # Strategies often build a TradeAction with order_type defaulted to
+    # 'credit' (the multileg default) and then route a single leg through
+    # _place_single_option — which 400s at Tradier. These helpers coerce
+    # invalid types back to 'limit' so the order survives.
+    @staticmethod
+    def _coerce_single_leg_type(order_type: Optional[str], has_price: bool) -> str:
+        t = (order_type or "").lower().strip()
+        if t in {"market", "limit", "stop", "stop_limit"}:
+            return t
+        # 'credit' / 'debit' / 'even' / '' all fall through here. If the
+        # strategy provided a price, treat it as a limit order; otherwise
+        # market.
+        return "limit" if has_price else "market"
+
+    @staticmethod
+    def _sanitize_tag(tag: Optional[str]) -> Optional[str]:
+        """Conform a strategy-provided tag to Tradier's allowed character set.
+
+        Tradier rejects orders whose `tag` contains anything outside
+        [A-Za-z0-9-]. Strategies in this repo build tags like
+        `HERMES_WHEEL` / `HERMES_CS75` — every underscore must become a
+        hyphen, and anything else exotic is stripped. Truncates at 255 chars
+        (Tradier's documented maximum).
+        """
+        if not tag:
+            return None
+        # Replace any run of disallowed chars with a single hyphen, trim
+        # leading/trailing hyphens, cap length.
+        cleaned = re.sub(r"[^A-Za-z0-9-]+", "-", tag).strip("-")
+        return cleaned[:255] or None
+
     def _place_single_option(self, action) -> Dict[str, Any]:
         leg = action.legs[0]
+        order_type = self._coerce_single_leg_type(action.order_type,
+                                                  action.price is not None)
         data: Dict[str, Any] = {
             "class": "option",
             "symbol": action.symbol,
             "option_symbol": leg["option_symbol"],
             "side": self._leg_action(leg, default_open=True),
             "quantity": int(leg.get("quantity", action.quantity or 1)),
-            "type": (action.order_type or "limit").lower(),
+            "type": order_type,
             "duration": (action.duration or "day").lower(),
         }
-        if action.price is not None:
+        if order_type in {"limit", "stop_limit"} and action.price is not None:
             data["price"] = f"{float(action.price):.2f}"
-        if action.tag:
-            data["tag"] = action.tag
+        clean_tag = self._sanitize_tag(action.tag)
+        if clean_tag:
+            data["tag"] = clean_tag
         if self.dry_run:
             data["preview"] = "true"
         return self._post(f"/accounts/{self.account_id}/orders", data)
 
     def _place_equity(self, action) -> Dict[str, Any]:
+        order_type = self._coerce_single_leg_type(action.order_type,
+                                                  action.price is not None)
         data: Dict[str, Any] = {
             "class": "equity",
             "symbol": action.symbol,
             "side": (action.side or "buy").lower(),
             "quantity": int(action.quantity or 1),
-            "type": (action.order_type or "market").lower(),
+            "type": order_type,
             "duration": (action.duration or "day").lower(),
         }
-        if action.price is not None and data["type"] in {"limit", "stop_limit"}:
+        if order_type in {"limit", "stop_limit"} and action.price is not None:
             data["price"] = f"{float(action.price):.2f}"
-        if action.tag:
-            data["tag"] = action.tag
+        clean_tag = self._sanitize_tag(action.tag)
+        if clean_tag:
+            data["tag"] = clean_tag
         if self.dry_run:
             data["preview"] = "true"
         return self._post(f"/accounts/{self.account_id}/orders", data)
