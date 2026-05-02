@@ -1,28 +1,33 @@
-# ── Stage 1: Official Hermes Agent core from Nous Research ────────────
-# Pulls the latest agent platform (Python, tools, runtime). Rebuilding
-# this image automatically picks up any upstream core updates.
-FROM nousresearch/hermes-agent:latest
+# ── Stage 1: Pull the latest Hermes Agent Python packages ─────────────
+# We grab the installed site-packages from the official image so we
+# automatically pick up any new Nous Research agent/LLM utilities on rebuild.
+FROM nousresearch/hermes-agent:latest AS hermes-core
+
+# ── Stage 2: Our runtime image (clean Python, no Docker deps) ─────────
+FROM python:3.11-slim
 
 ARG HERMES_VERSION=dev
 LABEL hermes.version="${HERMES_VERSION}"
 ENV HERMES_VERSION="${HERMES_VERSION}"
 
-# Set the working directory in the container
 WORKDIR /app
 
-# Install HermesTrader-specific system dependencies
-# (the official image already has Python 3, git, Node.js, etc.)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
+# Copy Hermes Agent core packages from the official image
+# This gives us the latest Nous Research agent utilities without
+# inheriting the Docker/Playwright/entrypoint baggage.
+COPY --from=hermes-core /usr/local/lib/python3.*/dist-packages/ /usr/local/lib/python3.11/site-packages/
+
 # Copy the current directory contents into the container at /app
 COPY . /app
 
 # Install HermesTrader-specific Python packages
-# (the official image uses `uv` as the package manager)
-RUN uv pip install --system --no-cache \
+RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
     watchfiles \
