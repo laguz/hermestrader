@@ -228,6 +228,7 @@ def status() -> Dict[str, Any]:
         "mode": mode,
         "stale_after_s": STALE_AFTER_S,
         "tick_interval_s": TICK_INTERVAL_S,
+        "hermes_version": os.environ.get("HERMES_VERSION", "dev"),
     }
 
 

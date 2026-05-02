@@ -147,7 +147,8 @@
          can verify in-browser that the container is serving the new HTML.
          If the page does not show "build: 2026-05-01-c", you are on cached
          or old container HTML. -->
-    <span class="small" style="margin-left:14px;color:#5a6271;">build: 2026-05-01-l (model refresh from server)</span>
+    <span class="small" style="margin-left:14px;color:#5a6271;">build: 2026-05-02-a (docker hub updates)</span>
+    <span class="small" style="margin-left:10px;color:#7eb6ff;" id="headerVersion"></span>
   </h1>
 
   <div class="status-bar" id="statusBar">
@@ -247,6 +248,7 @@
           <div class="health-row"><span class="k">Uptime</span><span class="v" id="hHUptime">—</span></div>
           <div class="health-row"><span class="k">Started at</span><span class="v" id="hHStarted">—</span></div>
           <div class="health-row"><span class="k">Tick interval</span><span class="v" id="hHTick">—</span></div>
+          <div class="health-row"><span class="k">Version</span><span class="v" id="hHVersion">—</span></div>
         </div>
         <div class="health-panel">
           <header>
@@ -639,6 +641,8 @@ async function refreshStatus() {
     $("#hHUptime").textContent = fmtDuration(s.uptime_s);
     $("#hHStarted").textContent = fmtIso(s.agent_started_at);
     $("#hHTick").textContent = s.tick_interval_s ? `${s.tick_interval_s}s` : "—";
+    $("#hHVersion").textContent = s.hermes_version || "dev";
+    $("#headerVersion").textContent = s.hermes_version ? `v${s.hermes_version}` : "";
 
     // Health card — Tradier ----------------------------------------------
     const tradierBadge = $("#tradierBadge");

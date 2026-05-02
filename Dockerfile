@@ -1,6 +1,10 @@
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
+ARG HERMES_VERSION=dev
+LABEL hermes.version="${HERMES_VERSION}"
+ENV HERMES_VERSION="${HERMES_VERSION}"
+
 # Set the working directory in the container
 WORKDIR /app
 
