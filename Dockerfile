@@ -21,13 +21,13 @@ RUN apt-get update && apt-get install -y \
 COPY . /app
 
 # Install HermesTrader-specific Python packages
-# (the official image already has a base set of packages)
-RUN pip install --no-cache-dir \
+# (the official image uses `uv` as the package manager)
+RUN uv pip install --system --no-cache \
     fastapi \
     uvicorn \
     watchfiles \
     sqlalchemy \
-    psycopg[binary] \
+    "psycopg[binary]" \
     xgboost \
     pandas \
     numpy \
