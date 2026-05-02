@@ -163,7 +163,7 @@ cmd_build() {
     local version
     version="$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
     info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${HERMES_VERSION})…"
-    docker build \
+    docker build --pull \
         --build-arg HERMES_VERSION="$HERMES_VERSION" \
         -t "$IMAGE_FULL" \
         -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
