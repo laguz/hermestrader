@@ -22,6 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 IMAGE_FULL="${HERMES_IMAGE}:${HERMES_TAG}"
+HERMES_VERSION="$(cat VERSION 2>/dev/null || echo '0.0.0')"
 
 # ── Colours ───────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -45,32 +46,8 @@ _remote_digest() {
 }
 
 _current_version() {
-    # Try 1: read from a running container's label
-    local cid
-    cid="$(docker compose ps -q watcher 2>/dev/null | head -1)"
-    if [ -n "$cid" ]; then
-        local v
-        v="$(docker inspect --format='{{index .Config.Labels "hermes.version"}}' "$cid" 2>/dev/null || true)"
-        if [ -n "$v" ] && [ "$v" != "<no value>" ]; then
-            echo "$v"
-            return
-        fi
-    fi
-    # Try 2: read from the image itself
-    local v2
-    v2="$(docker image inspect "$IMAGE_FULL" --format='{{index .Config.Labels "hermes.version"}}' 2>/dev/null || true)"
-    if [ -n "$v2" ] && [ "$v2" != "<no value>" ]; then
-        echo "$v2"
-        return
-    fi
-    # Try 3: short image ID
-    local id
-    id="$(docker image inspect "$IMAGE_FULL" --format='{{.Id}}' 2>/dev/null | cut -c8-19 || true)"
-    if [ -n "$id" ]; then
-        echo "$id"
-        return
-    fi
-    echo "unknown"
+    docker inspect --format='{{index .Config.Labels "hermes.version"}}' \
+        "$(docker compose ps -q watcher 2>/dev/null | head -1)" 2>/dev/null || echo "unknown"
 }
 
 _pull() {
@@ -87,16 +64,17 @@ _up() {
     docker compose up -d
     echo ""
     ok "Hermes is running"
-    _show_version
     echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
     echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
+    echo -e "   ${CYAN}Version${NC}    → Hermes Agent v${HERMES_VERSION}"
+    _show_version
 }
 
 _show_version() {
     local ver
     ver=$(_current_version)
-    if [ -n "$ver" ] && [ "$ver" != "unknown" ]; then
-        echo -e "   ${CYAN}Version${NC}    → ${GREEN}${ver}${NC}"
+    if [ "$ver" != "" ] && [ "$ver" != "unknown" ]; then
+        echo -e "   ${CYAN}Version${NC}    → ${ver}"
     fi
 }
 
@@ -178,19 +156,17 @@ cmd_logs() {
 }
 
 cmd_status() {
-    _show_version
-    echo ""
     docker compose ps
 }
 
 cmd_build() {
     local version
     version="$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
-    info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${version})…"
+    info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${HERMES_VERSION})…"
     docker build \
-        --build-arg HERMES_VERSION="$version" \
+        --build-arg HERMES_VERSION="$HERMES_VERSION" \
         -t "$IMAGE_FULL" \
-        -t "${HERMES_IMAGE}:${version}" \
+        -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
         .
     ok "Build complete: ${IMAGE_FULL}"
 }
@@ -199,12 +175,29 @@ cmd_push() {
     info "Pushing ${BOLD}${IMAGE_FULL}${NC} to Docker Hub…"
     docker push "$IMAGE_FULL"
     # Also push the version tag if it differs from "latest"
-    local version
-    version="$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
-    if [ "$version" != "latest" ] && [ "$version" != "dev" ]; then
-        docker push "${HERMES_IMAGE}:${version}"
+    if [ "$HERMES_VERSION" != "latest" ] && [ "$HERMES_VERSION" != "0.0.0" ]; then
+        docker push "${HERMES_IMAGE}:${HERMES_VERSION}"
     fi
     ok "Pushed to Docker Hub"
+}
+
+cmd_version() {
+    local build_date
+    build_date=$(date +"%Y.%-m.%-d")
+    echo -e "${BOLD}Hermes Agent${NC} v${HERMES_VERSION} (${build_date})"
+    echo ""
+    echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
+    # Show container image ID + creation time for each service
+    for svc in watcher agent; do
+        local cid
+        cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+        if [ -n "$cid" ]; then
+            local img created
+            img=$(docker inspect --format='{{.Config.Image}}' "$cid" 2>/dev/null || echo "—")
+            created=$(docker inspect --format='{{.Created}}' "$cid" 2>/dev/null | cut -d'.' -f1 || echo "—")
+            echo -e "   ${CYAN}${svc}${NC}  → image=${img}  created=${created}"
+        fi
+    done
 }
 
 cmd_help() {
@@ -222,6 +215,7 @@ cmd_help() {
     echo "  status           Show running containers"
     echo "  build            Build the Docker image locally"
     echo "  push             Push the local image to Docker Hub"
+    echo "  version          Show the running Hermes version"
     echo "  help             Show this help"
     echo ""
     echo "Environment:"
@@ -239,6 +233,7 @@ case "${1:-help}" in
     status)         cmd_status ;;
     build)          cmd_build ;;
     push)           cmd_push ;;
+    version|-v|--version) cmd_version ;;
     help|--help|-h) cmd_help ;;
     *)              err "Unknown command: $1"; cmd_help; exit 1 ;;
 esac

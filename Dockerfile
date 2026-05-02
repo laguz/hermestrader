@@ -1,5 +1,7 @@
-# Use an official Python runtime as a parent image
-FROM python:3.11-slim
+# ── Stage 1: Official Hermes Agent core from Nous Research ────────────
+# Pulls the latest agent platform (Python, tools, runtime). Rebuilding
+# this image automatically picks up any upstream core updates.
+FROM nousresearch/hermes-agent:latest
 
 ARG HERMES_VERSION=dev
 LABEL hermes.version="${HERMES_VERSION}"
@@ -8,7 +10,8 @@ ENV HERMES_VERSION="${HERMES_VERSION}"
 # Set the working directory in the container
 WORKDIR /app
 
-# Install system dependencies
+# Install HermesTrader-specific system dependencies
+# (the official image already has Python 3, git, Node.js, etc.)
 RUN apt-get update && apt-get install -y \
     libpq-dev \
     gcc \
@@ -17,8 +20,8 @@ RUN apt-get update && apt-get install -y \
 # Copy the current directory contents into the container at /app
 COPY . /app
 
-# Install any needed packages specified in requirements.txt
-# (Since we don't have a requirements.txt, we'll install them directly)
+# Install HermesTrader-specific Python packages
+# (the official image already has a base set of packages)
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \

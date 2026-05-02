@@ -76,6 +76,17 @@ TICK_INTERVAL_S = int(os.environ.get("HERMES_TICK_INTERVAL", 300))
 STALE_AFTER_S = max(60, TICK_INTERVAL_S * 2 + 30)
 
 
+def _read_version_file() -> str:
+    """Read VERSION file from the app root — fallback when HERMES_VERSION env isn't set."""
+    for p in (Path(__file__).resolve().parents[2] / "VERSION",  # repo root
+              Path("/app/VERSION")):                             # Docker container
+        try:
+            return p.read_text().strip()
+        except (FileNotFoundError, OSError):
+            continue
+    return "dev"
+
+
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
@@ -228,7 +239,7 @@ def status() -> Dict[str, Any]:
         "mode": mode,
         "stale_after_s": STALE_AFTER_S,
         "tick_interval_s": TICK_INTERVAL_S,
-        "hermes_version": os.environ.get("HERMES_VERSION", "dev"),
+        "hermes_version": os.environ.get("HERMES_VERSION") or _read_version_file(),
     }
 
 
