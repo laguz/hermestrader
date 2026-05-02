@@ -16,7 +16,7 @@
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────
-HERMES_IMAGE="${HERMES_IMAGE:-laguz/hermestrader}"
+HERMES_IMAGE="${HERMES_IMAGE:-laguz3/hermes}"
 HERMES_TAG="${HERMES_TAG:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -45,8 +45,32 @@ _remote_digest() {
 }
 
 _current_version() {
-    docker inspect --format='{{index .Config.Labels "hermes.version"}}' \
-        "$(docker compose ps -q watcher 2>/dev/null | head -1)" 2>/dev/null || echo "unknown"
+    # Try 1: read from a running container's label
+    local cid
+    cid="$(docker compose ps -q watcher 2>/dev/null | head -1)"
+    if [ -n "$cid" ]; then
+        local v
+        v="$(docker inspect --format='{{index .Config.Labels "hermes.version"}}' "$cid" 2>/dev/null || true)"
+        if [ -n "$v" ] && [ "$v" != "<no value>" ]; then
+            echo "$v"
+            return
+        fi
+    fi
+    # Try 2: read from the image itself
+    local v2
+    v2="$(docker image inspect "$IMAGE_FULL" --format='{{index .Config.Labels "hermes.version"}}' 2>/dev/null || true)"
+    if [ -n "$v2" ] && [ "$v2" != "<no value>" ]; then
+        echo "$v2"
+        return
+    fi
+    # Try 3: short image ID
+    local id
+    id="$(docker image inspect "$IMAGE_FULL" --format='{{.Id}}' 2>/dev/null | cut -c8-19 || true)"
+    if [ -n "$id" ]; then
+        echo "$id"
+        return
+    fi
+    echo "unknown"
 }
 
 _pull() {
@@ -63,16 +87,16 @@ _up() {
     docker compose up -d
     echo ""
     ok "Hermes is running"
+    _show_version
     echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
     echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
-    _show_version
 }
 
 _show_version() {
     local ver
     ver=$(_current_version)
-    if [ "$ver" != "" ] && [ "$ver" != "unknown" ]; then
-        echo -e "   ${CYAN}Version${NC}    → ${ver}"
+    if [ -n "$ver" ] && [ "$ver" != "unknown" ]; then
+        echo -e "   ${CYAN}Version${NC}    → ${GREEN}${ver}${NC}"
     fi
 }
 
@@ -154,6 +178,8 @@ cmd_logs() {
 }
 
 cmd_status() {
+    _show_version
+    echo ""
     docker compose ps
 }
 
@@ -199,7 +225,7 @@ cmd_help() {
     echo "  help             Show this help"
     echo ""
     echo "Environment:"
-    echo "  HERMES_IMAGE     Docker Hub image (default: laguz/hermestrader)"
+    echo "  HERMES_IMAGE     Docker Hub image (default: laguz3/hermes)"
     echo "  HERMES_TAG       Image tag (default: latest)"
 }
 

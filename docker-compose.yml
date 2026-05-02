@@ -17,7 +17,7 @@ services:
       retries: 5
 
   watcher:
-    image: ${HERMES_IMAGE:-laguz/hermestrader}:${HERMES_TAG:-latest}
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
     build: .
     # --reload picks up Python edits automatically; static HTML/CSS/JS under
     # hermes/service2_watcher/static is served fresh on every request, so the
@@ -38,7 +38,7 @@ services:
         condition: service_healthy
 
   agent:
-    image: ${HERMES_IMAGE:-laguz/hermestrader}:${HERMES_TAG:-latest}
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
     build: .
     command: python -m hermes.service1_agent.main
     env_file: .env
@@ -53,7 +53,7 @@ services:
         condition: service_healthy
 
   mcp:
-    image: ${HERMES_IMAGE:-laguz/hermestrader}:${HERMES_TAG:-latest}
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
     build: .
     command: python -m hermes.mcp.server
     stdin_open: true
