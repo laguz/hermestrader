@@ -29,7 +29,7 @@ COPY . /app
 # Install HermesTrader-specific Python packages
 RUN pip install --no-cache-dir \
     fastapi \
-    uvicorn \
+    "uvicorn[standard]" \
     watchfiles \
     sqlalchemy \
     "psycopg[binary]" \
@@ -37,6 +37,8 @@ RUN pip install --no-cache-dir \
     pandas \
     numpy \
     requests \
+    tenacity \
+    ollama \
     "mcp[cli]"
 
 # Set environment variables

@@ -11,6 +11,13 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
+from hermes.common import (
+    DEFAULT_LLM_TIMEOUT_S,
+    STRATEGY_PRIORITIES,
+    VALID_AUTONOMY,
+    VALID_LLM_PROVIDERS,
+    VALID_MODES,
+)
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.service1_agent.overseer import HermesOverseer
@@ -39,22 +46,19 @@ SETTING_LLM_TIMEOUT = "llm_timeout_s"           # seconds; bump on cold-load set
 SETTING_LLM_OK_TS = "llm_last_ok_ts"
 SETTING_LLM_ERROR = "llm_last_error"
 
-# Generous default — LM Studio cold-loading a multi-GB GGUF on consumer
-# hardware can take 60-90 seconds before the first token arrives. 120s is
-# a good middle ground for most setups.
-DEFAULT_LLM_TIMEOUT_S = 120.0
-
-# Operator doctrine + agent control — written by the watcher.
+# Operator doctrine + agent control — written by the C2 panel.
 SETTING_SOUL = "soul_md"
 SETTING_AUTONOMY = "agent_autonomy"
 SETTING_PAUSED = "agent_paused"
+SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
 
-VALID_MODES = ("paper", "live")
-VALID_LLM_PROVIDERS = ("mock", "local")
-VALID_AUTONOMY = ("advisory", "enforcing", "autonomous")
+# Per-strategy enable/disable flags — written by the C2 panel.
+# Key pattern: "strategy_{id}_enabled"  value: "true" | "false"
+def _strategy_enabled_key(strategy_id: str) -> str:
+    return f"strategy_{strategy_id.lower()}_enabled"
 
-# Cascading priority — must match service2_watcher/api.py STRATEGY_PRIORITIES.
-STRATEGY_PRIORITIES = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4}
+# VALID_MODES, VALID_LLM_PROVIDERS, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
+# and STRATEGY_PRIORITIES are imported from hermes.common above.
 
 
 def _utcnow_iso() -> str:
@@ -86,13 +90,42 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
         "provider": provider,
         "base_url": base_url,
         "model": model,
-        "has_api_key": bool(api_key),
+        # Store a hash of the key, not just bool, so that updating the key
+        # value (e.g. wrong → correct) is detected as a config change and
+        # triggers an LLM client rebuild on the next tick.
+        "api_key_hash": hash(api_key or ""),
         "temperature": temperature,
         "timeout_s": timeout_s,
         "vision": vision,
     }
 
-    if provider == "local" and base_url and model:
+    if provider == "ollama_cloud":
+        # Use the native Ollama Python library — Ollama Cloud auth works
+        # differently from the OpenAI-compatible shim and requires the
+        # official client (as documented at api.ollama.com).
+        if not model or not api_key:
+            log.warning("ollama_cloud requires both model and api_key — falling back to MockLLM")
+        else:
+            try:
+                from hermes.llm.clients import OllamaCloudLLM
+                client = OllamaCloudLLM(
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    max_tokens=1024,
+                    timeout_s=timeout_s,
+                )
+                log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
+                         model, vision, timeout_s)
+                return client, snapshot, vision
+            except Exception as exc:                            # noqa: BLE001
+                log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
+                try:
+                    db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                except Exception:                               # noqa: BLE001
+                    pass
+
+    elif provider == "local" and base_url and model:
         try:
             from hermes.llm import OpenAICompatibleLLM
             client = OpenAICompatibleLLM(
@@ -100,11 +133,11 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 api_key=api_key, temperature=temperature,
                 timeout_s=timeout_s,
             )
-            log.info("LLM overseer: local model=%s base=%s vision=%s timeout=%.0fs",
+            log.info("LLM overseer: provider=local model=%s base=%s vision=%s timeout=%.0fs",
                      model, base_url, vision, timeout_s)
             return client, snapshot, vision
         except Exception as exc:                                # noqa: BLE001
-            log.exception("Failed to build local LLM client: %s", exc)
+            log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
             try:
                 db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
             except Exception:                                   # noqa: BLE001
@@ -117,10 +150,10 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
 
 
 def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the operator-driven overseer config (soul, autonomy, paused).
+    """Return the operator-driven overseer config (soul, autonomy, paused, approval_mode).
 
     Defaults pull from `conf` (env vars) the very first time so nothing
-    surprising happens on first boot. After that, watcher writes win.
+    surprising happens on first boot. After that, C2 panel writes win.
     """
     autonomy = (db.get_setting(SETTING_AUTONOMY)
                 or conf.get("ai_autonomy") or "advisory").lower()
@@ -128,13 +161,27 @@ def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
         autonomy = "advisory"
     soul = db.get_setting(SETTING_SOUL) or ""
     paused = (db.get_setting(SETTING_PAUSED) or "false").lower() == "true"
-    return {"autonomy": autonomy, "soul": soul, "paused": paused}
+    approval_mode = (db.get_setting(SETTING_APPROVAL_MODE) or "true").lower() == "true"
+    # Per-strategy enable flags — default to enabled for all known strategies.
+    strategy_enabled = {
+        sid: (db.get_setting(_strategy_enabled_key(sid)) or "true").lower() != "false"
+        for sid in STRATEGY_PRIORITIES
+    }
+    return {
+        "autonomy": autonomy,
+        "soul": soul,
+        "paused": paused,
+        "approval_mode": approval_mode,
+        "strategy_enabled": strategy_enabled,
+    }
 
 
 def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           *, vision_enabled: bool = True,
           autonomy: Optional[str] = None,
-          soul: Optional[str] = None) -> CascadingEngine:
+          soul: Optional[str] = None,
+          approval_mode: bool = True,
+          strategy_enabled: Optional[Dict[str, bool]] = None) -> CascadingEngine:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
     mm = MoneyManager(broker, db, config)
@@ -147,16 +194,25 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
         soul=soul,
     )
 
+    enabled = strategy_enabled or {}
     common = dict(broker=broker, db=db, money_manager=mm, ic_builder=ic,
                   config=config, overseer=overseer,
                   dry_run=config.get("dry_run", False))
-    strategies = [
+    all_strategies = [
         CreditSpreads75(**common),
         CreditSpreads7(**common),
         TastyTrade45(**common),
         WheelStrategy(**common),
     ]
-    return CascadingEngine(broker, db, strategies, overseer=overseer)
+    # Filter out strategies the operator has disabled from the C2 panel.
+    active_strategies = [s for s in all_strategies
+                         if enabled.get(s.NAME, True)]
+    if len(active_strategies) < len(all_strategies):
+        disabled = [s.NAME for s in all_strategies if not enabled.get(s.NAME, True)]
+        log.info("Strategies disabled by C2 panel: %s", disabled)
+
+    return CascadingEngine(broker, db, active_strategies, overseer=overseer,
+                           approval_mode=approval_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +317,9 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
     engine = build(broker, current_llm, chart_provider, conf,
                    vision_enabled=current_vision,
                    autonomy=current_overseer_cfg["autonomy"],
-                   soul=current_overseer_cfg["soul"])
+                   soul=current_overseer_cfg["soul"],
+                   approval_mode=current_overseer_cfg["approval_mode"],
+                   strategy_enabled=current_overseer_cfg["strategy_enabled"])
     watchlist = conf["watchlist"]
     interval_s = int(conf.get("tick_interval_s", 300))
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",
@@ -279,7 +337,9 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 try:
                     broker = _build_broker(conf, desired_mode)
                     engine = build(broker, current_llm, chart_provider, conf,
-                                   vision_enabled=current_vision)
+                                   vision_enabled=current_vision,
+                                   approval_mode=current_overseer_cfg["approval_mode"],
+                                   strategy_enabled=current_overseer_cfg["strategy_enabled"])
                     current_mode = desired_mode
                     db.write_log("ENGINE", f"mode switched to {current_mode}")
                 except Exception as exc:                          # noqa: BLE001
@@ -312,7 +372,9 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 engine = build(broker, current_llm, chart_provider, conf,
                                vision_enabled=current_vision,
                                autonomy=current_overseer_cfg["autonomy"],
-                               soul=current_overseer_cfg["soul"])
+                               soul=current_overseer_cfg["soul"],
+                               approval_mode=current_overseer_cfg["approval_mode"],
+                               strategy_enabled=current_overseer_cfg["strategy_enabled"])
                 if llm_changed:
                     db.write_log("ENGINE",
                                  f"LLM swapped: provider={new_snapshot['provider']} "
@@ -331,6 +393,58 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 time.sleep(interval_s)
                 continue
 
+            # 1e) Stale pending-order cleanup — orders that were cancelled or
+            #     expired externally on Tradier never receive a fill callback,
+            #     so their PENDING rows would accumulate and shrink
+            #     side_aware_capacity indefinitely.  Mark anything older than
+            #     2× the tick interval as EXPIRED before the engine runs.
+            try:
+                expired = db.expire_stale_pending_orders(interval_s * 2)
+                if expired:
+                    log.info("Expired %d stale PENDING order(s)", expired)
+                    db.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("expire_stale_pending_orders failed: %s", exc)
+
+            # 1f) Execute C2-approved orders — process any trade the operator
+            #     has approved since the last tick.  Runs before the strategy
+            #     tick so capacity calculations reflect newly executed orders.
+            if current_overseer_cfg["approval_mode"]:
+                try:
+                    approved = db.fetch_approved_actions()
+                    for item in approved:
+                        action_json = item["action_json"]
+                        approval_id = item["id"]
+                        try:
+                            from hermes.service1_agent.core import TradeAction
+                            action = TradeAction(**action_json)
+                            db.record_pending_order(action)
+                            if not getattr(broker, "dry_run", False):
+                                resp = broker.place_order_from_action(action)
+                                db.record_order_response(action, resp)
+                            db.mark_approval_executed(approval_id, success=True)
+                            log.info(
+                                "[C2] Executed approved trade: %s %s strategy=%s id=%d",
+                                action.symbol, action.order_class,
+                                action.strategy_id, approval_id,
+                            )
+                            db.write_log(
+                                action.strategy_id,
+                                f"[C2 EXECUTED] {action.symbol} {action.order_class} "
+                                f"qty={action.quantity} approval_id={approval_id}",
+                            )
+                        except Exception as exc:               # noqa: BLE001
+                            log.exception(
+                                "[C2] Failed to execute approved trade id=%d: %s",
+                                approval_id, exc,
+                            )
+                            db.mark_approval_executed(
+                                approval_id, success=False,
+                                notes=f"execution error: {exc}",
+                            )
+                except Exception as exc:                       # noqa: BLE001
+                    log.warning("fetch_approved_actions failed: %s", exc)
+
             # 2) Heartbeat — guarantees the watcher sees a fresh log line each
             #    tick even when no strategy fires.
             db.write_log("ENGINE", f"heartbeat tick start mode={current_mode}")
@@ -345,7 +459,16 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
         except Exception as exc:                                  # noqa: BLE001
             log.exception("tick failed: %s", exc)
             try:
-                db.set_setting(SETTING_TRADIER_ERROR, str(exc)[:500])
+                exc_str = str(exc)[:500]
+                # Route LLM errors to llm_last_error; everything else to
+                # tradier_last_error so the C2 panel shows the right field.
+                llm_keywords = ("api.ollama.com", "openai", "LLMConnection",
+                                "chat/completions", "llm", "unauthorized")
+                is_llm_err = any(kw.lower() in exc_str.lower() for kw in llm_keywords)
+                if is_llm_err:
+                    db.set_setting(SETTING_LLM_ERROR, exc_str)
+                else:
+                    db.set_setting(SETTING_TRADIER_ERROR, exc_str)
                 db.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:                                     # noqa: BLE001
                 pass

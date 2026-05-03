@@ -158,7 +158,26 @@ SELECT add_compression_policy('bars_intraday', INTERVAL '14 days', if_not_exists
 SELECT add_compression_policy('predictions',   INTERVAL '30 days', if_not_exists => TRUE);
 
 -- ---------------------------------------------------------------------
--- Daily PnL roll-up for the Watcher dashboard.
+-- ---------------------------------------------------------------------
+-- Approval queue — agent proposed trades pending human review.
+-- Regular table (not hypertable): low volume, random-access by id.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pending_approvals (
+    id           BIGSERIAL PRIMARY KEY,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    strategy_id  TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    action_type  TEXT NOT NULL DEFAULT 'entry',   -- 'entry' | 'management' | 'ai'
+    action_json  JSONB NOT NULL,                  -- full TradeAction serialised
+    status       TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/APPROVED/REJECTED/EXECUTED/FAILED
+    notes        TEXT,
+    decided_at   TIMESTAMPTZ,
+    executed_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
+    ON pending_approvals(status, created_at DESC);
+
+-- Daily PnL roll-up for the C2 dashboard.
 -- This was originally a TimescaleDB continuous aggregate, but those require
 -- time_bucket() to reference the hypertable's primary time dimension. The
 -- `trades` hypertable is partitioned by opened_at, while PnL needs to be

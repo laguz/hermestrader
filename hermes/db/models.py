@@ -4,7 +4,7 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
@@ -13,6 +13,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
 
 import pandas as pd
 
@@ -86,6 +88,27 @@ class PendingOrder(Base):
     quantity = Column(Integer, nullable=False)
     payload = Column(JSONB, nullable=False)
     status = Column(String, nullable=False, default="PENDING")
+
+
+class PendingApproval(Base):
+    """Human-approval queue for proposed agent trades.
+
+    The agent writes a row here (status=PENDING) instead of calling the broker
+    when approval_mode is enabled.  The C2 panel approves or rejects; the
+    agent's tick loop executes APPROVED rows and marks them EXECUTED.
+    """
+    __tablename__ = "pending_approvals"
+    id = Column(BigInteger, Sequence("pending_approvals_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    action_type = Column(String, nullable=False, default="entry")
+    action_json = Column(JSONB, nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+    notes = Column(Text)
+    decided_at = Column(DateTime(timezone=True))
+    executed_at = Column(DateTime(timezone=True))
 
 
 class BotLog(Base):
@@ -247,9 +270,10 @@ class HermesDB:
                 out.setdefault(r.strategy_id, []).append(r.symbol)
             return out
 
-    # Hardcoded so add_to_watchlist is self-sufficient — a watchlist write
-    # cannot fail an FK check just because the strategies table is empty.
-    _DEFAULT_STRATEGY_PRIORITIES = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4}
+    # Pulled from hermes.common so add_to_watchlist is self-sufficient —
+    # a watchlist write cannot fail an FK check just because the strategies
+    # table is empty.  Single source of truth lives in common.py.
+    _DEFAULT_STRATEGY_PRIORITIES = _COMMON_STRATEGY_PRIORITIES
 
     def add_to_watchlist(self, strategy_id: str, symbol: str) -> bool:
         """Insert a single symbol. Returns True when inserted, False if it already existed.
@@ -334,6 +358,117 @@ class HermesDB:
                     .filter_by(strategy_id=strategy_id, symbol=symbol, side=side, status="PENDING")
                     .all())
             return sum(int(r.quantity or 0) for r in rows)
+
+    def expire_stale_pending_orders(self, older_than_seconds: int) -> int:
+        """Mark PENDING orders older than `older_than_seconds` as EXPIRED.
+
+        Orders that were cancelled externally on the broker (e.g. Tradier GTC
+        cancel, day-order expiry, manual intervention) never get a fill callback,
+        so their rows would sit as PENDING forever and artificially reduce
+        side_aware_capacity.  This method is called at the start of each tick
+        to clean up those ghosts.
+
+        Returns the number of rows marked EXPIRED.
+        """
+        cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)
+        expired = 0
+        with self.Session() as s:
+            stale = (
+                s.query(PendingOrder)
+                .filter(
+                    PendingOrder.status == "PENDING",
+                    PendingOrder.submitted_at < cutoff,
+                )
+                .all()
+            )
+            for row in stale:
+                row.status = "EXPIRED"
+                expired += 1
+            if expired:
+                s.commit()
+        return expired
+
+    # ---- approval queue --------------------------------------------------
+    def queue_for_approval(self, action_json: Dict[str, Any],
+                           action_type: str = "entry") -> int:
+        """Write a proposed TradeAction to the approval queue.  Returns the new row id."""
+        with self.Session() as s:
+            row = PendingApproval(
+                strategy_id=action_json.get("strategy_id", "UNKNOWN"),
+                symbol=action_json.get("symbol", ""),
+                action_type=action_type,
+                action_json=action_json,
+                status="PENDING",
+            )
+            s.add(row)
+            s.flush()
+            row_id = row.id
+            s.commit()
+            return row_id
+
+    def list_approvals(self, status: Optional[str] = None,
+                       limit: int = 100) -> List[Dict[str, Any]]:
+        with self.Session() as s:
+            q = s.query(PendingApproval).order_by(PendingApproval.created_at.desc())
+            if status:
+                q = q.filter(PendingApproval.status == status.upper())
+            rows = q.limit(limit).all()
+            return [
+                {
+                    "id": r.id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "action_type": r.action_type,
+                    "action_json": r.action_json,
+                    "status": r.status,
+                    "notes": r.notes,
+                    "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+                    "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+                }
+                for r in rows
+            ]
+
+    def decide_approval(self, approval_id: int, decision: str,
+                        notes: Optional[str] = None) -> bool:
+        """Set status to APPROVED or REJECTED.  Returns False if row not found."""
+        decision = decision.upper()
+        if decision not in ("APPROVED", "REJECTED"):
+            raise ValueError(f"decision must be APPROVED or REJECTED, got {decision!r}")
+        with self.Session() as s:
+            row = s.query(PendingApproval).filter_by(id=approval_id).first()
+            if row is None or row.status != "PENDING":
+                return False
+            row.status = decision
+            row.decided_at = datetime.utcnow()
+            if notes:
+                row.notes = notes
+            s.commit()
+            return True
+
+    def fetch_approved_actions(self) -> List[Dict[str, Any]]:
+        """Return APPROVED rows ready for execution."""
+        with self.Session() as s:
+            rows = (s.query(PendingApproval)
+                    .filter_by(status="APPROVED")
+                    .order_by(PendingApproval.decided_at)
+                    .all())
+            return [
+                {"id": r.id, "action_json": r.action_json,
+                 "strategy_id": r.strategy_id, "symbol": r.symbol}
+                for r in rows
+            ]
+
+    def mark_approval_executed(self, approval_id: int, success: bool = True,
+                               notes: Optional[str] = None) -> None:
+        with self.Session() as s:
+            row = s.query(PendingApproval).filter_by(id=approval_id).first()
+            if row:
+                row.status = "EXECUTED" if success else "FAILED"
+                row.executed_at = datetime.utcnow()
+                if notes:
+                    row.notes = (row.notes or "") + f"\n{notes}"
+                s.commit()
 
     def tracked_option_symbols(self) -> set:
         with self.Session() as s:

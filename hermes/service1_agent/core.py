@@ -5,6 +5,7 @@ MoneyManager and the CascadingEngine that drives execution priority.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 from abc import ABC, abstractmethod
@@ -122,9 +123,14 @@ class IronCondorBuilder:
         self.mm = money_manager
 
     @staticmethod
-    def margin_requirement(width: float, lots: int) -> float:
-        """Single-side margin for an iron condor on equal-width spreads."""
-        return float(width) * 100.0 * int(lots)
+    def margin_requirement(width: float, lots: int, multiplier: int = 100) -> float:
+        """Single-side margin for an iron condor on equal-width spreads.
+
+        `multiplier` is the contract size from the option chain (standard
+        equity options = 100; micro options may differ).  Defaults to 100 so
+        existing callers that don't pass it continue to work correctly.
+        """
+        return float(width) * int(multiplier) * int(lots)
 
     def plan(
         self,
@@ -138,10 +144,12 @@ class IronCondorBuilder:
         existing_sides: Sequence[str],
         put_action_factory,
         call_action_factory,
+        multiplier: int = 100,
     ) -> List[TradeAction]:
         """
         Returns a list of TradeAction(s) to open. May be empty if BP/caps prevent it.
         existing_sides: sides already open on this expiry, e.g. {'put'} or {} or {'put','call'}.
+        multiplier: contract size read from the option chain (default 100 for standard equity options).
         """
         existing = {s.lower() for s in existing_sides}
         if {"put", "call"}.issubset(existing):
@@ -154,7 +162,9 @@ class IronCondorBuilder:
             sides_to_open = ["call"] if "put" in existing else ["put"]
 
         # Single-sided margin governs BP — calculate once on the riskiest side.
-        requirement_per_lot = width * 100.0
+        # Use the chain's multiplier rather than the hardcoded 100 so micro
+        # options (multiplier=10) and other non-standard contracts are handled.
+        requirement_per_lot = width * float(multiplier)
         actions: List[TradeAction] = []
         for side in sides_to_open:
             lots = self.mm.scale_quantity(
@@ -271,12 +281,16 @@ class CascadingEngine:
     """
 
     def __init__(self, broker, db, strategies: Sequence[AbstractStrategy],
-                 overseer: Optional["HermesOverseer"] = None):
+                 overseer: Optional["HermesOverseer"] = None,
+                 approval_mode: bool = False):
         self.broker = broker
         self.db = db
         # Sort by declared PRIORITY (1 highest)
         self.strategies = sorted(strategies, key=lambda s: s.PRIORITY)
         self.overseer = overseer
+        # When True, submit() queues trades for human approval instead of
+        # sending them to the broker directly.
+        self.approval_mode = approval_mode
 
     # 1
     def sync_positions(self) -> None:
@@ -326,28 +340,44 @@ class CascadingEngine:
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
         return actions
 
-    def submit(self, actions: Iterable[TradeAction]) -> None:
+    def submit(self, actions: Iterable[TradeAction],
+               action_type: str = "entry") -> None:
         for a in actions:
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
             if self.overseer is not None:
                 a = self.overseer.review(a)
                 if a is None:
                     continue
-            self.db.record_pending_order(a)
-            if not getattr(self.broker, "dry_run", False):
-                resp = self.broker.place_order_from_action(a)
-                self.db.record_order_response(a, resp)
+
+            if self.approval_mode:
+                # Queue for human review instead of firing directly.
+                action_dict = dataclasses.asdict(a)
+                self.db.queue_for_approval(action_dict, action_type=action_type)
+                logger.info(
+                    "[C2] Trade queued for approval: %s %s strategy=%s",
+                    a.symbol, a.order_class, a.strategy_id,
+                )
+                self.db.write_log(
+                    a.strategy_id,
+                    f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
+                    f"qty={a.quantity} — awaiting human approval",
+                )
+            else:
+                self.db.record_pending_order(a)
+                if not getattr(self.broker, "dry_run", False):
+                    resp = self.broker.place_order_from_action(a)
+                    self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
     def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         self.sync_positions()
         self.reconcile_orphans()
         mgmt = self.process_management()
-        self.submit(mgmt)
+        self.submit(mgmt, action_type="management")
         entries = self.process_entries(watchlist)
-        self.submit(entries)
+        self.submit(entries, action_type="entry")
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         if self.overseer is not None:
             ai_actions = self.overseer.propose(watchlist) or []
-            self.submit(ai_actions)
+            self.submit(ai_actions, action_type="ai")
         return {"managed": len(mgmt), "entries": len(entries)}

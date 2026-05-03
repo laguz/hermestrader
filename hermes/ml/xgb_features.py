@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import logging
 import math
+import pickle
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as dtime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -155,8 +157,18 @@ def hv_rank(daily: pd.DataFrame, window: int = 252, lookback: int = 365) -> pd.S
 # ---------------------------------------------------------------------------
 # Async XGBoost predictor
 # ---------------------------------------------------------------------------
+# Directory where trained models are checkpointed.  Uses /tmp so it survives
+# container-internal restarts but is intentionally ephemeral across cold boots
+# (a model trained on stale bars is better than no model on warm restart).
+_MODEL_DIR = Path("/tmp/hermes_xgb_models")
+
+
 class AsyncXGBPredictor:
     """Trains per-symbol XGBoost regressors in a background thread.
+
+    Models are checkpointed to _MODEL_DIR after each retrain and reloaded on
+    startup so the predictor is immediately useful even before the first
+    retrain_interval elapses.
 
     Usage:
         p = AsyncXGBPredictor(db, feature_engineer, symbols=[...])
@@ -165,12 +177,14 @@ class AsyncXGBPredictor:
     """
 
     def __init__(self, db, feat_eng: FeatureEngineer, symbols: Sequence[str],
-                 retrain_interval_s: int = 60 * 60, predict_interval_s: int = 60):
+                 retrain_interval_s: int = 60 * 60, predict_interval_s: int = 60,
+                 model_dir: Optional[Path] = None):
         self.db = db
         self.feat = feat_eng
         self.symbols = list(symbols)
         self.retrain_interval = retrain_interval_s
         self.predict_interval = predict_interval_s
+        self._model_dir = model_dir or _MODEL_DIR
         self._models: Dict[str, Any] = {}
         self._last_pred: Dict[str, Dict[str, Any]] = {}
         self._stop = threading.Event()
@@ -180,8 +194,41 @@ class AsyncXGBPredictor:
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
+        self._load_models()   # warm-start from any checkpointed models
         self._thread = threading.Thread(target=self._loop, name="xgb-predictor", daemon=True)
         self._thread.start()
+
+    def _model_path(self, symbol: str) -> Path:
+        return self._model_dir / f"xgb_{symbol}.pkl"
+
+    def _load_models(self) -> None:
+        """Load any previously checkpointed models so the predictor is
+        immediately useful before the first retrain cycle completes."""
+        try:
+            self._model_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("Cannot create model dir %s: %s", self._model_dir, exc)
+            return
+        for sym in self.symbols:
+            p = self._model_path(sym)
+            if p.exists():
+                try:
+                    with p.open("rb") as f:
+                        self._models[sym] = pickle.load(f)  # noqa: S301
+                    logger.info("Loaded checkpointed xgb model for %s from %s", sym, p)
+                except Exception as exc:                     # noqa: BLE001
+                    logger.warning("Failed to load model for %s: %s", sym, exc)
+
+    def _save_model(self, symbol: str, model: Any) -> None:
+        """Persist a trained model to disk for warm-start on next boot."""
+        try:
+            self._model_dir.mkdir(parents=True, exist_ok=True)
+            p = self._model_path(symbol)
+            with p.open("wb") as f:
+                pickle.dump(model, f, protocol=pickle.HIGHEST_PROTOCOL)
+            logger.debug("Checkpointed xgb model for %s → %s", symbol, p)
+        except Exception as exc:                             # noqa: BLE001
+            logger.warning("Failed to checkpoint model for %s: %s", symbol, exc)
 
     def stop(self) -> None:
         self._stop.set()
@@ -221,6 +268,7 @@ class AsyncXGBPredictor:
             )
             model.fit(X, y)
             self._models[sym] = model
+            self._save_model(sym, model)
             logger.info("Trained xgb model for %s (%d rows)", sym, len(X))
 
     def _predict_all(self) -> None:

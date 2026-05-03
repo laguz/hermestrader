@@ -31,10 +31,28 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import requests
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    before_sleep_log,
+)
 
 logger = logging.getLogger("hermes.broker.tradier")
 
 OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
+
+# Tenacity retry policy for idempotent GET calls.  Retries on transient
+# network errors only — never on HTTP 4xx/5xx (those are Tradier rejections
+# and retrying won't help).
+_RETRY_POLICY = dict(
+    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=30),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 
 # Map Hermes leg side → Tradier OCC option side. A leg may carry the action
 # in one of three shapes — handled in this priority order by `_leg_action`:
@@ -99,6 +117,7 @@ class TradierBroker:
             response=r,
         )
 
+    @retry(**_RETRY_POLICY)
     def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}{path}"
         r = self._session.get(url, params=params, timeout=self._timeout)
@@ -107,11 +126,30 @@ class TradierBroker:
         return r.json() or {}
 
     def _post(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        # NOTE: _post is intentionally NOT retried — duplicate order placement
+        # is worse than a missed trade.  Connection-level errors propagate up
+        # to the tick loop which will catch and log them.
         url = f"{self.base_url}{path}"
         r = self._session.post(url, data=data, timeout=self._timeout)
         if not r.ok:
             self._raise_with_body(r, "POST", url, data)
         return r.json() or {}
+
+    def _enforce_dry_run(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Hard client-side guard: always stamp preview=true when dry_run is set.
+
+        This is belt-and-suspenders on top of each placement helper so that any
+        future order path added to this class cannot accidentally fire a live
+        order — even if the caller forgets to set the flag in `data`.
+        """
+        if self.dry_run:
+            if not data.get("preview"):
+                logger.warning(
+                    "dry_run=True but preview not set in order data — "
+                    "forcing preview=true (order will NOT be submitted)"
+                )
+            data["preview"] = "true"
+        return data
 
     # ----------------------------------------------------------------- Account
     def get_account_balances(self) -> Dict[str, Any]:
@@ -318,9 +356,7 @@ class TradierBroker:
             data[f"side[{i}]"] = self._leg_action(leg, default_open=True)
             data[f"quantity[{i}]"] = int(leg.get("quantity", action.quantity or 1))
 
-        if self.dry_run:
-            data["preview"] = "true"
-
+        self._enforce_dry_run(data)
         return self._post(f"/accounts/{self.account_id}/orders", data)
 
     # Tradier's `type` field is class-scoped:
@@ -376,8 +412,7 @@ class TradierBroker:
         clean_tag = self._sanitize_tag(action.tag)
         if clean_tag:
             data["tag"] = clean_tag
-        if self.dry_run:
-            data["preview"] = "true"
+        self._enforce_dry_run(data)
         return self._post(f"/accounts/{self.account_id}/orders", data)
 
     def _place_equity(self, action) -> Dict[str, Any]:
@@ -396,8 +431,7 @@ class TradierBroker:
         clean_tag = self._sanitize_tag(action.tag)
         if clean_tag:
             data["tag"] = clean_tag
-        if self.dry_run:
-            data["preview"] = "true"
+        self._enforce_dry_run(data)
         return self._post(f"/accounts/{self.account_id}/orders", data)
 
     # --------------------------------------------------------------- Roll API

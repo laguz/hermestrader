@@ -1,16 +1,12 @@
 """
-OpenAI-compatible chat client used by the HermesOverseer.
+LLM clients used by the HermesOverseer.
 
-Supports any backend that speaks the OpenAI Chat Completions API:
-    - LM Studio          → http://host.docker.internal:1234/v1
-    - Ollama             → http://host.docker.internal:11434/v1
-    - vLLM               → http://host.docker.internal:8000/v1
-    - llama.cpp server   → http://host.docker.internal:8080/v1
-    - hosted OpenAI      → https://api.openai.com/v1   (with api_key)
-
-Vision: image attachments are passed through OpenAI's multipart content
-format. If the local model is text-only it will simply ignore them; if the
-model rejects them the rejection bubbles up as `LLMConnectionError`.
+Two implementations:
+  - OpenAICompatibleLLM  — for LM Studio, Ollama local, vLLM, llama.cpp, OpenAI
+  - OllamaCloudLLM       — for api.ollama.com using the native ollama Python library
+                           (the OpenAI-compatible endpoint on Ollama Cloud uses
+                            different auth than the native API, so we use the
+                            official client instead)
 """
 from __future__ import annotations
 
@@ -231,3 +227,94 @@ class OpenAICompatibleLLM:
             "model": self.model,
             "reply": (reply or "").strip()[:200],
         }
+
+
+class OllamaCloudLLM:
+    """Native Ollama Cloud client using the official `ollama` Python library.
+
+    Ollama Cloud (api.ollama.com) auth works differently from its
+    OpenAI-compatible shim — the native client handles it correctly via a
+    custom Authorization header, which is what the official docs show.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        *,
+        temperature: float = 0.2,
+        max_tokens: int = 1024,
+        timeout_s: float = 120.0,
+    ):
+        if not model or not api_key:
+            raise ValueError("OllamaCloudLLM requires model and api_key")
+        self.model = model
+        self.api_key = api_key
+        self.temperature = float(temperature)
+        self.max_tokens = int(max_tokens)
+        self.timeout_s = float(timeout_s)
+
+        try:
+            from ollama import Client
+            self._client = Client(
+                host="https://api.ollama.com",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+            )
+        except ImportError as exc:
+            raise LLMConnectionError(
+                "ollama package not installed — run: pip install ollama"
+            ) from exc
+
+    def chat(
+        self,
+        messages: Sequence[Dict[str, Any]],
+        images: Optional[Iterable[Any]] = None,
+        *,
+        max_tokens: Optional[int] = None,
+        timeout_s: Optional[float] = None,
+    ) -> str:
+        """Send a chat request to Ollama Cloud. Returns the assistant text."""
+        effective_max = max_tokens if max_tokens is not None else self.max_tokens
+        try:
+            response = self._client.chat(
+                model=self.model,
+                messages=list(messages),
+                options={
+                    "temperature": self.temperature,
+                    "num_predict": effective_max,
+                },
+            )
+            # ollama library returns an object; access like a dict or attribute
+            if isinstance(response, dict):
+                return response["message"]["content"]
+            return response.message.content
+        except Exception as exc:                                    # noqa: BLE001
+            raise LLMConnectionError(f"Ollama Cloud error: {exc}") from exc
+
+    def ping(self, *, timeout_s: Optional[float] = None) -> Dict[str, Any]:
+        """Quick connectivity check."""
+        reply = self.chat(
+            [
+                {"role": "system", "content": "Respond with exactly: OK"},
+                {"role": "user",   "content": "ping"},
+            ],
+            max_tokens=32,
+        )
+        return {
+            "ok": True,
+            "base_url": "https://api.ollama.com",
+            "model": self.model,
+            "reply": (reply or "").strip()[:200],
+        }
+
+    def list_models(self, *, timeout_s: Optional[float] = None) -> List[Dict[str, Any]]:
+        """List models available on Ollama Cloud for this key."""
+        try:
+            result = self._client.list()
+            models = result.get("models") if isinstance(result, dict) else getattr(result, "models", [])
+            return [
+                {"id": getattr(m, "model", None) or m.get("model", ""), "owned_by": "ollama"}
+                for m in (models or [])
+            ]
+        except Exception as exc:                                    # noqa: BLE001
+            raise LLMConnectionError(f"list_models failed: {exc}") from exc

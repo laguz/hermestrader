@@ -116,23 +116,45 @@ class HermesOverseer:
                 images.append(self.chart_provider.snapshot(action.symbol))
             except Exception:                                          # noqa: BLE001
                 pass
-        msg = self.llm.chat(
-            [{"role": "system", "content": self.SYSTEM_PROMPT},
-             {"role": "user",   "content": prompt}],
-            images=images,
-        )
-        return self._safe_json(msg)
+        try:
+            msg = self.llm.chat(
+                [{"role": "system", "content": self.SYSTEM_PROMPT},
+                 {"role": "user",   "content": prompt}],
+                images=images,
+            )
+            # Clear any stored LLM error on success.
+            try:
+                self.db.set_setting("llm_last_error", "")
+                self.db.set_setting("llm_last_ok_ts",
+                                    __import__("datetime").datetime.now(
+                                        __import__("datetime").timezone.utc
+                                    ).isoformat(timespec="seconds"))
+            except Exception:                                          # noqa: BLE001
+                pass
+            return self._safe_json(msg)
+        except Exception as exc:                                       # noqa: BLE001
+            logger.warning("LLM call failed — passing action through: %s", exc)
+            try:
+                self.db.set_setting("llm_last_error", str(exc)[:500])
+            except Exception:                                          # noqa: BLE001
+                pass
+            # Fail-safe: pass the action through rather than crashing the tick.
+            return {"verdict": "APPROVE", "rationale": f"LLM unavailable ({exc}); defaulting to APPROVE."}
 
     def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
         prompt = (
             f"Propose ONE high-conviction options TradeAction for {symbol} or null. "
             "Use only fields from the dataclass schema. JSON only."
         )
-        msg = self.llm.chat(
-            [{"role": "system", "content": self.SYSTEM_PROMPT},
-             {"role": "user",   "content": prompt}],
-            images=[chart] if chart is not None else [],
-        )
+        try:
+            msg = self.llm.chat(
+                [{"role": "system", "content": self.SYSTEM_PROMPT},
+                 {"role": "user",   "content": prompt}],
+                images=[chart] if chart is not None else [],
+            )
+        except Exception as exc:                                       # noqa: BLE001
+            logger.warning("LLM propose failed for %s: %s", symbol, exc)
+            return None
         data = self._safe_json(msg)
         if not data or data.get("verdict") == "PASS":
             return None
