@@ -275,6 +275,44 @@ def set_approval_mode(body: ApprovalModeBody) -> Dict[str, Any]:
     return {"approval_mode": body.enabled}
 
 
+# ── Watchlist management ───────────────────────────────────────────────────────
+@app.get("/api/watchlist")
+def get_watchlist() -> Dict[str, Any]:
+    """Return per-strategy watchlists + the global default from env."""
+    per_strategy = db.list_all_watchlists()
+    return {
+        "global_default": WATCHLIST,
+        "per_strategy": per_strategy,
+        "strategies": list(STRATEGY_PRIORITIES.keys()),
+    }
+
+
+class WatchlistBody(BaseModel):
+    symbols: List[str]
+
+
+@app.put("/api/watchlist/{strategy_id}")
+def set_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]:
+    sid = strategy_id.upper()
+    if sid not in STRATEGY_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
+    cleaned = [s.strip().upper() for s in body.symbols if s.strip()]
+    saved = db.set_watchlist(sid, cleaned)
+    db.write_log("ENGINE", f"[C2] Watchlist updated for {sid}: {saved}")
+    return {"strategy_id": sid, "symbols": saved}
+
+
+@app.delete("/api/watchlist/{strategy_id}")
+def reset_watchlist(strategy_id: str) -> Dict[str, Any]:
+    """Clear per-strategy watchlist so it falls back to the global default."""
+    sid = strategy_id.upper()
+    if sid not in STRATEGY_PRIORITIES:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
+    db.set_watchlist(sid, [])
+    db.write_log("ENGINE", f"[C2] Watchlist reset for {sid} — using global default")
+    return {"strategy_id": sid, "symbols": [], "using_default": True}
+
+
 # ── Soul editor ────────────────────────────────────────────────────────────────
 @app.get("/api/soul")
 def get_soul() -> Dict[str, Any]:
@@ -477,3 +515,212 @@ def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
     return {"ok": True, "service": "hermes-c2"}
+
+
+# ── Lot configuration ──────────────────────────────────────────────────────────
+# Setting keys mirror the config dict keys strategies read via self.config.get(...)
+_LOT_SPECS = {
+    "CS75":  {"target": ("cs75_target_lots",  10), "max": ("cs75_max_lots",  10)},
+    "CS7":   {"target": ("cs7_target_lots",   10), "max": ("cs7_max_lots",   10)},
+    "TT45":  {"target": ("tt45_target_lots",   5), "max": ("tt45_max_lots",   5)},
+    "WHEEL": {"target": ("wheel_max_lots",      5), "max": ("wheel_max_lots",  5)},
+}
+
+
+def _read_lots() -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for sid, spec in _LOT_SPECS.items():
+        entry: Dict[str, Any] = {}
+        for role, (key, default) in spec.items():
+            raw = db.get_setting(key)
+            try:
+                entry[role] = int(raw) if raw is not None else default
+            except (ValueError, TypeError):
+                entry[role] = default
+            entry[f"{role}_key"] = key
+        out[sid] = entry
+    return out
+
+
+@app.get("/api/lots")
+def get_lots() -> Dict[str, Any]:
+    return _read_lots()
+
+
+class LotBody(BaseModel):
+    strategy_id: str
+    target_lots: Optional[int] = None
+    max_lots: Optional[int] = None
+
+
+@app.put("/api/lots")
+def set_lots(body: LotBody) -> Dict[str, Any]:
+    sid = body.strategy_id.upper()
+    if sid not in _LOT_SPECS:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown strategy. Valid: {list(_LOT_SPECS)}")
+    spec = _LOT_SPECS[sid]
+    changed: List[str] = []
+    if body.target_lots is not None:
+        if body.target_lots < 1 or body.target_lots > 100:
+            raise HTTPException(status_code=400, detail="target_lots must be 1–100")
+        key = spec["target"][0]
+        db.set_setting(key, str(body.target_lots))
+        changed.append(f"target→{body.target_lots}")
+    if body.max_lots is not None:
+        if body.max_lots < 1 or body.max_lots > 100:
+            raise HTTPException(status_code=400, detail="max_lots must be 1–100")
+        key = spec["max"][0]
+        db.set_setting(key, str(body.max_lots))
+        changed.append(f"max→{body.max_lots}")
+    if changed:
+        db.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")
+    return _read_lots()
+
+
+# ── Analytics ──────────────────────────────────────────────────────────────────
+@app.get("/api/analytics")
+def get_analytics() -> Dict[str, Any]:
+    """Return ML predictions, closed-trade performance, and open positions."""
+    from sqlalchemy import text as sa_text
+
+    result: Dict[str, Any] = {
+        "predictions": [],
+        "performance": {},
+        "open_trades": [],
+        "closed_trades": [],
+        "pnl_series": [],
+    }
+
+    try:
+        with db.Session() as s:
+            # --- Latest prediction per symbol ---------------------------------
+            raw = s.execute(sa_text("""
+                SELECT DISTINCT ON (symbol)
+                    symbol, predicted_return, predicted_price, spot, ts, model_tag
+                FROM predictions
+                ORDER BY symbol, ts DESC
+            """)).fetchall()
+            result["predictions"] = [
+                {
+                    "symbol": r.symbol,
+                    "predicted_return": float(r.predicted_return or 0),
+                    "predicted_price": float(r.predicted_price or 0),
+                    "spot": float(r.spot or 0),
+                    "as_of": r.ts.isoformat() if r.ts else None,
+                    "model_tag": r.model_tag,
+                }
+                for r in raw
+            ]
+
+            # --- Performance per strategy (closed trades) ---------------------
+            raw_perf = s.execute(sa_text("""
+                SELECT
+                    strategy_id,
+                    COUNT(*) FILTER (WHERE status = 'CLOSED') AS total_closed,
+                    COUNT(*) FILTER (WHERE status = 'CLOSED' AND pnl > 0) AS winners,
+                    COUNT(*) FILTER (WHERE status = 'CLOSED' AND pnl <= 0) AS losers,
+                    COALESCE(SUM(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS total_pnl,
+                    COALESCE(AVG(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS avg_pnl,
+                    COALESCE(MAX(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS best_trade,
+                    COALESCE(MIN(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS worst_trade,
+                    COUNT(*) FILTER (WHERE status = 'OPEN') AS open_count
+                FROM trades
+                GROUP BY strategy_id
+                ORDER BY strategy_id
+            """)).fetchall()
+            for r in raw_perf:
+                total = int(r.total_closed or 0)
+                winners = int(r.winners or 0)
+                result["performance"][r.strategy_id] = {
+                    "total_closed": total,
+                    "winners": winners,
+                    "losers": int(r.losers or 0),
+                    "win_rate": round(winners / total * 100, 1) if total else 0,
+                    "total_pnl": float(r.total_pnl or 0),
+                    "avg_pnl": float(r.avg_pnl or 0),
+                    "best_trade": float(r.best_trade or 0),
+                    "worst_trade": float(r.worst_trade or 0),
+                    "open_count": int(r.open_count or 0),
+                }
+
+            # --- Open trades (all strategies) --------------------------------
+            raw_open = s.execute(sa_text("""
+                SELECT id, strategy_id, symbol, side_type, short_leg, long_leg,
+                       short_strike, long_strike, width, lots, entry_credit,
+                       expiry, opened_at, ai_authored
+                FROM trades
+                WHERE status = 'OPEN'
+                ORDER BY opened_at DESC
+                LIMIT 100
+            """)).fetchall()
+            result["open_trades"] = [
+                {
+                    "id": r.id,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "side_type": r.side_type,
+                    "short_leg": r.short_leg,
+                    "long_leg": r.long_leg,
+                    "short_strike": float(r.short_strike) if r.short_strike else None,
+                    "long_strike": float(r.long_strike) if r.long_strike else None,
+                    "width": float(r.width) if r.width else None,
+                    "lots": int(r.lots or 0),
+                    "entry_credit": float(r.entry_credit or 0),
+                    "expiry": r.expiry.isoformat() if r.expiry else None,
+                    "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                    "ai_authored": bool(r.ai_authored),
+                }
+                for r in raw_open
+            ]
+
+            # --- Recent closed trades -----------------------------------------
+            raw_closed = s.execute(sa_text("""
+                SELECT id, strategy_id, symbol, side_type, lots, entry_credit,
+                       pnl, close_reason, expiry, opened_at, closed_at, ai_authored
+                FROM trades
+                WHERE status = 'CLOSED'
+                ORDER BY closed_at DESC
+                LIMIT 50
+            """)).fetchall()
+            result["closed_trades"] = [
+                {
+                    "id": r.id,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "side_type": r.side_type,
+                    "lots": int(r.lots or 0),
+                    "entry_credit": float(r.entry_credit or 0),
+                    "pnl": float(r.pnl or 0),
+                    "close_reason": r.close_reason,
+                    "expiry": r.expiry.isoformat() if r.expiry else None,
+                    "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                    "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                    "ai_authored": bool(r.ai_authored),
+                }
+                for r in raw_closed
+            ]
+
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("analytics query failed: %s", exc)
+        result["error"] = str(exc)
+
+    # --- Daily P&L series (last 60 days) from pnl_daily view ----------------
+    try:
+        result["pnl_series"] = db.pnl_daily(days=60)
+        for row in result["pnl_series"]:
+            if hasattr(row.get("day"), "isoformat"):
+                row["day"] = row["day"].isoformat()
+            row["realized_pnl"] = float(row.get("realized_pnl") or 0)
+    except Exception:  # noqa: BLE001
+        result["pnl_series"] = []
+
+    return result
+
+
+@app.get("/analytics")
+def analytics_page() -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / "analytics.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )

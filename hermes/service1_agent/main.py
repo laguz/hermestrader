@@ -402,6 +402,36 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 time.sleep(interval_s)
                 continue
 
+            # 1d-lot) Refresh per-strategy lot settings from DB into conf so
+            #         strategies pick up C2 changes on the next tick without
+            #         an engine rebuild.  conf is the same dict reference that
+            #         every strategy stores as self.config, so mutating it here
+            #         is visible immediately inside execute_entries().
+            _LOT_KEYS = [
+                "cs75_target_lots", "cs75_max_lots",
+                "cs7_target_lots",  "cs7_max_lots",
+                "tt45_target_lots", "tt45_max_lots",
+                "wheel_max_lots",
+            ]
+            _LOT_DEFAULTS = {
+                "cs75_target_lots": 10, "cs75_max_lots": 10,
+                "cs7_target_lots":  10, "cs7_max_lots":  10,
+                "tt45_target_lots":  5, "tt45_max_lots":  5,
+                "wheel_max_lots":    5,
+            }
+            try:
+                for _k in _LOT_KEYS:
+                    _raw = db.get_setting(_k)
+                    if _raw is not None:
+                        try:
+                            conf[_k] = int(_raw)
+                        except (ValueError, TypeError):
+                            conf[_k] = _LOT_DEFAULTS[_k]
+                    else:
+                        conf.setdefault(_k, _LOT_DEFAULTS[_k])
+            except Exception as _exc:                            # noqa: BLE001
+                log.warning("lot-settings refresh failed: %s", _exc)
+
             # 1e) Stale pending-order cleanup — orders that were cancelled or
             #     expired externally on Tradier never receive a fill callback,
             #     so their PENDING rows would accumulate and shrink

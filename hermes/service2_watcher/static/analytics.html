@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Analytics</title>
+<style>
+  :root {
+    --bg:#0d1117; --surface:#161b22; --border:#30363d; --text:#e6edf3;
+    --muted:#8b949e; --green:#3fb950; --red:#f85149; --yellow:#d29922;
+    --blue:#58a6ff; --orange:#e3771e; --purple:#bc8cff; --radius:8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;}
+  #topbar{display:flex;align-items:center;gap:12px;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100;}
+  #topbar h1{font-size:16px;font-weight:700;letter-spacing:.5px;color:var(--blue);}
+  #topbar a{color:var(--muted);font-size:13px;text-decoration:none;}
+  #topbar a:hover{color:var(--blue);}
+  .pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid;white-space:nowrap;}
+  .pill.green{color:var(--green);border-color:var(--green);background:#3fb95015;}
+  .pill.red{color:var(--red);border-color:var(--red);background:#f8514915;}
+  .pill.yellow{color:var(--yellow);border-color:var(--yellow);background:#d2992215;}
+  .pill.blue{color:var(--blue);border-color:var(--blue);background:#58a6ff15;}
+  .pill.purple{color:var(--purple);border-color:var(--purple);background:#bc8cff15;}
+  #page{max-width:1400px;margin:0 auto;padding:24px 20px 80px;}
+  .section{margin-bottom:32px;}
+  .section-heading{font-size:18px;font-weight:700;margin-bottom:16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);padding-bottom:10px;}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px;}
+  .card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;}
+  .card-body{padding:16px;}
+  button{cursor:pointer;border:none;border-radius:6px;font-size:13px;font-weight:600;padding:6px 14px;transition:opacity .15s;}
+  .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text);}
+  button:hover:not(:disabled){opacity:.8;}
+
+  /* Grid layouts */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+  .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;}
+  @media(max-width:900px){.grid-4{grid-template-columns:repeat(2,1fr);}.grid-3{grid-template-columns:1fr 1fr;}.grid-2{grid-template-columns:1fr;}}
+
+  /* Stat tiles */
+  .stat-tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;}
+  .stat-tile .val{font-size:28px;font-weight:700;margin:8px 0 4px;}
+  .stat-tile .lbl{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);}
+  .stat-tile .sub{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  /* Tables */
+  .tbl{width:100%;border-collapse:collapse;font-size:12px;}
+  .tbl th{text-align:left;padding:6px 10px;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;}
+  .tbl td{padding:7px 10px;border-bottom:1px solid #ffffff06;vertical-align:middle;}
+  .tbl tr:last-child td{border:none;}
+  .tbl tr:hover td{background:#ffffff04;}
+  .tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;}
+  .tag.put{background:#f8514920;color:var(--red);}
+  .tag.call{background:#3fb95020;color:var(--green);}
+  .tag.ic{background:#58a6ff20;color:var(--blue);}
+  .tag.ai{background:#bc8cff20;color:var(--purple);}
+
+  /* Prediction bar */
+  .pred-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #ffffff08;}
+  .pred-row:last-child{border:none;}
+  .pred-sym{font-weight:700;font-size:14px;min-width:60px;color:var(--blue);}
+  .pred-bar-wrap{flex:1;background:#ffffff08;border-radius:4px;height:8px;position:relative;overflow:hidden;}
+  .pred-bar{height:100%;border-radius:4px;transition:width .4s;}
+  .pred-meta{font-size:12px;color:var(--muted);min-width:180px;text-align:right;}
+
+  /* Feature table */
+  .feat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;}
+  .feat-item{background:#ffffff06;border-radius:6px;padding:10px 12px;}
+  .feat-item .fname{font-size:11px;font-weight:600;color:var(--muted);margin-bottom:4px;}
+  .feat-item .fval{font-size:14px;font-weight:700;}
+  .feat-item .fdesc{font-size:10px;color:var(--muted);margin-top:2px;line-height:1.3;}
+
+  /* Strategy logic cards */
+  .logic-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:12px;}
+  .logic-card h3{font-size:14px;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+  .logic-row{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px;}
+  .logic-box{flex:1;min-width:140px;background:#ffffff06;border-radius:6px;padding:10px 12px;}
+  .logic-box .lb-label{font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;}
+  .logic-box .lb-val{font-size:13px;font-weight:700;}
+  .formula{font-family:'SF Mono','Fira Code',monospace;font-size:12px;background:#ffffff08;border-radius:6px;padding:10px 12px;margin:8px 0;color:var(--yellow);line-height:1.6;}
+  .step{display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:12px;}
+  .step-n{background:var(--blue);color:#000;border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;margin-top:1px;}
+  .step-txt{color:var(--text);line-height:1.5;}
+  .step-txt em{color:var(--yellow);font-style:normal;}
+
+  /* P&L chart */
+  #pnl-chart{width:100%;height:200px;position:relative;}
+  canvas{display:block;}
+
+  /* Win-rate ring */
+  .wr-ring{display:inline-block;position:relative;width:80px;height:80px;}
+  .wr-ring svg{transform:rotate(-90deg);}
+  .wr-ring .wr-text{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;}
+
+  /* Tabs */
+  .tab-bar{display:flex;border-bottom:1px solid var(--border);margin-bottom:20px;}
+  .tab{padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;transition:all .15s;}
+  .tab.active{color:var(--blue);border-bottom-color:var(--blue);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+
+  .loading{text-align:center;color:var(--muted);padding:60px 20px;font-size:14px;}
+  .err-box{background:#f8514912;border:1px solid var(--red);border-radius:6px;padding:12px 16px;font-size:13px;color:var(--red);margin-bottom:16px;}
+  .no-data{color:var(--muted);font-size:13px;padding:24px;text-align:center;}
+
+  #toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999;}
+  #toast.show{opacity:1;}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>📊 Hermes Analytics</h1>
+  <a href="/">← C2 Dashboard</a>
+  <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+    <span id="last-updated" style="font-size:12px;color:var(--muted)"></span>
+    <button class="btn-ghost" onclick="load()" style="font-size:12px;padding:5px 12px;">↻ Refresh</button>
+  </div>
+</div>
+
+<div id="page">
+
+  <!-- ── TAB BAR ─────────────────────────────────────────────── -->
+  <div class="tab-bar">
+    <div class="tab active"  onclick="switchTab('performance')">📈 Performance</div>
+    <div class="tab"         onclick="switchTab('predictions')">🤖 ML Predictions</div>
+    <div class="tab"         onclick="switchTab('logic')">🧮 Entry Point Logic</div>
+    <div class="tab"         onclick="switchTab('trades')">📋 Trade History</div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 1 — PERFORMANCE
+  ══════════════════════════════════════════════════════════════ -->
+  <div id="tab-performance" class="tab-panel active">
+
+    <div id="perf-error" class="err-box" style="display:none"></div>
+
+    <!-- Top-level KPIs -->
+    <div class="grid-4" id="kpi-row" style="margin-bottom:24px;">
+      <div class="stat-tile">
+        <div class="lbl">Total P&amp;L</div>
+        <div class="val" id="kpi-total-pnl">—</div>
+        <div class="sub">all closed trades</div>
+      </div>
+      <div class="stat-tile">
+        <div class="lbl">Win Rate</div>
+        <div class="val" id="kpi-win-rate">—</div>
+        <div class="sub" id="kpi-win-sub">—</div>
+      </div>
+      <div class="stat-tile">
+        <div class="lbl">Avg P&amp;L / Trade</div>
+        <div class="val" id="kpi-avg-pnl">—</div>
+        <div class="sub">closed trades only</div>
+      </div>
+      <div class="stat-tile">
+        <div class="lbl">Open Positions</div>
+        <div class="val" id="kpi-open">—</div>
+        <div class="sub">across all strategies</div>
+      </div>
+    </div>
+
+    <!-- P&L chart -->
+    <div class="card" style="margin-bottom:24px;">
+      <div class="card-header">Cumulative P&amp;L — last 60 days</div>
+      <div class="card-body">
+        <canvas id="pnl-canvas" height="180"></canvas>
+        <div id="pnl-no-data" class="no-data" style="display:none">No P&L history yet — trades will appear here once the bot closes positions.</div>
+      </div>
+    </div>
+
+    <!-- Per-strategy breakdown -->
+    <div class="section-heading">Strategy Breakdown</div>
+    <div id="strategy-cards" class="grid-2"></div>
+
+    <!-- Open positions table -->
+    <div class="section-heading" style="margin-top:8px;">Open Positions</div>
+    <div class="card">
+      <div class="card-body" style="padding:0;">
+        <div id="open-trades-wrap">
+          <div class="loading">Loading…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 2 — ML PREDICTIONS
+  ══════════════════════════════════════════════════════════════ -->
+  <div id="tab-predictions" class="tab-panel">
+
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header">XGBoost Model — Next-Day Return Forecast</div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
+          Hermes trains a per-symbol <strong style="color:var(--text)">XGBoost regressor</strong> on 10 alpha features
+          derived from daily and intraday price/volume bars. The model predicts the
+          <em style="color:var(--yellow)">next-day return (%)</em> for each symbol in the watchlist.
+          Retrains every hour; predictions refresh every 60 seconds.
+        </p>
+        <div id="pred-bars"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+
+    <!-- Feature dictionary -->
+    <div class="section-heading">Feature Dictionary — the 10 Alpha Inputs</div>
+    <div class="feat-grid">
+      <div class="feat-item">
+        <div class="fname">① Overnight Gap</div>
+        <div class="fval" style="color:var(--yellow)">(open − prev_close) / prev_close</div>
+        <div class="fdesc">Measures the gap at open vs. prior close. Large gaps often mean-revert intraday.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">② Vol-Norm 5d Momentum</div>
+        <div class="fval" style="color:var(--yellow)">(close − close₋₅) / (σ₂₀ · close₋₅)</div>
+        <div class="fdesc">5-day price momentum scaled by 20-day realized vol. Removes vol-regime bias.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">③ SPY Beta Residual</div>
+        <div class="fval" style="color:var(--yellow)">ret − β₆₀ · SPY_ret</div>
+        <div class="fdesc">Symbol return minus SPY beta contribution. Isolates idiosyncratic alpha from market drift.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">④ Intraday Return</div>
+        <div class="fval" style="color:var(--yellow)">(close − open) / open</div>
+        <div class="fdesc">Full day return from open to close. Captures directional conviction within the session.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑤ VWAP Distance</div>
+        <div class="fval" style="color:var(--yellow)">(close − VWAP₃:₅₉) / close</div>
+        <div class="fdesc">How far the close deviated from closing-period VWAP. Positive = closed above institutional average.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑥ Range Position</div>
+        <div class="fval" style="color:var(--yellow)">(close − low) / (high − low)</div>
+        <div class="fdesc">Where the close sits within the day's range. 1.0 = closed at high; 0.0 = closed at low.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑦ Volume Z-Score (20d)</div>
+        <div class="fval" style="color:var(--yellow)">(vol − SMA₂₀) / σ₂₀</div>
+        <div class="fdesc">How unusual today's volume is vs. the 20-day average. High z-score = elevated conviction.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑧ Last-30min Volume %</div>
+        <div class="fval" style="color:var(--yellow)">vol₁₅:₃₀–₁₆:₀₀ / vol_total</div>
+        <div class="fdesc">Fraction of daily volume traded in the closing 30 minutes. Smart money tends to act late.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑨ Realized Vol 5d (ann.)</div>
+        <div class="fval" style="color:var(--yellow)">σ(log_ret₅) × √252</div>
+        <div class="fdesc">Short-term annualised volatility. Rising vol often precedes mean-reversion opportunities.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">⑩ Seasonality</div>
+        <div class="fval" style="color:var(--yellow)">day_of_week, month</div>
+        <div class="fdesc">Day-of-week (0=Mon) and calendar month. Captures Monday effect, January effect, OpEx patterns.</div>
+      </div>
+    </div>
+
+    <!-- Model config -->
+    <div class="section-heading" style="margin-top:24px;">XGBoost Hyperparameters</div>
+    <div class="card">
+      <div class="card-body">
+        <div class="feat-grid">
+          <div class="feat-item"><div class="fname">n_estimators</div><div class="fval">400</div><div class="fdesc">Boosting rounds</div></div>
+          <div class="feat-item"><div class="fname">max_depth</div><div class="fval">4</div><div class="fdesc">Max tree depth — limits overfitting</div></div>
+          <div class="feat-item"><div class="fname">learning_rate</div><div class="fval">0.05</div><div class="fdesc">Shrinkage per step</div></div>
+          <div class="feat-item"><div class="fname">subsample</div><div class="fval">0.85</div><div class="fdesc">Row sampling per tree</div></div>
+          <div class="feat-item"><div class="fname">colsample_bytree</div><div class="fval">0.80</div><div class="fdesc">Feature sampling per tree</div></div>
+          <div class="feat-item"><div class="fname">objective</div><div class="fval">reg:squarederror</div><div class="fdesc">Next-day return regression</div></div>
+          <div class="feat-item"><div class="fname">min training rows</div><div class="fval">60</div><div class="fdesc">Skips symbol if fewer bars</div></div>
+          <div class="feat-item"><div class="fname">retrain interval</div><div class="fval">60 min</div><div class="fdesc">Background thread retrains hourly</div></div>
+          <div class="feat-item"><div class="fname">predict interval</div><div class="fval">60 s</div><div class="fdesc">Fresh prediction every tick</div></div>
+          <div class="feat-item"><div class="fname">target variable</div><div class="fval">close pct_change t+1</div><div class="fdesc">Next-day forward return</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 3 — ENTRY POINT LOGIC
+  ══════════════════════════════════════════════════════════════ -->
+  <div id="tab-logic" class="tab-panel">
+
+    <p style="font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.6;">
+      Hermes runs <strong style="color:var(--text)">4 credit-spread strategies</strong> in priority order.
+      Each strategy has its own entry rules, strike-selection logic, credit requirements, and exit rules.
+      The agent checks every symbol in the watchlist on each tick and proposes a trade only when all conditions are met.
+    </p>
+
+    <!-- CS75 -->
+    <div class="logic-card">
+      <h3>
+        <span class="pill blue">P1</span> CS75 — Credit Spreads 39–45 DTE
+      </h3>
+      <div class="logic-row">
+        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">39 – 45 days</div></div>
+        <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$5.00</div></div>
+        <div class="logic-box"><div class="lb-label">Min Credit (30–45 DTE)</div><div class="lb-val">25% of width = $1.25</div></div>
+        <div class="logic-box"><div class="lb-label">Min Credit (14–29 DTE)</div><div class="lb-val">20% of width = $1.00</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">POP &gt; 75% S/R level</div></div>
+        <div class="logic-box"><div class="lb-label">Target Lots</div><div class="lb-val" id="lots-cs75-target">—</div></div>
+        <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-cs75-max">—</div></div>
+      </div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt">Find the nearest expiry in the <em>39–45 DTE</em> window (prefer max DTE). If none exists, skip the symbol.</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt">Scan <em>put_entry_points</em> from the broker analysis for strikes where <em>POP &gt; 75%</em> and <em>strike &lt; current_price</em> (for puts). Pick the strike closest to 75% POP.</div></div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt">Pull the option chain. Set <em>short_strike</em> = the POP-selected strike. Set <em>long_strike</em> = short_strike − $5 (put) or + $5 (call).</div></div>
+      <div class="step"><div class="step-n">4</div><div class="step-txt">Calculate net credit:</div></div>
+      <div class="formula">credit = (short_leg.bid + short_leg.ask) / 2  −  (long_leg.bid + long_leg.ask) / 2</div>
+      <div class="step"><div class="step-n">5</div><div class="step-txt">If <em>credit &lt; min_credit</em>, skip. Otherwise submit a multileg sell-to-open order.</div></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
+        <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit 50%</em> — when 21–45 DTE remain and debit ≤ entry_credit × 0.50</div></div>
+        <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit 75%</em> — when DTE &lt; 21 and debit ≤ entry_credit × 0.25</div></div>
+        <div class="step"><div class="step-n" style="background:var(--red)">✗</div><div class="step-txt"><em>Stop Loss 2.5×</em> — when debit ≥ entry_credit × 2.5</div></div>
+        <div class="step"><div class="step-n" style="background:var(--yellow)">⏱</div><div class="step-txt"><em>Time Exit</em> — force-close when DTE ≤ 8 regardless of P&L</div></div>
+      </div>
+    </div>
+
+    <!-- CS7 -->
+    <div class="logic-card">
+      <h3>
+        <span class="pill yellow">P2</span> CS7 — Credit Spreads 7 DTE
+      </h3>
+      <div class="logic-row">
+        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">5 – 8 days</div></div>
+        <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$5.00</div></div>
+        <div class="logic-box"><div class="lb-label">Min Credit</div><div class="lb-val">12% of width = $0.60</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">Δ ≈ 0.10 (±0.07)</div></div>
+        <div class="logic-box"><div class="lb-label">Target Lots</div><div class="lb-val" id="lots-cs7-target">—</div></div>
+        <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-cs7-max">—</div></div>
+      </div>
+      <div class="formula">min_credit = width × 0.12  →  $5 × 0.12 = $0.60 minimum</div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt">Find expiry in <em>5–8 DTE</em> window. Short weekly options only.</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt">Find strike with <em>delta closest to 0.10</em> (tolerance ±0.07) for puts and calls. This gives ~10-delta out-of-the-money strikes.</div></div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt">Set long_strike = short ± $5. Calculate credit. Require credit ≥ $0.60.</div></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
+        <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit</em> — when debit ≤ 2% of width ($0.10)</div></div>
+        <div class="formula">TP condition: debit ≤ width × 0.02  →  $5 × 0.02 = $0.10</div>
+        <div class="step"><div class="step-n" style="background:var(--red)">✗</div><div class="step-txt"><em>Stop Loss 3×</em> — when debit ≥ entry_credit × 3.0</div></div>
+      </div>
+    </div>
+
+    <!-- TT45 -->
+    <div class="logic-card">
+      <h3>
+        <span class="pill orange">P3</span> TT45 — TastyTrade 16-Delta 30–60 DTE
+      </h3>
+      <div class="logic-row">
+        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">30 – 60 days</div></div>
+        <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$5.00</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">Δ ≈ 0.16 (±0.05)</div></div>
+        <div class="logic-box"><div class="lb-label">Target Lots</div><div class="lb-val" id="lots-tt45-target">—</div></div>
+        <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-tt45-max">—</div></div>
+      </div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt">Find expiry in <em>30–60 DTE</em>. Prefer max DTE (more time value to decay).</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt">Select short strike at <em>16-delta</em> (±5 tolerance) — the standard TastyTrade entry. Statistically, 16-delta = ~84% probability OTM.</div></div>
+      <div class="formula">POP ≈ 1 − |delta| = 1 − 0.16 = 84% probability of expiring worthless</div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt">Buy protection at short ± $5. Credit must be &gt; $0 (any positive premium).</div></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
+        <div class="step"><div class="step-n" style="background:var(--yellow)">⏱</div><div class="step-txt"><em>Hard Time Exit at 21 DTE</em> — exit all positions at 21 days regardless of P&L</div></div>
+        <div class="step"><div class="step-n" style="background:var(--red)">✗</div><div class="step-txt"><em>Challenged Neutralise</em> — if the short delta crosses 0.30 (position going ITM), close immediately</div></div>
+        <div class="formula">Close condition: |Δ_short| &gt; 0.30  →  spread is being challenged</div>
+      </div>
+    </div>
+
+    <!-- WHEEL -->
+    <div class="logic-card">
+      <h3>
+        <span class="pill purple">P4</span> WHEEL — Cash-Secured Puts → Covered Calls
+      </h3>
+      <div class="logic-row">
+        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">30 – 45 days</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">Δ ≈ 0.30 (±0.05)</div></div>
+        <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-wheel-max">—</div><div class="lb-desc" style="font-size:10px;color:var(--muted)">per symbol</div></div>
+      </div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt">Check equity position. If holding shares, sell <em>covered calls</em> first (shares_lots − existing_calls).</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt">Top up with <em>cash-secured puts</em> until total (calls + puts) equals max_lots.</div></div>
+      <div class="formula">wanted_calls = min(shares ÷ 100, max_lots) − calls_open
+wanted_puts  = max_lots − (calls_open + puts_open)</div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt">Strike: 30-delta (±5). Mid-market price. 30–45 DTE expiry.</div></div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
+        <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
+        <div class="step"><div class="step-n" style="background:var(--yellow)">↻</div><div class="step-txt"><em>Roll ITM</em> — if DTE &lt; 7 and position is ITM, buy back + sell next-month equivalent</div></div>
+        <div class="formula">ITM put:  spot &lt; short_strike
+ITM call: spot &gt; short_strike</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
+       TAB 4 — TRADE HISTORY
+  ══════════════════════════════════════════════════════════════ -->
+  <div id="tab-trades" class="tab-panel">
+    <div class="card">
+      <div class="card-header">
+        Closed Trades — last 50
+        <span style="font-size:11px;color:var(--muted);font-weight:400">sorted by close date desc</span>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <div id="closed-trades-wrap"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /#page -->
+
+<div id="toast"></div>
+
+<script>
+let _data = {};
+
+function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function fmt$(v){const n=parseFloat(v||0);return(n>=0?'+':'')+n.toFixed(2);}
+function fmtPct(v){const n=parseFloat(v||0);return(n>=0?'+':'')+n.toFixed(2)+'%';}
+function relTime(iso){
+  if(!iso)return'—';
+  const d=Math.round((Date.now()-new Date(iso))/1000);
+  if(d<60)return d+'s ago';
+  if(d<3600)return Math.round(d/60)+'m ago';
+  if(d<86400)return Math.round(d/3600)+'h ago';
+  return Math.round(d/86400)+'d ago';
+}
+function pnlColor(v){return v>0?'var(--green)':v<0?'var(--red)':'var(--muted)';}
+
+function switchTab(name){
+  const tabs=['performance','predictions','logic','trades'];
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===name));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+}
+
+function toast(msg,isErr){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.style.borderColor=isErr?'var(--red)':'var(--green)';
+  el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'),2800);
+}
+
+// ── PERFORMANCE ──────────────────────────────────────────────────────────────
+function renderPerformance(){
+  const perf=_data.performance||{};
+  const open=_data.open_trades||[];
+  const closed=_data.closed_trades||[];
+
+  // Aggregate KPIs
+  let totalPnl=0,totalWin=0,totalLoss=0,totalClosed=0;
+  Object.values(perf).forEach(s=>{
+    totalPnl+=s.total_pnl;
+    totalWin+=s.winners;
+    totalLoss+=s.losers;
+    totalClosed+=s.total_closed;
+  });
+  const wr=totalClosed>0?Math.round(totalWin/totalClosed*100):0;
+  const avgPnl=totalClosed>0?(totalPnl/totalClosed):0;
+  const totalOpen=Object.values(perf).reduce((a,s)=>a+s.open_count,0);
+
+  document.getElementById('kpi-total-pnl').textContent=fmt$(totalPnl);
+  document.getElementById('kpi-total-pnl').style.color=pnlColor(totalPnl);
+  document.getElementById('kpi-win-rate').textContent=wr+'%';
+  document.getElementById('kpi-win-rate').style.color=wr>=50?'var(--green)':'var(--red)';
+  document.getElementById('kpi-win-sub').textContent=totalWin+' W / '+totalLoss+' L ('+totalClosed+' closed)';
+  document.getElementById('kpi-avg-pnl').textContent=fmt$(avgPnl);
+  document.getElementById('kpi-avg-pnl').style.color=pnlColor(avgPnl);
+  document.getElementById('kpi-open').textContent=totalOpen;
+
+  // Strategy cards
+  const stratColors={CS75:'var(--blue)',CS7:'var(--yellow)',TT45:'var(--orange)',WHEEL:'var(--purple)'};
+  const sc=document.getElementById('strategy-cards');
+  const strats=Object.keys(perf);
+  if(!strats.length){sc.innerHTML='<div class="no-data" style="grid-column:1/-1">No trade data yet.</div>';return;}
+  sc.innerHTML=strats.map(sid=>{
+    const s=perf[sid];
+    const wr=s.total_closed>0?Math.round(s.winners/s.total_closed*100):0;
+    const r=65,circ=2*Math.PI*r,dashLen=circ*(wr/100);
+    const col=stratColors[sid]||'var(--blue)';
+    return`<div class="card">
+      <div class="card-header" style="border-left:3px solid ${col};padding-left:13px;">${sid}
+        <span style="font-size:11px;font-weight:400;color:var(--muted)">${s.open_count} open</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex;align-items:center;gap:20px;margin-bottom:16px;">
+          <svg width="80" height="80" viewBox="0 0 160 160">
+            <circle cx="80" cy="80" r="${r}" fill="none" stroke="var(--border)" stroke-width="16"/>
+            <circle cx="80" cy="80" r="${r}" fill="none" stroke="${col}" stroke-width="16"
+              stroke-dasharray="${dashLen.toFixed(1)} ${circ.toFixed(1)}"
+              stroke-linecap="round" transform="rotate(-90 80 80)"/>
+            <text x="80" y="80" text-anchor="middle" dominant-baseline="central"
+              fill="${col}" font-size="28" font-weight="700" font-family="system-ui">${wr}%</text>
+            <text x="80" y="110" text-anchor="middle" dominant-baseline="central"
+              fill="var(--muted)" font-size="16" font-family="system-ui">Win Rate</text>
+          </svg>
+          <div style="flex:1">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+              <div><div style="font-size:11px;color:var(--muted)">Total P&amp;L</div>
+                <div style="font-size:18px;font-weight:700;color:${pnlColor(s.total_pnl)}">${fmt$(s.total_pnl)}</div></div>
+              <div><div style="font-size:11px;color:var(--muted)">Avg / Trade</div>
+                <div style="font-size:18px;font-weight:700;color:${pnlColor(s.avg_pnl)}">${fmt$(s.avg_pnl)}</div></div>
+              <div><div style="font-size:11px;color:var(--muted)">Best Trade</div>
+                <div style="font-size:14px;font-weight:600;color:var(--green)">${fmt$(s.best_trade)}</div></div>
+              <div><div style="font-size:11px;color:var(--muted)">Worst Trade</div>
+                <div style="font-size:14px;font-weight:600;color:var(--red)">${fmt$(s.worst_trade)}</div></div>
+              <div><div style="font-size:11px;color:var(--muted)">Closed Trades</div>
+                <div style="font-size:14px;font-weight:600">${s.total_closed}</div></div>
+              <div><div style="font-size:11px;color:var(--muted)">W / L</div>
+                <div style="font-size:14px;font-weight:600"><span style="color:var(--green)">${s.winners}</span> / <span style="color:var(--red)">${s.losers}</span></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // P&L chart
+  renderPnlChart(_data.pnl_series||[]);
+
+  // Open trades table
+  renderOpenTrades(open);
+}
+
+function renderPnlChart(series){
+  const canvas=document.getElementById('pnl-canvas');
+  const noData=document.getElementById('pnl-no-data');
+  if(!series.length){canvas.style.display='none';noData.style.display='';return;}
+  canvas.style.display='';noData.style.display='none';
+
+  // Aggregate by day
+  const dayMap={};
+  series.forEach(r=>{
+    const d=r.day||r.day;
+    dayMap[d]=(dayMap[d]||0)+parseFloat(r.realized_pnl||0);
+  });
+  const days=Object.keys(dayMap).sort();
+  // Cumulative
+  let cum=0;
+  const vals=days.map(d=>{cum+=dayMap[d];return cum;});
+
+  const W=canvas.offsetWidth||800;const H=180;
+  canvas.width=W;canvas.height=H;
+  const ctx=canvas.getContext('2d');
+  const pad={l:50,r:20,t:10,b:30};
+  const iW=W-pad.l-pad.r,iH=H-pad.t-pad.b;
+  const mn=Math.min(0,...vals),mx=Math.max(0,...vals);
+  const range=mx-mn||1;
+  const x=i=>pad.l+i*(iW/(days.length-1||1));
+  const y=v=>pad.t+iH-(((v-mn)/range)*iH);
+
+  ctx.clearRect(0,0,W,H);
+  // Zero line
+  ctx.strokeStyle='#ffffff20';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(pad.l,y(0));ctx.lineTo(W-pad.r,y(0));ctx.stroke();
+  ctx.setLineDash([]);
+
+  if(days.length<2){return;}
+
+  // Fill
+  const grad=ctx.createLinearGradient(0,pad.t,0,H-pad.b);
+  grad.addColorStop(0,vals[vals.length-1]>=0?'#3fb95030':'#f8514930');
+  grad.addColorStop(1,'transparent');
+  ctx.beginPath();
+  ctx.moveTo(x(0),y(vals[0]));
+  vals.forEach((v,i)=>ctx.lineTo(x(i),y(v)));
+  ctx.lineTo(x(vals.length-1),H-pad.b);
+  ctx.lineTo(x(0),H-pad.b);
+  ctx.closePath();ctx.fillStyle=grad;ctx.fill();
+
+  // Line
+  const lineCol=cum>=0?'#3fb950':'#f85149';
+  ctx.beginPath();ctx.strokeStyle=lineCol;ctx.lineWidth=2;
+  vals.forEach((v,i)=>i===0?ctx.moveTo(x(i),y(v)):ctx.lineTo(x(i),y(v)));
+  ctx.stroke();
+
+  // Y labels
+  ctx.fillStyle='#8b949e';ctx.font='11px system-ui';ctx.textAlign='right';
+  [mn,0,(mx+mn)/2,mx].forEach(v=>{
+    ctx.fillText('$'+v.toFixed(0),pad.l-6,y(v)+4);
+  });
+  // X labels (first + last)
+  ctx.textAlign='center';
+  if(days.length){
+    ctx.fillText(days[0].slice(5),x(0),H-6);
+    ctx.fillText(days[days.length-1].slice(5),x(days.length-1),H-6);
+  }
+}
+
+function renderOpenTrades(trades){
+  const el=document.getElementById('open-trades-wrap');
+  if(!trades.length){el.innerHTML='<div class="no-data">No open positions.</div>';return;}
+  el.innerHTML=`<table class="tbl">
+    <thead><tr>
+      <th>Symbol</th><th>Strategy</th><th>Side</th><th>Legs</th>
+      <th>Short Strike</th><th>Long Strike</th><th>Width</th>
+      <th>Lots</th><th>Credit</th><th>Expiry</th><th>Opened</th><th>AI</th>
+    </tr></thead>
+    <tbody>${trades.map(t=>`<tr>
+      <td><strong style="color:var(--blue)">${escHtml(t.symbol)}</strong></td>
+      <td>${escHtml(t.strategy_id)}</td>
+      <td><span class="tag ${t.side_type}">${escHtml(t.side_type||'—')}</span></td>
+      <td style="font-family:monospace;font-size:11px;color:var(--muted)">
+        ${t.short_leg?escHtml(t.short_leg.slice(-12)):'—'}<br>
+        ${t.long_leg?escHtml(t.long_leg.slice(-12)):'—'}
+      </td>
+      <td>${t.short_strike!=null?'$'+parseFloat(t.short_strike).toFixed(2):'—'}</td>
+      <td>${t.long_strike!=null?'$'+parseFloat(t.long_strike).toFixed(2):'—'}</td>
+      <td>${t.width!=null?'$'+parseFloat(t.width).toFixed(2):'—'}</td>
+      <td>${t.lots}</td>
+      <td style="color:var(--green)">$${parseFloat(t.entry_credit||0).toFixed(2)}</td>
+      <td style="font-size:11px">${t.expiry||'—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${relTime(t.opened_at)}</td>
+      <td>${t.ai_authored?'<span class="tag ai">AI</span>':'—'}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+// ── PREDICTIONS ──────────────────────────────────────────────────────────────
+function renderPredictions(){
+  const preds=_data.predictions||[];
+  const el=document.getElementById('pred-bars');
+  if(!preds.length){
+    el.innerHTML='<div class="no-data">No predictions yet. The XGBoost model needs at least 60 bars of daily data per symbol before it will train and predict. Predictions appear after the first full market day.</div>';
+    return;
+  }
+  const maxAbsRet=Math.max(0.01,...preds.map(p=>Math.abs(p.predicted_return)));
+  el.innerHTML=preds.map(p=>{
+    const ret=p.predicted_return*100;
+    const pct=(Math.abs(p.predicted_return)/maxAbsRet*100).toFixed(1);
+    const col=p.predicted_return>=0?'var(--green)':'var(--red)';
+    const spot=parseFloat(p.spot||0);
+    const pred=parseFloat(p.predicted_price||0);
+    const chg=pred-spot;
+    return`<div class="pred-row">
+      <span class="pred-sym">${escHtml(p.symbol)}</span>
+      <div style="flex:1;">
+        <div class="pred-bar-wrap">
+          <div class="pred-bar" style="width:${pct}%;background:${col}"></div>
+        </div>
+      </div>
+      <div class="pred-meta">
+        Spot: <strong>$${spot.toFixed(2)}</strong>
+        → Target: <strong style="color:${col}">$${pred.toFixed(2)}</strong>
+        <span style="color:${col};margin-left:6px">(${ret>=0?'+':''}${ret.toFixed(3)}%)</span>
+        <span style="font-size:10px;color:var(--muted);margin-left:8px">${relTime(p.as_of)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── CLOSED TRADES ────────────────────────────────────────────────────────────
+function renderTrades(){
+  const trades=_data.closed_trades||[];
+  const el=document.getElementById('closed-trades-wrap');
+  if(!trades.length){el.innerHTML='<div class="no-data">No closed trades yet.</div>';return;}
+  el.innerHTML=`<table class="tbl">
+    <thead><tr>
+      <th>Symbol</th><th>Strategy</th><th>Side</th><th>Lots</th>
+      <th>Entry Credit</th><th>P&amp;L</th><th>Close Reason</th>
+      <th>Expiry</th><th>Opened</th><th>Closed</th><th>AI</th>
+    </tr></thead>
+    <tbody>${trades.map(t=>`<tr>
+      <td><strong style="color:var(--blue)">${escHtml(t.symbol)}</strong></td>
+      <td>${escHtml(t.strategy_id)}</td>
+      <td><span class="tag ${t.side_type}">${escHtml(t.side_type||'—')}</span></td>
+      <td>${t.lots}</td>
+      <td style="color:var(--green)">$${parseFloat(t.entry_credit||0).toFixed(2)}</td>
+      <td style="font-weight:700;color:${pnlColor(t.pnl)}">${fmt$(t.pnl)}</td>
+      <td><span style="font-size:11px;background:#ffffff08;border-radius:4px;padding:1px 6px">${escHtml(t.close_reason||'—')}</span></td>
+      <td style="font-size:11px">${t.expiry||'—'}</td>
+      <td style="font-size:11px;color:var(--muted)">${relTime(t.opened_at)}</td>
+      <td style="font-size:11px;color:var(--muted)">${relTime(t.closed_at)}</td>
+      <td>${t.ai_authored?'<span class="tag ai">AI</span>':'—'}</td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+async function loadLots(){
+  try{
+    const d=await fetch('/api/lots').then(r=>r.json());
+    const map={
+      'lots-cs75-target':  d.CS75?.target,
+      'lots-cs75-max':     d.CS75?.max,
+      'lots-cs7-target':   d.CS7?.target,
+      'lots-cs7-max':      d.CS7?.max,
+      'lots-tt45-target':  d.TT45?.target,
+      'lots-tt45-max':     d.TT45?.max,
+      'lots-wheel-max':    d.WHEEL?.max,
+    };
+    Object.entries(map).forEach(([id,val])=>{
+      const el=document.getElementById(id);
+      if(el&&val!=null)el.textContent=val;
+    });
+  }catch(e){console.warn('lots load failed',e);}
+}
+
+async function load(){
+  try{
+    const r=await fetch('/api/analytics');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    _data=await r.json();
+    document.getElementById('last-updated').textContent='Updated '+new Date().toLocaleTimeString();
+    renderPerformance();
+    renderPredictions();
+    renderTrades();
+  }catch(e){
+    const eb=document.getElementById('perf-error');
+    if(eb){eb.style.display='';eb.textContent='Failed to load analytics: '+e.message;}
+    toast('Load failed: '+e.message,true);
+  }
+}
+
+loadLots();
+load();
+setInterval(()=>{load();loadLots();}, 30000);
+</script>
+</body>
+</html>
