@@ -50,15 +50,23 @@ class HermesOverseer:
 
     @property
     def SYSTEM_PROMPT(self) -> str:                              # noqa: N802
-        """Base instructions plus operator doctrine, when present."""
-        if not self.soul:
-            return self.BASE_SYSTEM_PROMPT
-        return (
-            f"{self.BASE_SYSTEM_PROMPT}\n\n"
-            "--- OPERATOR DOCTRINE (soul.md) ---\n"
-            f"{self.soul}\n"
-            "--- END DOCTRINE ---"
-        )
+        """Base instructions + market session context + operator doctrine."""
+        try:
+            from hermes.market_hours import session_label
+            mkt_line = session_label()
+        except Exception:                                        # noqa: BLE001
+            mkt_line = ""
+
+        parts = [self.BASE_SYSTEM_PROMPT]
+        if mkt_line:
+            parts.append(f"\nCURRENT MARKET STATUS: {mkt_line}")
+        if self.soul:
+            parts.append(
+                "\n--- OPERATOR DOCTRINE (soul.md) ---\n"
+                f"{self.soul}\n"
+                "--- END DOCTRINE ---"
+            )
+        return "\n".join(parts)
 
     # -- review existing rule-driven actions ---------------------------------
     def review(self, action: TradeAction) -> Optional[TradeAction]:

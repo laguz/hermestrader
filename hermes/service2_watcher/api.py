@@ -33,6 +33,7 @@ from hermes.common import (
     VALID_LLM_PROVIDERS,
     VALID_MODES,
 )
+from hermes.market_hours import market_session, next_open
 from hermes.db.models import HermesDB
 
 logger = logging.getLogger("hermes.c2.api")
@@ -173,6 +174,14 @@ def get_status() -> Dict[str, Any]:
     llm_model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
     llm_provider = (db.get_setting(SETTING_LLM_PROVIDER) or "mock").strip()
 
+    try:
+        mkt = market_session()
+        nxt = next_open() if not mkt["is_open"] else None
+    except Exception:                                               # noqa: BLE001
+        mkt = {"session": "unknown", "is_open": False,
+               "et_time": "--:--", "et_date": "", "trading_day": False}
+        nxt = None
+
     return {
         "hermes_running": hermes_running,
         "hermes_last_seen_age_s": last_log_age,
@@ -192,6 +201,11 @@ def get_status() -> Dict[str, Any]:
         "stale_after_s": STALE_AFTER_S,
         "tick_interval_s": TICK_INTERVAL_S,
         "version": os.environ.get("HERMES_VERSION") or _read_version(),
+        "market_session": mkt["session"],
+        "market_is_open": mkt["is_open"],
+        "market_et_time": mkt["et_time"],
+        "market_trading_day": mkt["trading_day"],
+        "market_next_open": nxt.isoformat() if nxt else None,
     }
 
 
@@ -224,6 +238,29 @@ def reject_trade(approval_id: int, body: ApprovalDecisionBody = ApprovalDecision
     db.write_log("ENGINE", f"[C2] Trade approval_id={approval_id} REJECTED by operator"
                            + (f": {body.notes}" if body.notes else ""))
     return {"status": "rejected", "id": approval_id}
+
+
+# ── Bulk approve / reject ─────────────────────────────────────────────────────
+class BulkDecisionBody(BaseModel):
+    action: str          # "approve" | "reject"
+    notes: Optional[str] = None
+
+
+@app.post("/api/approvals/bulk")
+def bulk_decide(body: BulkDecisionBody) -> Dict[str, Any]:
+    action = body.action.lower()
+    if action not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
+    status = "APPROVED" if action == "approve" else "REJECTED"
+    pending = db.list_approvals(status="PENDING", limit=500)
+    count = 0
+    for item in pending:
+        if db.decide_approval(item["id"], status, notes=body.notes):
+            count += 1
+    db.write_log("ENGINE",
+                 f"[C2] Bulk {status} — {count} trades by operator"
+                 + (f": {body.notes}" if body.notes else ""))
+    return {"status": status.lower(), "count": count}
 
 
 # ── Approval mode toggle ───────────────────────────────────────────────────────

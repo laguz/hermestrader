@@ -18,6 +18,7 @@ from hermes.common import (
     VALID_LLM_PROVIDERS,
     VALID_MODES,
 )
+from hermes.market_hours import is_market_open, market_session, next_open, session_label
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.service1_agent.overseer import HermesOverseer
@@ -117,6 +118,10 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 )
                 log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
                          model, vision, timeout_s)
+                try:
+                    db.set_setting(SETTING_LLM_ERROR, "")
+                except Exception:                               # noqa: BLE001
+                    pass
                 return client, snapshot, vision
             except Exception as exc:                            # noqa: BLE001
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
@@ -135,6 +140,10 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
             )
             log.info("LLM overseer: provider=local model=%s base=%s vision=%s timeout=%.0fs",
                      model, base_url, vision, timeout_s)
+            try:
+                db.set_setting(SETTING_LLM_ERROR, "")
+            except Exception:                                   # noqa: BLE001
+                pass
             return client, snapshot, vision
         except Exception as exc:                                # noqa: BLE001
             log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
@@ -445,17 +454,41 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 except Exception as exc:                       # noqa: BLE001
                     log.warning("fetch_approved_actions failed: %s", exc)
 
-            # 2) Heartbeat — guarantees the watcher sees a fresh log line each
-            #    tick even when no strategy fires.
-            db.write_log("ENGINE", f"heartbeat tick start mode={current_mode}")
+            # 2) Heartbeat — always written so the watcher knows the agent is alive.
+            mkt = market_session()
+            db.write_log("ENGINE",
+                         f"heartbeat tick start mode={current_mode} "
+                         f"market={mkt['session']} open={mkt['is_open']}")
 
-            # 3) The actual tick. Any successful tick implies Tradier is
-            #    reachable (the very first thing tick() does is broker.get_positions()).
-            stats = engine.tick(watchlist)
+            # 3) Market-hours gate — only run entries during regular hours.
+            #    Position management (exits/rolls) still runs in pre/after-hours
+            #    so we don't miss time-sensitive closes, but new entries are
+            #    blocked.  Outside a trading day entirely, skip both.
+            if not mkt["trading_day"]:
+                nxt = next_open()
+                db.write_log("ENGINE",
+                             f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} "
+                             f"({mkt['et_date']} is not a trading day)")
+                time.sleep(interval_s)
+                continue
+
+            if mkt["is_open"]:
+                # Full tick: management + entries.
+                stats = engine.tick(watchlist)
+            else:
+                # Outside regular hours: management only (exits, rolls, fills).
+                engine.sync_positions()
+                engine.reconcile_orphans()
+                mgmt = engine.process_management()
+                engine.submit(mgmt, action_type="management")
+                stats = {"managed": len(mgmt), "entries": 0,
+                         "note": f"entries skipped ({mkt['session']})"}
+
             db.set_setting(SETTING_TRADIER_OK_TS, _utcnow_iso())
             db.set_setting(SETTING_TRADIER_ERROR, "")
-            log.info("tick complete: %s", stats)
-            db.write_log("ENGINE", f"heartbeat tick complete: {stats}")
+            db.set_setting("market_session", mkt["session"])
+            log.info("tick complete: %s  [%s]", stats, session_label())
+            db.write_log("ENGINE", f"heartbeat tick complete: {stats} | {session_label()}")
         except Exception as exc:                                  # noqa: BLE001
             log.exception("tick failed: %s", exc)
             try:

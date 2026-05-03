@@ -1,0 +1,30 @@
+# HermesTrader Python dependencies
+# Keep in sync with Dockerfile RUN pip install block.
+
+# Web / API
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+watchfiles>=0.21.0
+
+# Database
+sqlalchemy>=2.0.0
+psycopg[binary]>=3.1.0
+
+# ML
+xgboost>=2.0.0
+pandas>=2.0.0
+numpy>=1.26.0
+
+# HTTP + resilience
+requests>=2.31.0
+tenacity>=8.2.0
+
+# LLM clients
+ollama>=0.6.0
+
+# Timezone data — provides zoneinfo fallback when OS tzdata is absent
+# (required for market_hours.py ZoneInfo("America/New_York"))
+tzdata>=2024.1
+
+# MCP
+mcp[cli]>=1.0.0

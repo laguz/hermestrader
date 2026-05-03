@@ -160,15 +160,65 @@ cmd_status() {
 }
 
 cmd_build() {
-    local version
-    version="$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')"
     info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${HERMES_VERSION})…"
-    docker build --pull \
+    docker build \
         --build-arg HERMES_VERSION="$HERMES_VERSION" \
         -t "$IMAGE_FULL" \
         -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
         .
     ok "Build complete: ${IMAGE_FULL}"
+}
+
+cmd_rebuild() {
+    info "Rebuilding Hermes from scratch (no cache)…"
+    info "Stopping containers…"
+    docker compose down --remove-orphans
+
+    info "Building image with --no-cache…"
+    docker build --no-cache \
+        --build-arg HERMES_VERSION="$HERMES_VERSION" \
+        -t "$IMAGE_FULL" \
+        -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
+        .
+    ok "Build complete"
+
+    info "Starting services…"
+    docker compose up -d
+    echo ""
+    ok "Hermes is running on fresh containers"
+    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
+    echo -e "   ${CYAN}Version${NC}    → Hermes Agent v${HERMES_VERSION}"
+}
+
+cmd_nuke() {
+    warn "This will DELETE all containers AND all data volumes (DB, settings, logs)."
+    warn "Your .env file and source code will NOT be touched."
+    echo ""
+    read -r -p "$(echo -e "${RED}Type 'yes' to confirm nuclear reset:${NC} ")" confirm
+    if [ "$confirm" != "yes" ]; then
+        info "Aborted."
+        return 0
+    fi
+
+    info "Stopping and removing all containers + volumes…"
+    docker compose down --volumes --remove-orphans
+    ok "Containers and volumes removed"
+
+    info "Building fresh image (no cache)…"
+    docker build --no-cache \
+        --build-arg HERMES_VERSION="$HERMES_VERSION" \
+        -t "$IMAGE_FULL" \
+        -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
+        .
+    ok "Build complete"
+
+    info "Starting clean services…"
+    docker compose up -d
+    echo ""
+    ok "Nuclear reset complete — Hermes is running on a clean slate"
+    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
+    warn "All previous settings, trades, and logs have been erased."
+    warn "Re-enter your Tradier credentials and LLM config in the C2 panel."
 }
 
 cmd_push() {
@@ -209,6 +259,8 @@ cmd_help() {
     echo "  start            Pull latest images from Docker Hub & start all services"
     echo "  stop             Stop all services"
     echo "  restart          Restart agent + watcher (keeps DB running)"
+    echo "  rebuild          Stop, build from scratch (no cache), restart — keeps DB data"
+    echo "  nuke             ⚠  Full reset: delete containers + volumes, rebuild clean"
     echo "  update --check   Check if a newer image is available on Docker Hub"
     echo "  update           Pull latest image & recreate containers"
     echo "  logs [service]   Tail logs (agent, watcher, db, or all)"
@@ -228,6 +280,8 @@ case "${1:-help}" in
     start)          cmd_start ;;
     stop)           cmd_stop ;;
     restart)        cmd_restart ;;
+    rebuild)        cmd_rebuild ;;
+    nuke)           cmd_nuke ;;
     update)         shift; cmd_update "$@" ;;
     logs)           shift; cmd_logs "$@" ;;
     status)         cmd_status ;;

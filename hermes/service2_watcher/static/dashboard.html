@@ -23,7 +23,7 @@
   #topbar-actions{margin-left:auto;display:flex;gap:8px;align-items:center;}
   #pending-badge{background:var(--orange);color:#000;border-radius:20px;padding:2px 8px;font-size:12px;font-weight:700;display:none;}
   #layout{display:grid;grid-template-columns:1fr 340px;gap:0;height:calc(100vh - 45px);overflow:hidden;}
-  #main{overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px;}
+  #main{overflow-y:auto;padding:20px 20px 80px;display:flex;flex-direction:column;gap:16px;}
   #sidebar{overflow-y:auto;border-left:1px solid var(--border);background:var(--surface);}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
   .card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;}
@@ -102,6 +102,7 @@
   <span id="pill-agent" class="pill red">● OFFLINE</span>
   <span id="pill-mode"  class="pill blue">PAPER</span>
   <span id="pill-approval" class="pill orange">🔒 APPROVAL ON</span>
+  <span id="pill-market" class="pill red">● CLOSED</span>
   <span id="pill-paused" class="pill yellow" style="display:none">⏸ PAUSED</span>
   <div id="topbar-actions">
     <span id="pending-badge">0 pending</span>
@@ -113,18 +114,19 @@
   <div id="main">
     <div class="card">
       <div class="card-header">
-        Trade Approval Queue
+        Trade Approval Queue <span id="queue-count" style="color:var(--muted);font-weight:400;font-size:12px"></span>
         <div class="actions">
-          <button class="btn-ghost" onclick="loadApprovals()" style="font-size:12px;padding:4px 10px;">↻ Refresh</button>
+          <button class="btn-ghost" onclick="bulkDecide('approve')" style="font-size:12px;padding:4px 10px;color:var(--green)">✓ All</button>
+          <button class="btn-ghost" onclick="bulkDecide('reject')"  style="font-size:12px;padding:4px 10px;color:var(--red)">✗ All</button>
+          <button class="btn-ghost" onclick="loadApprovals()" style="font-size:12px;padding:4px 10px;">↻</button>
           <button class="btn-ghost" id="btn-approval-mode" onclick="toggleApprovalMode()" style="font-size:12px;padding:4px 10px;">—</button>
         </div>
       </div>
       <div class="card-body">
-        <div id="queue-list">
-          <div id="queue-empty" style="display:none;text-align:center;color:var(--muted);padding:32px;">
-            <div style="font-size:32px;margin-bottom:8px">✓</div>
-            No pending trades. The agent queues proposals here for your approval.
-          </div>
+        <div id="queue-list"></div>
+        <div id="queue-empty" style="display:none;text-align:center;color:var(--muted);padding:32px;">
+          <div style="font-size:32px;margin-bottom:8px">✓</div>
+          No pending trades. The agent queues proposals here for your approval.
         </div>
       </div>
     </div>
@@ -295,6 +297,13 @@ async function loadStatus(){
     app2.textContent=_approvalMode?'🔒 APPROVAL ON':'⚡ AUTO';
     app2.className='pill '+(_approvalMode?'orange':'green');
     document.getElementById('pill-paused').style.display=_paused?'':'none';
+    const mktPill=document.getElementById('pill-market');
+    const mktSession=_status.market_session||'closed';
+    const mktOpen=_status.market_is_open;
+    const mktLabels={regular:'● OPEN',pre_market:'◑ PRE-MKT',after_hours:'◑ AFTER-HRS',closed:'● CLOSED'};
+    const mktColors={regular:'green',pre_market:'yellow',after_hours:'yellow',closed:'red'};
+    mktPill.textContent=(mktLabels[mktSession]||'● CLOSED')+' '+(_status.market_et_time||'');
+    mktPill.className='pill '+(mktColors[mktSession]||'red');
     const pb=document.getElementById('btn-pause-resume');
     pb.textContent=_paused?'Resume':'Pause';
     pb.className=_paused?'btn-resume':'btn-pause';
@@ -315,7 +324,9 @@ function renderAgentStatus(){
   function truncErr(e){return e?e.slice(0,60)+(e.length>60?'…':''):'Error';}
   const tradierHtml=s.tradier_ok
     ?'<span style="color:var(--green)">OK</span>'
-    :'<span style="color:var(--red)">'+truncErr(s.tradier_error)+'</span>';
+    :s.tradier_error
+      ?'<span style="color:var(--red)">'+truncErr(s.tradier_error)+'</span>'
+      :'<span style="color:var(--muted)">—</span>';
   const llmHtml=s.llm_ok
     ?'<span style="color:var(--green)">OK</span>'
     :s.llm_error
@@ -331,6 +342,7 @@ function renderAgentStatus(){
     <div class="status-row"><span>Mode</span><span>${(s.mode||'paper').toUpperCase()}</span></div>
     <div class="status-row"><span>Approval</span><span>${s.approval_mode?'<span style="color:var(--orange)">Required</span>':'<span style="color:var(--green)">Auto</span>'}</span></div>
     <div class="status-row"><span>Pending</span><span style="color:var(--orange);font-weight:700">${s.pending_approvals||0}</span></div>
+    <div class="status-row"><span>Market</span><span>${s.market_is_open?'<span style="color:var(--green)">OPEN</span>':'<span style="color:var(--muted)">'+(s.market_session||'closed').replace('_',' ')+'</span>'} <span style="color:var(--muted);font-size:11px">${s.market_et_time||''} ET</span></span></div>
     <div class="status-row"><span>Version</span><span style="color:var(--muted)">${s.version||'—'}</span></div>`;
   document.getElementById('btn-paper').style.borderColor=s.mode==='paper'?'var(--blue)':'';
   document.getElementById('btn-live').style.borderColor=s.mode==='live'?'var(--orange)':'';
@@ -358,8 +370,15 @@ function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function renderQueue(items){
   const el=document.getElementById('queue-list');
   const empty=document.getElementById('queue-empty');
-  if(!items||!items.length){el.innerHTML='';el.appendChild(empty);empty.style.display='';return;}
+  const countEl=document.getElementById('queue-count');
+  if(!items||!items.length){
+    el.innerHTML='';
+    empty.style.display='';
+    if(countEl)countEl.textContent='';
+    return;
+  }
   empty.style.display='none';
+  if(countEl)countEl.textContent='('+items.length+' pending)';
   el.innerHTML=items.map(item=>{
     const a=item.action_json||{};
     const legs=(a.legs||[]).map(formatLeg).join('');
@@ -385,11 +404,21 @@ function renderQueue(items){
       </div>
       <div class="trade-actions">
         <input class="notes-input" id="notes-${item.id}" placeholder="Optional note…">
-        <button class="btn-approve" onclick="decide(${item.id},'approve')">Approve</button>
-        <button class="btn-reject"  onclick="decide(${item.id},'reject')">Reject</button>
+        <button class="btn-approve" onclick="decide(${item.id},'approve')">✓ Approve</button>
+        <button class="btn-reject"  onclick="decide(${item.id},'reject')">✗ Reject</button>
       </div>
     </div>`;
   }).join('');
+}
+
+async function bulkDecide(action){
+  const label=action==='approve'?'Approve ALL pending trades?':'Reject ALL pending trades?';
+  if(!confirm(label+'\n\nThis cannot be undone.'))return;
+  try{
+    const res=await api('POST','/api/approvals/bulk',{action,notes:'bulk '+action});
+    toast((action==='approve'?'✓ Approved ':'✗ Rejected ')+res.count+' trades',action!=='approve');
+    setTimeout(()=>{loadStatus();loadApprovals();},600);
+  }catch(e){toast('Error: '+e.message,true);}
 }
 
 function renderHistory(items){
