@@ -61,7 +61,12 @@ class MoneyManager:
         balances = self.broker.get_account_balances() or {}
         obp = float(balances.get("option_buying_power", 0.0))
         reserve = float(self.config.get("min_obp_reserve", 0.0))
-        return max(0.0, obp - reserve)
+        available = max(0.0, obp - reserve)
+        logger.debug(
+            "[MM] true_available_bp: obp=%.2f reserve=%.2f available=%.2f account_type=%s",
+            obp, reserve, available, balances.get("account_type"),
+        )
+        return available
 
     def max_affordable_contracts(self, requirement_per_contract: float) -> int:
         if requirement_per_contract <= 0:
@@ -96,10 +101,36 @@ class MoneyManager:
         bp_cap = self.max_affordable_contracts(requirement_per_lot)
         side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots)
         scaled = min(requested_lots, bp_cap, side_cap)
-        if scaled < requested_lots:
+        if scaled == 0 and requested_lots > 0:
+            # Write a DB-visible log so the C2 live feed shows the block reason.
+            if side_cap == 0:
+                reason = f"at capacity (open+pending={max_lots}/{max_lots})"
+            elif bp_cap == 0:
+                balances = self.broker.get_account_balances() or {}
+                raw_obp = float(balances.get("option_buying_power", 0.0))
+                reserve = float(self.config.get("min_obp_reserve", 0.0))
+                avail = max(0.0, raw_obp - reserve)
+                acct_type = balances.get("account_type", "?")
+                reason = (
+                    f"insufficient BP (raw_obp=${raw_obp:,.0f} reserve=${reserve:,.0f} "
+                    f"avail=${avail:,.0f} need=${requirement_per_lot:,.0f}/lot "
+                    f"acct_type={acct_type})"
+                )
+            else:
+                reason = f"bp_cap={bp_cap} side_cap={side_cap}"
+            self.db.write_log(
+                strategy_id,
+                f"[MM] BLOCKED {symbol} {side.upper()}: {reason} — 0 lots available",
+            )
+        elif scaled < requested_lots:
             logger.info(
                 "[MM] Scaled %s/%s %s %d→%d (bp_cap=%d side_cap=%d)",
                 strategy_id, symbol, side, requested_lots, scaled, bp_cap, side_cap,
+            )
+            self.db.write_log(
+                strategy_id,
+                f"[MM] Scaled {symbol} {side.upper()} {requested_lots}→{scaled} lots "
+                f"(bp_cap={bp_cap} side_cap={side_cap})",
             )
         return max(0, scaled)
 
@@ -153,7 +184,12 @@ class IronCondorBuilder:
         """
         existing = {s.lower() for s in existing_sides}
         if {"put", "call"}.issubset(existing):
-            return []  # already a full IC
+            # Both sides already open — nothing to do, log so operator can see.
+            self.mm.db.write_log(
+                strategy_id,
+                f"[IC] {symbol} {expiry}: full IC already open on both sides; skip",
+            )
+            return []
 
         sides_to_open: List[str] = []
         if not existing:                          # Mode A
@@ -176,6 +212,7 @@ class IronCondorBuilder:
                 max_lots=max_lots,
             )
             if lots < 1:
+                # scale_quantity already wrote a BLOCKED log; nothing more needed.
                 continue
             factory = put_action_factory if side == "put" else call_action_factory
             action = factory(symbol=symbol, expiry=expiry, lots=lots, width=width)
@@ -248,7 +285,13 @@ class AbstractStrategy(ABC):
         for o in chain:
             if o.get("option_type") != option_type:
                 continue
-            d = abs(float(o.get("greeks", {}).get("delta", 0.0)))
+            # Tradier returns greeks=null for deep OTM / illiquid options;
+            # guard with `or {}` so we treat missing greeks as delta=0.0
+            greeks = o.get("greeks") or {}
+            raw_delta = greeks.get("delta")
+            if raw_delta is None:
+                continue          # skip options with no greek data at all
+            d = abs(float(raw_delta))
             diff = abs(d - target_delta)
             if diff < best_diff and diff <= tolerance:
                 best_diff, best = diff, o
@@ -357,10 +400,15 @@ class CascadingEngine:
                 side_type = (a.strategy_params or {}).get("side_type")
                 if self.db.has_pending_approval(a.strategy_id, a.symbol,
                                                 side_type, a.expiry):
-                    logger.debug(
+                    logger.info(
                         "[C2] Skipping duplicate — already PENDING: %s %s "
                         "side=%s expiry=%s",
                         a.strategy_id, a.symbol, side_type, a.expiry,
+                    )
+                    self.db.write_log(
+                        a.strategy_id,
+                        f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
+                        f"already PENDING approval — skipped",
                     )
                     continue
 

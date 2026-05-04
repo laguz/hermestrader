@@ -156,14 +156,49 @@ class TradierBroker:
         data = self._get(f"/accounts/{self.account_id}/balances")
         b = (data.get("balances") or {})
         margin = b.get("margin") or {}
-        cash = b.get("cash") or {}
+        pdt    = b.get("pdt") or {}
+        cash   = b.get("cash") or {}
+
+        # Tradier places option_buying_power in different locations depending on
+        # account type:
+        #   Live margin  → balances.option_buying_power (top-level)
+        #   Paper/margin → balances.margin.option_buying_power
+        #   PDT account  → balances.pdt.option_buying_power
+        #   Cash account → balances.cash.cash_available (no dedicated OBP field)
+        # Walk through the priority list and take the first non-zero value found.
+        def _f(val) -> float:
+            try:
+                return float(val or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        obp = (
+            _f(b.get("option_buying_power"))
+            or _f(margin.get("option_buying_power"))
+            or _f(pdt.get("option_buying_power"))
+            or _f(cash.get("cash_available"))
+            or _f(b.get("total_cash"))
+        )
+
+        sbp = (
+            _f(b.get("stock_buying_power"))
+            or _f(margin.get("stock_buying_power"))
+            or _f(pdt.get("stock_buying_power"))
+        )
+
+        import logging as _logging
+        _logging.getLogger("hermes.broker.tradier").debug(
+            "get_account_balances: account_type=%s obp=%.2f sbp=%.2f raw_keys=%s",
+            b.get("account_type"), obp, sbp, list(b.keys()),
+        )
+
         return {
-            "option_buying_power": float(b.get("option_buying_power", 0.0) or 0.0),
-            "stock_buying_power": float(b.get("stock_buying_power", 0.0) or 0.0),
-            "total_equity": float(b.get("total_equity", 0.0) or 0.0),
-            "cash": float(cash.get("cash_available", b.get("total_cash", 0.0)) or 0.0),
+            "option_buying_power": obp,
+            "stock_buying_power": sbp,
+            "total_equity": _f(b.get("total_equity")),
+            "cash": _f(cash.get("cash_available") or b.get("total_cash")),
             "account_type": b.get("account_type"),
-            "margin_buying_power": float(margin.get("stock_buying_power", 0.0) or 0.0),
+            "margin_buying_power": _f(margin.get("stock_buying_power") or pdt.get("stock_buying_power")),
             "raw": b,
         }
 

@@ -517,6 +517,37 @@ def health() -> Dict[str, Any]:
     return {"ok": True, "service": "hermes-c2"}
 
 
+# ── Account balances (diagnostic) ─────────────────────────────────────────────
+@app.get("/api/balances")
+def get_balances() -> Dict[str, Any]:
+    """Return live account balances from Tradier plus the computed true-available BP."""
+    try:
+        from hermes.broker.tradier import TradierBroker
+        import os
+        broker = TradierBroker(
+            api_key=os.environ.get("TRADIER_API_KEY", ""),
+            account_id=os.environ.get("TRADIER_ACCOUNT_ID", ""),
+            paper=os.environ.get("HERMES_MODE", "paper").lower() != "live",
+        )
+        balances = broker.get_account_balances() or {}
+        reserve = float(os.environ.get("HERMES_MIN_OBP_RESERVE", 5000.0))
+        raw_obp = float(balances.get("option_buying_power", 0.0))
+        true_bp = max(0.0, raw_obp - reserve)
+        return {
+            "ok": True,
+            "account_type": balances.get("account_type"),
+            "option_buying_power": raw_obp,
+            "min_obp_reserve": reserve,
+            "true_available_bp": true_bp,
+            "stock_buying_power": balances.get("stock_buying_power"),
+            "total_equity": balances.get("total_equity"),
+            "cash": balances.get("cash"),
+            "raw": balances.get("raw", {}),
+        }
+    except Exception as exc:                                      # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
 # ── Lot configuration ──────────────────────────────────────────────────────────
 # Setting keys mirror the config dict keys strategies read via self.config.get(...)
 _LOT_SPECS = {
