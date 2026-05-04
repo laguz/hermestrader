@@ -221,6 +221,28 @@ cmd_nuke() {
     warn "Re-enter your Tradier credentials and LLM config in the C2 panel."
 }
 
+cmd_check_deps() {
+    # Verify that the chart vision layer (matplotlib) is working inside the
+    # running watcher container.  Runs a one-liner import so any missing OS
+    # library (libfreetype6, fontconfig, etc.) surfaces immediately.
+    info "Checking chart-vision dependencies inside the watcher container…"
+    local cid
+    cid=$(docker compose ps -q watcher 2>/dev/null | head -1)
+    if [ -z "$cid" ]; then
+        warn "Watcher container is not running — start Hermes first with: ./hermes.sh start"
+        return 1
+    fi
+    if docker exec "$cid" python -c \
+        "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; print('matplotlib', matplotlib.__version__)" \
+        2>&1; then
+        ok "matplotlib is available — chart vision is ready"
+    else
+        err "matplotlib import failed inside the container."
+        echo -e "   Rebuild the image with ${BOLD}./hermes.sh rebuild${NC} to pick up the updated Dockerfile."
+        return 1
+    fi
+}
+
 cmd_push() {
     info "Pushing ${BOLD}${IMAGE_FULL}${NC} to Docker Hub…"
     docker push "$IMAGE_FULL"
@@ -267,6 +289,7 @@ cmd_help() {
     echo "  status           Show running containers"
     echo "  build            Build the Docker image locally"
     echo "  push             Push the local image to Docker Hub"
+    echo "  check-deps       Verify chart-vision (matplotlib) is working in the container"
     echo "  version          Show the running Hermes version"
     echo "  help             Show this help"
     echo ""
@@ -287,6 +310,7 @@ case "${1:-help}" in
     status)         cmd_status ;;
     build)          cmd_build ;;
     push)           cmd_push ;;
+    check-deps)     cmd_check_deps ;;
     version|-v|--version) cmd_version ;;
     help|--help|-h) cmd_help ;;
     *)              err "Unknown command: $1"; cmd_help; exit 1 ;;
