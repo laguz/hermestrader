@@ -177,7 +177,7 @@ class AsyncXGBPredictor:
     """
 
     def __init__(self, db, feat_eng: FeatureEngineer, symbols: Sequence[str],
-                 retrain_interval_s: int = 60 * 60, predict_interval_s: int = 60,
+                 retrain_interval_s: int = 7 * 24 * 60 * 60, predict_interval_s: int = 24 * 60 * 60,
                  model_dir: Optional[Path] = None):
         self.db = db
         self.feat = feat_eng

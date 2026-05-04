@@ -617,4 +617,17 @@ if __name__ == "__main__":
     except Exception as _chart_exc:                              # noqa: BLE001
         log.warning("HermesChartProvider init failed — vision disabled: %s", _chart_exc)
 
+    # ML Predictor — background thread for daily XGBoost forecasting.
+    try:
+        from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
+        _ml_db = HermesDB(os.environ.get("HERMES_DSN",
+                                         "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+        _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), conf["watchlist"])
+        _ml_predictor.start()
+        log.info("AsyncXGBPredictor started — daily forecasting enabled for %s", conf["watchlist"])
+    except ImportError:
+        log.warning("xgboost or pandas not installed — ML predictor disabled (pip install xgboost pandas)")
+    except Exception as _ml_exc:                                  # noqa: BLE001
+        log.warning("AsyncXGBPredictor init failed: %s", _ml_exc)
+
     run(_chart_provider, conf)

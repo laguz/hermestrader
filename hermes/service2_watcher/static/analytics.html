@@ -196,7 +196,7 @@
           Hermes trains a per-symbol <strong style="color:var(--text)">XGBoost regressor</strong> on 10 alpha features
           derived from daily and intraday price/volume bars. The model predicts the
           <em style="color:var(--yellow)">next-day return (%)</em> for each symbol in the watchlist.
-          Retrains every hour; predictions refresh every 60 seconds.
+          Retrains weekly; predicts daily.
         </p>
         <div id="pred-bars"><div class="loading">Loading…</div></div>
       </div>
@@ -269,8 +269,8 @@
           <div class="feat-item"><div class="fname">colsample_bytree</div><div class="fval">0.80</div><div class="fdesc">Feature sampling per tree</div></div>
           <div class="feat-item"><div class="fname">objective</div><div class="fval">reg:squarederror</div><div class="fdesc">Next-day return regression</div></div>
           <div class="feat-item"><div class="fname">min training rows</div><div class="fval">60</div><div class="fdesc">Skips symbol if fewer bars</div></div>
-          <div class="feat-item"><div class="fname">retrain interval</div><div class="fval">60 min</div><div class="fdesc">Background thread retrains hourly</div></div>
-          <div class="feat-item"><div class="fname">predict interval</div><div class="fval">60 s</div><div class="fdesc">Fresh prediction every tick</div></div>
+          <div class="feat-item"><div class="fname">retrain interval</div><div class="fval">7 days</div><div class="fdesc">Background thread retrains weekly</div></div>
+          <div class="feat-item"><div class="fname">predict interval</div><div class="fval">24 hours</div><div class="fdesc">Fresh prediction once a day</div></div>
           <div class="feat-item"><div class="fname">target variable</div><div class="fval">close pct_change t+1</div><div class="fdesc">Next-day forward return</div></div>
         </div>
       </div>
