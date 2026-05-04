@@ -403,25 +403,43 @@ class WheelStrategy(AbstractStrategy):
         for symbol in watchlist:
             shares = int(self.db.equity_position(symbol) or 0)
             shares_lots = shares // 100
-            calls_open = self.db.count_open_contracts(self.strategy_id, symbol, "call")
-            puts_open = self.db.count_open_contracts(self.strategy_id, symbol, "put")
 
-            # Always cover existing shares with calls first
-            wanted_calls = min(shares_lots, max_lots) - calls_open
-            for _ in range(max(0, wanted_calls)):
+            # side_aware_capacity = max_lots - (open_contracts + pending_orders)
+            # This includes both pending_orders and pending_approvals so we
+            # never exceed max_lots even when trades are awaiting execution.
+            call_capacity = self.mm.side_aware_capacity(
+                self.strategy_id, symbol, "call", max_lots)
+            put_capacity = self.mm.side_aware_capacity(
+                self.strategy_id, symbol, "put", max_lots)
+
+            # calls committed = open + pending (what side_aware_capacity already subtracted)
+            calls_committed = max_lots - call_capacity
+            puts_committed  = max_lots - put_capacity
+
+            # ── Calls: cover shares first, bounded by share count and max_lots ──
+            # We can add at most call_capacity more, further capped by the
+            # share-coverage constraint: total calls ≤ min(shares_lots, max_lots).
+            share_call_budget = max(0, min(shares_lots, max_lots) - calls_committed)
+            wanted_calls = min(call_capacity, share_call_budget)
+
+            added_calls = 0
+            for _ in range(wanted_calls):
                 a = self._open_wheel_leg(symbol, "call")
                 if a:
                     actions.append(a)
-                    calls_open += 1
+                    added_calls += 1
 
-            # Top up puts to reach max_lots total exposure (calls+puts)
-            total_open = calls_open + puts_open
-            wanted_puts = max_lots - total_open
-            for _ in range(max(0, wanted_puts)):
+            # ── Puts: fill remaining capacity toward max_lots total ──
+            # Total calls after this tick (committed + newly queued).
+            total_calls = calls_committed + added_calls
+            # Total puts must not push (calls + puts) beyond max_lots.
+            puts_budget = max(0, max_lots - total_calls - puts_committed)
+            wanted_puts = min(put_capacity, puts_budget)
+
+            for _ in range(wanted_puts):
                 a = self._open_wheel_leg(symbol, "put")
                 if a:
                     actions.append(a)
-                    puts_open += 1
         return actions
 
     def _open_wheel_leg(self, symbol, side) -> Optional[TradeAction]:

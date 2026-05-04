@@ -350,16 +350,31 @@ class CascadingEngine:
                     continue
 
             if self.approval_mode:
+                # Dedup guard: never re-queue a trade that already has a PENDING
+                # approval for the same (strategy, symbol, side, expiry).
+                # Without this, every tick re-generates and re-queues the same
+                # spread because the approval hasn't been actioned yet.
+                side_type = (a.strategy_params or {}).get("side_type")
+                if self.db.has_pending_approval(a.strategy_id, a.symbol,
+                                                side_type, a.expiry):
+                    logger.debug(
+                        "[C2] Skipping duplicate — already PENDING: %s %s "
+                        "side=%s expiry=%s",
+                        a.strategy_id, a.symbol, side_type, a.expiry,
+                    )
+                    continue
+
                 # Queue for human review instead of firing directly.
                 action_dict = dataclasses.asdict(a)
                 self.db.queue_for_approval(action_dict, action_type=action_type)
                 logger.info(
-                    "[C2] Trade queued for approval: %s %s strategy=%s",
-                    a.symbol, a.order_class, a.strategy_id,
+                    "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
+                    a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
                 )
                 self.db.write_log(
                     a.strategy_id,
                     f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
+                    f"side={side_type} expiry={a.expiry} "
                     f"qty={a.quantity} — awaiting human approval",
                 )
             else:

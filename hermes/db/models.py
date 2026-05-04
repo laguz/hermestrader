@@ -229,15 +229,29 @@ class HermesDB:
             s.commit()
 
     def record_pending_order(self, action) -> None:
+        # Derive the lot count from the first sell/open leg so that
+        # count_pending_orders operates on the same unit (lots) as
+        # count_open_contracts.  action.quantity is always 1 (one order
+        # envelope); the actual lot size lives in leg["quantity"].
+        lots = action.quantity  # fallback
+        for leg in (action.legs or []):
+            leg_side = (leg.get("side") or "").lower()
+            if "sell" in leg_side or "open" in leg_side:
+                try:
+                    lots = int(leg["quantity"])
+                except (KeyError, TypeError, ValueError):
+                    pass
+                break
         with self.Session() as s:
             s.add(PendingOrder(
                 strategy_id=action.strategy_id, symbol=action.symbol,
                 side=(action.strategy_params or {}).get("side_type", action.side),
-                quantity=action.quantity,
+                quantity=lots,          # lot count, not order count
                 payload={
                     "legs": action.legs, "price": action.price,
                     "tag": action.tag, "ai_authored": action.ai_authored,
                     "ai_rationale": action.ai_rationale,
+                    "expiry": action.expiry,
                 },
             ))
             s.commit()
@@ -379,11 +393,75 @@ class HermesDB:
             return sum(int(r.lots or 0) for r in rows)
 
     def count_pending_orders(self, strategy_id: str, symbol: str, side: str) -> int:
+        """Return total lot-count of pending exposure for (strategy, symbol, side).
+
+        Checks two tables:
+        * pending_orders   — orders queued for direct broker submission
+        * pending_approvals— orders queued for human C2 approval (approval_mode=True)
+
+        Both must be counted so side_aware_capacity works correctly regardless
+        of whether approval_mode is on or off.  Without this, every tick looks
+        like capacity is full/zero from open trades but the pending approval
+        queue is invisible, causing duplicate entries every tick.
+        """
+        side_lower = side.lower()
         with self.Session() as s:
-            rows = (s.query(PendingOrder)
-                    .filter_by(strategy_id=strategy_id, symbol=symbol, side=side, status="PENDING")
+            # 1) Directly-submitted pending orders
+            po_rows = (s.query(PendingOrder)
+                       .filter_by(strategy_id=strategy_id, symbol=symbol,
+                                  side=side_lower, status="PENDING")
+                       .all())
+            po_lots = sum(int(r.quantity or 0) for r in po_rows)
+
+            # 2) Approval-queued trades not yet executed
+            pa_rows = (s.query(PendingApproval)
+                       .filter_by(strategy_id=strategy_id, symbol=symbol,
+                                  status="PENDING")
+                       .all())
+            pa_lots = 0
+            for r in pa_rows:
+                aj = r.action_json or {}
+                sp = aj.get("strategy_params") or {}
+                # Match side_type (put/call) stored in strategy_params
+                if sp.get("side_type", "").lower() != side_lower:
+                    continue
+                # Sum lots from the first sell/open leg
+                for leg in (aj.get("legs") or []):
+                    leg_side = (leg.get("side") or "").lower()
+                    if "sell" in leg_side or "open" in leg_side:
+                        try:
+                            pa_lots += int(leg["quantity"])
+                        except (KeyError, TypeError, ValueError):
+                            pa_lots += 1
+                        break
+
+        return po_lots + pa_lots
+
+    def has_pending_approval(self, strategy_id: str, symbol: str,
+                             side_type: Optional[str],
+                             expiry: Optional[str]) -> bool:
+        """Return True if an identical PENDING approval already exists.
+
+        Matches on (strategy_id, symbol, side_type, expiry) so the engine
+        never double-queues the same spread in the same tick or across ticks
+        while the operator hasn't acted yet.
+        """
+        with self.Session() as s:
+            rows = (s.query(PendingApproval)
+                    .filter_by(strategy_id=strategy_id, symbol=symbol,
+                               status="PENDING")
                     .all())
-            return sum(int(r.quantity or 0) for r in rows)
+            for r in rows:
+                aj = r.action_json or {}
+                sp = aj.get("strategy_params") or {}
+                if side_type is not None:
+                    if sp.get("side_type", "").lower() != (side_type or "").lower():
+                        continue
+                if expiry is not None:
+                    if aj.get("expiry") != expiry:
+                        continue
+                return True
+        return False
 
     def expire_stale_pending_orders(self, older_than_seconds: int) -> int:
         """Mark PENDING orders older than `older_than_seconds` as EXPIRED.
