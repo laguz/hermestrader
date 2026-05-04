@@ -197,6 +197,32 @@ class HermesDB:
                              autonomy=autonomy, decision=decision))
             s.commit()
 
+    def recent_ai_decisions(self, strategy_id: Optional[str] = None,
+                            symbol: Optional[str] = None,
+                            limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent ai_decisions rows, newest-first.
+
+        Optionally filter by strategy_id and/or symbol.
+        Returns a list of plain dicts ready for JSON serialisation.
+        """
+        with self.Session() as s:
+            q = s.query(AIDecision).order_by(AIDecision.ts.desc())
+            if strategy_id is not None:
+                q = q.filter(AIDecision.strategy_id == strategy_id)
+            if symbol is not None:
+                q = q.filter(AIDecision.symbol == symbol.upper())
+            rows = q.limit(limit).all()
+            return [
+                {
+                    "ts": r.ts.isoformat() if r.ts else None,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "autonomy": r.autonomy,
+                    "decision": r.decision,
+                }
+                for r in rows
+            ]
+
     def write_prediction(self, symbol: str, ret: float, price: float) -> None:
         with self.Session() as s:
             s.add(Prediction(symbol=symbol, predicted_return=ret, predicted_price=price))

@@ -265,6 +265,37 @@ class OllamaCloudLLM:
                 "ollama package not installed — run: pip install ollama"
             ) from exc
 
+    @staticmethod
+    def _images_to_ollama(images: Optional[Iterable[Any]]) -> list:
+        """Convert image payloads to the list of base64 strings ollama expects.
+
+        The ollama Python library accepts images as raw bytes or base64-encoded
+        strings attached to individual messages.  We extract base64 from whatever
+        the chart_provider returns (bytes, data-URL, or dict with 'b64' key).
+        """
+        import base64 as _b64
+        result = []
+        for img in (images or []):
+            if img is None:
+                continue
+            if isinstance(img, (bytes, bytearray)):
+                result.append(_b64.b64encode(bytes(img)).decode("ascii"))
+            elif isinstance(img, str):
+                if img.startswith("data:"):
+                    # data:<mime>;base64,<b64data>
+                    try:
+                        result.append(img.split(",", 1)[1])
+                    except IndexError:
+                        pass
+                else:
+                    # Assume it's already a raw base64 string or a URL — pass through
+                    result.append(img)
+            elif isinstance(img, dict):
+                b64 = img.get("b64") or img.get("base64")
+                if b64:
+                    result.append(b64)
+        return result
+
     def chat(
         self,
         messages: Sequence[Dict[str, Any]],
@@ -273,12 +304,29 @@ class OllamaCloudLLM:
         max_tokens: Optional[int] = None,
         timeout_s: Optional[float] = None,
     ) -> str:
-        """Send a chat request to Ollama Cloud. Returns the assistant text."""
+        """Send a chat request to Ollama Cloud. Returns the assistant text.
+
+        When `images` is provided, the base64-encoded images are attached to
+        the last user message so vision-capable models (llava, gemma3, etc.)
+        can analyse them.
+        """
         effective_max = max_tokens if max_tokens is not None else self.max_tokens
+        ollama_images = self._images_to_ollama(images)
+
+        # Build the message list, attaching images to the last user message.
+        msg_list = [dict(m) for m in messages]
+        if ollama_images:
+            for i in range(len(msg_list) - 1, -1, -1):
+                if msg_list[i].get("role") == "user":
+                    msg_list[i]["images"] = ollama_images
+                    break
+            else:
+                msg_list.append({"role": "user", "content": "", "images": ollama_images})
+
         try:
             response = self._client.chat(
                 model=self.model,
-                messages=list(messages),
+                messages=msg_list,
                 options={
                     "temperature": self.temperature,
                     "num_predict": effective_max,

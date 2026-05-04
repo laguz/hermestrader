@@ -108,6 +108,48 @@ class HermesOverseer:
                 logger.warning("Overseer proposal malformed for %s: %s", symbol, exc)
         return proposed
 
+    # -- chart-only analysis (always runs when vision enabled) ---------------
+    def analyze_charts(self, watchlist: Iterable[str]) -> None:
+        """Run a vision-only read on each symbol's chart and store the result.
+
+        Runs regardless of autonomy level — purely informational.  Results are
+        stored back on the chart_provider so the C2 API can surface them.
+        """
+        if not self.vision_enabled or self.chart_provider is None:
+            return
+        for symbol in watchlist:
+            chart = self.chart_provider.snapshot(symbol)
+            if chart is None:
+                continue
+            prompt = (
+                f"Analyse this price chart for {symbol}. "
+                "Identify the current trend, key support/resistance levels, "
+                "any chart patterns (e.g. head-and-shoulders, cup-and-handle, "
+                "double top/bottom, flags, wedges), RSI regime (overbought / "
+                "oversold / neutral), and whether the Bollinger Band squeeze "
+                "suggests an imminent volatility expansion. "
+                "Reply with JSON: "
+                "{trend, support, resistance, pattern, rsi_regime, bb_squeeze, "
+                "outlook, rationale} — all string values."
+            )
+            try:
+                msg = self.llm.chat(
+                    [{"role": "system", "content": self.SYSTEM_PROMPT},
+                     {"role": "user",   "content": prompt}],
+                    images=[chart],
+                )
+                analysis = self._safe_json(msg)
+                verdict  = analysis.get("outlook", "NEUTRAL").upper()
+                rationale = analysis.get("rationale", "")
+                self.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
+                self.db.write_ai_decision(
+                    "CHART", symbol, "vision",
+                    {"type": "chart_analysis", **analysis},
+                )
+                logger.info("Chart analysis %s → %s", symbol, verdict)
+            except Exception as exc:                                   # noqa: BLE001
+                logger.warning("Chart analysis failed for %s: %s", symbol, exc)
+
     # -- LLM I/O -------------------------------------------------------------
     def _consult(self, action: TradeAction) -> Dict[str, Any]:
         prompt = (

@@ -66,6 +66,17 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    """Parse an ISO-8601 string into a timezone-aware datetime, or return None."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     """Build the LLM overseer client from current settings.
 
@@ -514,6 +525,47 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 stats = {"managed": len(mgmt), "entries": 0,
                          "note": f"entries skipped ({mkt['session']})"}
 
+            # 4) Chart analysis — throttled to once per calendar week.
+            #    The LLM reads 7 months of daily bars so running more often
+            #    provides no new signal and wastes inference time.
+            #    Last-run timestamp is stored in system_settings so the
+            #    throttle survives container restarts.
+            _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
+            _CHART_ANALYSIS_INTERVAL_DAYS = 7
+            if chart_provider is not None and engine.overseer is not None:
+                _should_run_charts = False
+                _age_days: float = 0.0
+                try:
+                    _last_chart_ts_raw = db.get_setting(_CHART_ANALYSIS_KEY)
+                    if _last_chart_ts_raw:
+                        _last_chart_dt = _parse_iso(_last_chart_ts_raw)
+                        if _last_chart_dt is None:
+                            _should_run_charts = True
+                        else:
+                            _age_days = (
+                                datetime.now(timezone.utc) - _last_chart_dt
+                            ).total_seconds() / 86400
+                            _should_run_charts = _age_days >= _CHART_ANALYSIS_INTERVAL_DAYS
+                    else:
+                        # Never run before — run now.
+                        _should_run_charts = True
+                except Exception:                               # noqa: BLE001
+                    _should_run_charts = True
+
+                if _should_run_charts:
+                    log.info("Running weekly chart vision analysis for %d symbols", len(watchlist))
+                    try:
+                        engine.overseer.analyze_charts(watchlist)
+                        db.set_setting(_CHART_ANALYSIS_KEY, _utcnow_iso())
+                        db.write_log("ENGINE",
+                                     f"chart vision: analysed {len(watchlist)} symbols "
+                                     f"(7-month daily bars, next run in 7 days)")
+                    except Exception as _ca_exc:                # noqa: BLE001
+                        log.warning("analyze_charts failed: %s", _ca_exc)
+                else:
+                    _days_left = max(0.0, _CHART_ANALYSIS_INTERVAL_DAYS - _age_days)
+                    log.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
+
             db.set_setting(SETTING_TRADIER_OK_TS, _utcnow_iso())
             db.set_setting(SETTING_TRADIER_ERROR, "")
             db.set_setting("market_session", mkt["session"])
@@ -548,5 +600,21 @@ if __name__ == "__main__":
         # Initial mode if no setting is stored yet — paper is the safe default.
         "mode": os.environ.get("HERMES_MODE", "paper").lower(),
     }
-    charts = None
-    run(charts, conf)
+
+    # Chart provider — renders dark-theme candlestick PNG snapshots from
+    # TimescaleDB bars and caches them for the LLM vision layer.
+    # Gracefully degrades to None if matplotlib isn't installed.
+    _chart_provider = None
+    try:
+        from hermes.charts.provider import HermesChartProvider
+        _chart_db = HermesDB(os.environ.get("HERMES_DSN",
+                                            "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+        _chart_provider = HermesChartProvider(_chart_db, lookback_days=210, cache_ttl_s=300)
+        _chart_provider.start(conf["watchlist"])
+        log.info("HermesChartProvider started — warming up charts for %s", conf["watchlist"])
+    except ImportError:
+        log.warning("matplotlib not installed — chart vision disabled (pip install matplotlib)")
+    except Exception as _chart_exc:                              # noqa: BLE001
+        log.warning("HermesChartProvider init failed — vision disabled: %s", _chart_exc)
+
+    run(_chart_provider, conf)

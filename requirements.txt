@@ -15,6 +15,9 @@ xgboost>=2.0.0
 pandas>=2.0.0
 numpy>=1.26.0
 
+# Chart rendering (vision layer — HermesChartProvider)
+matplotlib>=3.8.0
+
 # HTTP + resilience
 requests>=2.31.0
 tenacity>=8.2.0

@@ -166,9 +166,10 @@
   <div id="sidebar">
     <div class="tab-bar">
       <div class="tab active" onclick="switchTab('soul')">Soul</div>
-      <div class="tab" onclick="switchTab('strategies')">Strategies</div>
+      <div class="tab" onclick="switchTab('strategies')">Strats</div>
       <div class="tab" onclick="switchTab('agent')">Agent</div>
       <div class="tab" onclick="switchTab('llm')">LLM</div>
+      <div class="tab" onclick="switchTab('charts');loadCharts()">📈</div>
     </div>
 
     <div id="tab-soul" class="tab-panel active">
@@ -257,6 +258,22 @@ Examples:
       <button class="btn-primary" onclick="saveLLM()" style="width:100%;margin-bottom:8px">Save LLM Config</button>
       <div id="llm-status" style="font-size:12px;color:var(--muted);text-align:center;"></div>
     </div>
+
+    <div id="tab-charts" class="tab-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div class="section-title" style="margin:0">Chart Vision</div>
+        <button class="btn-ghost" onclick="loadCharts()" style="font-size:11px;padding:3px 10px;">↻ Refresh</button>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">
+        The agent renders a live candlestick chart for each watchlist symbol and sends it to the LLM for analysis every tick.
+        Results appear below after the first tick completes.
+      </p>
+      <div id="charts-container">
+        <div style="text-align:center;color:var(--muted);padding:32px 0;font-size:13px">
+          Click ↻ Refresh to load chart analyses
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -290,7 +307,7 @@ function relativeTime(iso){
 }
 
 function switchTab(name){
-  const names=['soul','strategies','agent','llm'];
+  const names=['soul','strategies','agent','llm','charts'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',names[i]===name));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
@@ -752,6 +769,69 @@ async function resetWatchlist(sid){
     toast('↺ '+sid+' reset to global default');
     loadWatchlist();
   }catch(e){toast('Error: '+e.message,true);}
+}
+
+// ── Chart Vision ───────────────────────────────────────────────────────────────
+let _chartsLoaded = false;
+
+async function loadCharts(){
+  const container = document.getElementById('charts-container');
+  if(!container) return;
+  container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:24px;">Loading…</div>';
+  try {
+    const data = await api('GET', '/api/charts');
+    const analyses = data.analyses || {};
+    const watchlist = data.watchlist || Object.keys(analyses);
+    if(!watchlist.length){
+      container.innerHTML = '<div style="text-align:center;color:var(--muted);padding:24px;">No symbols in watchlist.</div>';
+      return;
+    }
+    container.innerHTML = watchlist.map(sym => {
+      const a = analyses[sym];
+      const decision = a?.decision || {};
+      const outlook = (decision.outlook || 'NEUTRAL').toUpperCase();
+      const outlookColor = outlook.includes('BULL') ? 'var(--green)'
+        : outlook.includes('BEAR') ? 'var(--red)' : 'var(--yellow)';
+      const tsStr = a?.ts ? relativeTime(a.ts) : '—';
+      const pattern = decision.pattern || '—';
+      const trend   = decision.trend   || '—';
+      const rsi     = decision.rsi_regime || '—';
+      const bb      = decision.bb_squeeze === 'true' || decision.bb_squeeze === true ? '⚡ Squeeze' : decision.bb_squeeze || '—';
+      const support  = decision.support  ? '$'+decision.support  : '—';
+      const resistance = decision.resistance ? '$'+decision.resistance : '—';
+      const rationale = escHtml(decision.rationale || 'No analysis yet — waiting for the agent to complete a tick.');
+      return `<div style="margin-bottom:16px;border:1px solid var(--border);border-radius:8px;overflow:hidden;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#ffffff08;border-bottom:1px solid var(--border);">
+          <span style="font-weight:700;color:var(--blue)">${escHtml(sym)}</span>
+          <span style="font-weight:700;font-size:12px;color:${outlookColor}">${outlook}</span>
+          <span style="font-size:11px;color:var(--muted)">${tsStr}</span>
+        </div>
+        <div style="padding:0;">
+          <img src="/api/chart/${encodeURIComponent(sym)}/image?t=${Date.now()}"
+               alt="${escHtml(sym)} chart"
+               style="width:100%;display:block;border-bottom:1px solid var(--border);"
+               onerror="this.style.display='none';this.nextElementSibling.style.display=''">
+          <div style="display:none;padding:10px 12px;font-size:11px;color:var(--muted)">
+            Chart unavailable — make sure <code>matplotlib</code> is installed and bars data is populated.
+          </div>
+        </div>
+        <div style="padding:10px 12px;font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;">
+          <div><span style="color:var(--muted)">Trend</span> <strong>${escHtml(trend)}</strong></div>
+          <div><span style="color:var(--muted)">Pattern</span> <strong>${escHtml(pattern)}</strong></div>
+          <div><span style="color:var(--muted)">RSI</span> <strong>${escHtml(rsi)}</strong></div>
+          <div><span style="color:var(--muted)">BB Squeeze</span> <strong>${escHtml(String(bb))}</strong></div>
+          <div><span style="color:var(--muted)">Support</span> <strong>${escHtml(support)}</strong></div>
+          <div><span style="color:var(--muted)">Resistance</span> <strong>${escHtml(resistance)}</strong></div>
+        </div>
+        <div style="padding:8px 12px;border-top:1px solid var(--border);font-size:11px;color:var(--muted);line-height:1.5">
+          ${rationale}
+        </div>
+      </div>`;
+    }).join('');
+    _chartsLoaded = true;
+  } catch(e) {
+    container.innerHTML = `<div style="color:var(--red);padding:16px;font-size:12px">Error loading charts: ${escHtml(e.message)}</div>`;
+  }
 }
 
 async function init(){await Promise.all([loadStatus(),loadApprovals(),loadSoul(),loadLLM(),loadLogs(),loadWatchlist()]);}

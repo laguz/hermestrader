@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -724,3 +724,87 @@ def analytics_page() -> FileResponse:
         STATIC_DIR / "analytics.html",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
     )
+
+
+# ── Chart endpoints ────────────────────────────────────────────────────────────
+# The watcher renders chart PNGs on demand from TimescaleDB bars (same logic as
+# the agent's HermesChartProvider).  Analysis results written by the agent are
+# read back from the ai_decisions table.
+
+# Module-level lazy chart provider — one instance shared across requests.
+_watcher_chart_provider = None
+
+
+def _get_chart_provider():
+    """Return (or lazily build) the watcher-side chart provider."""
+    global _watcher_chart_provider                               # noqa: PLW0603
+    if _watcher_chart_provider is not None:
+        return _watcher_chart_provider
+    try:
+        from hermes.charts.provider import HermesChartProvider
+        _watcher_chart_provider = HermesChartProvider(db, lookback_days=210, cache_ttl_s=300)
+        return _watcher_chart_provider
+    except ImportError:
+        return None
+    except Exception as exc:                                     # noqa: BLE001
+        logger.warning("Could not build watcher chart provider: %s", exc)
+        return None
+
+
+@app.get("/api/chart/{symbol}/image")
+def chart_image(symbol: str) -> Response:
+    """Return a PNG candlestick chart for `symbol`.
+
+    The chart is rendered from bars_daily in TimescaleDB and cached for 5 min.
+    Returns 503 if matplotlib is unavailable or bars are missing.
+    """
+    sym = symbol.upper().strip()
+    provider = _get_chart_provider()
+    if provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Chart rendering unavailable — install matplotlib in the watcher container",
+        )
+    png = provider.snapshot(sym)
+    if png is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No chart data available for {sym} — bars may not yet be populated",
+        )
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"Cache-Control": "max-age=300, public"},
+    )
+
+
+@app.get("/api/chart/{symbol}/analysis")
+def chart_analysis(symbol: str) -> Dict[str, Any]:
+    """Return the latest LLM chart analysis recorded by the agent for `symbol`.
+
+    The agent writes these via HermesOverseer.analyze_charts() on every tick.
+    Returns the most recent ai_decisions row where strategy_id='CHART'.
+    """
+    sym = symbol.upper().strip()
+    # The agent stores chart analyses with strategy_id='CHART'
+    try:
+        rows = db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+        if rows:
+            return {"symbol": sym, "analysis": rows[0]}
+        return {"symbol": sym, "analysis": None}
+    except Exception as exc:                                     # noqa: BLE001
+        logger.warning("chart_analysis query failed for %s: %s", sym, exc)
+        return {"symbol": sym, "analysis": None}
+
+
+@app.get("/api/charts")
+def all_chart_analyses() -> Dict[str, Any]:
+    """Return the latest LLM analysis for every symbol in the watchlist."""
+    results: Dict[str, Any] = {}
+    for sym in WATCHLIST:
+        try:
+            rows = db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+            results[sym] = rows[0] if rows else None
+        except Exception:                                        # noqa: BLE001
+            results[sym] = None
+    return {"analyses": results, "watchlist": WATCHLIST}
