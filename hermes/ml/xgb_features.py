@@ -246,8 +246,17 @@ class AsyncXGBPredictor:
                     self._retrain_all()
                     last_train = now
                 self._predict_all()
+                try:
+                    self.db.set_setting("ml_last_ok_ts", datetime.utcnow().isoformat())
+                    self.db.set_setting("ml_last_error", "")
+                except Exception:                               # noqa: BLE001
+                    pass
             except Exception as exc:                                   # noqa: BLE001
                 logger.exception("xgb loop error: %s", exc)
+                try:
+                    self.db.set_setting("ml_last_error", str(exc)[:500])
+                except Exception:                               # noqa: BLE001
+                    pass
             self._stop.wait(self.predict_interval)
 
     def _retrain_all(self) -> None:

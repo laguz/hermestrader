@@ -364,12 +364,18 @@ function renderAgentStatus(){
     :s.llm_error
       ?'<span style="color:var(--red)">'+truncErr(s.llm_error)+'</span>'
       :'<span style="color:var(--muted)">—</span>';
+  const mlHtml=s.ml_ok
+    ?'<span style="color:var(--green)">OK</span>'
+    :s.ml_error
+      ?'<span style="color:var(--red)">'+truncErr(s.ml_error)+'</span>'
+      :'<span style="color:var(--muted)">—</span>';
   const llmLabel='LLM'+(s.llm_model?' <span style="color:var(--muted);font-weight:400;font-size:11px">('+s.llm_model+')</span>':'');
   document.getElementById('agent-status-block').innerHTML=`
     <div class="status-row"><span>Agent</span><span>${s.hermes_running?'<span style="color:var(--green)">Online</span>':'<span style="color:var(--red)">Offline</span>'}</span></div>
     <div class="status-row"><span>Last seen</span><span>${ageStr}</span></div>
     <div class="status-row"><span>Uptime</span><span>${s.uptime_s!=null?Math.round(s.uptime_s/60)+'m':'—'}</span></div>
     <div class="status-row"><span>Tradier</span><span>${tradierHtml}</span></div>
+    <div class="status-row"><span>XGBoost</span><span>${mlHtml}</span></div>
     <div class="status-row"><span>${llmLabel}</span><span>${llmHtml}</span></div>
     <div class="status-row"><span>Mode</span><span>${(s.mode||'paper').toUpperCase()}</span></div>
     <div class="status-row"><span>Approval</span><span>${s.approval_mode?'<span style="color:var(--orange)">Required</span>':'<span style="color:var(--green)">Auto</span>'}</span></div>
