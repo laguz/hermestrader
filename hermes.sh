@@ -174,6 +174,9 @@ cmd_rebuild() {
     info "Stopping containers…"
     docker compose down --remove-orphans
 
+    info "Clearing corrupted Docker build cache to prevent I/O errors…"
+    docker builder prune -a -f
+
     info "Building image with --no-cache…"
     docker build --no-cache \
         --build-arg HERMES_VERSION="$HERMES_VERSION" \
@@ -203,6 +206,9 @@ cmd_nuke() {
     info "Stopping and removing all containers + volumes…"
     docker compose down --volumes --remove-orphans
     ok "Containers and volumes removed"
+
+    info "Clearing Docker build cache…"
+    docker builder prune -a -f
 
     info "Building fresh image (no cache)…"
     docker build --no-cache \

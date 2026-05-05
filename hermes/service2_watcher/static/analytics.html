@@ -622,7 +622,7 @@ function renderOpenTrades(trades){
 // ── PREDICTIONS ──────────────────────────────────────────────────────────────
 function renderPredictions(){
   const d = _data || {};
-  const preds=d.ml_predictions||[];
+  const preds=d.predictions||[];
   const el=document.getElementById('pred-bars');
 
   let errorHtml = '';

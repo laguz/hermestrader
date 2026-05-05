@@ -101,13 +101,25 @@ class FeatureEngineer:
     # 8. Last-30-minute volume % of total daily volume
     @staticmethod
     def last_30min_volume_pct(intraday: pd.DataFrame) -> pd.Series:
+        if intraday is None or intraday.empty:
+            return pd.Series(dtype=float, name="last30_pct")
         intraday = intraday.copy()
+        
+        # Ensure the index is a DatetimeIndex before accessing .date / .time
+        if not isinstance(intraday.index, pd.DatetimeIndex):
+            try:
+                intraday.index = pd.to_datetime(intraday.index)
+            except Exception:
+                return pd.Series(dtype=float, name="last30_pct")
+                
         intraday["date"] = intraday.index.date
         last30_mask = intraday.index.time >= dtime(15, 30)
         per_day = intraday.groupby("date")["volume"].sum()
         per_last30 = intraday[last30_mask].groupby("date")["volume"].sum()
         out = (per_last30 / per_day).rename("last30_pct")
         out.index = pd.to_datetime(out.index)
+        if intraday.index.tz is not None:
+            out.index = out.index.tz_localize(intraday.index.tz)
         return out
 
     # 9. Realised volatility 5d (annualised)
@@ -133,6 +145,7 @@ class FeatureEngineer:
         df["range_position"] = self.range_position(daily)
         df["volume_zscore_20d"] = self.volume_zscore(daily)
         df["last_30min_volume_pct"] = self.last_30min_volume_pct(intraday)
+        df["last_30min_volume_pct"] = df["last_30min_volume_pct"].fillna(0)
         df["realized_vol_5d"] = self.realized_vol_5d(daily)
         dow, month = self.seasonality(daily)
         df["day_of_week"] = dow
@@ -286,6 +299,19 @@ class AsyncXGBPredictor:
                 self._stop.wait(10)
                 sleep_time += 10
 
+    def _get_active_symbols(self) -> list[str]:
+        active = set(self.symbols)
+        active.add("SPY") # Essential for beta residual
+        
+        try:
+            strategy_lists = self.db.list_all_watchlists()
+            for sym_list in strategy_lists.values():
+                active.update(sym_list)
+        except Exception as e:
+            logger.warning(f"Failed to fetch strategy watchlists: {e}")
+            
+        return list(active)
+
     def _sync_history(self) -> None:
         """Fetch missing daily and intraday history from the broker and save to db."""
         if not hasattr(self.db, 'save_daily_bars'):
@@ -296,8 +322,7 @@ class AsyncXGBPredictor:
         end_date = date.today()
         start_date = end_date - timedelta(days=400)
         
-        symbols_to_sync = set(self.symbols)
-        symbols_to_sync.add("SPY") # Essential for beta residual
+        symbols_to_sync = self._get_active_symbols()
         
         for sym in symbols_to_sync:
             try:
@@ -345,7 +370,8 @@ class AsyncXGBPredictor:
             return [msg]
         
         trained_count = 0
-        for sym in self.symbols:
+        active_symbols = self._get_active_symbols()
+        for sym in active_symbols:
             data = self._feature_frame(sym)
             if data is None:
                 warnings.append(f"{sym}: No data")
@@ -390,7 +416,8 @@ class AsyncXGBPredictor:
             self.db.write_prediction(sym, yhat, predicted_price)
             predicted_count += 1
             
-        if not self._models and self.symbols:
+        active_symbols = self._get_active_symbols()
+        if not self._models and active_symbols:
             warnings.append("No models available to predict")
             
         return warnings

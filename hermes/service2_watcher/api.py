@@ -619,6 +619,35 @@ def set_lots(body: LotBody) -> Dict[str, Any]:
     return _read_lots()
 
 
+@app.get("/api/debug")
+def get_debug_info():
+    try:
+        import xgboost
+        xgb_ver = xgboost.__version__
+    except ImportError:
+        xgb_ver = "MISSING"
+
+    result = {"xgboost": xgb_ver, "logs": [], "db": {}}
+    
+    with db.Session() as s:
+        from sqlalchemy import text as sa_text
+        try:
+            result["db"]["bars_daily"] = s.execute(sa_text("SELECT COUNT(*) FROM bars_daily")).scalar()
+            result["db"]["bars_intraday"] = s.execute(sa_text("SELECT COUNT(*) FROM bars_intraday")).scalar()
+            result["db"]["predictions"] = s.execute(sa_text("SELECT COUNT(*) FROM predictions")).scalar()
+            result["db"]["ml_last_error"] = s.execute(sa_text("SELECT value FROM system_settings WHERE key='ml_last_error'")).scalar()
+        except Exception as e:
+            result["db"]["error"] = str(e)
+
+        try:
+            # get last 10 agent logs
+            raw = s.execute(sa_text("SELECT message FROM bot_logs ORDER BY ts DESC LIMIT 10")).fetchall()
+            result["logs"] = [r[0] for r in raw]
+        except Exception as e:
+            pass
+            
+    return result
+
 # ── Analytics ──────────────────────────────────────────────────────────────────
 @app.get("/api/analytics")
 def get_analytics() -> Dict[str, Any]:
@@ -635,6 +664,10 @@ def get_analytics() -> Dict[str, Any]:
 
     try:
         with db.Session() as s:
+            ml_err = s.execute(sa_text("SELECT value FROM system_settings WHERE key = 'ml_last_error'")).scalar()
+            if ml_err:
+                result["ml_last_error"] = ml_err
+
             # --- Latest prediction per symbol ---------------------------------
             raw = s.execute(sa_text("""
                 SELECT DISTINCT ON (symbol)
