@@ -621,14 +621,23 @@ function renderOpenTrades(trades){
 
 // ── PREDICTIONS ──────────────────────────────────────────────────────────────
 function renderPredictions(){
-  const preds=_data.predictions||[];
+  const d = _data || {};
+  const preds=d.ml_predictions||[];
   const el=document.getElementById('pred-bars');
+
+  let errorHtml = '';
+  if(d.ml_last_error){
+    errorHtml = `<div style="color:var(--red); font-size:12px; margin-bottom:12px; padding:8px; background:rgba(248,81,73,0.1); border-radius:4px; border:1px solid rgba(248,81,73,0.4);">
+      <strong>ML Error / Warning:</strong> ${escHtml(d.ml_last_error)}
+    </div>`;
+  }
+
   if(!preds.length){
-    el.innerHTML='<div class="no-data">No predictions yet. The XGBoost model needs at least 60 bars of daily data per symbol before it will train and predict. Predictions appear after the first full market day.</div>';
+    el.innerHTML=errorHtml + '<div class="no-data">No predictions yet. The XGBoost model needs at least 60 bars of daily data per symbol before it will train and predict. Predictions appear after the first full market day.</div>';
     return;
   }
   const maxAbsRet=Math.max(0.01,...preds.map(p=>Math.abs(p.predicted_return)));
-  el.innerHTML=preds.map(p=>{
+  el.innerHTML=errorHtml + preds.map(p=>{
     const ret=p.predicted_return*100;
     const pct=(Math.abs(p.predicted_return)/maxAbsRet*100).toFixed(1);
     const col=p.predicted_return>=0?'var(--green)':'var(--red)';

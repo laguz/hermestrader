@@ -165,23 +165,20 @@ _MODEL_DIR = Path("/tmp/hermes_xgb_models")
 
 class AsyncXGBPredictor:
     """Trains per-symbol XGBoost regressors in a background thread.
-
-    Models are checkpointed to _MODEL_DIR after each retrain and reloaded on
-    startup so the predictor is immediately useful even before the first
-    retrain_interval elapses.
-
-    Usage:
-        p = AsyncXGBPredictor(db, feature_engineer, symbols=[...])
-        p.start()                       # non-blocking
-        p.predict_latest("AAPL")        # returns last cached prediction
+    """Threaded wrapper around the XGBoost engine.
+    
+    Sleeps most of the day, wakes up to predict at prediction_interval_s.
+    Retrains entirely every retrain_interval_s.
     """
-
-    def __init__(self, db, feat_eng: FeatureEngineer, symbols: Sequence[str],
-                 retrain_interval_s: int = 7 * 24 * 60 * 60, predict_interval_s: int = 24 * 60 * 60,
+    def __init__(self, db: Any, feat: FeatureEngineer, broker: Any,
+                 watchlist: Sequence[str],
+                 retrain_interval_s: float = 7 * 24 * 3600,
+                 predict_interval_s: float = 24 * 3600,
                  model_dir: Optional[Path] = None):
         self.db = db
-        self.feat = feat_eng
-        self.symbols = list(symbols)
+        self.feat = feat
+        self.broker = broker
+        self.symbols = list(watchlist)
         self.retrain_interval = retrain_interval_s
         self.predict_interval = predict_interval_s
         self._model_dir = model_dir or _MODEL_DIR
@@ -244,13 +241,18 @@ class AsyncXGBPredictor:
                 now = time.time()
                 force_run = (self.db.get_setting("ml_force_run") == "true")
                 
+                # Sync history before running models
                 if force_run or now - last_train > self.retrain_interval:
-                    self._retrain_all()
+                    self._sync_history()
+                
+                retrain_warnings = []
+                predict_warnings = []
+                if force_run or now - last_train > self.retrain_interval:
+                    retrain_warnings = self._retrain_all()
                     last_train = now
                     
                 # Always predict if we just retrained or if it's a forced run.
-                # Predict interval logic could be applied but daily predicting is cheap.
-                self._predict_all()
+                predict_warnings = self._predict_all()
                 
                 if force_run:
                     try:
@@ -261,7 +263,13 @@ class AsyncXGBPredictor:
                 try:
                     from datetime import timezone
                     self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
-                    self.db.set_setting("ml_last_error", "")
+                    
+                    all_warns = retrain_warnings + predict_warnings
+                    if all_warns:
+                        # If we had warnings, surface them so the user knows why output is missing
+                        self.db.set_setting("ml_last_error", "; ".join(all_warns)[:500])
+                    else:
+                        self.db.set_setting("ml_last_error", "")
                 except Exception:                               # noqa: BLE001
                     pass
             except Exception as exc:                                   # noqa: BLE001
@@ -279,16 +287,74 @@ class AsyncXGBPredictor:
                 self._stop.wait(10)
                 sleep_time += 10
 
-    def _retrain_all(self) -> None:
+    def _sync_history(self) -> None:
+        """Fetch missing daily and intraday history from the broker and save to db."""
+        if not hasattr(self.db, 'save_daily_bars'):
+            logger.warning("HermesDB missing save_daily_bars method. Cannot sync history.")
+            return
+
+        from datetime import date, timedelta
+        end_date = date.today()
+        start_date = end_date - timedelta(days=400)
+        
+        symbols_to_sync = set(self.symbols)
+        symbols_to_sync.add("SPY") # Essential for beta residual
+        
+        for sym in symbols_to_sync:
+            try:
+                # 1. Sync Daily Bars
+                daily_bars = self.broker.get_history(sym, interval="daily", start=start_date.isoformat(), end=end_date.isoformat())
+                if daily_bars:
+                    # Convert to dataframe
+                    df_daily = pd.DataFrame(daily_bars)
+                    if not df_daily.empty:
+                        # Rename 'date' to 'ts' if necessary
+                        if 'date' in df_daily.columns:
+                            df_daily = df_daily.rename(columns={'date': 'ts'})
+                        # Add missing vwap_close as approximation
+                        if 'vwap_close' not in df_daily.columns and 'close' in df_daily.columns:
+                            df_daily['vwap_close'] = df_daily['close']
+                        self.db.save_daily_bars(sym, df_daily)
+                
+                # 2. Sync Intraday Bars
+                # Tradier history endpoint doesn't really support intraday easily via get_history 
+                # (requires timesales), but we attempt a fallback to 1min or 5min if possible.
+                try:
+                    intra_start = end_date - timedelta(days=10)
+                    intra_bars = self.broker.get_history(sym, interval="1min", start=intra_start.isoformat(), end=end_date.isoformat())
+                    if intra_bars:
+                        df_intra = pd.DataFrame(intra_bars)
+                        if not df_intra.empty:
+                            if 'date' in df_intra.columns:
+                                df_intra = df_intra.rename(columns={'date': 'ts'})
+                            self.db.save_intraday_bars(sym, df_intra)
+                except Exception as e:
+                    logger.debug(f"Failed to sync intraday history for {sym}: {e}")
+
+            except Exception as e:
+                logger.error(f"Failed to sync history for {sym}: {e}")
+                
+        logger.info("History sync complete.")
+
+    def _retrain_all(self) -> list[str]:
+        warnings = []
         try:
             import xgboost as xgb  # imported lazily so dev env doesn't require it
         except ImportError:
-            logger.warning("xgboost not installed; skipping retrain.")
-            return
+            msg = "xgboost not installed; skipping retrain."
+            logger.warning(msg)
+            return [msg]
+        
+        trained_count = 0
         for sym in self.symbols:
             data = self._feature_frame(sym)
-            if data is None or len(data) < 60:
+            if data is None:
+                warnings.append(f"{sym}: No data")
                 continue
+            if len(data) < 60:
+                warnings.append(f"{sym}: Need 60 bars, got {len(data)}")
+                continue
+                
             X, y = data.drop(columns=["target"]), data["target"]
             model = xgb.XGBRegressor(
                 n_estimators=400, max_depth=4, learning_rate=0.05,
@@ -299,8 +365,15 @@ class AsyncXGBPredictor:
             self._models[sym] = model
             self._save_model(sym, model)
             logger.info("Trained xgb model for %s (%d rows)", sym, len(X))
+            trained_count += 1
+            
+        if trained_count == 0 and self.symbols:
+            warnings.insert(0, "No models trained")
+        return warnings
 
-    def _predict_all(self) -> None:
+    def _predict_all(self) -> list[str]:
+        warnings = []
+        predicted_count = 0
         for sym, model in self._models.items():
             data = self._feature_frame(sym, drop_target=True)
             if data is None or data.empty:
@@ -316,6 +389,12 @@ class AsyncXGBPredictor:
                 "spot": spot,
             }
             self.db.write_prediction(sym, yhat, predicted_price)
+            predicted_count += 1
+            
+        if not self._models and self.symbols:
+            warnings.append("No models available to predict")
+            
+        return warnings
 
     # -- helpers -------------------------------------------------------------
     def _feature_frame(self, symbol: str, drop_target: bool = False) -> Optional[pd.DataFrame]:

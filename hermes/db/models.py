@@ -152,6 +152,29 @@ class SystemSetting(Base):
                         onupdate=datetime.utcnow)
 
 
+class DailyBar(Base):
+    __tablename__ = "bars_daily"
+    ts = Column(DateTime(timezone=True), primary_key=True)
+    symbol = Column(String, primary_key=True)
+    open = Column(Numeric(12, 4))
+    high = Column(Numeric(12, 4))
+    low = Column(Numeric(12, 4))
+    close = Column(Numeric(12, 4))
+    volume = Column(BigInteger)
+    vwap_close = Column(Numeric(12, 4))
+
+
+class IntradayBar(Base):
+    __tablename__ = "bars_intraday"
+    ts = Column(DateTime(timezone=True), primary_key=True)
+    symbol = Column(String, primary_key=True)
+    open = Column(Numeric(12, 4))
+    high = Column(Numeric(12, 4))
+    low = Column(Numeric(12, 4))
+    close = Column(Numeric(12, 4))
+    volume = Column(BigInteger)
+
+
 # ---------------------------------------------------------------------------
 # Repository — the only place SQL lives.
 # ---------------------------------------------------------------------------
@@ -642,6 +665,70 @@ class HermesDB:
         """
         df = pd.read_sql(sql, self.engine, params=(symbol, lookback_days), parse_dates=["ts"])
         return df.set_index("ts") if not df.empty else df
+
+    def save_daily_bars(self, symbol: str, df: pd.DataFrame) -> None:
+        """Upsert daily bars for a symbol from a DataFrame."""
+        if df.empty:
+            return
+        
+        # Reset index if ts is the index
+        if df.index.name == 'ts' or 'ts' not in df.columns:
+            reset_df = df.reset_index()
+            if 'ts' not in reset_df.columns and 'index' in reset_df.columns:
+                reset_df = reset_df.rename(columns={'index': 'ts'})
+        else:
+            reset_df = df.copy()
+            
+        with self.Session() as s:
+            for _, row in reset_df.iterrows():
+                try:
+                    bar = DailyBar(
+                        ts=pd.to_datetime(row['ts']),
+                        symbol=symbol,
+                        open=row.get('open'),
+                        high=row.get('high'),
+                        low=row.get('low'),
+                        close=row.get('close'),
+                        volume=row.get('volume'),
+                        vwap_close=row.get('vwap_close')
+                    )
+                    # Merge will update existing records on primary key conflict (ts, symbol)
+                    s.merge(bar)
+                except Exception as e:
+                    import logging
+                    logging.getLogger("hermes.db").warning(f"Failed to save daily bar: {e}")
+            s.commit()
+
+    def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
+        """Upsert intraday bars for a symbol from a DataFrame."""
+        if df.empty:
+            return
+            
+        # Reset index if ts is the index
+        if df.index.name == 'ts' or 'ts' not in df.columns:
+            reset_df = df.reset_index()
+            if 'ts' not in reset_df.columns and 'index' in reset_df.columns:
+                reset_df = reset_df.rename(columns={'index': 'ts'})
+        else:
+            reset_df = df.copy()
+            
+        with self.Session() as s:
+            for _, row in reset_df.iterrows():
+                try:
+                    bar = IntradayBar(
+                        ts=pd.to_datetime(row['ts']),
+                        symbol=symbol,
+                        open=row.get('open'),
+                        high=row.get('high'),
+                        low=row.get('low'),
+                        close=row.get('close'),
+                        volume=row.get('volume')
+                    )
+                    s.merge(bar)
+                except Exception as e:
+                    import logging
+                    logging.getLogger("hermes.db").warning(f"Failed to save intraday bar: {e}")
+            s.commit()
 
     def last_price(self, symbol: str) -> Optional[float]:
         sql = "SELECT close FROM bars_daily WHERE symbol = %s ORDER BY ts DESC LIMIT 1"

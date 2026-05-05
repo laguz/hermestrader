@@ -622,7 +622,8 @@ if __name__ == "__main__":
         from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
         _ml_db = HermesDB(os.environ.get("HERMES_DSN",
                                          "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
-        _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), conf["watchlist"])
+        _ml_broker = _build_broker(conf, conf.get("mode", "paper"))
+        _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), _ml_broker, conf["watchlist"])
         _ml_predictor.start()
         log.info("AsyncXGBPredictor started — daily forecasting enabled for %s", conf["watchlist"])
     except ImportError:
