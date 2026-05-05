@@ -30,7 +30,10 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+import pandas as pd
 import requests
+from hermes.ml.pop_engine import find_key_levels
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -323,48 +326,56 @@ class TradierBroker:
     # --------------------------------------------------------------- Analysis
     def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
         """
-        Lightweight rules-based analysis used by strategies to pick entry zones.
-        Returns current price plus put/call entry-point candidates derived from
-        the empirical price distribution over the requested window.
+        Structural market analysis used by strategies to pick entry zones.
+        Returns current price plus key Support/Resistance levels derived from
+        K-Means clustering on volume-weighted pivots over the requested window.
         """
         months = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}.get(period, 6)
         end = date.today()
         start = end - timedelta(days=months * 31)
         bars = self.get_history(symbol, start=start.isoformat(), end=end.isoformat())
-        closes = [float(b.get("close", 0.0) or 0.0) for b in bars if b.get("close") is not None]
-        if not closes:
+        
+        if not bars:
             return {"error": f"no history for {symbol}"}
+            
+        df = pd.DataFrame(bars)
+        if df.empty or 'close' not in df.columns or 'volume' not in df.columns:
+            return {"error": f"incomplete history for {symbol}"}
+            
+        df['close'] = pd.to_numeric(df['close'], errors='coerce')
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+        df = df.dropna(subset=['close', 'volume'])
+        
+        if df.empty:
+            return {"error": f"invalid history data for {symbol}"}
 
-        current = closes[-1]
-        sorted_closes = sorted(closes)
+        current = float(df['close'].iloc[-1])
+        
+        # Calculate key levels using K-Means
+        key_levels = find_key_levels(df['close'], df['volume'], window=5, n_clusters=6)
+        
+        # Calculate historical volatility for the meta-model (annualized)
+        log_ret = np.log(df["close"] / df["close"].shift(1))
+        realized_vol = float(log_ret.rolling(21).std().iloc[-1] * np.sqrt(252)) if len(df) >= 21 else 0.0
+        avg_vol = float(log_ret.rolling(len(df)).std().iloc[-1] * np.sqrt(252)) if len(df) > 2 else 0.0
 
-        def _p(pct: float) -> float:
-            i = max(0, min(len(sorted_closes) - 1, int(round(pct * (len(sorted_closes) - 1)))))
-            return round(sorted_closes[i], 2)
+        # Separate into put (support) and call (resistance) barriers
+        put_entries = [lvl for lvl in key_levels if lvl['type'] == 'support']
+        call_entries = [lvl for lvl in key_levels if lvl['type'] == 'resistance']
+        
+        # Sort by proximity to current price
+        put_entries.sort(key=lambda x: abs(x['price'] - current))
+        call_entries.sort(key=lambda x: abs(x['price'] - current))
 
-        # POP heuristic: how often price stayed beyond the candidate strike historically.
-        def _pop_below(level: float) -> int:
-            return int(round(100 * sum(1 for c in closes if c >= level) / len(closes)))
-
-        def _pop_above(level: float) -> int:
-            return int(round(100 * sum(1 for c in closes if c <= level) / len(closes)))
-
-        put_entries = [
-            {"price": _p(0.20), "pop": _pop_below(_p(0.20))},
-            {"price": _p(0.10), "pop": _pop_below(_p(0.10))},
-            {"price": _p(0.05), "pop": _pop_below(_p(0.05))},
-        ]
-        call_entries = [
-            {"price": _p(0.80), "pop": _pop_above(_p(0.80))},
-            {"price": _p(0.90), "pop": _pop_above(_p(0.90))},
-            {"price": _p(0.95), "pop": _pop_above(_p(0.95))},
-        ]
         return {
             "symbol": symbol,
             "current_price": current,
+            "current_vol": realized_vol,
+            "avg_vol": avg_vol,
+            "key_levels": key_levels,
             "put_entry_points": put_entries,
             "call_entry_points": call_entries,
-            "samples": len(closes),
+            "samples": len(df),
             "period": period,
         }
 

@@ -251,6 +251,16 @@ class HermesDB:
             s.add(Prediction(symbol=symbol, predicted_return=ret, predicted_price=price))
             s.commit()
 
+    def latest_prediction(self, symbol: str) -> Optional[Dict[str, Any]]:
+        with self.Session() as s:
+            row = s.query(Prediction).filter_by(symbol=symbol).order_by(Prediction.ts.desc()).first()
+            if row:
+                return {
+                    "predicted_return": float(row.predicted_return or 0),
+                    "predicted_price": float(row.predicted_price or 0)
+                }
+            return None
+
     def record_pending_order(self, action) -> None:
         # Derive the lot count from the first sell/open leg so that
         # count_pending_orders operates on the same unit (lots) as

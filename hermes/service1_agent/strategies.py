@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from .core import AbstractStrategy, TradeAction
+from hermes.ml.pop_engine import calculate_strike_protection, generate_regime_pops
 
 logger = logging.getLogger("hermes.agent.strategies")
 
@@ -119,29 +120,67 @@ class CreditSpreads75(AbstractStrategy):
 
     def _build_spread_action(self, *, symbol, expiry, side, lots, width,
                              min_credit, analysis, current_price) -> Optional[TradeAction]:
-        # Pick a short strike with POP > 75% (S/R based) per the spec
-        ep_key = "put_entry_points" if side == "put" else "call_entry_points"
-        candidates = [ep for ep in analysis.get(ep_key, []) if ep.get("pop", 0) > 75]
-        candidates = [
-            ep for ep in candidates
-            if (side == "put" and ep["price"] < current_price)
-            or (side == "call" and ep["price"] > current_price)
-        ]
-        if not candidates:
-            self._log(f"{symbol} {side}: no >75% POP S/R level; skip.")
-            return None
-        target = min(candidates, key=lambda ep: abs(ep["pop"] - 75))
-        # target["price"] is a raw percentile price (e.g. $185.42) — snap it to
-        # the nearest real strike available on the chain so we always find a leg.
-        target_price = target["price"]
-
         chain = self.broker.get_option_chains(symbol, expiry) or []
-        opt_type = side
-
-        short_leg = self._nearest_strike(chain, opt_type, target_price)
-        if not short_leg:
+        if not chain:
             self._log(f"{symbol} {side}: empty chain for {expiry}; skip.")
             return None
+            
+        opt_type = side
+        options = [o for o in chain if o.get("option_type") == opt_type]
+        
+        # Get XGBoost predictions
+        xgb_pred = self.db.latest_prediction(symbol) or {}
+        # Convert predicted return to a rough probability (0.5 + return * 5, clipped to 0.01-0.99)
+        pred_ret = xgb_pred.get("predicted_return", 0.0)
+        xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
+        xgb_preds = {'3M': xgb_prob, '6M': xgb_prob, '1Y': xgb_prob}
+        
+        best_strike = None
+        best_pop_diff = 999.0
+        
+        for opt in options:
+            strike = float(opt["strike"])
+            greeks = opt.get("greeks") or {}
+            delta = float(greeks.get("delta", 0.0))
+            if delta == 0.0:
+                continue
+            
+            # Basic sanity check
+            if side == "put" and strike >= current_price: continue
+            if side == "call" and strike <= current_price: continue
+            
+            # We want reasonable deltas to avoid deep OTM nonsense
+            if abs(delta) < 0.05 or abs(delta) > 0.40: continue
+            
+            prot_score = calculate_strike_protection(
+                key_levels=analysis.get("key_levels", []),
+                current_price=current_price,
+                short_strike=strike,
+                spread_type=f"{side}_credit"
+            )
+            
+            pops = generate_regime_pops(
+                delta=delta,
+                current_vol=analysis.get("current_vol", 0.2),
+                vol_sma_21=analysis.get("avg_vol", 0.2),
+                protection_score=prot_score,
+                xgb_preds=xgb_preds
+            )
+            
+            avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
+            
+            # We want POP > 75% (0.75), find the one closest to 0.75
+            if avg_pop >= 0.75:
+                diff = abs(avg_pop - 0.75)
+                if diff < best_pop_diff:
+                    best_pop_diff = diff
+                    best_strike = opt
+                    
+        if not best_strike:
+            self._log(f"{symbol} {side}: no >75% POP S/R level found in chain; skip.")
+            return None
+            
+        short_leg = best_strike
         # Snap the long strike to the nearest chain strike below/above the short
         long_target = float(short_leg["strike"]) - width if side == "put" else float(short_leg["strike"]) + width
         long_leg = self._nearest_strike(chain, opt_type, long_target)
