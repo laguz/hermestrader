@@ -103,12 +103,15 @@ def calculate_log_odds(probability: float) -> float:
     p = np.clip(probability, 0.01, 0.99)
     return float(np.log(p / (1 - p)))
 
-def predict_single_pop(delta: float, current_vol: float, avg_vol: float, xgb_prob: float, protection_score: float, weights: List[float]) -> float:
+def predict_single_pop(delta: float, current_vol: float, avg_vol: float, xgb_prob: float, protection_score: float, weights: List[float], side: str = 'put') -> float:
     p_base = 1.0 - abs(delta)
     rv = current_vol / (avg_vol + 1e-5) 
     
     l_base = calculate_log_odds(p_base)
     l_xgb = calculate_log_odds(xgb_prob)
+    
+    if side == 'call':
+        l_xgb = -l_xgb
     
     # Unpack the 5 weights (Intercept, Delta, XGB, Vol, Protection)
     beta_0, beta_1, beta_2, beta_3, beta_4 = weights
@@ -118,7 +121,7 @@ def predict_single_pop(delta: float, current_vol: float, avg_vol: float, xgb_pro
     
     return float(1 / (1 + np.exp(-score)))
 
-def generate_regime_pops(delta: float, current_vol: float, vol_sma_21: float, protection_score: float, xgb_preds: Dict[str, float], regime_weights: Dict[str, List[float]] = DEFAULT_REGIME_WEIGHTS) -> Dict[str, float]:
+def generate_regime_pops(delta: float, current_vol: float, vol_sma_21: float, protection_score: float, xgb_preds: Dict[str, float], regime_weights: Dict[str, List[float]] = DEFAULT_REGIME_WEIGHTS, side: str = 'put') -> Dict[str, float]:
     timeframes = ['3M', '6M', '1Y']
     results = {}
     for tf in timeframes:
@@ -128,7 +131,8 @@ def generate_regime_pops(delta: float, current_vol: float, vol_sma_21: float, pr
             vol_sma_21, 
             xgb_preds.get(tf, 0.5), # Default to neutral probability if not provided
             protection_score, 
-            regime_weights.get(tf, DEFAULT_REGIME_WEIGHTS['3M'])
+            regime_weights.get(tf, DEFAULT_REGIME_WEIGHTS['3M']),
+            side=side
         )
         results[tf] = pop
     return results

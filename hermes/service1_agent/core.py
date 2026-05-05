@@ -279,6 +279,22 @@ class AbstractStrategy(ABC):
         chosen = max(candidates) if prefer == "max" else min(candidates)
         return chosen.strftime("%Y-%m-%d")
 
+    def find_active_ic_expiry(self, symbol: str) -> Optional[str]:
+        """Return the expiry of an incomplete Iron Condor for this strategy and symbol."""
+        open_legs = self.db.open_legs(self.strategy_id, symbol)
+        expiry_sides = {}
+        for leg in open_legs:
+            exp = leg.get("expiry")
+            if exp:
+                expiry_sides.setdefault(exp, set()).add(leg.get("side", "").lower())
+                
+        # If any expiry has exactly 1 side (put OR call, but not both), return it.
+        # This prioritizes completing an IC over starting a new one.
+        for exp, sides in expiry_sides.items():
+            if len(sides) == 1:
+                return exp
+        return None
+
     def find_strike_by_delta(self, chain, option_type: str, target_delta: float,
                              tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
         best, best_diff = None, math.inf

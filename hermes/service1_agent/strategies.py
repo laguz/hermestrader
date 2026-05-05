@@ -72,27 +72,19 @@ class CreditSpreads75(AbstractStrategy):
                     continue
                 price = analysis["current_price"]
 
-                # Inspect existing CS75 sides for this symbol
-                open_legs = self.db.open_legs(self.strategy_id, symbol)
-                sides_by_expiry: Dict[str, set] = {}
-                for leg in open_legs:
-                    info = _parse_occ(leg["option_symbol"])
-                    if not info:
-                        continue
-                    sides_by_expiry.setdefault(info["expiry"].isoformat(), set()).add(info["side"])
-
                 # Mode A vs Mode B
-                mode_a = not sides_by_expiry
+                expiry = self.find_active_ic_expiry(symbol)
+                mode_a = not expiry
+                existing_sides: set = set()
+
                 if mode_a:
                     expiry = self.find_expiry_in_dte_range(symbol, 39, 45, prefer="max")
-                    existing_sides: set = set()
                 else:
-                    # Pick the latest existing expiry
-                    expiry, existing_sides = sorted(sides_by_expiry.items())[-1]
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                     if dte < 14 or dte > 45:
-                        self._log(f"ℹ️ {symbol}: existing expiry {expiry} ({dte}DTE) outside 14-45 completion window; skip.")
+                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 14-45 completion window; skip.")
                         continue
+                    existing_sides = {leg.get("side", "").lower() for leg in self.db.open_legs(self.strategy_id, symbol) if leg.get("expiry") == expiry}
 
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no expiry found in 39-45 DTE range; skip.")
@@ -184,7 +176,8 @@ class CreditSpreads75(AbstractStrategy):
                 current_vol=analysis.get("current_vol", 0.2),
                 vol_sma_21=analysis.get("avg_vol", 0.2),
                 protection_score=prot_score,
-                xgb_preds=xgb_preds
+                xgb_preds=xgb_preds,
+                side=side
             )
             
             avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
@@ -197,7 +190,7 @@ class CreditSpreads75(AbstractStrategy):
                     best_strike = opt
                     
         if not best_strike:
-            self._log(f"{symbol} {side}: no >75% POP S/R level found in chain; skip.")
+            self._log(f"✗ {symbol} {side}: no >75% POP S/R level found in chain; skip.")
             return None
             
         short_leg = best_strike
@@ -206,7 +199,7 @@ class CreditSpreads75(AbstractStrategy):
         long_leg = self._nearest_strike(chain, opt_type, long_target)
         if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
             self._log(
-                f"{symbol} {side}: no distinct long leg for short={short_leg['strike']:.2f} "
+                f"✗ {symbol} {side}: no distinct long leg for short={short_leg['strike']:.2f} "
                 f"long_target={long_target:.2f}; skip."
             )
             return None
@@ -214,10 +207,10 @@ class CreditSpreads75(AbstractStrategy):
         sl_strike = float(short_leg["strike"])
         ll_strike = float(long_leg["strike"])
         if side == "put" and ll_strike >= sl_strike:
-            self._log(f"{symbol} {side}: long strike {ll_strike} ≥ short {sl_strike} (invalid put spread); skip.")
+            self._log(f"✗ {symbol} {side}: long strike {ll_strike} ≥ short {sl_strike} (invalid put spread); skip.")
             return None
         if side == "call" and ll_strike <= sl_strike:
-            self._log(f"{symbol} {side}: long strike {ll_strike} ≤ short {sl_strike} (invalid call spread); skip.")
+            self._log(f"✗ {symbol} {side}: long strike {ll_strike} ≤ short {sl_strike} (invalid call spread); skip.")
             return None
         actual_width = abs(sl_strike - ll_strike)
         self._log(
@@ -231,7 +224,7 @@ class CreditSpreads75(AbstractStrategy):
         effective_min_credit = round(actual_width * (min_credit / width), 2) if width > 0 else min_credit
         if credit < effective_min_credit:
             self._log(
-                f"{symbol} {side}: credit ${credit:.2f} < min ${effective_min_credit:.2f} "
+                f"✗ {symbol} {side}: credit ${credit:.2f} < min ${effective_min_credit:.2f} "
                 f"(width={actual_width:.2f}); skip."
             )
             return None
@@ -341,28 +334,23 @@ class CreditSpreads7(AbstractStrategy):
                 price = analysis["current_price"]
 
                 # Mode A vs Mode B Logic
-                open_legs = self.db.open_legs(self.strategy_id, symbol)
-                sides_by_expiry: Dict[str, set] = {}
-                for leg in open_legs:
-                    info = _parse_occ(leg["option_symbol"])
-                    if info:
-                        sides_by_expiry.setdefault(info["expiry"].isoformat(), set()).add(info["side"])
+                expiry = self.find_active_ic_expiry(symbol)
+                mode_a = not expiry
+                existing_sides: set = set()
 
-                mode_a = not sides_by_expiry
                 if mode_a:
                     # Initial Entry: Fixed 7 DTE
                     expiry = self.find_expiry_in_dte_range(symbol, 7, 7)
-                    existing_sides: set = set()
                     if not expiry:
                         self._log(f"ℹ️ {symbol}: no exact 7 DTE expiry found for new entry; skip.")
                         continue
                 else:
                     # Completion (Mode B): Follow existing expiry if in 4-7 DTE window
-                    expiry, existing_sides = sorted(sides_by_expiry.items())[-1]
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                     if not (4 <= dte <= 7):
-                        self._log(f"ℹ️ {symbol}: existing expiry {expiry} ({dte}DTE) outside 4-7 completion window; skip.")
+                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 4-7 completion window; skip.")
                         continue
+                    existing_sides = {leg.get("side", "").lower() for leg in self.db.open_legs(self.strategy_id, symbol) if leg.get("expiry") == expiry}
 
                 self._log(f"→ {symbol}: {'MODE A' if mode_a else 'MODE B'} expiry={expiry} existing_sides={sorted(existing_sides)}")
 
@@ -427,7 +415,8 @@ class CreditSpreads7(AbstractStrategy):
                 current_vol=analysis.get("current_vol", 0.2),
                 vol_sma_21=analysis.get("avg_vol", 0.2),
                 protection_score=prot_score,
-                xgb_preds=xgb_preds
+                xgb_preds=xgb_preds,
+                side=side
             )
             
             avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
@@ -448,10 +437,18 @@ class CreditSpreads7(AbstractStrategy):
         long_leg = self._nearest_strike(chain, opt_type, long_target)
         
         if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
+            self._log(
+                f"✗ {symbol} {side}: no distinct long leg for short={short_leg['strike']:.2f} "
+                f"long_target={long_target:.2f} (7DTE); skip."
+            )
             return None
 
         credit = self.short_credit(short_leg, long_leg)
         if credit < min_credit:
+            self._log(
+                f"✗ {symbol} {side}: credit ${credit:.2f} < min ${min_credit:.2f} "
+                f"(short={short_leg['strike']:.2f} long={long_leg['strike']:.2f}); skip."
+            )
             return None
         return TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="multileg",
@@ -515,7 +512,11 @@ class TastyTrade45(AbstractStrategy):
 
         for symbol in symbols:
             try:
-                expiry = self.find_expiry_in_dte_range(symbol, 30, 60, prefer="max")
+                # Prioritize completing an existing Iron Condor
+                expiry = self.find_active_ic_expiry(symbol)
+                if not expiry:
+                    expiry = self.find_expiry_in_dte_range(symbol, 30, 60, prefer="max")
+                    
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no expiry in 30-60 DTE range; skip.")
                     continue
