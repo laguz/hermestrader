@@ -371,6 +371,14 @@ def resume_agent() -> Dict[str, Any]:
     return {"paused": False}
 
 
+@app.post("/api/ml/trigger")
+def trigger_ml_predictor() -> Dict[str, Any]:
+    """Force the XGBoost background thread to retrain and predict immediately."""
+    db.set_setting("ml_force_run", "true")
+    db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
+    return {"status": "triggered"}
+
+
 class ModeBody(BaseModel):
     mode: str
 

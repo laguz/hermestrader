@@ -190,7 +190,10 @@
   <div id="tab-predictions" class="tab-panel">
 
     <div class="card" style="margin-bottom:20px;">
-      <div class="card-header">XGBoost Model — Next-Day Return Forecast</div>
+      <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>XGBoost Model — Next-Day Return Forecast</span>
+        <button class="btn-ghost" onclick="triggerML(this)" style="font-size:12px;padding:4px 10px;">⚡ Force Retrain & Predict</button>
+      </div>
       <div class="card-body">
         <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
           Hermes trains a per-symbol <strong style="color:var(--text)">XGBoost regressor</strong> on 10 alpha features
@@ -694,6 +697,21 @@ async function loadLots(){
       if(el&&val!=null)el.textContent=val;
     });
   }catch(e){console.warn('lots load failed',e);}
+}
+
+async function triggerML(btn){
+  try{
+    btn.disabled=true;
+    btn.textContent='Triggering...';
+    const r=await fetch('/api/ml/trigger',{method:'POST'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    toast('ML predictor triggered. Background training may take a minute.',false);
+  }catch(e){
+    toast('Failed to trigger ML: '+e.message,true);
+  }finally{
+    btn.disabled=false;
+    btn.textContent='⚡ Force Retrain & Predict';
+  }
 }
 
 async function load(){

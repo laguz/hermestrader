@@ -242,12 +242,25 @@ class AsyncXGBPredictor:
         while not self._stop.is_set():
             try:
                 now = time.time()
-                if now - last_train > self.retrain_interval:
+                force_run = (self.db.get_setting("ml_force_run") == "true")
+                
+                if force_run or now - last_train > self.retrain_interval:
                     self._retrain_all()
                     last_train = now
+                    
+                # Always predict if we just retrained or if it's a forced run.
+                # Predict interval logic could be applied but daily predicting is cheap.
                 self._predict_all()
+                
+                if force_run:
+                    try:
+                        self.db.set_setting("ml_force_run", "false")
+                    except Exception:
+                        pass
+                
                 try:
-                    self.db.set_setting("ml_last_ok_ts", datetime.utcnow().isoformat())
+                    from datetime import timezone
+                    self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
                     self.db.set_setting("ml_last_error", "")
                 except Exception:                               # noqa: BLE001
                     pass
@@ -257,7 +270,14 @@ class AsyncXGBPredictor:
                     self.db.set_setting("ml_last_error", str(exc)[:500])
                 except Exception:                               # noqa: BLE001
                     pass
-            self._stop.wait(self.predict_interval)
+                    
+            # Wait for predict_interval, but wake up every 10s to check for manual triggers
+            sleep_time = 0
+            while sleep_time < self.predict_interval and not self._stop.is_set():
+                if self.db.get_setting("ml_force_run") == "true":
+                    break
+                self._stop.wait(10)
+                sleep_time += 10
 
     def _retrain_all(self) -> None:
         try:
