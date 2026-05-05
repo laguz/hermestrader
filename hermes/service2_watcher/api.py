@@ -565,8 +565,8 @@ def get_balances() -> Dict[str, Any]:
 # ── Lot configuration ──────────────────────────────────────────────────────────
 # Setting keys mirror the config dict keys strategies read via self.config.get(...)
 _LOT_SPECS = {
-    "CS75":  {"target": ("cs75_target_lots",  10), "max": ("cs75_max_lots",  10)},
-    "CS7":   {"target": ("cs7_target_lots",   10), "max": ("cs7_max_lots",   10)},
+    "CS75":  {"target": ("cs75_target_lots",   1), "max": ("cs75_max_lots",   1)},
+    "CS7":   {"target": ("cs7_target_lots",    1), "max": ("cs7_max_lots",    1)},
     "TT45":  {"target": ("tt45_target_lots",   5), "max": ("tt45_max_lots",   5)},
     "WHEEL": {"target": ("wheel_max_lots",      5), "max": ("wheel_max_lots",  5)},
 }

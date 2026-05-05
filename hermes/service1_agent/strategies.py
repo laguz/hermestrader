@@ -39,8 +39,8 @@ class CreditSpreads75(AbstractStrategy):
     def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         width = float(self.config.get("cs75_width", 5.0))
-        max_lots_global = int(self.config.get("cs75_max_lots", 10))
-        target_lots_global = int(self.config.get("cs75_target_lots", 10))
+        max_lots_global = int(self.config.get("cs75_max_lots", 1))
+        target_lots_global = int(self.config.get("cs75_target_lots", 1))
         
         # Load detailed watchlist to get per-symbol target overrides
         detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
@@ -48,12 +48,23 @@ class CreditSpreads75(AbstractStrategy):
         
         self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global}")
 
-        for symbol in symbols:
+        for sym_raw in symbols:
             try:
-                # Per-symbol overrides
-                symbol_meta = detailed_wl.get(symbol, {})
-                target_lots = symbol_meta.get("target_lots") or target_lots_global
-                max_lots = max_lots_global # Keep global max for now
+                # Support "SYMBOL:LOTS" format
+                if ":" in sym_raw:
+                    symbol, lots_str = sym_raw.split(":", 1)
+                    symbol = symbol.strip()
+                    try:
+                        target_lots = int(lots_str)
+                    except ValueError:
+                        target_lots = target_lots_global
+                else:
+                    symbol = sym_raw
+                    # Per-symbol overrides from DB
+                    symbol_meta = detailed_wl.get(symbol, {})
+                    target_lots = symbol_meta.get("target_lots") or target_lots_global
+                
+                max_lots = target_lots
                 
                 analysis = self.broker.analyze_symbol(symbol, period="6m")
                 if not analysis or "error" in analysis:
@@ -295,8 +306,8 @@ class CreditSpreads7(AbstractStrategy):
     def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         width = float(self.config.get("cs7_width", 1.0))
-        max_lots_global = int(self.config.get("cs7_max_lots", 10))
-        target_lots_global = int(self.config.get("cs7_target_lots", 10))
+        max_lots_global = int(self.config.get("cs7_max_lots", 1))
+        target_lots_global = int(self.config.get("cs7_target_lots", 1))
         min_credit = round(width * 0.12, 2)
         
         # Load detailed watchlist to get per-symbol target overrides
@@ -305,12 +316,23 @@ class CreditSpreads7(AbstractStrategy):
         
         self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global} min_credit=${min_credit:.2f}")
 
-        for symbol in symbols:
+        for sym_raw in symbols:
             try:
-                # Per-symbol overrides
-                symbol_meta = detailed_wl.get(symbol, {})
-                target_lots = symbol_meta.get("target_lots") or target_lots_global
-                max_lots = max_lots_global
+                # Support "SYMBOL:LOTS" format
+                if ":" in sym_raw:
+                    symbol, lots_str = sym_raw.split(":", 1)
+                    symbol = symbol.strip()
+                    try:
+                        target_lots = int(lots_str)
+                    except ValueError:
+                        target_lots = target_lots_global
+                else:
+                    symbol = sym_raw
+                    # Per-symbol overrides from DB
+                    symbol_meta = detailed_wl.get(symbol, {})
+                    target_lots = symbol_meta.get("target_lots") or target_lots_global
+                
+                max_lots = target_lots
                 
                 analysis = self.broker.analyze_symbol(symbol, period="3m")
                 if not analysis or "error" in analysis:
