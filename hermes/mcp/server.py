@@ -32,7 +32,19 @@ def _broker() -> TradierBroker:
         return _BROKER  # type: ignore[name-defined]
     except NameError:
         pass
-    cfg = {"dry_run": os.environ.get("HERMES_DRY_RUN", "").lower() == "true"}
+    
+    dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true"
+    # Honor TRADIER_ENDPOINT from .env if TRADIER_BASE_URL is missing
+    base_url = os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT")
+    
+    # If dry_run is on and no URL provided, default to sandbox
+    if dry_run and not base_url:
+        base_url = "https://sandbox.tradier.com/v1"
+
+    cfg = {
+        "dry_run": dry_run,
+        "tradier_base_url": base_url
+    }
     _BROKER = TradierBroker(cfg)  # type: ignore[name-defined]
     return _BROKER  # type: ignore[name-defined]
 
