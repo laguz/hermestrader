@@ -164,7 +164,6 @@ _MODEL_DIR = Path("/tmp/hermes_xgb_models")
 
 
 class AsyncXGBPredictor:
-    """Trains per-symbol XGBoost regressors in a background thread.
     """Threaded wrapper around the XGBoost engine.
     
     Sleeps most of the day, wakes up to predict at prediction_interval_s.
