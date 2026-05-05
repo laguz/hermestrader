@@ -845,8 +845,10 @@ function renderKeyLevels(data){
 
     return `<div class="card" style="margin-bottom:16px;">
       <div class="card-header">
-        <span style="color:var(--blue)">${sym}</span>
-        <span style="font-size:11px;font-weight:400;color:var(--muted)">Spot: <strong>$${current.toFixed(2)}</strong></span>
+        <div style="display:flex; align-items:baseline; gap:10px;">
+          <span style="color:var(--blue); font-size:16px;">${sym}</span>
+          <span style="font-size:12px; font-weight:400; color:var(--muted)">Spot: <strong style="color:var(--text)">$${current.toFixed(2)}</strong></span>
+        </div>
       </div>
       <div class="card-body" style="padding:0;">
         <div class="grid-2">

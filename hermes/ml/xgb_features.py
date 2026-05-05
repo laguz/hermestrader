@@ -427,7 +427,7 @@ class AsyncXGBPredictor:
                 "predicted_price": predicted_price,
                 "spot": spot,
             }
-            self.db.write_prediction(sym, yhat, predicted_price)
+            self.db.write_prediction(sym, yhat, predicted_price, spot)
             predicted_count += 1
             
         active_symbols = self._get_active_symbols()

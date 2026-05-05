@@ -247,9 +247,9 @@ class HermesDB:
                 for r in rows
             ]
 
-    def write_prediction(self, symbol: str, ret: float, price: float) -> None:
+    def write_prediction(self, symbol: str, ret: float, price: float, spot: float = 0.0) -> None:
         with self.Session() as s:
-            s.add(Prediction(symbol=symbol, predicted_return=ret, predicted_price=price))
+            s.add(Prediction(symbol=symbol, predicted_return=ret, predicted_price=price, spot=spot))
             s.commit()
 
     def latest_prediction(self, symbol: str) -> Optional[Dict[str, Any]]:
