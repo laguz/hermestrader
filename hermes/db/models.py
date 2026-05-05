@@ -36,6 +36,7 @@ class StrategyWatchlist(Base):
     strategy_id = Column(String, ForeignKey("strategies.strategy_id", ondelete="CASCADE"),
                          primary_key=True)
     symbol = Column(String, primary_key=True)
+    target_lots = Column(Integer)
     added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
@@ -329,18 +330,45 @@ class HermesDB:
     # ---- watchlist CRUD ---------------------------------------------------
     def list_watchlist(self, strategy_id: str) -> List[str]:
         with self.Session() as s:
-            rows = (s.query(StrategyWatchlist)
-                    .filter_by(strategy_id=strategy_id)
-                    .order_by(StrategyWatchlist.symbol).all())
-            return [r.symbol for r in rows]
+            from sqlalchemy import text as sa_text
+            rows = s.execute(sa_text(
+                "SELECT symbol FROM strategy_watchlists WHERE strategy_id = :sid ORDER BY symbol"
+            ), {"sid": strategy_id}).fetchall()
+            return [r[0] for r in rows]
+
+    def list_watchlist_detailed(self, strategy_id: str) -> Dict[str, Dict[str, Any]]:
+        """Return symbols mapped to their metadata (target_lots, etc.).
+        Resilient to missing columns during migration.
+        """
+        out = {}
+        with self.Session() as s:
+            from sqlalchemy import text as sa_text
+            try:
+                # Attempt to fetch with target_lots
+                rows = s.execute(sa_text(
+                    "SELECT symbol, target_lots FROM strategy_watchlists WHERE strategy_id = :sid"
+                ), {"sid": strategy_id}).fetchall()
+                for r in rows:
+                    out[r[0]] = {"target_lots": r[1]}
+            except Exception:
+                # Fallback: table exists but column might not
+                s.rollback()
+                rows = s.execute(sa_text(
+                    "SELECT symbol FROM strategy_watchlists WHERE strategy_id = :sid"
+                ), {"sid": strategy_id}).fetchall()
+                for r in rows:
+                    out[r[0]] = {"target_lots": None}
+        return out
 
     def list_all_watchlists(self) -> Dict[str, List[str]]:
         with self.Session() as s:
-            rows = s.query(StrategyWatchlist).order_by(
-                StrategyWatchlist.strategy_id, StrategyWatchlist.symbol).all()
+            from sqlalchemy import text as sa_text
+            rows = s.execute(sa_text(
+                "SELECT strategy_id, symbol FROM strategy_watchlists ORDER BY strategy_id, symbol"
+            )).fetchall()
             out: Dict[str, List[str]] = {}
-            for r in rows:
-                out.setdefault(r.strategy_id, []).append(r.symbol)
+            for sid, sym in rows:
+                out.setdefault(sid, []).append(sym)
             return out
 
     # Pulled from hermes.common so add_to_watchlist is self-sufficient —

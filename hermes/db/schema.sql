@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS strategies (
 CREATE TABLE IF NOT EXISTS strategy_watchlists (
     strategy_id TEXT NOT NULL REFERENCES strategies(strategy_id) ON DELETE CASCADE,
     symbol      TEXT NOT NULL,
+    target_lots INT,
     added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (strategy_id, symbol)
 );

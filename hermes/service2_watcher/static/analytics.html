@@ -106,6 +106,12 @@
 
   #toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999;}
   #toast.show{opacity:1;}
+  
+  .strength-bar-wrap{width:60px;background:#ffffff10;height:4px;border-radius:2px;overflow:hidden;margin-top:4px;}
+  .strength-bar{height:100%;background:var(--blue);border-radius:2px;}
+  
+  .btn-horizon{background:transparent; color:var(--muted); padding:3px 10px; font-size:11px; border-radius:4px; border:none;}
+  .btn-horizon.active{background:var(--blue); color:#000; font-weight:700;}
 </style>
 </head>
 <body>
@@ -125,6 +131,7 @@
   <div class="tab-bar">
     <div class="tab active"  onclick="switchTab('performance')">📈 Performance</div>
     <div class="tab"         onclick="switchTab('predictions')">🤖 ML Predictions</div>
+    <div class="tab"         onclick="switchTab('keylevels')">🎚 Key Levels</div>
     <div class="tab"         onclick="switchTab('logic')">🧮 Entry Point Logic</div>
     <div class="tab"         onclick="switchTab('trades')">📋 Trade History</div>
   </div>
@@ -294,23 +301,21 @@
     <!-- CS75 -->
     <div class="logic-card">
       <h3>
-        <span class="pill blue">P1</span> CS75 — Credit Spreads 39–45 DTE
+        <span class="pill blue">P1</span> CS75 — Iron Condor / Credit Spreads (Institutional POP)
       </h3>
       <div class="logic-row">
+        <div class="logic-box"><div class="lb-label">Strategy Type</div><div class="lb-val">Iron Condor (Bidirectional)</div></div>
         <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">39 – 45 days</div></div>
         <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$5.00</div></div>
-        <div class="logic-box"><div class="lb-label">Min Credit (30–45 DTE)</div><div class="lb-val">25% of width = $1.25</div></div>
-        <div class="logic-box"><div class="lb-label">Min Credit (14–29 DTE)</div><div class="lb-val">20% of width = $1.00</div></div>
-        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">POP &gt; 75% S/R level</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">POP > 75% (6M Lookback)</div></div>
         <div class="logic-box"><div class="lb-label">Target Lots</div><div class="lb-val" id="lots-cs75-target">—</div></div>
         <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-cs75-max">—</div></div>
       </div>
-      <div class="step"><div class="step-n">1</div><div class="step-txt">Find the nearest expiry in the <em>39–45 DTE</em> window (prefer max DTE). If none exists, skip the symbol.</div></div>
-      <div class="step"><div class="step-n">2</div><div class="step-txt">Scan <em>put_entry_points</em> from the broker analysis for strikes where <em>POP &gt; 75%</em> and <em>strike &lt; current_price</em> (for puts). Pick the strike closest to 75% POP.</div></div>
-      <div class="step"><div class="step-n">3</div><div class="step-txt">Pull the option chain. Set <em>short_strike</em> = the POP-selected strike. Set <em>long_strike</em> = short_strike − $5 (put) or + $5 (call).</div></div>
-      <div class="step"><div class="step-n">4</div><div class="step-txt">Calculate net credit:</div></div>
-      <div class="formula">credit = (short_leg.bid + short_leg.ask) / 2  −  (long_leg.bid + long_leg.ask) / 2</div>
-      <div class="step"><div class="step-n">5</div><div class="step-txt">If <em>credit &lt; min_credit</em>, skip. Otherwise submit a multileg sell-to-open order.</div></div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt"><strong>Initial Entry (Mode A):</strong> Find expiry in <em>39–45 DTE</em> window. Prefer max DTE.</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt"><strong>Completion (Mode B):</strong> If a side is already open, the bot persistently re-scans the missing side between <em>14–45 DTE</em>.</div></div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt"><strong>Analysis:</strong> Run <em>6-Month Structural Analysis</em> (K-Means). Identify multi-quarter walls.</div></div>
+      <div class="step"><div class="step-n">4</div><div class="step-txt"><strong>Selection:</strong> Calculate POP for the entire chain. Pick strike closest to 75% POP. Set width = $5.00.</div></div>
+      <div class="step"><div class="step-n">5</div><div class="step-txt">Verify <em>credit ≥ min_credit</em> (1.25 for new; 1.00 for completions). Submit order.</div></div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
         <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit 50%</em> — when 21–45 DTE remain and debit ≤ entry_credit × 0.50</div></div>
@@ -323,24 +328,25 @@
     <!-- CS7 -->
     <div class="logic-card">
       <h3>
-        <span class="pill yellow">P2</span> CS7 — Credit Spreads 7 DTE
+        <span class="pill yellow">P2</span> CS7 — Iron Condor / Credit Spreads (7 DTE)
       </h3>
       <div class="logic-row">
-        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">5 – 8 days</div></div>
-        <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$5.00</div></div>
-        <div class="logic-box"><div class="lb-label">Min Credit</div><div class="lb-val">12% of width = $0.60</div></div>
-        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">Δ ≈ 0.10 (±0.07)</div></div>
+        <div class="logic-box"><div class="lb-label">Strategy Type</div><div class="lb-val">Iron Condor (Bidirectional)</div></div>
+        <div class="logic-box"><div class="lb-label">DTE Window</div><div class="lb-val">Fixed 7 days</div></div>
+        <div class="logic-box"><div class="lb-label">Spread Width</div><div class="lb-val">$1.00</div></div>
+        <div class="logic-box"><div class="lb-label">Strike Selection</div><div class="lb-val">POP > 75% (3M Lookback)</div></div>
         <div class="logic-box"><div class="lb-label">Target Lots</div><div class="lb-val" id="lots-cs7-target">—</div></div>
         <div class="logic-box"><div class="lb-label">Max Lots</div><div class="lb-val" id="lots-cs7-max">—</div></div>
       </div>
-      <div class="formula">min_credit = width × 0.12  →  $5 × 0.12 = $0.60 minimum</div>
-      <div class="step"><div class="step-n">1</div><div class="step-txt">Find expiry in <em>5–8 DTE</em> window. Short weekly options only.</div></div>
-      <div class="step"><div class="step-n">2</div><div class="step-txt">Find strike with <em>delta closest to 0.10</em> (tolerance ±0.07) for puts and calls. This gives ~10-delta out-of-the-money strikes.</div></div>
-      <div class="step"><div class="step-n">3</div><div class="step-txt">Set long_strike = short ± $5. Calculate credit. Require credit ≥ $0.60.</div></div>
+      <div class="formula">min_credit = width × 0.12  →  $1 × 0.12 = $0.12 minimum</div>
+      <div class="step"><div class="step-n">1</div><div class="step-txt"><strong>Initial Entry (Mode A):</strong> Find expiry exactly at <em>7 DTE</em>. If unavailable, skip.</div></div>
+      <div class="step"><div class="step-n">2</div><div class="step-txt"><strong>Iron Condor Logic:</strong> The bot evaluates the Put side (Support) and Call side (Resistance) as independent pairs. If both hit 75% POP, it opens the full IC.</div></div>
+      <div class="step"><div class="step-n">3</div><div class="step-txt"><strong>Completion (Mode B):</strong> If only one side was filled at 7 DTE, the bot persistently re-scans the missing side between <em>4–7 DTE</em>.</div></div>
+      <div class="step"><div class="step-n">4</div><div class="step-txt"><strong>Strike:</strong> Pick the strike closest to 75% POP (3M analysis) for each side. Set width = $1.00.</div></div>
       <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);">
         <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">Exit Rules</div>
-        <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit</em> — when debit ≤ 2% of width ($0.10)</div></div>
-        <div class="formula">TP condition: debit ≤ width × 0.02  →  $5 × 0.02 = $0.10</div>
+        <div class="step"><div class="step-n" style="background:var(--green)">✓</div><div class="step-txt"><em>Take Profit</em> — when debit ≤ 2% of width ($0.02)</div></div>
+        <div class="formula">TP condition: debit ≤ width × 0.02  →  $1 × 0.02 = $0.02</div>
         <div class="step"><div class="step-n" style="background:var(--red)">✗</div><div class="step-txt"><em>Stop Loss 3×</em> — when debit ≥ entry_credit × 3.0</div></div>
       </div>
     </div>
@@ -394,6 +400,56 @@ ITM call: spot &gt; short_strike</div>
   </div>
 
   <!-- ══════════════════════════════════════════════════════════
+       TAB 5 — KEY LEVELS (S/R CLUSTERING)
+  ══════════════════════════════════════════════════════════════ -->
+  <div id="tab-keylevels" class="tab-panel">
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-header" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>K-Means S/R Clustering — Structural Market Analysis</span>
+        <div class="pill-toggle" style="display:flex; background:#ffffff08; border-radius:6px; padding:2px;">
+          <button class="btn-horizon active" onclick="setHorizon('3m', this)">3M</button>
+          <button class="btn-horizon"        onclick="setHorizon('6m', this)">6M</button>
+          <button class="btn-horizon"        onclick="setHorizon('1y', this)">1Y</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6;">
+          Key Levels are identified by running <strong style="color:var(--text)">K-Means Clustering</strong> on local price pivots. 
+          Pivots are weighted by <em style="color:var(--blue)">Volume × Recency²</em> to prioritize high-conviction, recent price action.
+          The algorithm automatically clusters these pivots into 6 significant zones.
+        </p>
+        <div id="keylevels-content">
+          <div class="loading">Loading analysis...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="section-heading">Calculation Logic</div>
+    <div class="feat-grid">
+      <div class="feat-item">
+        <div class="fname">Pivot Identification</div>
+        <div class="fval">Window = 5 bars</div>
+        <div class="fdesc">Uses <code>argrelextrema</code> to find local minima/maxima within a 5-day rolling window.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">Recency Bias</div>
+        <div class="fval">Weight ∝ (index / total)²</div>
+        <div class="fdesc">Square of the relative index ensures recent pivots have exponentially more influence than old ones.</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">Clustering</div>
+        <div class="fval">K = 6</div>
+        <div class="fdesc">Groups thousands of historical data points into 6 distinct price levels (Support/Resistance).</div>
+      </div>
+      <div class="feat-item">
+        <div class="fname">Level Strength</div>
+        <div class="fval">Cluster Density</div>
+        <div class="fdesc">Strength is determined by the number of individual pivots that fall into the same cluster.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════
        TAB 4 — TRADE HISTORY
   ══════════════════════════════════════════════════════════════ -->
   <div id="tab-trades" class="tab-panel">
@@ -429,10 +485,11 @@ function relTime(iso){
 function pnlColor(v){return v>0?'var(--green)':v<0?'var(--red)':'var(--muted)';}
 
 function switchTab(name){
-  const tabs=['performance','predictions','logic','trades'];
+  const tabs=['performance','predictions','keylevels','logic','trades'];
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',tabs[i]===name));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('tab-'+name).classList.add('active');
+  if(name==='keylevels') loadAnalysis();
 }
 
 function toast(msg,isErr){
@@ -739,9 +796,112 @@ async function load(){
   }
 }
 
+let _currentHorizon = '3m';
+
+function setHorizon(h, btn){
+  _currentHorizon = h;
+  document.querySelectorAll('.btn-horizon').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadAnalysis();
+}
+
+// ── KEY LEVELS ──────────────────────────────────────────────────────────────
+async function loadAnalysis(){
+  const el=document.getElementById('keylevels-content');
+  if(!el) return;
+  try{
+    const r=await fetch('/api/analysis?period=' + _currentHorizon);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const data=await r.json();
+    renderKeyLevels(data);
+  }catch(e){
+    el.innerHTML=`<div class="err-box">Failed to load analysis: ${e.message}</div>`;
+  }
+}
+
+function renderKeyLevels(data){
+  const el=document.getElementById('keylevels-content');
+  if (data.error) {
+    el.innerHTML = `<div class="err-box">API Error: ${escHtml(data.error)}</div>`;
+    return;
+  }
+
+  const symbols=Object.keys(data);
+  if(!symbols.length){
+    el.innerHTML='<div class="no-data">No analysis data available.</div>';
+    return;
+  }
+  
+  el.innerHTML=symbols.map(sym=>{
+    const d=data[sym];
+    if(!d || d.error) return `<div class="card"><div class="card-header">${sym}</div><div class="card-body"><div class="err-box">${escHtml(d?.error || 'No data')}</div></div></div>`;
+    
+    const levels=d.key_levels||[];
+    const current=parseFloat(d.current_price || 0);
+    const support=levels.filter(l=>l.type==='support').sort((a,b)=>b.price-a.price);
+    const resistance=levels.filter(l=>l.type==='resistance').sort((a,b)=>a.price-b.price);
+    
+    const maxStrength = Math.max(1, ...levels.map(l=>l.strength));
+
+    return `<div class="card" style="margin-bottom:16px;">
+      <div class="card-header">
+        <span style="color:var(--blue)">${sym}</span>
+        <span style="font-size:11px;font-weight:400;color:var(--muted)">Spot: <strong>$${current.toFixed(2)}</strong></span>
+      </div>
+      <div class="card-body" style="padding:0;">
+        <div class="grid-2">
+          <div style="border-right:1px solid var(--border);padding:16px;">
+            <div style="font-size:11px;font-weight:700;color:var(--green);text-transform:uppercase;margin-bottom:12px;">Support Clusters</div>
+            <table class="tbl">
+              <thead><tr><th>Price</th><th>Strength</th><th>Distance</th><th>POP</th></tr></thead>
+              <tbody>
+                ${support.map(l=>`<tr>
+                  <td style="font-weight:700;color:var(--green)">$${(l.price || 0).toFixed(2)}</td>
+                  <td>
+                    <div style="font-size:10px;color:var(--muted)">${l.strength} touches</div>
+                    <div class="strength-bar-wrap"><div class="strength-bar" style="width:${(l.strength/maxStrength*100)}%;background:var(--green)"></div></div>
+                  </td>
+                  <td style="color:var(--muted)">-${(current > 0 ? 100*(current-(l.price||0))/current : 0).toFixed(2)}%</td>
+                  <td style="font-weight:700;color:${(l.pop||0) >= 0.75 ? 'var(--green)' : (l.pop||0) >= 0.6 ? 'var(--yellow)' : 'var(--muted)'}">${((l.pop||0)*100).toFixed(1)}%</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div style="padding:16px;">
+            <div style="font-size:11px;font-weight:700;color:var(--red);text-transform:uppercase;margin-bottom:12px;">Resistance Clusters</div>
+            <table class="tbl">
+              <thead><tr><th>Price</th><th>Strength</th><th>Distance</th><th>POP</th></tr></thead>
+              <tbody>
+                ${resistance.map(l=>`<tr>
+                  <td style="font-weight:700;color:var(--red)">$${(l.price || 0).toFixed(2)}</td>
+                  <td>
+                    <div style="font-size:10px;color:var(--muted)">${l.strength} touches</div>
+                    <div class="strength-bar-wrap"><div class="strength-bar" style="width:${(l.strength/maxStrength*100)}%;background:var(--red)"></div></div>
+                  </td>
+                  <td style="color:var(--muted)">+${(current > 0 ? 100*((l.price||0)-current)/current : 0).toFixed(2)}%</td>
+                  <td style="font-weight:700;color:${(l.pop||0) >= 0.75 ? 'var(--green)' : (l.pop||0) >= 0.6 ? 'var(--yellow)' : 'var(--muted)'}">${((l.pop||0)*100).toFixed(1)}%</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style="padding:12px 16px;background:#ffffff04;border-top:1px solid var(--border);display:flex;gap:20px;font-size:11px;color:var(--muted)">
+           <div>Realized Vol (21d): <strong style="color:var(--text)">${((d.current_vol||0)*100).toFixed(1)}%</strong></div>
+           <div>Avg Vol (${d.period || 'N/A'}): <strong style="color:var(--text)">${((d.avg_vol||0)*100).toFixed(1)}%</strong></div>
+           <div>Samples: <strong style="color:var(--text)">${d.samples || 0} days</strong></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 loadLots();
 load();
-setInterval(()=>{load();loadLots();}, 30000);
+setInterval(()=>{
+  load();
+  loadLots();
+  if(document.getElementById('tab-keylevels').classList.contains('active')) loadAnalysis();
+}, 30000);
 </script>
 </body>
 </html>

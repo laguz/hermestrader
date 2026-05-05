@@ -38,14 +38,23 @@ class CreditSpreads75(AbstractStrategy):
 
     def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
-        max_lots = int(self.config.get("cs75_max_lots", 10))
-        target_lots = int(self.config.get("cs75_target_lots", 10))
         width = float(self.config.get("cs75_width", 5.0))
+        max_lots_global = int(self.config.get("cs75_max_lots", 10))
+        target_lots_global = int(self.config.get("cs75_target_lots", 10))
+        
+        # Load detailed watchlist to get per-symbol target overrides
+        detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — target={target_lots} max={max_lots} width={width}")
+        
+        self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global}")
 
         for symbol in symbols:
             try:
+                # Per-symbol overrides
+                symbol_meta = detailed_wl.get(symbol, {})
+                target_lots = symbol_meta.get("target_lots") or target_lots_global
+                max_lots = max_lots_global # Keep global max for now
+                
                 analysis = self.broker.analyze_symbol(symbol, period="6m")
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
@@ -285,36 +294,69 @@ class CreditSpreads7(AbstractStrategy):
 
     def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
-        width = float(self.config.get("cs7_width", 5.0))
-        max_lots = int(self.config.get("cs7_max_lots", 10))
-        target_lots = int(self.config.get("cs7_target_lots", 10))
+        width = float(self.config.get("cs7_width", 1.0))
+        max_lots_global = int(self.config.get("cs7_max_lots", 10))
+        target_lots_global = int(self.config.get("cs7_target_lots", 10))
         min_credit = round(width * 0.12, 2)
+        
+        # Load detailed watchlist to get per-symbol target overrides
+        detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — target={target_lots} max={max_lots} min_credit=${min_credit:.2f}")
+        
+        self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global} min_credit=${min_credit:.2f}")
 
         for symbol in symbols:
             try:
-                expiry = self.find_expiry_in_dte_range(symbol, 5, 8, prefer="max")
-                if not expiry:
-                    self._log(f"ℹ️ {symbol}: no expiry in 5-8 DTE range; skip.")
+                # Per-symbol overrides
+                symbol_meta = detailed_wl.get(symbol, {})
+                target_lots = symbol_meta.get("target_lots") or target_lots_global
+                max_lots = max_lots_global
+                
+                analysis = self.broker.analyze_symbol(symbol, period="3m")
+                if not analysis or "error" in analysis:
+                    self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
-                existing = {leg["side"] for leg in self.db.open_legs(self.strategy_id, symbol)
-                            if leg.get("expiry") == expiry}
-                dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                self._log(f"→ {symbol}: expiry={expiry} {dte}DTE existing_sides={sorted(existing)}")
+                price = analysis["current_price"]
+
+                # Mode A vs Mode B Logic
+                open_legs = self.db.open_legs(self.strategy_id, symbol)
+                sides_by_expiry: Dict[str, set] = {}
+                for leg in open_legs:
+                    info = _parse_occ(leg["option_symbol"])
+                    if info:
+                        sides_by_expiry.setdefault(info["expiry"].isoformat(), set()).add(info["side"])
+
+                mode_a = not sides_by_expiry
+                if mode_a:
+                    # Initial Entry: Fixed 7 DTE
+                    expiry = self.find_expiry_in_dte_range(symbol, 7, 7)
+                    existing_sides: set = set()
+                    if not expiry:
+                        self._log(f"ℹ️ {symbol}: no exact 7 DTE expiry found for new entry; skip.")
+                        continue
+                else:
+                    # Completion (Mode B): Follow existing expiry if in 4-7 DTE window
+                    expiry, existing_sides = sorted(sides_by_expiry.items())[-1]
+                    dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
+                    if not (4 <= dte <= 7):
+                        self._log(f"ℹ️ {symbol}: existing expiry {expiry} ({dte}DTE) outside 4-7 completion window; skip.")
+                        continue
+
+                self._log(f"→ {symbol}: {'MODE A' if mode_a else 'MODE B'} expiry={expiry} existing_sides={sorted(existing_sides)}")
 
                 def factory(side: str):
                     def _b(symbol, expiry, lots, width):
                         return self._build_short_premium_spread(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,
-                            width=width, min_credit=min_credit, target_delta=0.10,
+                            width=width, min_credit=min_credit, analysis=analysis,
+                            current_price=price,
                         )
                     return _b
 
                 planned = self.ic.plan(
                     strategy_id=self.strategy_id, symbol=symbol, expiry=expiry,
                     target_lots=target_lots, width=width, max_lots=max_lots,
-                    existing_sides=existing,
+                    existing_sides=existing_sides,
                     put_action_factory=factory("put"),
                     call_action_factory=factory("call"),
                 )
@@ -324,26 +366,70 @@ class CreditSpreads7(AbstractStrategy):
         return actions
 
     def _build_short_premium_spread(self, *, symbol, expiry, side, lots,
-                                    width, min_credit, target_delta) -> Optional[TradeAction]:
+                                    width, min_credit, analysis, current_price) -> Optional[TradeAction]:
+        from hermes.ml.pop_engine import calculate_strike_protection, generate_regime_pops
+
         chain = self.broker.get_option_chains(symbol, expiry) or []
-        short_leg = self.find_strike_by_delta(chain, side, target_delta, tolerance=0.07)
-        if not short_leg:
-            self._log(f"✗ {symbol} {side}: no strike near {target_delta:.2f}Δ (±0.07) in chain; skip.")
+        if not chain: return None
+        
+        opt_type = side
+        options = [o for o in chain if o.get("option_type") == opt_type]
+        
+        # Get XGBoost predictions
+        xgb_pred = self.db.latest_prediction(symbol) or {}
+        pred_ret = xgb_pred.get("predicted_return", 0.0)
+        xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
+        xgb_preds = {'3M': xgb_prob, '6M': xgb_prob, '1Y': xgb_prob}
+
+        best_strike = None
+        best_pop_diff = 999.0
+        
+        for opt in options:
+            strike = float(opt["strike"])
+            greeks = opt.get("greeks") or {}
+            delta = float(greeks.get("delta", 0.0))
+            
+            if side == "put" and strike >= current_price: continue
+            if side == "call" and strike <= current_price: continue
+            
+            # Use pure POP selection, removing Delta guardrails
+            prot_score = calculate_strike_protection(
+                key_levels=analysis.get("key_levels", []),
+                current_price=current_price,
+                short_strike=strike,
+                spread_type=f"{side}_credit"
+            )
+            
+            pops = generate_regime_pops(
+                delta=delta,
+                current_vol=analysis.get("current_vol", 0.2),
+                vol_sma_21=analysis.get("avg_vol", 0.2),
+                protection_score=prot_score,
+                xgb_preds=xgb_preds
+            )
+            
+            avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
+            
+            # Mandate POP > 75%
+            if avg_pop >= 0.75:
+                diff = abs(avg_pop - 0.75)
+                if diff < best_pop_diff:
+                    best_pop_diff = diff
+                    best_strike = opt
+
+        if not best_strike:
+            self._log(f"{symbol} {side}: no >75% POP S/R level found in chain (7DTE); skip.")
             return None
-        long_strike = short_leg["strike"] - width if side == "put" else short_leg["strike"] + width
-        long_leg = next(
-            (o for o in chain if o["option_type"] == side and abs(o["strike"] - long_strike) < 0.01),
-            None,
-        )
-        if not long_leg:
-            self._log(f"✗ {symbol} {side}: no long leg at strike {long_strike:.2f}; skip.")
+            
+        short_leg = best_strike
+        long_target = float(short_leg["strike"]) - width if side == "put" else float(short_leg["strike"]) + width
+        long_leg = self._nearest_strike(chain, opt_type, long_target)
+        
+        if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
             return None
+
         credit = self.short_credit(short_leg, long_leg)
         if credit < min_credit:
-            self._log(
-                f"✗ {symbol} {side}: credit ${credit:.2f} < min ${min_credit:.2f} "
-                f"(short={short_leg['strike']:.0f} long={long_strike:.0f}); skip."
-            )
             return None
         return TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="multileg",
