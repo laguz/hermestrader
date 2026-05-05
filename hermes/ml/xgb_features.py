@@ -247,43 +247,62 @@ class AsyncXGBPredictor:
 
     # -- background loop -----------------------------------------------------
     def _loop(self) -> None:
+        from hermes.market_hours import ET
+        from datetime import datetime
+        
         last_train = 0.0
+        last_pred_tuple = None
+        
         while not self._stop.is_set():
             try:
                 now = time.time()
+                now_et = datetime.now(ET)
                 force_run = (self.db.get_setting("ml_force_run") == "true")
                 
-                # Sync history before running models
-                if force_run or now - last_train > self.retrain_interval:
+                should_predict = force_run
+                if not should_predict:
+                    hour = now_et.hour
+                    # 9 AM to 4 PM (16:00) on weekdays
+                    if now_et.weekday() < 5 and 9 <= hour <= 16:
+                        current_tuple = (now_et.year, now_et.month, now_et.day, hour)
+                        if last_pred_tuple != current_tuple:
+                            should_predict = True
+                            last_pred_tuple = current_tuple
+                            
+                should_retrain = force_run or (now - last_train > self.retrain_interval)
+                
+                if should_predict or should_retrain:
+                    # Sync history before running models
                     self._sync_history()
-                
-                retrain_warnings = []
-                predict_warnings = []
-                if force_run or now - last_train > self.retrain_interval:
-                    retrain_warnings = self._retrain_all()
-                    last_train = now
                     
-                # Always predict if we just retrained or if it's a forced run.
-                predict_warnings = self._predict_all()
-                
-                if force_run:
+                    retrain_warnings = []
+                    predict_warnings = []
+                    
+                    if should_retrain:
+                        retrain_warnings = self._retrain_all()
+                        last_train = now
+                        
+                    # Always predict if we just retrained or if the hourly schedule hit
+                    predict_warnings = self._predict_all()
+                    
+                    if force_run:
+                        try:
+                            self.db.set_setting("ml_force_run", "false")
+                        except Exception:
+                            pass
+                    
                     try:
-                        self.db.set_setting("ml_force_run", "false")
-                    except Exception:
+                        from datetime import timezone
+                        self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
+                        
+                        all_warns = retrain_warnings + predict_warnings
+                        if all_warns:
+                            # If we had warnings, surface them so the user knows why output is missing
+                            self.db.set_setting("ml_last_error", "; ".join(all_warns)[:500])
+                        else:
+                            self.db.set_setting("ml_last_error", "")
+                    except Exception:                               # noqa: BLE001
                         pass
-                
-                try:
-                    from datetime import timezone
-                    self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
-                    
-                    all_warns = retrain_warnings + predict_warnings
-                    if all_warns:
-                        # If we had warnings, surface them so the user knows why output is missing
-                        self.db.set_setting("ml_last_error", "; ".join(all_warns)[:500])
-                    else:
-                        self.db.set_setting("ml_last_error", "")
-                except Exception:                               # noqa: BLE001
-                    pass
             except Exception as exc:                                   # noqa: BLE001
                 logger.exception("xgb loop error: %s", exc)
                 try:
@@ -291,13 +310,8 @@ class AsyncXGBPredictor:
                 except Exception:                               # noqa: BLE001
                     pass
                     
-            # Wait for predict_interval, but wake up every 10s to check for manual triggers
-            sleep_time = 0
-            while sleep_time < self.predict_interval and not self._stop.is_set():
-                if self.db.get_setting("ml_force_run") == "true":
-                    break
-                self._stop.wait(10)
-                sleep_time += 10
+            # Wake up every 10s to check for schedule or manual triggers
+            self._stop.wait(10)
 
     def _get_active_symbols(self) -> list[str]:
         active = set(self.symbols)
