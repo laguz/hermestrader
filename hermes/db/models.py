@@ -679,25 +679,38 @@ class HermesDB:
         else:
             reset_df = df.copy()
             
-        with self.Session() as s:
-            for _, row in reset_df.iterrows():
-                try:
-                    bar = DailyBar(
-                        ts=pd.to_datetime(row['ts']),
-                        symbol=symbol,
-                        open=row.get('open'),
-                        high=row.get('high'),
-                        low=row.get('low'),
-                        close=row.get('close'),
-                        volume=row.get('volume'),
-                        vwap_close=row.get('vwap_close')
-                    )
-                    # Merge will update existing records on primary key conflict (ts, symbol)
-                    s.merge(bar)
-                except Exception as e:
-                    import logging
-                    logging.getLogger("hermes.db").warning(f"Failed to save daily bar: {e}")
-            s.commit()
+        from sqlalchemy.dialects.postgresql import insert
+        
+        data = []
+        for _, row in reset_df.iterrows():
+            data.append({
+                'ts': pd.to_datetime(row['ts']),
+                'symbol': symbol,
+                'open': row.get('open'),
+                'high': row.get('high'),
+                'low': row.get('low'),
+                'close': row.get('close'),
+                'volume': row.get('volume'),
+                'vwap_close': row.get('vwap_close')
+            })
+
+        if not data:
+            return
+
+        stmt = insert(DailyBar).values(data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['ts', 'symbol'],
+            set_={
+                'open': stmt.excluded.open,
+                'high': stmt.excluded.high,
+                'low': stmt.excluded.low,
+                'close': stmt.excluded.close,
+                'volume': stmt.excluded.volume,
+                'vwap_close': stmt.excluded.vwap_close
+            }
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
 
     def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
         """Upsert intraday bars for a symbol from a DataFrame."""
@@ -711,24 +724,37 @@ class HermesDB:
                 reset_df = reset_df.rename(columns={'index': 'ts'})
         else:
             reset_df = df.copy()
-            
-        with self.Session() as s:
-            for _, row in reset_df.iterrows():
-                try:
-                    bar = IntradayBar(
-                        ts=pd.to_datetime(row['ts']),
-                        symbol=symbol,
-                        open=row.get('open'),
-                        high=row.get('high'),
-                        low=row.get('low'),
-                        close=row.get('close'),
-                        volume=row.get('volume')
-                    )
-                    s.merge(bar)
-                except Exception as e:
-                    import logging
-                    logging.getLogger("hermes.db").warning(f"Failed to save intraday bar: {e}")
-            s.commit()
+
+        from sqlalchemy.dialects.postgresql import insert
+        
+        data = []
+        for _, row in reset_df.iterrows():
+            data.append({
+                'ts': pd.to_datetime(row['ts']),
+                'symbol': symbol,
+                'open': row.get('open'),
+                'high': row.get('high'),
+                'low': row.get('low'),
+                'close': row.get('close'),
+                'volume': row.get('volume')
+            })
+
+        if not data:
+            return
+
+        stmt = insert(IntradayBar).values(data)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['ts', 'symbol'],
+            set_={
+                'open': stmt.excluded.open,
+                'high': stmt.excluded.high,
+                'low': stmt.excluded.low,
+                'close': stmt.excluded.close,
+                'volume': stmt.excluded.volume
+            }
+        )
+        with self.engine.begin() as conn:
+            conn.execute(stmt)
 
     def last_price(self, symbol: str) -> Optional[float]:
         sql = "SELECT close FROM bars_daily WHERE symbol = %s ORDER BY ts DESC LIMIT 1"

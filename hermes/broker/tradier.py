@@ -279,6 +279,27 @@ class TradierBroker:
 
     def get_history(self, symbol: str, *, interval: str = "daily",
                     start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
+        # For intraday intervals, use /markets/timesales
+        if interval in ("1min", "5min", "15min"):
+            params = {"symbol": symbol, "interval": interval}
+            if start:
+                params["start"] = start
+            if end:
+                params["end"] = end
+            data = self._get("/markets/timesales", params=params)
+            ts = (data.get("series") or {})
+            if not ts or ts == "null":
+                return []
+            items = ts.get("data", [])
+            if isinstance(items, dict):
+                items = [items]
+            # Normalize key names to match history endpoint (date -> time)
+            for item in items:
+                if "time" in item:
+                    item["date"] = item["time"]
+            return items
+
+        # Standard daily/weekly/monthly history
         params = {"symbol": symbol, "interval": interval}
         if start:
             params["start"] = start
@@ -288,7 +309,13 @@ class TradierBroker:
         history = (data.get("history") or {})
         if not history or history == "null":
             return []
-        items = history.get("day", [])
+        
+        # Tradier returns the list under a key matching the interval (day, week, month)
+        key = "day"
+        if interval == "weekly": key = "week"
+        elif interval == "monthly": key = "month"
+        
+        items = history.get(key, [])
         if isinstance(items, dict):
             items = [items]
         return items

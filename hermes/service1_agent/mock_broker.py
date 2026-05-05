@@ -47,6 +47,26 @@ class MockBroker:
             "call_entry_points": [{"price": 165.0, "pop": 80}, {"price": 170.0, "pop": 90}],
         }
 
+    def get_history(self, symbol: str, interval: str = "daily",
+                    start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return dummy history data."""
+        from datetime import datetime, timedelta
+        out = []
+        now = datetime.utcnow()
+        days = 400 if interval == "daily" else 10
+        for i in range(days):
+            ts = now - timedelta(days=i)
+            out.append({
+                "date": ts.strftime("%Y-%m-%d" if interval == "daily" else "%Y-%m-%d %H:%M:%S"),
+                "open": 150.0 + i % 10,
+                "high": 155.0 + i % 10,
+                "low": 145.0 + i % 10,
+                "close": 152.0 + i % 10,
+                "volume": 1000000,
+                "vwap": 152.0 + i % 10
+            })
+        return out
+
     def place_order_from_action(self, action: TradeAction) -> Dict[str, Any]:
         logger.info("[MOCK] Placing order for %s: %s", action.symbol, action.legs)
         return {"status": "ok", "order_id": "MOCK-123"}
