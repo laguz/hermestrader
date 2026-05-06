@@ -12,7 +12,13 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    # Imported only for type checking — resolves the F821 forward references
+    # to ``HermesOverseer`` without re-introducing a runtime circular import
+    # (overseer.py imports TradeAction from this module).
+    from .overseer import HermesOverseer
 
 logger = logging.getLogger("hermes.agent.core")
 
