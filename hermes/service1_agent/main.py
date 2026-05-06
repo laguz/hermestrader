@@ -67,11 +67,17 @@ def _utcnow_iso() -> str:
 
 
 def _parse_iso(s: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO-8601 string into a timezone-aware datetime, or return None."""
+    """Parse an ISO-8601 string into a timezone-aware datetime, or return None.
+
+    Python <3.11's ``datetime.fromisoformat`` rejects the trailing ``Z``
+    used by most external services; normalise it to ``+00:00`` first so
+    timestamps round-tripped through other tools still parse.
+    """
     if not s:
         return None
     try:
-        dt = datetime.fromisoformat(s)
+        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
+        dt = datetime.fromisoformat(normalised)
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
@@ -553,7 +559,13 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 try:
                     # Check if ANY symbol in the current watchlist is missing an AI decision.
                     # This forces an analysis run when new symbols like AAPL are added.
-                    _recent_decisions = db.recent_ai_decisions(limit=len(current_watchlist) * 2)
+                    # Filter by strategy_id="CHART" so advisory-review rows
+                    # (one per submitted action) can't crowd CHART rows out
+                    # of the limit window and force re-analysis every tick.
+                    _recent_decisions = db.recent_ai_decisions(
+                        strategy_id="CHART",
+                        limit=max(len(current_watchlist) * 2, 20),
+                    )
                     _analyzed_syms = {d["symbol"] for d in _recent_decisions}
                     _missing_analysis = any(s not in _analyzed_syms for s in current_watchlist)
                     

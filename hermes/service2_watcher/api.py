@@ -84,7 +84,9 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
     if not s:
         return None
     try:
-        dt = datetime.fromisoformat(s)
+        # Normalise trailing 'Z' for Python <3.11 compatibility.
+        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
+        dt = datetime.fromisoformat(normalised)
         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
