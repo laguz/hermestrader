@@ -35,9 +35,8 @@ from hermes.common import (
 )
 from hermes.market_hours import market_session, next_open
 from hermes.db.models import HermesDB
-from hermes.ml.pop_engine import calculate_strike_protection, predict_single_pop, DEFAULT_REGIME_WEIGHTS
+from hermes.ml.pop_engine import augment_levels_with_pop
 import numpy as np
-from scipy.stats import norm
 
 
 logger = logging.getLogger("hermes.c2.api")
@@ -829,7 +828,9 @@ def get_symbol_analysis(symbol: str) -> Dict[str, Any]:
         if "error" in analysis:
             return analysis
             
-        return _augment_analysis_with_pop(analysis)
+        db = HermesDB(DSN)
+        xgb_pred = db.latest_prediction(symbol.upper()) or {}
+        return augment_levels_with_pop(analysis, xgb_pred)
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -874,73 +875,14 @@ def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
         for sym in sorted(symbols):
             ans = broker.analyze_symbol(sym, period=period)
             if "error" not in ans:
-                ans = _augment_analysis_with_pop(ans, period=period)
+                xgb_pred = db.latest_prediction(sym) or {}
+                ans = augment_levels_with_pop(ans, xgb_pred, period=period)
             results[sym] = ans
         return results
     except Exception as exc:
         return {"error": str(exc)}
 
 
-def _augment_analysis_with_pop(analysis: Dict[str, Any], period: str = "6m") -> Dict[str, Any]:
-    """Injects estimated POP calculations into the key levels data with NaN safety."""
-    symbol = analysis.get("symbol")
-    current_price = float(analysis.get("current_price", 0))
-    current_vol = float(analysis.get("current_vol", 0.30))
-    avg_vol = float(analysis.get("avg_vol", 0.25))
-    key_levels = analysis.get("key_levels", [])
-    
-    # Clean NaN values
-    if np.isnan(current_vol) or current_vol <= 0: current_vol = 0.30
-    if np.isnan(avg_vol) or avg_vol <= 0: avg_vol = 0.25
-    if np.isnan(current_price) or current_price <= 0: return analysis
-
-    # Fetch XGBoost prediction
-    db = HermesDB(DSN)
-    xgb_pred = db.latest_prediction(symbol) or {}
-    pred_ret = float(xgb_pred.get("predicted_return", 0.0))
-    if np.isnan(pred_ret): pred_ret = 0.0
-    
-    xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
-    
-    # Strategy Alignment: 3M horizon = 7 DTE (CS7), 6M/1Y = 45 DTE (CS75)
-    target_dte = 7 if period.lower() == "3m" else 45
-    t_years = target_dte / 365
-    sigma = max(0.05, current_vol)
-    
-    # Weight Alignment: 3M, 6M, or 1Y
-    weight_key = period.upper()
-    weights = DEFAULT_REGIME_WEIGHTS.get(weight_key, [0.0, 1.0, 0.6, 0.3, 0.4])
-
-    for level in key_levels:
-        strike = float(level.get("price", 0))
-        if strike <= 0 or np.isnan(strike): continue
-            
-        # 1. Estimate Delta / Baseline POP
-        try:
-            z = np.log(strike / current_price) / (sigma * np.sqrt(t_years))
-            p_base = float(norm.cdf(abs(z)))
-            if np.isnan(p_base): p_base = 0.84
-            delta_est = 1.0 - p_base
-        except Exception:
-            p_base = 0.84
-            delta_est = 0.16
-            
-        # 2. Calculate Protection Score
-        prot_score = calculate_strike_protection(
-            key_levels, current_price, strike, 
-            'put_credit' if level.get("type") == "support" else 'call_credit'
-        )
-        if np.isnan(prot_score): prot_score = 1.0
-        
-        # 3. Predict POP using Regime Weights
-        pop = predict_single_pop(delta_est, current_vol, avg_vol, xgb_prob, prot_score, weights)
-        
-        if np.isnan(pop): pop = p_base # Fallback to baseline
-        
-        level["pop"] = float(pop)
-        level["p_base"] = float(p_base)
-        
-    return analysis
 
 
 

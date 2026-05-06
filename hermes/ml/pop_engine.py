@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.signal import argrelextrema
+from scipy.stats import norm
 from sklearn.cluster import KMeans
 from typing import Dict, List, Any
 
@@ -136,3 +137,67 @@ def generate_regime_pops(delta: float, current_vol: float, vol_sma_21: float, pr
         )
         results[tf] = pop
     return results
+
+def augment_levels_with_pop(analysis: Dict[str, Any], xgb_pred: Dict[str, Any], period: str = "6m") -> Dict[str, Any]:
+    """
+    Injects estimated POP calculations into key levels data.
+    Standardizes the logic used by the analytics dashboard and strategies.
+    """
+    current_price = float(analysis.get("current_price", 0))
+    current_vol = float(analysis.get("current_vol", 0.30))
+    avg_vol = float(analysis.get("avg_vol", 0.25))
+    key_levels = analysis.get("key_levels", [])
+    
+    # Clean NaN values
+    if np.isnan(current_vol) or current_vol <= 0: current_vol = 0.30
+    if np.isnan(avg_vol) or avg_vol <= 0: avg_vol = 0.25
+    if np.isnan(current_price) or current_price <= 0: return analysis
+
+    pred_ret = float(xgb_pred.get("predicted_return", 0.0))
+    if np.isnan(pred_ret): pred_ret = 0.0
+    
+    # Convert predicted return to a rough probability (0.5 + return * 5, clipped to 0.01-0.99)
+    xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
+    
+    # Strategy Alignment: 3M horizon = 7 DTE (CS7), 6M/1Y = 45 DTE (CS75)
+    target_dte = 7 if period.lower() == "3m" else 45
+    t_years = target_dte / 365
+    sigma = max(0.05, current_vol)
+    
+    # Weight Alignment: 3M, 6M, or 1Y
+    weight_key = period.upper()
+    weights = DEFAULT_REGIME_WEIGHTS.get(weight_key, [0.0, 1.0, 0.6, 0.3, 0.4])
+
+    for level in key_levels:
+        strike = float(level.get("price", 0))
+        if strike <= 0 or np.isnan(strike): continue
+            
+        # 1. Estimate Delta / Baseline POP (Probability OTM)
+        try:
+            z = np.log(strike / current_price) / (sigma * np.sqrt(t_years))
+            p_base = float(norm.cdf(abs(z)))
+            if np.isnan(p_base): p_base = 0.84
+            delta_est = 1.0 - p_base
+        except Exception:
+            p_base = 0.84
+            delta_est = 0.16
+            
+        # 2. Calculate Protection Score
+        side = 'put' if level.get("type") == "support" else 'call'
+        spread_type = f"{side}_credit"
+        
+        prot_score = calculate_strike_protection(
+            key_levels, current_price, strike, spread_type
+        )
+        if np.isnan(prot_score): prot_score = 1.0
+        
+        # 3. Predict POP using Regime Weights
+        # Pass the side explicitly to ensure XGB probability is correctly signed
+        pop = predict_single_pop(delta_est, current_vol, avg_vol, xgb_prob, prot_score, weights, side=side)
+        
+        if np.isnan(pop): pop = p_base
+        
+        level["pop"] = float(pop)
+        level["p_base"] = float(p_base)
+        
+    return analysis
