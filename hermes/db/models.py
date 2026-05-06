@@ -4,8 +4,13 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
+
+# OCC option symbol — used to derive put/call from a leg's option_symbol when
+# the calling strategy didn't populate strategy_params.side_type.
+_OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
@@ -276,10 +281,27 @@ class HermesDB:
                 except (KeyError, TypeError, ValueError):
                     pass
                 break
+
+        # Resolve the put/call side that count_pending_orders filters on.
+        # Strategies populate strategy_params.side_type; if a future
+        # ad-hoc action skips it, derive from the first leg's OCC symbol so
+        # the row stays countable rather than silently bucketed under
+        # "buy"/"sell".
+        side_value = (action.strategy_params or {}).get("side_type")
+        if not side_value or side_value.lower() in {"buy", "sell"}:
+            side_value = None
+            for leg in (action.legs or []):
+                m = _OCC_RE.match(str(leg.get("option_symbol", "") or ""))
+                if m:
+                    side_value = "put" if m.group(3) == "P" else "call"
+                    break
+            if side_value is None:
+                side_value = action.side
+
         with self.Session() as s:
             s.add(PendingOrder(
                 strategy_id=action.strategy_id, symbol=action.symbol,
-                side=(action.strategy_params or {}).get("side_type", action.side),
+                side=side_value,
                 quantity=lots,          # lot count, not order count
                 payload={
                     "legs": action.legs, "price": action.price,
@@ -436,15 +458,24 @@ class HermesDB:
             return [self._trade_dict(r) for r in rows]
 
     def open_legs(self, strategy_id: str, symbol: str) -> List[Dict[str, Any]]:
+        """Return both legs of every OPEN trade for (strategy, symbol).
+
+        Both legs of a vertical share the same side_type (put/call), so
+        callers that build {expiry → sides} sets are unaffected by the
+        duplicate side; callers that need every leg by option_symbol
+        (e.g. broker reconciliation) now get them.
+        """
         out: List[Dict[str, Any]] = []
         for t in self.open_trades(strategy_id):
             if t["symbol"] != symbol:
                 continue
-            for leg, side in (("short_leg", t.get("side_type")), ):
-                opt = t.get(leg)
+            expiry_iso = t.get("expiry").isoformat() if t.get("expiry") else None
+            side = t.get("side_type")
+            for leg_key in ("short_leg", "long_leg"):
+                opt = t.get(leg_key)
                 if opt:
                     out.append({"option_symbol": opt, "side": side,
-                                "expiry": t.get("expiry").isoformat() if t.get("expiry") else None})
+                                "expiry": expiry_iso})
         return out
 
     def count_open_contracts(self, strategy_id: str, symbol: str, side: str) -> int:
