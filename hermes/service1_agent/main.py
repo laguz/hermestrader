@@ -593,7 +593,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 if __name__ == "__main__":
     conf = {
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
-        "min_obp_reserve": float(os.environ.get("HERMES_MIN_OBP_RESERVE", 5000.0)),
+        "min_obp_reserve": float(os.environ.get("HERMES_MIN_OBP_RESERVE", 0.0)),
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
         "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
         "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
