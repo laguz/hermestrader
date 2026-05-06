@@ -56,6 +56,57 @@ class MoneyManager:
         self.broker = broker
         self.db = db
         self.config = config or {}
+        # In-memory cache of active broker-side orders, refreshed every tick
+        # Map: (strategy_id, symbol, side_type) -> lots
+        self._broker_order_counts: Dict[Tuple[str, str, str], int] = {}
+
+    def sync_broker_orders(self) -> None:
+        """Fetch all active orders from the broker and cache their counts.
+        Hermes uses tags (e.g. 'HERMES_CS75') to associate broker orders with strategies.
+        """
+        self._broker_order_counts = {}
+        try:
+            orders = self.broker.get_orders() or []
+        except Exception:
+            logger.exception("[MM] Failed to fetch broker orders for sync")
+            return
+
+        active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
+        for o in orders:
+            status = str(o.get("status", "")).lower()
+            if status not in active_statuses:
+                continue
+
+            tag = o.get("tag", "")
+            if not tag.startswith("HERMES_"):
+                continue
+
+            strategy_id = tag.replace("HERMES_", "")
+            symbol = str(o.get("symbol", "")).upper()
+            
+            # Determine if it's a Put or Call spread by looking at the legs
+            legs = o.get("leg", [])
+            if isinstance(legs, dict): legs = [legs]
+            
+            side_type = "unknown"
+            lots = int(o.get("quantity", 1))
+            
+            for leg in legs:
+                occ_sym = leg.get("option_symbol", "")
+                # OCC format: SYMBOL YYMMDD P/C STRIKE
+                # Put spreads have 'P' at index -9 (approx) or we can use regex
+                if "P" in occ_sym[-9:]: # Loose check for 'P' in the right area
+                    side_type = "put"
+                    break
+                elif "C" in occ_sym[-9:]:
+                    side_type = "call"
+                    break
+            
+            if side_type != "unknown":
+                key = (strategy_id, symbol, side_type)
+                self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + lots
+                logger.debug("[MM] Sync found active broker order: %s %s %s lots=%d",
+                             strategy_id, symbol, side_type, lots)
 
     def true_available_bp(self) -> float:
         balances = self.broker.get_account_balances() or {}
@@ -81,11 +132,23 @@ class MoneyManager:
         side: str,
         max_lots: int,
     ) -> int:
-        """max_lots - (open_contracts + pending_orders) for (symbol, side)."""
+        """max_lots - (open_contracts + pending_orders + active_broker_orders) per (symbol, side)."""
         side = side.lower()
+        symbol = symbol.upper()
+        # 1. Check DB for filled contracts (status='OPEN')
         open_qty = self.db.count_open_contracts(strategy_id, symbol, side)
+        # 2. Check DB for pending internal orders (pre-submission or approval queue)
         pending = self.db.count_pending_orders(strategy_id, symbol, side)
-        remaining = max_lots - (open_qty + pending)
+        # 3. Check cached broker-side active orders (resting limits)
+        broker_qty = self._broker_order_counts.get((strategy_id, symbol, side), 0)
+        
+        total_used = open_qty + pending + broker_qty
+        remaining = max_lots - total_used
+        
+        if broker_qty > 0:
+            logger.debug("[MM] side_aware_capacity %s %s %s: open=%d pending=%d broker=%d total=%d max=%d",
+                         strategy_id, symbol, side, open_qty, pending, broker_qty, total_used, max_lots)
+            
         return max(0, remaining)
 
     def scale_quantity(
@@ -388,16 +451,22 @@ class CascadingEngine:
             return list(default)
         return wl or list(default)
 
-    def process_entries(self, watchlist: Sequence[str]) -> List[TradeAction]:
-        actions: List[TradeAction] = []
+    def process_entries(self, watchlist: Sequence[str]) -> None:
+        """Execute entries in priority order. Submits actions after each strategy
+        to ensure MoneyManager capacity is updated for the next priority level.
+        """
+        # Dedup watchlist to prevent multiple scans of the same symbol in one tick
+        unique_watchlist = list(dict.fromkeys(watchlist))
+        
         for s in self.strategies:
             try:
-                wl = self._watchlist_for(s.strategy_id, watchlist)
-                # Drain entire watchlist for THIS strategy before moving on.
-                actions.extend(s.execute_entries(wl))
+                wl = self._watchlist_for(s.strategy_id, unique_watchlist)
+                # Drain entire watchlist for THIS strategy.
+                actions = s.execute_entries(wl)
+                # Submit immediately so subsequent strategies see these as PENDING.
+                self.submit(actions, action_type="entry")
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
-        return actions
 
     def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
@@ -450,11 +519,13 @@ class CascadingEngine:
     # ----- top level entry point used by main.py and the scheduler ----------
     def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         self.sync_positions()
+        # Refresh real-time broker order counts to prevent duplicate entries
+        self.mm.sync_broker_orders()
         self.reconcile_orphans()
         mgmt = self.process_management()
         self.submit(mgmt, action_type="management")
-        entries = self.process_entries(watchlist)
-        self.submit(entries, action_type="entry")
+        # Entries are now submitted internally strategy-by-strategy.
+        self.process_entries(watchlist)
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         if self.overseer is not None:
             ai_actions = self.overseer.propose(watchlist) or []

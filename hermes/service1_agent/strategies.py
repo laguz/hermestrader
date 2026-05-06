@@ -30,6 +30,17 @@ def _parse_occ(symbol: str):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _nearest_strike(chain, option_type: str, target: float) -> Optional[Dict[str, Any]]:
+    """Return the chain option whose strike is closest to `target`."""
+    candidates = [o for o in chain if o.get("option_type") == option_type]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda o: abs(float(o["strike"]) - target))
+
+
+# ---------------------------------------------------------------------------
 # Priority 1 — CS75 (39-45 DTE entry; 25% / 20% credit-to-width by DTE band)
 # ---------------------------------------------------------------------------
 class CreditSpreads75(AbstractStrategy):
@@ -127,13 +138,6 @@ class CreditSpreads75(AbstractStrategy):
                 self._log(f"❌ {symbol}: {exc}")
         return actions
 
-    @staticmethod
-    def _nearest_strike(chain, option_type: str, target: float) -> Optional[Dict[str, Any]]:
-        """Return the chain option whose strike is closest to `target`."""
-        candidates = [o for o in chain if o.get("option_type") == option_type]
-        if not candidates:
-            return None
-        return min(candidates, key=lambda o: abs(float(o["strike"]) - target))
 
     def _build_spread_action(self, *, symbol, expiry, side, lots, width,
                              min_credit, analysis, current_price) -> Optional[TradeAction]:
@@ -163,7 +167,7 @@ class CreditSpreads75(AbstractStrategy):
                 diff = abs(lvl_pop - 0.75)
                 if diff < best_pop_diff:
                     # Find the real strike closest to this key level
-                    strike_opt = self._nearest_strike(chain, opt_type, level["price"])
+                    strike_opt = _nearest_strike(chain, opt_type, level["price"])
                     if not strike_opt: continue
                     
                     # Verify delta sanity on the real strike
@@ -181,7 +185,7 @@ class CreditSpreads75(AbstractStrategy):
         short_leg = best_strike
         # Snap the long strike to the nearest chain strike below/above the short
         long_target = float(short_leg["strike"]) - width if side == "put" else float(short_leg["strike"]) + width
-        long_leg = self._nearest_strike(chain, opt_type, long_target)
+        long_leg = _nearest_strike(chain, opt_type, long_target)
         if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
             self._log(
                 f"✗ {symbol} {side}: no distinct long leg for short={short_leg['strike']:.2f} "
@@ -390,7 +394,7 @@ class CreditSpreads7(AbstractStrategy):
                 diff = abs(lvl_pop - 0.75)
                 if diff < best_pop_diff:
                     # Find the real strike closest to this key level
-                    strike_opt = self._nearest_strike(chain, opt_type, level["price"])
+                    strike_opt = _nearest_strike(chain, opt_type, level["price"])
                     if not strike_opt: continue
                     
                     # Verify delta sanity on the real strike
@@ -408,7 +412,7 @@ class CreditSpreads7(AbstractStrategy):
             
         short_leg = best_strike
         long_target = float(short_leg["strike"]) - width if side == "put" else float(short_leg["strike"]) + width
-        long_leg = self._nearest_strike(chain, opt_type, long_target)
+        long_leg = _nearest_strike(chain, opt_type, long_target)
         
         if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
             self._log(
@@ -424,6 +428,11 @@ class CreditSpreads7(AbstractStrategy):
                 f"(short={short_leg['strike']:.2f} long={long_leg['strike']:.2f}); skip."
             )
             return None
+
+        self._log(
+            f"→ {symbol} {side}: short={short_leg['strike']} long={long_leg['strike']} "
+            f"credit=${credit:.2f} (7DTE)"
+        )
         return TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="multileg",
             legs=[
