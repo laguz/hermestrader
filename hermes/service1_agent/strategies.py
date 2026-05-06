@@ -675,10 +675,17 @@ class WheelStrategy(AbstractStrategy):
         if not short:
             self._log(f"✗ {symbol} {side}: no strike near 0.30Δ (±0.05) in chain for {expiry}; skip.")
             return None
+        # Defensive: illiquid contracts can return None for bid/ask.
+        bid = float(short.get("bid") or 0.0)
+        ask = float(short.get("ask") or 0.0)
+        if bid <= 0 and ask <= 0:
+            self._log(f"✗ {symbol} {side}: no bid/ask on {short.get('symbol')}; skip.")
+            return None
+        mid = round((bid + ask) / 2, 2) if (bid > 0 and ask > 0) else round(max(bid, ask), 2)
         return TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="option",
             legs=[{"option_symbol": short["symbol"], "side": "sell_to_open", "quantity": 1}],
-            price=round((short["bid"] + short["ask"]) / 2, 2),
+            price=mid,
             side="sell", quantity=1, order_type="credit", tag="HERMES_WHEEL",
             strategy_params={"side_type": side, "short_leg": short["symbol"]},
             expiry=expiry,
@@ -692,9 +699,11 @@ class WheelStrategy(AbstractStrategy):
             if not info:
                 continue
             dte = (info["expiry"] - self.today()).days
-            quote = self.broker.get_quote(trade["symbol"]) or {}
-            spot = float(quote.get("last", 0))
-            short_strike = float(trade.get("short_strike", 0))
+            # broker.get_quote returns List[Dict]; take the first element.
+            quotes = self.broker.get_quote(trade["symbol"]) or []
+            quote = quotes[0] if quotes else {}
+            spot = float(quote.get("last") or 0)
+            short_strike = float(trade.get("short_strike") or 0)
             itm = (info["side"] == "put" and spot < short_strike) or \
                   (info["side"] == "call" and spot > short_strike)
             if dte < 7 and itm:

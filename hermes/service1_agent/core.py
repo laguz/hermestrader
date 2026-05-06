@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -60,9 +61,16 @@ class MoneyManager:
         # Map: (strategy_id, symbol, side_type) -> lots
         self._broker_order_counts: Dict[Tuple[str, str, str], int] = {}
 
+    # OCC option symbol regex: SYMBOL YYMMDD P|C STRIKE(8)
+    _OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
+
     def sync_broker_orders(self) -> None:
         """Fetch all active orders from the broker and cache their counts.
-        Hermes uses tags (e.g. 'HERMES_CS75') to associate broker orders with strategies.
+
+        Hermes-authored orders carry a tag like ``HERMES_CS75`` that Tradier's
+        order endpoint sanitises to ``HERMES-CS75`` (only [A-Za-z0-9-] is
+        permitted). We accept either form so the matcher survives the
+        sanitisation round-trip.
         """
         self._broker_order_counts = {}
         try:
@@ -77,31 +85,37 @@ class MoneyManager:
             if status not in active_statuses:
                 continue
 
-            tag = o.get("tag", "")
-            if not tag.startswith("HERMES_"):
+            tag = str(o.get("tag", "") or "")
+            # Tradier's tag sanitiser converts '_' to '-' so 'HERMES_CS75'
+            # arrives back as 'HERMES-CS75'. Accept both shapes.
+            if not (tag.startswith("HERMES_") or tag.startswith("HERMES-")):
                 continue
-
-            strategy_id = tag.replace("HERMES_", "")
+            strategy_id = tag[len("HERMES_"):].split("-", 1)[0].split("_", 1)[0]
+            if not strategy_id:
+                continue
             symbol = str(o.get("symbol", "")).upper()
-            
-            # Determine if it's a Put or Call spread by looking at the legs
-            legs = o.get("leg", [])
-            if isinstance(legs, dict): legs = [legs]
-            
+
+            # Multileg orders return their legs under "leg"; single-leg option
+            # orders carry option_symbol at the top level (no "leg" array).
+            legs = o.get("leg") or []
+            if isinstance(legs, dict):
+                legs = [legs]
+            if not legs:
+                top_opt = o.get("option_symbol")
+                if top_opt:
+                    legs = [{"option_symbol": top_opt,
+                             "quantity": o.get("quantity", 1)}]
+
+            lots = int(o.get("quantity", 1) or 1)
             side_type = "unknown"
-            lots = int(o.get("quantity", 1))
-            
             for leg in legs:
-                occ_sym = leg.get("option_symbol", "")
-                # OCC format: SYMBOL YYMMDD P/C STRIKE
-                # Put spreads have 'P' at index -9 (approx) or we can use regex
-                if "P" in occ_sym[-9:]: # Loose check for 'P' in the right area
-                    side_type = "put"
-                    break
-                elif "C" in occ_sym[-9:]:
-                    side_type = "call"
-                    break
-            
+                occ_sym = str(leg.get("option_symbol", "") or "")
+                m = self._OCC_RE.match(occ_sym)
+                if not m:
+                    continue
+                side_type = "put" if m.group(3) == "P" else "call"
+                break
+
             if side_type != "unknown":
                 key = (strategy_id, symbol, side_type)
                 self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + lots
@@ -404,7 +418,8 @@ class CascadingEngine:
 
     def __init__(self, broker, db, strategies: Sequence[AbstractStrategy],
                  overseer: Optional["HermesOverseer"] = None,
-                 approval_mode: bool = False):
+                 approval_mode: bool = False,
+                 money_manager: Optional["MoneyManager"] = None):
         self.broker = broker
         self.db = db
         # Sort by declared PRIORITY (1 highest)
@@ -413,6 +428,11 @@ class CascadingEngine:
         # When True, submit() queues trades for human approval instead of
         # sending them to the broker directly.
         self.approval_mode = approval_mode
+        # MoneyManager is shared across strategies; the engine also holds a
+        # reference so tick() can refresh broker-side order counts before
+        # capacity decisions run. Falls back to the first strategy's mm so
+        # callers that haven't been updated yet still work.
+        self.mm = money_manager or (strategies[0].mm if strategies else None)
 
     # 1
     def sync_positions(self) -> None:
@@ -523,8 +543,11 @@ class CascadingEngine:
     # ----- top level entry point used by main.py and the scheduler ----------
     def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         self.sync_positions()
-        # Refresh real-time broker order counts to prevent duplicate entries
-        self.mm.sync_broker_orders()
+        # Refresh real-time broker order counts to prevent duplicate entries.
+        # mm may be None on legacy callers that haven't been updated yet;
+        # skip rather than crash the entire tick.
+        if self.mm is not None:
+            self.mm.sync_broker_orders()
         self.reconcile_orphans()
         mgmt = self.process_management()
         self.submit(mgmt, action_type="management")

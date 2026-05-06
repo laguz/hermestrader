@@ -232,7 +232,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
         log.info("Strategies disabled by C2 panel: %s", disabled)
 
     return CascadingEngine(broker, db, active_strategies, overseer=overseer,
-                           approval_mode=approval_mode)
+                           approval_mode=approval_mode, money_manager=mm)
 
 
 # ---------------------------------------------------------------------------
@@ -356,8 +356,13 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 log.warning("mode change requested: %s → %s", current_mode, desired_mode)
                 try:
                     broker = _build_broker(conf, desired_mode)
+                    # Preserve the operator's overseer doctrine (autonomy +
+                    # soul.md) across mode switches; without these kwargs the
+                    # rebuilt overseer would silently revert to env defaults.
                     engine = build(broker, current_llm, chart_provider, conf,
                                    vision_enabled=current_vision,
+                                   autonomy=current_overseer_cfg["autonomy"],
+                                   soul=current_overseer_cfg["soul"],
                                    approval_mode=current_overseer_cfg["approval_mode"],
                                    strategy_enabled=current_overseer_cfg["strategy_enabled"])
                     current_mode = desired_mode
