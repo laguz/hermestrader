@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from .core import AbstractStrategy, TradeAction
-from hermes.ml.pop_engine import calculate_strike_protection, generate_regime_pops
+from hermes.ml.pop_engine import calculate_strike_protection, generate_regime_pops, augment_levels_with_pop
 
 logger = logging.getLogger("hermes.agent.strategies")
 
@@ -70,6 +70,11 @@ class CreditSpreads75(AbstractStrategy):
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
+                
+                # Augment analysis with centralized POP logic (6M regime for CS75)
+                xgb_pred = self.db.latest_prediction(symbol) or {}
+                analysis = augment_levels_with_pop(analysis, xgb_pred, period="6m")
+                
                 price = analysis["current_price"]
 
                 # Mode A vs Mode B
@@ -140,61 +145,37 @@ class CreditSpreads75(AbstractStrategy):
         opt_type = side
         options = [o for o in chain if o.get("option_type") == opt_type]
         
-        # Get XGBoost predictions
-        xgb_pred = self.db.latest_prediction(symbol) or {}
-        # Convert predicted return to a rough probability (0.5 + return * 5, clipped to 0.01-0.99)
-        pred_ret = xgb_pred.get("predicted_return", 0.0)
-        xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
-        xgb_preds = {'3M': xgb_prob, '6M': xgb_prob, '1Y': xgb_prob}
-        self._log(f"→ {symbol} {side}: using XGB_prob={xgb_prob:.2f} (ret={pred_ret:+.2%})")
-        
+        # Selection Strategy: Use POP already calculated for Key Levels (Institutional Flow)
+        # instead of looping through the entire option chain.
         best_strike = None
         best_pop_diff = 999.0
-        max_avg_pop = 0.0
+        max_level_pop = 0.0
         
-        for opt in options:
-            strike = float(opt["strike"])
-            greeks = opt.get("greeks") or {}
-            delta = float(greeks.get("delta", 0.0))
-            if delta == 0.0:
-                continue
-            
-            # Basic sanity check
-            if side == "put" and strike >= current_price: continue
-            if side == "call" and strike <= current_price: continue
-            
-            # We want reasonable deltas to avoid deep OTM nonsense
-            if abs(delta) < 0.05 or abs(delta) > 0.40: continue
-            
-            prot_score = calculate_strike_protection(
-                key_levels=analysis.get("key_levels", []),
-                current_price=current_price,
-                short_strike=strike,
-                spread_type=f"{side}_credit"
-            )
-            
-            pops = generate_regime_pops(
-                delta=delta,
-                current_vol=analysis.get("current_vol", 0.2),
-                vol_sma_21=analysis.get("avg_vol", 0.2),
-                protection_score=prot_score,
-                xgb_preds=xgb_preds,
-                side=side
-            )
-            
-            avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
-            if avg_pop > max_avg_pop:
-                max_avg_pop = avg_pop
-            
-            # We want POP > 75% (0.75), find the one closest to 0.75
-            if avg_pop >= 0.75:
-                diff = abs(avg_pop - 0.75)
+        target_type = "support" if side == "put" else "resistance"
+        levels = [l for l in analysis.get("key_levels", []) if l.get("type") == target_type]
+        
+        for level in levels:
+            lvl_pop = level.get("pop", 0.0)
+            if lvl_pop > max_level_pop:
+                max_level_pop = lvl_pop
+                
+            if lvl_pop >= 0.75:
+                diff = abs(lvl_pop - 0.75)
                 if diff < best_pop_diff:
+                    # Find the real strike closest to this key level
+                    strike_opt = self._nearest_strike(chain, opt_type, level["price"])
+                    if not strike_opt: continue
+                    
+                    # Verify delta sanity on the real strike
+                    greeks = strike_opt.get("greeks") or {}
+                    delta = abs(float(greeks.get("delta", 0.0)))
+                    if delta < 0.05 or delta > 0.40: continue
+                    
                     best_pop_diff = diff
-                    best_strike = opt
+                    best_strike = strike_opt
                     
         if not best_strike:
-            self._log(f"✗ {symbol} {side}: no strike with >75% POP found (Best POP found: {max_avg_pop:.1%}); skip.")
+            self._log(f"✗ {symbol} {side}: no >75% POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
             return None
             
         short_leg = best_strike
@@ -335,6 +316,11 @@ class CreditSpreads7(AbstractStrategy):
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
+                
+                # Augment analysis with centralized POP logic (3M regime for CS7)
+                xgb_pred = self.db.latest_prediction(symbol) or {}
+                analysis = augment_levels_with_pop(analysis, xgb_pred, period="3m")
+                
                 price = analysis["current_price"]
 
                 # Mode A vs Mode B Logic
@@ -382,58 +368,42 @@ class CreditSpreads7(AbstractStrategy):
     def _build_short_premium_spread(self, *, symbol, expiry, side, lots,
                                     width, min_credit, analysis, current_price) -> Optional[TradeAction]:
         from hermes.ml.pop_engine import calculate_strike_protection, generate_regime_pops
-
         chain = self.broker.get_option_chains(symbol, expiry) or []
         if not chain: return None
         
         opt_type = side
-        options = [o for o in chain if o.get("option_type") == opt_type]
-        
-        # Get XGBoost predictions
-        xgb_pred = self.db.latest_prediction(symbol) or {}
-        pred_ret = xgb_pred.get("predicted_return", 0.0)
-        xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
-        xgb_preds = {'3M': xgb_prob, '6M': xgb_prob, '1Y': xgb_prob}
-
+        # Selection Strategy: Use POP already calculated for Key Levels (Institutional Flow)
+        # instead of looping through the entire option chain.
         best_strike = None
         best_pop_diff = 999.0
+        max_level_pop = 0.0
         
-        for opt in options:
-            strike = float(opt["strike"])
-            greeks = opt.get("greeks") or {}
-            delta = float(greeks.get("delta", 0.0))
-            
-            if side == "put" and strike >= current_price: continue
-            if side == "call" and strike <= current_price: continue
-            
-            # Use pure POP selection, removing Delta guardrails
-            prot_score = calculate_strike_protection(
-                key_levels=analysis.get("key_levels", []),
-                current_price=current_price,
-                short_strike=strike,
-                spread_type=f"{side}_credit"
-            )
-            
-            pops = generate_regime_pops(
-                delta=delta,
-                current_vol=analysis.get("current_vol", 0.2),
-                vol_sma_21=analysis.get("avg_vol", 0.2),
-                protection_score=prot_score,
-                xgb_preds=xgb_preds,
-                side=side
-            )
-            
-            avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
-            
-            # Mandate POP > 75%
-            if avg_pop >= 0.75:
-                diff = abs(avg_pop - 0.75)
+        target_type = "support" if side == "put" else "resistance"
+        levels = [l for l in analysis.get("key_levels", []) if l.get("type") == target_type]
+        
+        for level in levels:
+            lvl_pop = level.get("pop", 0.0)
+            if lvl_pop > max_level_pop:
+                max_level_pop = lvl_pop
+                
+            if lvl_pop >= 0.75:
+                diff = abs(lvl_pop - 0.75)
                 if diff < best_pop_diff:
+                    # Find the real strike closest to this key level
+                    strike_opt = self._nearest_strike(chain, opt_type, level["price"])
+                    if not strike_opt: continue
+                    
+                    # Verify delta sanity on the real strike
+                    greeks = strike_opt.get("greeks") or {}
+                    delta = abs(float(greeks.get("delta", 0.0)))
+                    # In CS7 (7DTE), we allow slightly higher deltas than CS75
+                    if delta < 0.05 or delta > 0.45: continue
+                    
                     best_pop_diff = diff
-                    best_strike = opt
-
+                    best_strike = strike_opt
+                    
         if not best_strike:
-            self._log(f"{symbol} {side}: no >75% POP S/R level found in chain (7DTE); skip.")
+            self._log(f"✗ {symbol} {side}: no >75% POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
             return None
             
         short_leg = best_strike
