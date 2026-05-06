@@ -334,13 +334,8 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
     if db.get_setting(SETTING_SOUL) is None:
         db.set_setting(SETTING_SOUL, "")
 
-    engine = build(broker, current_llm, chart_provider, conf,
-                   vision_enabled=current_vision,
-                   autonomy=current_overseer_cfg["autonomy"],
-                   soul=current_overseer_cfg["soul"],
-                   approval_mode=current_overseer_cfg["approval_mode"],
-                   strategy_enabled=current_overseer_cfg["strategy_enabled"])
-    watchlist = conf["watchlist"]
+                    strategy_enabled=current_overseer_cfg["strategy_enabled"])
+    
     interval_s = int(conf.get("tick_interval_s", 300))
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",
              current_mode, current_overseer_cfg["autonomy"],
@@ -404,6 +399,19 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                                  f"Overseer reconfigured: autonomy={new_overseer_cfg['autonomy']} "
                                  f"paused={new_overseer_cfg['paused']} "
                                  f"soul={len(new_overseer_cfg['soul'])}B")
+
+            # 1d) Dynamic Watchlist Refresh — pick up C2-added symbols immediately.
+            #     This ensures new symbols like AAPL are scanned without a restart.
+            try:
+                all_wls = db.list_all_watchlists()
+                unique_syms = set()
+                for syms in all_wls.values():
+                    unique_syms.update(syms)
+                # Combine DB watchlist with any env-specified defaults
+                current_watchlist = sorted(list(unique_syms | set(conf.get("watchlist", []))))
+            except Exception as wl_exc:
+                log.warning("Dynamic watchlist refresh failed: %s", wl_exc)
+                current_watchlist = conf.get("watchlist", [])
 
             # 1d) Hard pause — skip the engine but keep the heartbeat so
             #     the watcher's System health card distinguishes "paused"
@@ -515,7 +523,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
             if mkt["is_open"]:
                 # Full tick: management + entries.
-                stats = engine.tick(watchlist)
+                stats = engine.tick(current_watchlist)
             else:
                 # Outside regular hours: management only (exits, rolls, fills).
                 engine.sync_positions()
@@ -525,40 +533,46 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 stats = {"managed": len(mgmt), "entries": 0,
                          "note": f"entries skipped ({mkt['session']})"}
 
-            # 4) Chart analysis — throttled to once per calendar week.
-            #    The LLM reads 7 months of daily bars so running more often
-            #    provides no new signal and wastes inference time.
-            #    Last-run timestamp is stored in system_settings so the
-            #    throttle survives container restarts.
+            # 4) Chart analysis — throttled to once per calendar week,
+            #    BUT runs immediately if new symbols are missing analysis.
             _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
             _CHART_ANALYSIS_INTERVAL_DAYS = 7
             if chart_provider is not None and engine.overseer is not None:
                 _should_run_charts = False
                 _age_days: float = 0.0
                 try:
-                    _last_chart_ts_raw = db.get_setting(_CHART_ANALYSIS_KEY)
-                    if _last_chart_ts_raw:
-                        _last_chart_dt = _parse_iso(_last_chart_ts_raw)
-                        if _last_chart_dt is None:
-                            _should_run_charts = True
-                        else:
-                            _age_days = (
-                                datetime.now(timezone.utc) - _last_chart_dt
-                            ).total_seconds() / 86400
-                            _should_run_charts = _age_days >= _CHART_ANALYSIS_INTERVAL_DAYS
-                    else:
-                        # Never run before — run now.
+                    # Check if ANY symbol in the current watchlist is missing an AI decision.
+                    # This forces an analysis run when new symbols like AAPL are added.
+                    _recent_decisions = db.recent_ai_decisions(limit=len(current_watchlist) * 2)
+                    _analyzed_syms = {d["symbol"] for d in _recent_decisions}
+                    _missing_analysis = any(s not in _analyzed_syms for s in current_watchlist)
+                    
+                    if _missing_analysis:
                         _should_run_charts = True
+                        log.info("Forcing chart analysis: some symbols in watchlist are missing analysis.")
+                    else:
+                        _last_chart_ts_raw = db.get_setting(_CHART_ANALYSIS_KEY)
+                        if _last_chart_ts_raw:
+                            _last_chart_dt = _parse_iso(_last_chart_ts_raw)
+                            if _last_chart_dt is None:
+                                _should_run_charts = True
+                            else:
+                                _age_days = (
+                                    datetime.now(timezone.utc) - _last_chart_dt
+                                ).total_seconds() / 86400
+                                _should_run_charts = _age_days >= _CHART_ANALYSIS_INTERVAL_DAYS
+                        else:
+                            _should_run_charts = True
                 except Exception:                               # noqa: BLE001
                     _should_run_charts = True
 
                 if _should_run_charts:
-                    log.info("Running weekly chart vision analysis for %d symbols", len(watchlist))
+                    log.info("Running chart vision analysis for %d symbols", len(current_watchlist))
                     try:
-                        engine.overseer.analyze_charts(watchlist)
+                        engine.overseer.analyze_charts(current_watchlist)
                         db.set_setting(_CHART_ANALYSIS_KEY, _utcnow_iso())
                         db.write_log("ENGINE",
-                                     f"chart vision: analysed {len(watchlist)} symbols "
+                                     f"chart vision: analysed {len(current_watchlist)} symbols "
                                      f"(7-month daily bars, next run in 7 days)")
                     except Exception as _ca_exc:                # noqa: BLE001
                         log.warning("analyze_charts failed: %s", _ca_exc)
