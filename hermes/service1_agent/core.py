@@ -357,18 +357,24 @@ class AbstractStrategy(ABC):
         return chosen.strftime("%Y-%m-%d")
 
     def find_active_ic_expiry(self, symbol: str) -> Optional[str]:
-        """Return the expiry of an incomplete Iron Condor for this strategy and symbol."""
+        """Return the expiry of an incomplete Iron Condor for this strategy and symbol.
+
+        Deterministic ordering: when multiple incomplete ICs exist, return
+        the earliest expiry so completion is prioritised on the trade
+        closest to its DTE deadline. Without sorting, dict iteration order
+        determined the choice — stable in CPython but reads as non-obvious.
+        """
         open_legs = self.db.open_legs(self.strategy_id, symbol)
-        expiry_sides = {}
+        expiry_sides: Dict[str, set] = {}
         for leg in open_legs:
             exp = leg.get("expiry")
             if exp:
                 expiry_sides.setdefault(exp, set()).add(leg.get("side", "").lower())
-                
-        # If any expiry has exactly 1 side (put OR call, but not both), return it.
-        # This prioritizes completing an IC over starting a new one.
-        for exp, sides in expiry_sides.items():
-            if len(sides) == 1:
+
+        # Sort expiries chronologically; ISO YYYY-MM-DD strings sort
+        # correctly without parsing.
+        for exp in sorted(expiry_sides):
+            if len(expiry_sides[exp]) == 1:
                 return exp
         return None
 
