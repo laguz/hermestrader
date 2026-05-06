@@ -146,9 +146,11 @@ class CreditSpreads75(AbstractStrategy):
         pred_ret = xgb_pred.get("predicted_return", 0.0)
         xgb_prob = max(0.01, min(0.99, 0.5 + (pred_ret * 5)))
         xgb_preds = {'3M': xgb_prob, '6M': xgb_prob, '1Y': xgb_prob}
+        self._log(f"→ {symbol} {side}: using XGB_prob={xgb_prob:.2f} (ret={pred_ret:+.2%})")
         
         best_strike = None
         best_pop_diff = 999.0
+        max_avg_pop = 0.0
         
         for opt in options:
             strike = float(opt["strike"])
@@ -181,6 +183,8 @@ class CreditSpreads75(AbstractStrategy):
             )
             
             avg_pop = sum(pops.values()) / len(pops) if pops else 0.0
+            if avg_pop > max_avg_pop:
+                max_avg_pop = avg_pop
             
             # We want POP > 75% (0.75), find the one closest to 0.75
             if avg_pop >= 0.75:
@@ -190,7 +194,7 @@ class CreditSpreads75(AbstractStrategy):
                     best_strike = opt
                     
         if not best_strike:
-            self._log(f"✗ {symbol} {side}: no >75% POP S/R level found in chain; skip.")
+            self._log(f"✗ {symbol} {side}: no strike with >75% POP found (Best POP found: {max_avg_pop:.1%}); skip.")
             return None
             
         short_leg = best_strike
@@ -215,7 +219,7 @@ class CreditSpreads75(AbstractStrategy):
         actual_width = abs(sl_strike - ll_strike)
         self._log(
             f"→ {symbol} {side}: short={sl_strike:.2f} long={ll_strike:.2f} "
-            f"width={actual_width:.2f} (target_sr=${target_price:.2f})"
+            f"width={actual_width:.2f}"
         )
 
         credit = self.short_credit(short_leg, long_leg)
