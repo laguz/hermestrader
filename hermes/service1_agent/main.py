@@ -334,7 +334,12 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
     if db.get_setting(SETTING_SOUL) is None:
         db.set_setting(SETTING_SOUL, "")
 
-                    strategy_enabled=current_overseer_cfg["strategy_enabled"])
+    engine = build(broker, current_llm, chart_provider, conf,
+                   vision_enabled=current_vision,
+                   autonomy=current_overseer_cfg["autonomy"],
+                   soul=current_overseer_cfg["soul"],
+                   approval_mode=current_overseer_cfg["approval_mode"],
+                   strategy_enabled=current_overseer_cfg["strategy_enabled"])
     
     interval_s = int(conf.get("tick_interval_s", 300))
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",

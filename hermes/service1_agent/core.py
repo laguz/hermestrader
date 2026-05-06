@@ -451,12 +451,14 @@ class CascadingEngine:
             return list(default)
         return wl or list(default)
 
-    def process_entries(self, watchlist: Sequence[str]) -> None:
+    def process_entries(self, watchlist: Sequence[str]) -> int:
         """Execute entries in priority order. Submits actions after each strategy
         to ensure MoneyManager capacity is updated for the next priority level.
+        Returns total number of entry actions planned.
         """
         # Dedup watchlist to prevent multiple scans of the same symbol in one tick
         unique_watchlist = list(dict.fromkeys(watchlist))
+        total_entries = 0
         
         for s in self.strategies:
             try:
@@ -465,8 +467,10 @@ class CascadingEngine:
                 actions = s.execute_entries(wl)
                 # Submit immediately so subsequent strategies see these as PENDING.
                 self.submit(actions, action_type="entry")
+                total_entries += len(actions)
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
+        return total_entries
 
     def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
@@ -525,9 +529,11 @@ class CascadingEngine:
         mgmt = self.process_management()
         self.submit(mgmt, action_type="management")
         # Entries are now submitted internally strategy-by-strategy.
-        self.process_entries(watchlist)
+        num_entries = self.process_entries(watchlist)
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
+        ai_count = 0
         if self.overseer is not None:
             ai_actions = self.overseer.propose(watchlist) or []
             self.submit(ai_actions, action_type="ai")
-        return {"managed": len(mgmt), "entries": len(entries)}
+            ai_count = len(ai_actions)
+        return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
