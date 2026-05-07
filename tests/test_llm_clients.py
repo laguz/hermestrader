@@ -8,7 +8,7 @@ mock_ollama = MagicMock()
 sys.modules["ollama"] = mock_ollama
 
 import pytest
-from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM
+from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM, OpenAICompatibleLLM
 
 def test_image_to_data_url_none():
     assert _image_to_data_url(None) is None
@@ -86,3 +86,74 @@ def test_images_to_ollama_dict():
         {"other": "nothing"}
     ]
     assert OllamaCloudLLM._images_to_ollama(imgs) == ["YWJj", "ZGVm"]
+
+# Tests for OpenAICompatibleLLM._attach_images
+def test_openai_attach_images_empty_images():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    messages = [{"role": "user", "content": "hello"}]
+    # Test with empty list
+    result = llm._attach_images(messages, [])
+    assert result == messages
+    # Verify it returns a new list (though the plan doesn't strictly require this, it's good practice)
+    assert result is not messages
+
+def test_openai_attach_images_invalid_images():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    messages = [{"role": "user", "content": "hello"}]
+    # Test with items that _image_to_data_url returns None for
+    result = llm._attach_images(messages, [None, 123, "not a url"])
+    assert result == messages
+
+def test_openai_attach_images_no_user_message():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    images = [b"abc"]
+
+    # Case 1: Empty messages
+    result = llm._attach_images([], images)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == [{"type": "image_url", "image_url": {"url": "data:image/png;base64,YWJj"}}]
+
+    # Case 2: Only system message
+    messages = [{"role": "system", "content": "you are a bot"}]
+    result = llm._attach_images(messages, images)
+    assert len(result) == 2
+    assert result[0] == messages[0]
+    assert result[1]["role"] == "user"
+    assert result[1]["content"] == [{"type": "image_url", "image_url": {"url": "data:image/png;base64,YWJj"}}]
+
+def test_openai_attach_images_to_string_content():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    messages = [{"role": "user", "content": "describe this"}]
+    images = [b"abc"]
+    result = llm._attach_images(messages, images)
+    assert len(result) == 1
+    assert result[0]["role"] == "user"
+    assert result[0]["content"] == [
+        {"type": "text", "text": "describe this"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YWJj"}}
+    ]
+
+def test_openai_attach_images_to_parts_content():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    messages = [{
+        "role": "user",
+        "content": [{"type": "text", "text": "existing text"}]
+    }]
+    images = [b"abc"]
+    result = llm._attach_images(messages, images)
+    assert len(result) == 1
+    assert result[0]["content"] == [
+        {"type": "text", "text": "existing text"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,YWJj"}}
+    ]
+
+def test_openai_attach_images_multiple_images():
+    llm = OpenAICompatibleLLM("http://localhost:1234", "test-model")
+    messages = [{"role": "user", "content": "two charts"}]
+    images = [b"abc", b"def"]
+    result = llm._attach_images(messages, images)
+    assert len(result) == 1
+    assert len(result[0]["content"]) == 3 # 1 text + 2 images
+    assert result[0]["content"][1]["image_url"]["url"] == "data:image/png;base64,YWJj"
+    assert result[0]["content"][2]["image_url"]["url"] == "data:image/png;base64,ZGVm"
