@@ -61,3 +61,35 @@ def test_get_orders_exception(monkeypatch):
 
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
+
+def test_get_option_expirations_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    expected_expirations = ["2024-06-21", "2024-07-19"]
+    mock_broker.get_option_expirations.return_value = expected_expirations
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_option_expirations("AAPL")
+
+    assert result == expected_expirations
+    mock_broker.get_option_expirations.assert_called_once_with("AAPL")
+
+def test_get_option_expirations_empty(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_option_expirations.return_value = []
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_option_expirations("INVALID")
+
+    assert result == []
+    mock_broker.get_option_expirations.assert_called_once_with("INVALID")
+
+def test_get_option_expirations_exception(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_option_expirations.side_effect = Exception("API error")
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    with pytest.raises(Exception, match="API error"):
+        server.get_option_expirations("AAPL")
