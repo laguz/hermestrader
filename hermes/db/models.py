@@ -263,6 +263,30 @@ class HermesDB:
                 }
             return None
 
+    def latest_predictions_batch(self, symbols: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Fetch the latest prediction for multiple symbols in one query."""
+        if not symbols:
+            return {}
+        from sqlalchemy import bindparam
+        from sqlalchemy import text as sa_text
+        # Postgres-specific DISTINCT ON for efficient latest-per-group
+        sql = sa_text("""
+            SELECT DISTINCT ON (symbol)
+                symbol, predicted_return, predicted_price
+            FROM predictions
+            WHERE symbol IN :symbols
+            ORDER BY symbol, ts DESC
+        """).bindparams(bindparam("symbols", expanding=True))
+        results = {}
+        with self.Session() as s:
+            rows = s.execute(sql, {"symbols": list(symbols)}).fetchall()
+            for r in rows:
+                results[r.symbol] = {
+                    "predicted_return": float(r.predicted_return or 0),
+                    "predicted_price": float(r.predicted_price or 0)
+                }
+        return results
+
     def record_pending_order(self, action) -> None:
         # Derive the lot count from the first sell/open leg so that
         # count_pending_orders operates on the same unit (lots) as
