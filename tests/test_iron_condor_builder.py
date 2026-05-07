@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from typing import List
 
-import pytest
 
 from hermes.service1_agent.core import (
     IronCondorBuilder, MoneyManager, TradeAction,

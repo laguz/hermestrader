@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-import pytest
 
 from hermes.service1_agent.core import IronCondorBuilder, MoneyManager
 from hermes.service1_agent.strategies import (

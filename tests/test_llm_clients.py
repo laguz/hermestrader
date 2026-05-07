@@ -7,7 +7,6 @@ sys.modules["requests"] = mock_requests
 mock_ollama = MagicMock()
 sys.modules["ollama"] = mock_ollama
 
-import pytest
 from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM, OpenAICompatibleLLM
 
 def test_image_to_data_url_none():

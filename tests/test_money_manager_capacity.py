@@ -7,7 +7,6 @@ either sizes too small (missed alpha) or too large (margin call risk).
 """
 from __future__ import annotations
 
-import pytest
 
 from hermes.service1_agent.core import MoneyManager
 

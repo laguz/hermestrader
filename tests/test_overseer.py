@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-import pytest
 
 from hermes.service1_agent.core import TradeAction
 from hermes.service1_agent.overseer import HermesOverseer
