@@ -8,7 +8,47 @@ mock_ollama = MagicMock()
 sys.modules["ollama"] = mock_ollama
 
 import pytest
-from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM
+from hermes.llm.clients import OpenAICompatibleLLM, _image_to_data_url, OllamaCloudLLM
+
+def test_openai_compatible_llm_headers_with_api_key():
+    client = OpenAICompatibleLLM(base_url="http://localhost:1234", model="test-model", api_key="sk-test")
+    headers = client._headers()
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Authorization"] == "Bearer sk-test"
+
+def test_openai_compatible_llm_headers_without_api_key():
+    client = OpenAICompatibleLLM(base_url="http://localhost:1234", model="test-model")
+    headers = client._headers()
+    assert headers["Content-Type"] == "application/json"
+    assert "Authorization" not in headers
+
+def test_openai_compatible_llm_init_validation():
+    with pytest.raises(ValueError, match="OpenAICompatibleLLM requires base_url and model"):
+        OpenAICompatibleLLM(base_url="", model="test-model")
+    with pytest.raises(ValueError, match="OpenAICompatibleLLM requires base_url and model"):
+        OpenAICompatibleLLM(base_url="http://localhost:1234", model="")
+    with pytest.raises(ValueError, match="OpenAICompatibleLLM requires base_url and model"):
+        OpenAICompatibleLLM(base_url=None, model="test-model")
+    with pytest.raises(ValueError, match="OpenAICompatibleLLM requires base_url and model"):
+        OpenAICompatibleLLM(base_url="http://localhost:1234", model=None)
+
+def test_openai_compatible_llm_init_url_stripping():
+    client = OpenAICompatibleLLM(base_url="http://localhost:1234/", model="test-model")
+    assert client.base_url == "http://localhost:1234"
+    client = OpenAICompatibleLLM(base_url="http://localhost:1234///", model="test-model")
+    assert client.base_url == "http://localhost:1234"
+
+def test_openai_compatible_llm_init_defaults():
+    client = OpenAICompatibleLLM(
+        base_url="http://localhost:1234",
+        model="test-model",
+        temperature=None,
+        timeout_s=None,
+        max_tokens=None
+    )
+    assert client.temperature == 0.2
+    assert client.timeout_s == 60.0
+    assert client.max_tokens == 1024
 
 def test_image_to_data_url_none():
     assert _image_to_data_url(None) is None
