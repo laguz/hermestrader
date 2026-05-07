@@ -13,13 +13,7 @@ import pytest
 from hermes.service1_agent.core import (
     AbstractStrategy, IronCondorBuilder, MoneyManager,
 )
-# Import helpers from wherever they currently live so this PR is
-# independent of the strategies-package split (PR C). After PR C lands,
-# update to ``from hermes.service1_agent.strategies._helpers import ...``.
-from hermes.service1_agent.strategies import (
-    _nearest_strike as nearest_strike,
-    _parse_occ as parse_occ,
-)
+from hermes.service1_agent.strategies._helpers import nearest_strike, parse_occ
 
 from ._stubs import StubBroker, StubDB, make_chain
 
