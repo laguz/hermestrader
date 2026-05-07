@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import pytest
 from hermes.ml.pop_engine import find_key_levels
 
 def test_find_key_levels_empty_series():

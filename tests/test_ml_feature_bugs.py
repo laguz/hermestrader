@@ -13,13 +13,11 @@ the ``claude/fix-ml-feature-bugs`` PR:
 from __future__ import annotations
 
 import pickle
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
 

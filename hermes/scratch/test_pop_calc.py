@@ -1,7 +1,5 @@
 import sys
 import os
-import numpy as np
-from typing import Dict, Any
 
 # Mock the environment
 os.environ["HERMES_DSN"] = "sqlite:///:memory:"

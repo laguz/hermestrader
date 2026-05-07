@@ -6,9 +6,8 @@ fix), plus the module-level ``parse_occ`` / ``nearest_strike``.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
-import pytest
 
 from hermes.service1_agent.core import (
     AbstractStrategy, IronCondorBuilder, MoneyManager,
