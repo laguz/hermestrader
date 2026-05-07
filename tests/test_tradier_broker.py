@@ -2,6 +2,15 @@
 import sys
 from unittest.mock import MagicMock, patch
 
+# Save original modules
+original_modules = {
+    "numpy": sys.modules.get("numpy"),
+    "pandas": sys.modules.get("pandas"),
+    "requests": sys.modules.get("requests"),
+    "tenacity": sys.modules.get("tenacity"),
+    "hermes.ml.pop_engine": sys.modules.get("hermes.ml.pop_engine"),
+}
+
 # Mock all dependencies before importing TradierBroker
 sys.modules["numpy"] = MagicMock()
 sys.modules["pandas"] = MagicMock()
@@ -58,3 +67,10 @@ def test_get_delta_broker_none_delta():
     with patch.object(broker, "get_quote", return_value=mock_quotes):
         delta = broker.get_delta("SYM")
         assert delta == 0.0
+
+# Cleanup at the end of module (not ideal for pytest, but better than nothing here)
+for mod, val in original_modules.items():
+    if val is None:
+        sys.modules.pop(mod, None)
+    else:
+        sys.modules[mod] = val
