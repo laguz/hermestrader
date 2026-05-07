@@ -20,6 +20,7 @@ from hermes.common import (
 )
 from hermes.market_hours import is_market_open, market_session, next_open, session_label
 from hermes.db.models import HermesDB
+from hermes.utils import parse_iso, utcnow, utcnow_iso
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.service1_agent.overseer import HermesOverseer
 from hermes.service1_agent.strategies import (
@@ -62,25 +63,6 @@ def _strategy_enabled_key(strategy_id: str) -> str:
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _parse_iso(s: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO-8601 string into a timezone-aware datetime, or return None.
-
-    Python <3.11's ``datetime.fromisoformat`` rejects the trailing ``Z``
-    used by most external services; normalise it to ``+00:00`` first so
-    timestamps round-tripped through other tools still parse.
-    """
-    if not s:
-        return None
-    try:
-        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
-        dt = datetime.fromisoformat(normalised)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
 
 
 def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
@@ -322,7 +304,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
     if initial_mode not in VALID_MODES:
         initial_mode = "paper"
     db.set_setting(SETTING_MODE, initial_mode)
-    db.set_setting(SETTING_AGENT_STARTED_AT, _utcnow_iso())
+    db.set_setting(SETTING_AGENT_STARTED_AT, utcnow_iso())
 
     current_mode = initial_mode
     broker = _build_broker(conf, current_mode)
@@ -575,12 +557,12 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                     else:
                         _last_chart_ts_raw = db.get_setting(_CHART_ANALYSIS_KEY)
                         if _last_chart_ts_raw:
-                            _last_chart_dt = _parse_iso(_last_chart_ts_raw)
+                            _last_chart_dt = parse_iso(_last_chart_ts_raw)
                             if _last_chart_dt is None:
                                 _should_run_charts = True
                             else:
                                 _age_days = (
-                                    datetime.now(timezone.utc) - _last_chart_dt
+                                    utcnow() - _last_chart_dt
                                 ).total_seconds() / 86400
                                 _should_run_charts = _age_days >= _CHART_ANALYSIS_INTERVAL_DAYS
                         else:
@@ -592,7 +574,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                     log.info("Running chart vision analysis for %d symbols", len(current_watchlist))
                     try:
                         engine.overseer.analyze_charts(current_watchlist)
-                        db.set_setting(_CHART_ANALYSIS_KEY, _utcnow_iso())
+                        db.set_setting(_CHART_ANALYSIS_KEY, utcnow_iso())
                         db.write_log("ENGINE",
                                      f"chart vision: analysed {len(current_watchlist)} symbols "
                                      f"(7-month daily bars, next run in 7 days)")
@@ -602,7 +584,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                     _days_left = max(0.0, _CHART_ANALYSIS_INTERVAL_DAYS - _age_days)
                     log.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
 
-            db.set_setting(SETTING_TRADIER_OK_TS, _utcnow_iso())
+            db.set_setting(SETTING_TRADIER_OK_TS, utcnow_iso())
             db.set_setting(SETTING_TRADIER_ERROR, "")
             db.set_setting("market_session", mkt["session"])
             log.info("tick complete: %s  [%s]", stats, session_label())

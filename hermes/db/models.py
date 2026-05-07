@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
+from hermes.utils import utcnow
 
 import pandas as pd
 
@@ -33,7 +34,7 @@ class Strategy(Base):
     strategy_id = Column(String, primary_key=True)
     priority = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="ACTIVE")
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
 
 
 class StrategyWatchlist(Base):
@@ -42,7 +43,7 @@ class StrategyWatchlist(Base):
                          primary_key=True)
     symbol = Column(String, primary_key=True)
     target_lots = Column(Integer)
-    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    added_at = Column(DateTime(timezone=True), default=utcnow)
 
 
 class Trade(Base):
@@ -54,7 +55,7 @@ class Trade(Base):
     # via RETURNING instead of inserting NULL.
     id = Column(BigInteger, Sequence("trades_id_seq"), primary_key=True,
                 autoincrement=True)
-    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+    opened_at = Column(DateTime(timezone=True), default=utcnow,
                        primary_key=True)
     strategy_id = Column(String, ForeignKey("strategies.strategy_id"), nullable=False)
     symbol = Column(String, nullable=False)
@@ -86,7 +87,7 @@ class PendingOrder(Base):
     # hypertable's partitioning column.
     id = Column(BigInteger, Sequence("pending_orders_id_seq"), primary_key=True,
                 autoincrement=True)
-    submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+    submitted_at = Column(DateTime(timezone=True), default=utcnow,
                           primary_key=True)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
@@ -106,7 +107,7 @@ class PendingApproval(Base):
     __tablename__ = "pending_approvals"
     id = Column(BigInteger, Sequence("pending_approvals_id_seq"), primary_key=True,
                 autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
     action_type = Column(String, nullable=False, default="entry")
@@ -119,7 +120,7 @@ class PendingApproval(Base):
 
 class BotLog(Base):
     __tablename__ = "bot_logs"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utcnow, primary_key=True)
     strategy_id = Column(String, nullable=False, primary_key=True)
     level = Column(String, default="INFO")
     message = Column(Text, nullable=False)
@@ -127,7 +128,7 @@ class BotLog(Base):
 
 class AIDecision(Base):
     __tablename__ = "ai_decisions"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utcnow, primary_key=True)
     strategy_id = Column(String)
     symbol = Column(String, primary_key=True)
     autonomy = Column(String, nullable=False)
@@ -136,7 +137,7 @@ class AIDecision(Base):
 
 class Prediction(Base):
     __tablename__ = "predictions"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utcnow, primary_key=True)
     symbol = Column(String, nullable=False, primary_key=True)
     predicted_return = Column(Numeric(12, 6))
     predicted_price = Column(Numeric(12, 4))
@@ -154,8 +155,8 @@ class SystemSetting(Base):
     __tablename__ = "system_settings"
     key = Column(String, primary_key=True)
     value = Column(Text, nullable=False, default="")
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
-                        onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow,
+                        onupdate=utcnow)
 
 
 class DailyBar(Base):
@@ -566,7 +567,7 @@ class HermesDB:
 
         Returns the number of rows marked EXPIRED.
         """
-        cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)
+        cutoff = utcnow() - timedelta(seconds=older_than_seconds)
         expired = 0
         with self.Session() as s:
             stale = (
@@ -636,7 +637,7 @@ class HermesDB:
             if row is None or row.status != "PENDING":
                 return False
             row.status = decision
-            row.decided_at = datetime.utcnow()
+            row.decided_at = utcnow()
             if notes:
                 row.notes = notes
             s.commit()
@@ -661,7 +662,7 @@ class HermesDB:
             row = s.query(PendingApproval).filter_by(id=approval_id).first()
             if row:
                 row.status = "EXECUTED" if success else "FAILED"
-                row.executed_at = datetime.utcnow()
+                row.executed_at = utcnow()
                 if notes:
                     row.notes = (row.notes or "") + f"\n{notes}"
                 s.commit()
