@@ -17,7 +17,9 @@ import os
 from typing import Any, Dict
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+
+_NO_CACHE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
 
 from hermes.db.models import HermesDB
 from hermes.ml.pop_engine import augment_levels_with_pop
@@ -223,8 +225,11 @@ def get_symbol_analysis(symbol: str) -> Dict[str, Any]:
 
 
 @router.get("/api/analysis")
-def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
+def get_watchlist_analysis(period: str = "6m") -> JSONResponse:
     """S/R clustering for every watchlist symbol, augmented with POP."""
+    period = (period or "6m").lower()
+    if period not in {"1m", "3m", "6m", "1y"}:
+        period = "6m"
     try:
         from concurrent.futures import ThreadPoolExecutor
 
@@ -236,7 +241,7 @@ def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
         if not symbols:
             symbols = set(WATCHLIST)
         if not symbols:
-            return {}
+            return JSONResponse({}, headers=_NO_CACHE_HEADERS)
 
         sorted_symbols = sorted(symbols)
         broker = _build_broker_for_analysis()
@@ -264,6 +269,6 @@ def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
                 xgb_pred = preds_map.get(sym) or {}
                 results[sym] = augment_levels_with_pop(ans, xgb_pred, period=period)
 
-        return results
+        return JSONResponse(results, headers=_NO_CACHE_HEADERS)
     except Exception as exc:                                       # noqa: BLE001
-        return {"error": str(exc)}
+        return JSONResponse({"error": str(exc)}, headers=_NO_CACHE_HEADERS)
