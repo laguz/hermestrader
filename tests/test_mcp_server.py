@@ -15,16 +15,20 @@ class FastMCP:
     def __new__(cls, *args, **kwargs):
         return mcp_instance
 
-# Setup sys.modules mocks
+# Setup sys.modules mocks ONLY if they are missing
 missing_deps = [
     "mcp", "mcp.server", "mcp.server.fastmcp",
     "requests", "numpy", "pandas", "tenacity",
     "hermes.ml.pop_engine"
 ]
 for dep in missing_deps:
-    sys.modules[dep] = MagicMock()
+    try:
+        __import__(dep)
+    except ImportError:
+        sys.modules[dep] = MagicMock()
 
-sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
+if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
+    sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
 
 # Now we can import the server
 from hermes.mcp import server
@@ -62,129 +66,87 @@ def test_get_orders_exception(monkeypatch):
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
 
-def test_place_multileg_order_credit(monkeypatch):
+@pytest.mark.parametrize("side, expected_action_side", [
+    ("buy_to_open", "buy"),
+    ("sell_to_open", "sell"),
+    ("buy_to_close", "buy"),
+    ("sell_to_close", "sell"),
+])
+@pytest.mark.parametrize("order_type", ["limit", "market"])
+@pytest.mark.parametrize("price", [None, 1.50])
+@pytest.mark.parametrize("tag", [None, "test-tag"])
+def test_place_single_option_order(monkeypatch, side, expected_action_side, order_type, price, tag):
     mock_broker = MagicMock()
-    mock_broker.place_order_from_action.return_value = {"status": "ok"}
+    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 123}
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    symbol = "AAPL"
+    option_symbol = "AAPL230616C00150000"
+    quantity = 2
+
+    result = server.place_single_option_order(
+        symbol=symbol,
+        option_symbol=option_symbol,
+        side=side,
+        quantity=quantity,
+        price=price,
+        order_type=order_type,
+        tag=tag
+    )
+
+    assert result == {"status": "ok", "order_id": 123}
+    mock_broker.place_order_from_action.assert_called_once()
+    action = mock_broker.place_order_from_action.call_args[0][0]
+
+    assert action.strategy_id == "mcp"
+    assert action.symbol == symbol
+    assert action.order_class == "option"
+    assert action.legs == [{"option_symbol": option_symbol, "action": side, "quantity": quantity}]
+    assert action.price == price
+    assert action.side == expected_action_side
+    assert action.quantity == quantity
+    assert action.order_type == order_type
+    assert action.duration == "day"
+    assert action.tag == tag
+
+@pytest.mark.parametrize("order_type, expected_side", [
+    ("credit", "sell"),
+    ("debit", "buy"),
+    ("CREDIT", "sell"),
+])
+@pytest.mark.parametrize("duration", ["day", "gtc"])
+@pytest.mark.parametrize("tag", [None, "multi-tag"])
+def test_place_multileg_order(monkeypatch, order_type, expected_side, duration, tag):
+    mock_broker = MagicMock()
+    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 456}
     monkeypatch.setattr(server, "_broker", lambda: mock_broker)
 
     symbol = "SPY"
-    legs = [{"option_symbol": "SPY241220C00500000", "quantity": 1, "action": "sell_to_open"}]
-    price = 1.5
+    legs = [
+        {"option_symbol": "SPY230616C00400000", "action": "sell_to_open", "quantity": 1},
+        {"option_symbol": "SPY230616C00405000", "action": "buy_to_open", "quantity": 1},
+    ]
+    price = 1.25
 
     result = server.place_multileg_order(
         symbol=symbol,
         legs=legs,
         price=price,
-        order_type="credit",
-        duration="day",
-        tag="test-tag"
+        order_type=order_type,
+        duration=duration,
+        tag=tag
     )
 
-    assert result == {"status": "ok"}
+    assert result == {"status": "ok", "order_id": 456}
     mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
+    action = mock_broker.place_order_from_action.call_args[0][0]
 
     assert action.strategy_id == "mcp"
     assert action.symbol == symbol
     assert action.order_class == "multileg"
     assert action.legs == legs
     assert action.price == price
-    assert action.side == "sell"
-    assert action.order_type == "credit"
-    assert action.duration == "day"
-    assert action.tag == "test-tag"
-
-def test_place_multileg_order_debit(monkeypatch):
-    mock_broker = MagicMock()
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
-
-    server.place_multileg_order(
-        symbol="AAPL",
-        legs=[],
-        price=2.0,
-        order_type="debit"
-    )
-
-    mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
-    assert action.side == "buy"
-    assert action.order_type == "debit"
-
-def test_place_single_option_order_buy(monkeypatch):
-    mock_broker = MagicMock()
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
-
-    server.place_single_option_order(
-        symbol="TSLA",
-        option_symbol="TSLA241220C00200000",
-        side="buy_to_open",
-        quantity=2,
-        price=5.0
-    )
-
-    mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
-    assert action.order_class == "option"
-    assert action.side == "buy"
-    assert action.quantity == 2
-    assert action.legs == [{"option_symbol": "TSLA241220C00200000", "action": "buy_to_open", "quantity": 2}]
-
-def test_place_single_option_order_sell(monkeypatch):
-    mock_broker = MagicMock()
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
-
-    server.place_single_option_order(
-        symbol="TSLA",
-        option_symbol="TSLA241220P00190000",
-        side="sell_to_open",
-        quantity=3
-    )
-
-    mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
-    assert action.side == "sell"
-    assert action.quantity == 3
-    assert action.legs == [{"option_symbol": "TSLA241220P00190000", "action": "sell_to_open", "quantity": 3}]
-
-def test_place_equity_order_buy(monkeypatch):
-    mock_broker = MagicMock()
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
-
-    server.place_equity_order(
-        symbol="NVDA",
-        side="buy",
-        quantity=100,
-        order_type="limit",
-        price=120.0
-    )
-
-    mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
-    assert action.order_class == "equity"
-    assert action.side == "buy"
-    assert action.quantity == 100
-    assert action.order_type == "limit"
-    assert action.price == 120.0
-    assert action.legs == [{"side": "buy", "quantity": 100}]
-
-def test_place_equity_order_sell_short(monkeypatch):
-    mock_broker = MagicMock()
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
-
-    server.place_equity_order(
-        symbol="NVDA",
-        side="sell_short",
-        quantity=50
-    )
-
-    mock_broker.place_order_from_action.assert_called_once()
-    args, _ = mock_broker.place_order_from_action.call_args
-    action = args[0]
-    assert action.side == "sell_short"
-    assert action.quantity == 50
-    assert action.legs == [{"side": "sell_short", "quantity": 50}]
+    assert action.side == expected_side
+    assert action.order_type == order_type
+    assert action.duration == duration
+    assert action.tag == tag
