@@ -797,8 +797,10 @@ async function load(){
 }
 
 let _currentHorizon = '3m';
+let _analysisReqSeq = 0;
 
 function setHorizon(h, btn){
+  if (_currentHorizon === h) { loadAnalysis(); return; }
   _currentHorizon = h;
   document.querySelectorAll('.btn-horizon').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
@@ -809,17 +811,25 @@ function setHorizon(h, btn){
 async function loadAnalysis(){
   const el=document.getElementById('keylevels-content');
   if(!el) return;
+  const seq = ++_analysisReqSeq;
+  const horizon = _currentHorizon;
+  el.innerHTML = `<div class="loading">Loading ${horizon.toUpperCase()} analysis…</div>`;
   try{
-    const r=await fetch('/api/analysis?period=' + _currentHorizon);
+    const r=await fetch('/api/analysis?period=' + horizon + '&_=' + Date.now(), {
+      cache: 'no-store',
+      headers: {'Cache-Control': 'no-cache'},
+    });
     if(!r.ok) throw new Error('HTTP '+r.status);
     const data=await r.json();
-    renderKeyLevels(data);
+    if (seq !== _analysisReqSeq) return; // stale response — newer request in flight
+    renderKeyLevels(data, horizon);
   }catch(e){
+    if (seq !== _analysisReqSeq) return;
     el.innerHTML=`<div class="err-box">Failed to load analysis: ${e.message}</div>`;
   }
 }
 
-function renderKeyLevels(data){
+function renderKeyLevels(data, horizon){
   const el=document.getElementById('keylevels-content');
   if (data.error) {
     el.innerHTML = `<div class="err-box">API Error: ${escHtml(data.error)}</div>`;
@@ -831,23 +841,25 @@ function renderKeyLevels(data){
     el.innerHTML='<div class="no-data">No analysis data available.</div>';
     return;
   }
-  
+
   el.innerHTML=symbols.map(sym=>{
     const d=data[sym];
     if(!d || d.error) return `<div class="card"><div class="card-header">${sym}</div><div class="card-body"><div class="err-box">${escHtml(d?.error || 'No data')}</div></div></div>`;
-    
+
     const levels=d.key_levels||[];
     const current=parseFloat(d.current_price || 0);
     const support=levels.filter(l=>l.type==='support').sort((a,b)=>b.price-a.price);
     const resistance=levels.filter(l=>l.type==='resistance').sort((a,b)=>a.price-b.price);
-    
+
     const maxStrength = Math.max(1, ...levels.map(l=>l.strength));
+    const periodLabel = (d.period || horizon || '').toUpperCase();
 
     return `<div class="card" style="margin-bottom:16px;">
       <div class="card-header">
         <div style="display:flex; align-items:baseline; gap:10px;">
           <span style="color:var(--blue); font-size:16px;">${sym}</span>
           <span style="font-size:12px; font-weight:400; color:var(--muted)">Spot: <strong style="color:var(--text)">$${current.toFixed(2)}</strong></span>
+          <span style="font-size:11px; font-weight:600; color:var(--blue); background:#3b82f622; padding:2px 8px; border-radius:4px;">${periodLabel} · ${d.samples || 0}d analyzed</span>
         </div>
       </div>
       <div class="card-body" style="padding:0;">
