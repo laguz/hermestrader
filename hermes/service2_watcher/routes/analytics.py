@@ -226,6 +226,8 @@ def get_symbol_analysis(symbol: str) -> Dict[str, Any]:
 def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
     """S/R clustering for every watchlist symbol, augmented with POP."""
     try:
+        from concurrent.futures import ThreadPoolExecutor
+
         local_db = HermesDB(DSN)
         all_wl = local_db.list_all_watchlists()
         symbols = set()
@@ -235,14 +237,33 @@ def get_watchlist_analysis(period: str = "6m") -> Dict[str, Any]:
             symbols = set(WATCHLIST)
         if not symbols:
             return {}
+
+        sorted_symbols = sorted(symbols)
         broker = _build_broker_for_analysis()
+
+        # 1. Fetch analysis in parallel (I/O bound REST calls)
         results: Dict[str, Any] = {}
-        for sym in sorted(symbols):
-            ans = broker.analyze_symbol(sym, period=period)
+        with ThreadPoolExecutor(max_workers=min(len(sorted_symbols), 20)) as executor:
+            future_to_sym = {
+                executor.submit(broker.analyze_symbol, sym, period=period): sym
+                for sym in sorted_symbols
+            }
+            for future in future_to_sym:
+                sym = future_to_sym[future]
+                try:
+                    results[sym] = future.result()
+                except Exception as exc:                           # noqa: BLE001
+                    results[sym] = {"error": str(exc)}
+
+        # 2. Fetch all predictions in one batch (DB optimization)
+        preds_map = local_db.latest_predictions_batch(sorted_symbols)
+
+        # 3. Augment with POP
+        for sym, ans in results.items():
             if "error" not in ans:
-                xgb_pred = local_db.latest_prediction(sym) or {}
-                ans = augment_levels_with_pop(ans, xgb_pred, period=period)
-            results[sym] = ans
+                xgb_pred = preds_map.get(sym) or {}
+                results[sym] = augment_levels_with_pop(ans, xgb_pred, period=period)
+
         return results
     except Exception as exc:                                       # noqa: BLE001
         return {"error": str(exc)}
