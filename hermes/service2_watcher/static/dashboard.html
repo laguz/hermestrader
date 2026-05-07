@@ -805,9 +805,15 @@ async function loadCharts(){
       const bb      = decision.bb_squeeze === 'true' || decision.bb_squeeze === true ? '⚡ Squeeze' : decision.bb_squeeze || '—';
       // The LLM returns support/resistance as a free-text string —
       // sometimes one value ("250"), sometimes a comma-separated list
+<<<<<<< Updated upstream
       // ("250, 260" or "$250 / $260"). Strip any existing "$" signs
       // first, then re-prefix every numeric token so each value renders
       // as a proper price without doubling up.
+=======
+      // ("250, 260" or "$250 / $260"). Strip any existing "$" signs,
+      // then re-prefix every numeric token so each value renders as a
+      // proper price without doubling up.
+>>>>>>> Stashed changes
       const formatPriceList = (raw) => {
         if (raw === null || raw === undefined) return '—';
         const s = String(raw).trim();
