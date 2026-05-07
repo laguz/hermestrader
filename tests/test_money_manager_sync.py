@@ -121,3 +121,47 @@ def test_engine_tick_survives_missing_money_manager():
     # No strategies, so tick should complete without raising.
     stats = engine.tick(watchlist=[])
     assert "managed" in stats and "entries" in stats
+
+def test_sync_handles_sanitised_closing_tag():
+    """Tradier sanitises HERMES_CS75_CLOSE_TP-50 -> HERMES-CS75-CLOSE-TP-50."""
+    orders = [{
+        "status": "open",
+        "tag": "HERMES-CS75-CLOSE-TP-50",
+        "symbol": "AAPL",
+        "quantity": 1,
+        "leg": [{"option_symbol": "AAPL250620P00150000", "quantity": 1}],
+    }]
+    mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
+    mm.sync_broker_orders()
+    assert mm._broker_order_counts == {("CS75", "AAPL", "put"): 1}
+
+def test_sync_extracts_strategy_id_robustly():
+    """Verify strategy ID extraction from various tag shapes including multiples."""
+    # This matches the current logic: tag.replace("_", "-")[7:].split('-', 1)[0]
+    # Tag: HERMES-CS75-CLOSE -> CS75
+    # Tag: HERMES_CS75_CLOSE -> CS75
+    # Tag: HERMES-CS75_CLOSE -> CS75
+    # Tag: HERMES_CS75-CLOSE -> CS75
+
+    mm = MoneyManager(broker=_StubBroker([]), db=_StubDB(), config={})
+
+    tags = {
+        "HERMES_CS75": "CS75",
+        "HERMES-CS75": "CS75",
+        "HERMES_CS75_CLOSE": "CS75",
+        "HERMES-CS75-CLOSE": "CS75",
+        "HERMES_CS75-CLOSE": "CS75",
+        "HERMES-CS75_CLOSE": "CS75",
+    }
+
+    for tag, expected in tags.items():
+        orders = [{
+            "status": "open",
+            "tag": tag,
+            "symbol": "AAPL",
+            "quantity": 1,
+            "option_symbol": "AAPL250620P00150000",
+        }]
+        mm.broker = _StubBroker(orders)
+        mm.sync_broker_orders()
+        assert mm._broker_order_counts == {(expected, "AAPL", "put"): 1}, f"Failed for tag {tag}"

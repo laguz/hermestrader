@@ -119,12 +119,30 @@ class TastyTrade45(AbstractStrategy):
     def manage_positions(self) -> List[TradeAction]:
         """Hard exit at 21 DTE; neutralise challenged side (|Δ_short| > 0.30)."""
         actions: List[TradeAction] = []
-        for trade in self.db.open_trades(self.strategy_id):
+        trades = self.db.open_trades(self.strategy_id)
+        if not trades:
+            return []
+
+        # Optimization: batch fetch quotes for all short legs to avoid N+1 API calls
+        # in the loop. get_delta(sym) internally calls get_quote(sym); we can
+        # pull them all once.
+        short_legs = list({t["short_leg"] for t in trades if t.get("short_leg")})
+        deltas = {}
+        if short_legs:
+            quotes = self.broker.get_quote(",".join(short_legs))
+            for q in quotes:
+                symbol = q.get("symbol")
+                greeks = q.get("greeks") or {}
+                delta = float(greeks.get("delta", 0.0) or 0.0)
+                if symbol:
+                    deltas[symbol] = delta
+
+        for trade in trades:
             info = parse_occ(trade["short_leg"])
             if not info:
                 continue
             dte = (info["expiry"] - self.today()).days
-            short_delta = abs(self.broker.get_delta(trade["short_leg"]) or 0.0)
+            short_delta = abs(deltas.get(trade["short_leg"], 0.0))
 
             close_reason = None
             if dte <= 21:
