@@ -60,8 +60,8 @@ class OpenAICompatibleLLM:
         model: str,
         *,
         api_key: Optional[str] = None,
-        temperature: float = 0.2,
-        timeout_s: float = 60.0,
+        temperature: Optional[float] = 0.2,
+        timeout_s: Optional[float] = 60.0,
         max_tokens: Optional[int] = 1024,
     ):
         if not base_url or not model:
@@ -69,9 +69,9 @@ class OpenAICompatibleLLM:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key or None
-        self.temperature = float(temperature)
-        self.timeout_s = float(timeout_s)
-        self.max_tokens = max_tokens
+        self.temperature = float(temperature if temperature is not None else 0.2)
+        self.timeout_s = float(timeout_s if timeout_s is not None else 60.0)
+        self.max_tokens = max_tokens if max_tokens is not None else 1024
 
     # ------------------------------------------------------------------ HTTP
     def _headers(self) -> Dict[str, str]:
@@ -242,17 +242,17 @@ class OllamaCloudLLM:
         model: str,
         api_key: str,
         *,
-        temperature: float = 0.2,
-        max_tokens: int = 1024,
-        timeout_s: float = 120.0,
+        temperature: Optional[float] = 0.2,
+        max_tokens: Optional[int] = 1024,
+        timeout_s: Optional[float] = 120.0,
     ):
         if not model or not api_key:
             raise ValueError("OllamaCloudLLM requires model and api_key")
         self.model = model
         self.api_key = api_key
-        self.temperature = float(temperature)
-        self.max_tokens = int(max_tokens)
-        self.timeout_s = float(timeout_s)
+        self.temperature = float(temperature if temperature is not None else 0.2)
+        self.max_tokens = int(max_tokens if max_tokens is not None else 1024)
+        self.timeout_s = float(timeout_s if timeout_s is not None else 120.0)
 
         try:
             from ollama import Client
