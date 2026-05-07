@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
+from hermes.utils import utcnow, utcnow_iso
 from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -292,8 +293,7 @@ class AsyncXGBPredictor:
                             pass
                     
                     try:
-                        from datetime import timezone
-                        self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
+                        self.db.set_setting("ml_last_ok_ts", utcnow_iso())
                         
                         all_warns = retrain_warnings + predict_warnings
                         if all_warns:
@@ -422,7 +422,7 @@ class AsyncXGBPredictor:
             spot = float(self.db.last_price(sym) or 0.0)
             predicted_price = round(spot * (1 + yhat), 4)
             self._last_pred[sym] = {
-                "asof": datetime.utcnow(),
+                "asof": utcnow(),
                 "predicted_return": yhat,
                 "predicted_price": predicted_price,
                 "spot": spot,

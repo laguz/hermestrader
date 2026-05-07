@@ -36,6 +36,7 @@ from hermes.common import (
 from hermes.market_hours import market_session, next_open
 from hermes.db.models import HermesDB
 from hermes.ml.pop_engine import augment_levels_with_pop
+from hermes.utils import parse_iso, seconds_since, utcnow
 import numpy as np
 
 
@@ -75,29 +76,6 @@ def _strategy_enabled_key(sid: str) -> str:
     return f"strategy_{sid.lower()}_enabled"
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _parse_iso(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        # Normalise trailing 'Z' for Python <3.11 compatibility.
-        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
-        dt = datetime.fromisoformat(normalised)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-
-
-def _seconds_since(dt: Optional[datetime]) -> Optional[float]:
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return (_utcnow() - dt).total_seconds()
 
 
 def _read_version() -> str:
@@ -141,27 +119,27 @@ def index() -> FileResponse:
 @app.get("/api/status")
 def get_status() -> Dict[str, Any]:
     last_log_ts = db.latest_log_ts()
-    last_log_age = _seconds_since(last_log_ts)
+    last_log_age = seconds_since(last_log_ts)
     hermes_running = last_log_age is not None and last_log_age <= STALE_AFTER_S
 
     started_iso = db.get_setting(SETTING_AGENT_STARTED)
-    started_at = _parse_iso(started_iso)
-    uptime_s = _seconds_since(started_at) if hermes_running else None
+    started_at = parse_iso(started_iso)
+    uptime_s = seconds_since(started_at) if hermes_running else None
 
-    last_ok = _parse_iso(db.get_setting(SETTING_TRADIER_OK_TS))
+    last_ok = parse_iso(db.get_setting(SETTING_TRADIER_OK_TS))
     tradier_error = (db.get_setting(SETTING_TRADIER_ERROR) or "").strip()
     tradier_ok = (
-        _seconds_since(last_ok) is not None
-        and _seconds_since(last_ok) <= STALE_AFTER_S
+        seconds_since(last_ok) is not None
+        and seconds_since(last_ok) <= STALE_AFTER_S
         and not tradier_error
     )
 
     llm_error = (db.get_setting(SETTING_LLM_ERROR) or "").strip()
-    llm_last_ok = _parse_iso(db.get_setting(SETTING_LLM_OK_TS))
+    llm_last_ok = parse_iso(db.get_setting(SETTING_LLM_OK_TS))
     llm_ok = (
         llm_last_ok is not None
-        and _seconds_since(llm_last_ok) is not None
-        and _seconds_since(llm_last_ok) <= STALE_AFTER_S * 4  # LLM may not be used every tick
+        and seconds_since(llm_last_ok) is not None
+        and seconds_since(llm_last_ok) <= STALE_AFTER_S * 4  # LLM may not be used every tick
         and not llm_error
     )
 
@@ -445,7 +423,7 @@ def _read_llm_config() -> Dict[str, Any]:
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
     vision = (db.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
-    last_ok = _parse_iso(db.get_setting(SETTING_LLM_OK_TS))
+    last_ok = parse_iso(db.get_setting(SETTING_LLM_OK_TS))
     last_err = (db.get_setting(SETTING_LLM_ERROR) or "").strip() or None
     return {
         "provider": provider,
@@ -454,7 +432,7 @@ def _read_llm_config() -> Dict[str, Any]:
         "temperature": temperature,
         "timeout_s": timeout_s,
         "vision": vision,
-        "last_ok_age_s": _seconds_since(last_ok),
+        "last_ok_age_s": seconds_since(last_ok),
         "last_error": last_err,
         "valid_providers": list(VALID_LLM_PROVIDERS),
         # True/False only — the actual key is never sent to the browser.

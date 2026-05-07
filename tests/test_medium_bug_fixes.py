@@ -13,16 +13,9 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from hermes.service1_agent.core import AbstractStrategy
-from hermes.service1_agent.main import _parse_iso as _parse_iso_main
+from hermes.utils import parse_iso
 
-# api.py instantiates a HermesDB at module load, which needs the psycopg
-# driver (installed in CI via requirements.txt). Skip the api side locally
-# if it isn't available so this test file is still useful in dev.
-try:
-    from hermes.service2_watcher.api import _parse_iso as _parse_iso_api
-    _PARSERS = [_parse_iso_main, _parse_iso_api]
-except ModuleNotFoundError:
-    _PARSERS = [_parse_iso_main]
+_PARSERS = [parse_iso]
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +127,8 @@ def test_find_active_ic_returns_none_when_all_complete():
 def test_record_pending_derives_side_from_occ_when_side_type_missing():
     """The OCC-side fallback in record_pending_order is unit-testable
     without a database: import and call the helper regex directly."""
-    from hermes.db.models import _OCC_RE
+    import re
+    _OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
     # Put leg
     m = _OCC_RE.match("AAPL250620P00150000")
