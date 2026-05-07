@@ -12,7 +12,7 @@ import pickle
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dtime, timedelta, timezone
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
