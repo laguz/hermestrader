@@ -185,17 +185,31 @@ def place_equity_order(
     tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Place an equity order. `side` is buy / sell / sell_short / buy_to_cover."""
+    side = side.lower()
+    if side not in {"buy", "sell", "sell_short", "buy_to_cover"}:
+        raise ValueError(f"Invalid side: {side}. Must be buy, sell, sell_short, or buy_to_cover.")
+
+    if quantity <= 0:
+        raise ValueError(f"Invalid quantity: {quantity}. Must be greater than 0.")
+
+    order_type = order_type.lower()
+    if order_type not in {"market", "limit", "stop", "stop_limit"}:
+        raise ValueError(f"Invalid order_type: {order_type}. Must be market, limit, stop, or stop_limit.")
+
+    if order_type in {"limit", "stop_limit"} and price is None:
+        raise ValueError(f"Price is required for {order_type} orders.")
+
     from hermes.service1_agent.core import TradeAction
     action = TradeAction(
         strategy_id="mcp",
-        symbol=symbol,
+        symbol=symbol.upper(),
         order_class="equity",
         legs=[{"side": side, "quantity": quantity}],
         price=price,
         side=side,
         quantity=quantity,
         order_type=order_type,
-        duration=duration,
+        duration=duration.lower(),
         tag=tag,
     )
     return _broker().place_order_from_action(action)

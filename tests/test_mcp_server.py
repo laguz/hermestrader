@@ -61,3 +61,55 @@ def test_get_orders_exception(monkeypatch):
 
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
+
+def test_place_equity_order_market_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 123}
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.place_equity_order(symbol="AAPL", side="buy", quantity=10, order_type="market")
+
+    assert result["status"] == "ok"
+    # Verify TradeAction construction
+    args, _ = mock_broker.place_order_from_action.call_args
+    action = args[0]
+    assert action.symbol == "AAPL"
+    assert action.side == "buy"
+    assert action.quantity == 10
+    assert action.order_type == "market"
+    assert action.order_class == "equity"
+    assert action.legs == [{"side": "buy", "quantity": 10}]
+
+def test_place_equity_order_limit_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 124}
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.place_equity_order(symbol="tsla", side="SELL", quantity=5, order_type="LIMIT", price=250.0)
+
+    assert result["status"] == "ok"
+    args, _ = mock_broker.place_order_from_action.call_args
+    action = args[0]
+    assert action.symbol == "TSLA"
+    assert action.side == "sell"
+    assert action.quantity == 5
+    assert action.order_type == "limit"
+    assert action.price == 250.0
+
+def test_place_equity_order_invalid_side():
+    with pytest.raises(ValueError, match="Invalid side: invalid_side"):
+        server.place_equity_order(symbol="AAPL", side="invalid_side", quantity=10)
+
+def test_place_equity_order_invalid_quantity():
+    with pytest.raises(ValueError, match="Invalid quantity: 0"):
+        server.place_equity_order(symbol="AAPL", side="buy", quantity=0)
+    with pytest.raises(ValueError, match="Invalid quantity: -1"):
+        server.place_equity_order(symbol="AAPL", side="buy", quantity=-1)
+
+def test_place_equity_order_invalid_order_type():
+    with pytest.raises(ValueError, match="Invalid order_type: invalid_type"):
+        server.place_equity_order(symbol="AAPL", side="buy", quantity=10, order_type="invalid_type")
+
+def test_place_equity_order_missing_price_for_limit():
+    with pytest.raises(ValueError, match="Price is required for limit orders"):
+        server.place_equity_order(symbol="AAPL", side="buy", quantity=10, order_type="limit")
