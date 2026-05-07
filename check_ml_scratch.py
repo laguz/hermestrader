@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 from sqlalchemy import create_engine, text
 
 dsn = os.environ.get("HERMES_DSN", "postgresql+psycopg://hermes:hermes@localhost:5432/hermes")
