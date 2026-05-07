@@ -61,3 +61,35 @@ def test_get_orders_exception(monkeypatch):
 
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
+
+def test_get_option_chain_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    expected_chain = [{"symbol": "AAPL230616C00150000", "strike": 150.0}]
+    mock_broker.get_option_chains.return_value = expected_chain
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_option_chain("AAPL", "2023-06-16")
+
+    assert result == expected_chain
+    mock_broker.get_option_chains.assert_called_once_with("AAPL", "2023-06-16")
+
+def test_get_option_chain_empty(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_option_chains.return_value = []
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_option_chain("AAPL", "2023-06-16")
+
+    assert result == []
+    mock_broker.get_option_chains.assert_called_once_with("AAPL", "2023-06-16")
+
+def test_get_option_chain_exception(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_option_chains.side_effect = Exception("Chain error")
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    with pytest.raises(Exception, match="Chain error"):
+        server.get_option_chain("AAPL", "2023-06-16")
