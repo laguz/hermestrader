@@ -18,6 +18,7 @@ from hermes.common import (
     VALID_LLM_PROVIDERS,
     VALID_MODES,
 )
+from hermes.utils import decrypt_value
 from hermes.market_hours import is_market_open, market_session, next_open, session_label
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
@@ -92,7 +93,7 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     provider = (db.get_setting(SETTING_LLM_PROVIDER) or "mock").lower()
     base_url = (db.get_setting(SETTING_LLM_BASE_URL) or "").strip()
     model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
-    api_key = (db.get_setting(SETTING_LLM_API_KEY) or "").strip() or None
+    api_key = decrypt_value((db.get_setting(SETTING_LLM_API_KEY) or "").strip()) or None
     temperature_raw = (db.get_setting(SETTING_LLM_TEMPERATURE) or "0.2").strip()
     try:
         temperature = float(temperature_raw)

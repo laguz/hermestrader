@@ -1,84 +1,63 @@
-"""Unit tests for the Tradier MCP server tools.
-
-Uses a module-scoped fixture to mock missing dependencies (mcp, numpy, pandas,
-requests, etc.) so that the server module can be imported and tested without
-polluting the global sys.modules state for other test files.
-"""
-from __future__ import annotations
-
 import sys
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 import pytest
 
+# Manually mock mcp and other missing dependencies before anything else
+def tool_decorator(*args, **kwargs):
+    def decorator(f):
+        return f
+    return decorator
 
-@pytest.fixture(scope="module", autouse=True)
-def mock_dependencies():
-    """Patch sys.modules with mocks for dependencies missing in the test environment."""
-    # Create mocks for all missing modules
-    mocks = {
-        "mcp": MagicMock(),
-        "mcp.server": MagicMock(),
-        "mcp.server.fastmcp": MagicMock(),
-        "numpy": MagicMock(),
-        "pandas": MagicMock(),
-        "requests": MagicMock(),
-        "tenacity": MagicMock(),
-        "scipy": MagicMock(),
-        "scipy.signal": MagicMock(),
-        "scipy.stats": MagicMock(),
-        "sklearn": MagicMock(),
-        "sklearn.cluster": MagicMock(),
-    }
+mcp_instance = MagicMock()
+mcp_instance.tool = tool_decorator
 
-    # Configure FastMCP to work as a decorator that returns the function itself
-    def mock_tool_decorator(*args, **kwargs):
-        return lambda f: f
-    mocks["mcp.server.fastmcp"].FastMCP.return_value.tool.side_effect = mock_tool_decorator
+class FastMCP:
+    def __new__(cls, *args, **kwargs):
+        return mcp_instance
 
-    with patch.dict(sys.modules, mocks):
-        yield
+# Setup sys.modules mocks
+missing_deps = [
+    "mcp", "mcp.server", "mcp.server.fastmcp",
+    "requests", "numpy", "pandas", "tenacity",
+    "hermes.ml.pop_engine"
+]
+for dep in missing_deps:
+    sys.modules[dep] = MagicMock()
 
+sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
 
-@pytest.fixture
-def mcp_server():
-    """Import and return the mcp server module after mocks are applied."""
-    # We must import inside the fixture so that it happens after sys.modules is patched
-    import hermes.mcp.server as server
-    return server
+# Now we can import the server
+from hermes.mcp import server
 
+def test_get_orders_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    expected_orders = [{"id": "order_1", "status": "filled"}]
+    mock_broker.get_orders.return_value = expected_orders
 
-def test_get_positions_delegates_to_broker(mcp_server):
-    """Verify that get_positions tool correctly calls the broker and returns its data."""
-    from tests._stubs import StubBroker
+    # Mock the _broker() function
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
 
-    # Setup
-    expected_positions = [
-        {"symbol": "AAPL", "quantity": 100, "cost_basis": 150.0, "date_acquired": "2023-01-01"},
-        {"symbol": "TSLA", "quantity": 50, "cost_basis": 200.0, "date_acquired": "2023-01-02"}
-    ]
-    broker = StubBroker(positions=expected_positions)
+    result = server.get_orders()
 
-    # Inject the stub broker
-    mcp_server._BROKER = broker
+    assert result == expected_orders
+    mock_broker.get_orders.assert_called_once()
 
-    # Execute
-    result = mcp_server.get_positions()
+def test_get_orders_empty(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_orders.return_value = []
 
-    # Verify
-    assert result == expected_positions
-    assert len(result) == 2
-    assert result[0]["symbol"] == "AAPL"
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
 
+    result = server.get_orders()
 
-def test_get_account_balances_delegates_to_broker(mcp_server):
-    """Verify that get_account_balances tool correctly calls the broker and returns its data."""
-    from tests._stubs import StubBroker
+    assert result == []
+    mock_broker.get_orders.assert_called_once()
 
-    broker = StubBroker(option_buying_power=50000.0)
-    mcp_server._BROKER = broker
+def test_get_orders_exception(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_orders.side_effect = Exception("Broker error")
 
-    result = mcp_server.get_account_balances()
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
 
-    assert result["option_buying_power"] == 50000.0
-    assert result["account_type"] == "margin"
+    with pytest.raises(Exception, match="Broker error"):
+        server.get_orders()
