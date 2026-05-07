@@ -8,11 +8,12 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from hermes.common import OCC_RE
 
 if TYPE_CHECKING:
     # Imported only for type checking — resolves the F821 forward references
@@ -67,8 +68,9 @@ class MoneyManager:
         # Map: (strategy_id, symbol, side_type) -> lots
         self._broker_order_counts: Dict[Tuple[str, str, str], int] = {}
 
-    # OCC option symbol regex: SYMBOL YYMMDD P|C STRIKE(8)
-    _OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
+    # OCC option symbol regex lives in hermes.common so DB-side parsing in
+    # record_pending_order shares one definition with this matcher.
+    _OCC_RE = OCC_RE
 
     def sync_broker_orders(self) -> None:
         """Fetch all active orders from the broker and cache their counts.
