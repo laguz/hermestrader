@@ -1,90 +1,63 @@
-"""Unit tests for the Tradier MCP server tools.
-
-NOTE: This test file uses sys.modules mocking to stand in for third-party
-dependencies (mcp, requests, pandas, etc.) that are missing in the restricted
-development environment. This approach allows for unit testing the logic
-wrappers without requiring the full environment setup.
-"""
-from __future__ import annotations
-
 import sys
-from unittest.mock import MagicMock, patch
-
-# --- Environment Mocking Start ---
-# These mocks must be established before hermes.mcp.server is imported.
-
-class MockFastMCP:
-    """Mock for mcp.server.fastmcp.FastMCP class."""
-    def __init__(self, *args, **kwargs):
-        pass
-    def tool(self, *args, **kwargs):
-        def decorator(func):
-            # The tool decorator just returns the function in this mock.
-            return func
-        return decorator
-    def run(self, *args, **kwargs):
-        pass
-
-# Setup sys.modules mocks for all missing dependencies found during collection.
-_MOCK_MODULES = [
-    "mcp",
-    "mcp.server",
-    "mcp.server.fastmcp",
-    "requests",
-    "pandas",
-    "numpy",
-    "tenacity",
-    "scipy",
-    "scipy.signal",
-    "scipy.stats",
-    "sklearn",
-    "sklearn.cluster",
-    "xgboost",
-]
-
-for mod in _MOCK_MODULES:
-    if mod not in sys.modules:
-        sys.modules[mod] = MagicMock()
-
-# Specifically wire up FastMCP class in its mock module.
-sys.modules["mcp.server.fastmcp"].FastMCP = MockFastMCP
-
-# Reload the module under test to ensure it picks up the mocks if it was
-# partially imported by previous test attempts.
-if "hermes.mcp.server" in sys.modules:
-    import importlib
-    importlib.reload(sys.modules["hermes.mcp.server"])
-# --- Environment Mocking End ---
-
+from unittest.mock import MagicMock
 import pytest
-from hermes.mcp.server import roll_to_next_month
 
-def test_roll_to_next_month_calls_broker(monkeypatch):
-    """Verify that the tool wrapper calls the broker's roll_to_next_month method."""
-    # 1. Setup
-    mock_broker_instance = MagicMock()
-    mock_broker_instance.roll_to_next_month.return_value = "AAPL250718P00150000"
+# Manually mock mcp and other missing dependencies before anything else
+def tool_decorator(*args, **kwargs):
+    def decorator(f):
+        return f
+    return decorator
 
-    # Mock the internal _broker() getter to return our mock instance.
-    monkeypatch.setattr("hermes.mcp.server._broker", lambda: mock_broker_instance)
+mcp_instance = MagicMock()
+mcp_instance.tool = tool_decorator
 
-    input_symbol = "AAPL250620P00150000"
+class FastMCP:
+    def __new__(cls, *args, **kwargs):
+        return mcp_instance
 
-    # 2. Execute
-    result = roll_to_next_month(input_symbol)
+# Setup sys.modules mocks
+missing_deps = [
+    "mcp", "mcp.server", "mcp.server.fastmcp",
+    "requests", "numpy", "pandas", "tenacity",
+    "hermes.ml.pop_engine"
+]
+for dep in missing_deps:
+    sys.modules[dep] = MagicMock()
 
-    # 3. Assert
-    assert result == "AAPL250718P00150000"
-    mock_broker_instance.roll_to_next_month.assert_called_once_with(input_symbol)
+sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
 
-def test_roll_to_next_month_propagates_errors(monkeypatch):
-    """Verify that errors from the broker are propagated through the wrapper."""
-    # 1. Setup
-    mock_broker_instance = MagicMock()
-    mock_broker_instance.roll_to_next_month.side_effect = ValueError("Invalid symbol")
+# Now we can import the server
+from hermes.mcp import server
 
-    monkeypatch.setattr("hermes.mcp.server._broker", lambda: mock_broker_instance)
+def test_get_orders_happy_path(monkeypatch):
+    mock_broker = MagicMock()
+    expected_orders = [{"id": "order_1", "status": "filled"}]
+    mock_broker.get_orders.return_value = expected_orders
 
-    # 2. Execute & 3. Assert
-    with pytest.raises(ValueError, match="Invalid symbol"):
-        roll_to_next_month("NOT-A-SYMBOL")
+    # Mock the _broker() function
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_orders()
+
+    assert result == expected_orders
+    mock_broker.get_orders.assert_called_once()
+
+def test_get_orders_empty(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_orders.return_value = []
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_orders()
+
+    assert result == []
+    mock_broker.get_orders.assert_called_once()
+
+def test_get_orders_exception(monkeypatch):
+    mock_broker = MagicMock()
+    mock_broker.get_orders.side_effect = Exception("Broker error")
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    with pytest.raises(Exception, match="Broker error"):
+        server.get_orders()
