@@ -154,7 +154,7 @@ class CreditSpreads75(AbstractStrategy):
         max_level_pop = 0.0
 
         target_type = "support" if side == "put" else "resistance"
-        levels = [l for l in analysis.get("key_levels", []) if l.get("type") == target_type]
+        levels = [lvl for lvl in analysis.get("key_levels", []) if lvl.get("type") == target_type]
 
         for level in levels:
             lvl_pop = level.get("pop", 0.0)
