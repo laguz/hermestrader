@@ -95,10 +95,11 @@ class MoneyManager:
 
             tag = str(o.get("tag", "") or "")
             # Tradier's tag sanitiser converts '_' to '-' so 'HERMES_CS75'
-            # arrives back as 'HERMES-CS75'. Accept both shapes.
-            if not (tag.startswith("HERMES_") or tag.startswith("HERMES-")):
+            # arrives back as 'HERMES-CS75'. Normalise to hyphens for matching.
+            normalised_tag = tag.replace("_", "-")
+            if not normalised_tag.startswith("HERMES-"):
                 continue
-            strategy_id = tag[len("HERMES_"):].split("-", 1)[0].split("_", 1)[0]
+            strategy_id = normalised_tag[len("HERMES-"):].split("-", 1)[0]
             if not strategy_id:
                 continue
             symbol = str(o.get("symbol", "")).upper()
