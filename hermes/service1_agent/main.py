@@ -15,7 +15,6 @@ from hermes.common import (
     DEFAULT_LLM_TIMEOUT_S,
     STRATEGY_PRIORITIES,
     VALID_AUTONOMY,
-    VALID_LLM_PROVIDERS,
     VALID_MODES,
 )
 from hermes.utils import decrypt_value
@@ -59,7 +58,7 @@ SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
 def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
 
-# VALID_MODES, VALID_LLM_PROVIDERS, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
+# VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
 
