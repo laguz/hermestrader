@@ -12,9 +12,9 @@ import pickle
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dtime, timezone
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -276,7 +276,6 @@ class AsyncXGBPredictor:
     # -- background loop -----------------------------------------------------
     def _loop(self) -> None:
         from hermes.market_hours import ET
-        from datetime import datetime
         
         last_train = 0.0
         last_pred_tuple = None
@@ -320,7 +319,6 @@ class AsyncXGBPredictor:
                             pass
                     
                     try:
-                        from datetime import timezone
                         self.db.set_setting("ml_last_ok_ts", datetime.now(timezone.utc).isoformat())
                         
                         all_warns = retrain_warnings + predict_warnings
@@ -360,7 +358,6 @@ class AsyncXGBPredictor:
             logger.warning("HermesDB missing save_daily_bars method. Cannot sync history.")
             return
 
-        from datetime import date, timedelta
         end_date = date.today()
         start_date = end_date - timedelta(days=400)
         

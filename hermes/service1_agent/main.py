@@ -15,11 +15,10 @@ from hermes.common import (
     DEFAULT_LLM_TIMEOUT_S,
     STRATEGY_PRIORITIES,
     VALID_AUTONOMY,
-    VALID_LLM_PROVIDERS,
     VALID_MODES,
 )
 from hermes.utils import decrypt_value
-from hermes.market_hours import is_market_open, market_session, next_open, session_label
+from hermes.market_hours import market_session, next_open, session_label
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.service1_agent.overseer import HermesOverseer
@@ -59,7 +58,7 @@ SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
 def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
 
-# VALID_MODES, VALID_LLM_PROVIDERS, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
+# VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
 
