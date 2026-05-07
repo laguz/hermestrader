@@ -133,8 +133,13 @@ def test_find_active_ic_returns_none_when_all_complete():
 # ---------------------------------------------------------------------------
 def test_record_pending_derives_side_from_occ_when_side_type_missing():
     """The OCC-side fallback in record_pending_order is unit-testable
-    without a database: import and call the helper regex directly."""
-    from hermes.db.models import _OCC_RE
+    without a database: import the shared regex and call it directly.
+
+    Importing from hermes.common (rather than hermes.db.models) keeps the
+    test free of SQLAlchemy/psycopg, which lets it run on dev machines
+    that don't have the DB driver installed.
+    """
+    from hermes.common import OCC_RE as _OCC_RE
 
     # Put leg
     m = _OCC_RE.match("AAPL250620P00150000")

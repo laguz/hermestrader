@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from .core import TradeAction
@@ -175,10 +176,10 @@ class HermesOverseer:
             # Clear any stored LLM error on success.
             try:
                 self.db.set_setting("llm_last_error", "")
-                self.db.set_setting("llm_last_ok_ts",
-                                    __import__("datetime").datetime.now(
-                                        __import__("datetime").timezone.utc
-                                    ).isoformat(timespec="seconds"))
+                self.db.set_setting(
+                    "llm_last_ok_ts",
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                )
             except Exception:                                          # noqa: BLE001
                 pass
             return self._safe_json(msg)

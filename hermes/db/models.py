@@ -4,13 +4,8 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
-
-# OCC option symbol — used to derive put/call from a leg's option_symbol when
-# the calling strategy didn't populate strategy_params.side_type.
-_OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
@@ -19,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from hermes.common import OCC_RE as _OCC_RE
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
 
 import pandas as pd

@@ -15,9 +15,25 @@ class MockBroker:
         self.current_date = None  # Use system time
 
     def get_account_balances(self) -> Dict[str, Any]:
-        return {"option_buying_power": 100000.0, "cash": 50000.0}
+        # account_type matches the field MoneyManager logs and Tradier returns
+        # ("margin" / "pdt" / "cash") — without it, debug lines render as None.
+        return {
+            "option_buying_power": 100000.0,
+            "stock_buying_power": 100000.0,
+            "cash": 50000.0,
+            "total_equity": 100000.0,
+            "account_type": "margin",
+        }
 
     def get_positions(self) -> List[Dict[str, Any]]:
+        return []
+
+    def get_orders(self) -> List[Dict[str, Any]]:
+        # CascadingEngine.tick() → MoneyManager.sync_broker_orders() calls
+        # this. Without it the call raised AttributeError, was swallowed by
+        # the except clause, and mock-mode broker-side capacity tracking
+        # ran on an empty cache forever. Returning [] keeps mock capacity
+        # calculations consistent (no resting broker orders) without crashing.
         return []
 
     def get_option_expirations(self, symbol: str) -> List[str]:

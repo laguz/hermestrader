@@ -12,7 +12,7 @@ import pickle
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, time as dtime, timedelta
+from datetime import datetime, time as dtime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -422,7 +422,7 @@ class AsyncXGBPredictor:
             spot = float(self.db.last_price(sym) or 0.0)
             predicted_price = round(spot * (1 + yhat), 4)
             self._last_pred[sym] = {
-                "asof": datetime.utcnow(),
+                "asof": datetime.now(timezone.utc),
                 "predicted_return": yhat,
                 "predicted_price": predicted_price,
                 "spot": spot,

@@ -20,7 +20,7 @@ import io
 import logging
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -178,7 +178,7 @@ def render_chart(df: pd.DataFrame, symbol: str, lookback: int = 210) -> bytes:
 
     # Watermark
     fig.text(0.99, 0.01,
-             f"Hermes · {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
+             f"Hermes · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
              ha="right", va="bottom", color="#30363d", fontsize=7)
 
     buf = io.BytesIO()
@@ -262,7 +262,7 @@ class HermesChartProvider:
                 "verdict":   verdict,
                 "rationale": rationale,
                 "features":  features or {},
-                "ts":        datetime.utcnow().isoformat(timespec="seconds"),
+                "ts":        datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
 
     def latest_analysis(self, symbol: str) -> Optional[dict]:
