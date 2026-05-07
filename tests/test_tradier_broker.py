@@ -1,13 +1,4 @@
-
-import sys
-from unittest.mock import MagicMock, patch
-
-# Mock all dependencies before importing TradierBroker
-sys.modules["numpy"] = MagicMock()
-sys.modules["pandas"] = MagicMock()
-sys.modules["requests"] = MagicMock()
-sys.modules["tenacity"] = MagicMock()
-sys.modules["hermes.ml.pop_engine"] = MagicMock()
+from unittest.mock import patch
 
 from hermes.broker.tradier import TradierBroker
 
