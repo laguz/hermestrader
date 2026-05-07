@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from hermes.common import DEFAULT_LLM_TIMEOUT_S, VALID_LLM_PROVIDERS
+from hermes.utils import decrypt_value, encrypt_value
 
 from .._app_state import (
     DEFAULT_LLM_BASE_URL,
@@ -44,7 +45,7 @@ def _read_llm_config() -> Dict[str, Any]:
         provider = "mock"
     base_url = (db.get_setting(SETTING_LLM_BASE_URL) or DEFAULT_LLM_BASE_URL).strip()
     model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
-    api_key = (db.get_setting(SETTING_LLM_API_KEY) or "").strip()
+    api_key = decrypt_value((db.get_setting(SETTING_LLM_API_KEY) or "").strip())
     try:
         temperature = float(db.get_setting(SETTING_LLM_TEMPERATURE) or 0.2)
     except ValueError:
@@ -112,7 +113,7 @@ def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
     if body.model is not None:
         db.set_setting(SETTING_LLM_MODEL, body.model.strip())
     if body.api_key is not None:
-        db.set_setting(SETTING_LLM_API_KEY, body.api_key.strip())
+        db.set_setting(SETTING_LLM_API_KEY, encrypt_value(body.api_key.strip()))
     if body.temperature is not None:
         if not (0.0 <= body.temperature <= 2.0):
             raise HTTPException(status_code=400, detail="temperature must be in [0.0, 2.0]")
