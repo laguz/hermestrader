@@ -9,10 +9,10 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, Sequence, String, Text, create_engine,
+    Numeric, Sequence, String, Text, create_engine, text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from hermes.common import OCC_RE as _OCC_RE
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
@@ -185,7 +185,7 @@ class HermesDB:
 
     def __init__(self, dsn: str):
         self.engine = create_engine(dsn, pool_pre_ping=True, future=True)
-        self.Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
+        self.Session: sessionmaker[Session] = sessionmaker(self.engine, expire_on_commit=False, future=True)
         # Defensive: create any ORM-mapped tables that don't already exist.
         # schema.sql is the source of truth (TimescaleDB hypertables, indexes,
         # compression policies, continuous aggregates), but if it was never
@@ -348,8 +348,7 @@ class HermesDB:
     # ---- watchlist CRUD ---------------------------------------------------
     def list_watchlist(self, strategy_id: str) -> List[str]:
         with self.Session() as s:
-            from sqlalchemy import text as sa_text
-            rows = s.execute(sa_text(
+            rows = s.execute(text(
                 "SELECT symbol FROM strategy_watchlists WHERE strategy_id = :sid ORDER BY symbol"
             ), {"sid": strategy_id}).fetchall()
             return [r[0] for r in rows]
@@ -360,10 +359,9 @@ class HermesDB:
         """
         out = {}
         with self.Session() as s:
-            from sqlalchemy import text as sa_text
             try:
                 # Attempt to fetch with target_lots
-                rows = s.execute(sa_text(
+                rows = s.execute(text(
                     "SELECT symbol, target_lots FROM strategy_watchlists WHERE strategy_id = :sid"
                 ), {"sid": strategy_id}).fetchall()
                 for r in rows:
@@ -371,7 +369,7 @@ class HermesDB:
             except Exception:
                 # Fallback: table exists but column might not
                 s.rollback()
-                rows = s.execute(sa_text(
+                rows = s.execute(text(
                     "SELECT symbol FROM strategy_watchlists WHERE strategy_id = :sid"
                 ), {"sid": strategy_id}).fetchall()
                 for r in rows:
@@ -380,8 +378,7 @@ class HermesDB:
 
     def list_all_watchlists(self) -> Dict[str, List[str]]:
         with self.Session() as s:
-            from sqlalchemy import text as sa_text
-            rows = s.execute(sa_text(
+            rows = s.execute(text(
                 "SELECT strategy_id, symbol FROM strategy_watchlists ORDER BY strategy_id, symbol"
             )).fetchall()
             out: Dict[str, List[str]] = {}
@@ -745,8 +742,6 @@ class HermesDB:
                 reset_df = reset_df.rename(columns={'index': 'ts'})
         else:
             reset_df = df.copy()
-            
-        from sqlalchemy.dialects.postgresql import insert
         
         data = []
         for _, row in reset_df.iterrows():
@@ -791,8 +786,6 @@ class HermesDB:
                 reset_df = reset_df.rename(columns={'index': 'ts'})
         else:
             reset_df = df.copy()
-
-        from sqlalchemy.dialects.postgresql import insert
         
         data = []
         for _, row in reset_df.iterrows():
