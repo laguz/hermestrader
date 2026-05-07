@@ -61,3 +61,27 @@ def test_get_orders_exception(monkeypatch):
 
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
+
+def test_get_history_defaults(monkeypatch):
+    mock_broker = MagicMock()
+    expected_data = [{"date": "2023-01-01", "close": 150.0}]
+    mock_broker.get_history.return_value = expected_data
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_history(symbol="AAPL")
+
+    assert result == expected_data
+    mock_broker.get_history.assert_called_once_with("AAPL", interval="daily", start=None, end=None)
+
+def test_get_history_custom_params(monkeypatch):
+    mock_broker = MagicMock()
+    expected_data = [{"date": "2023-01-01", "close": 150.0}]
+    mock_broker.get_history.return_value = expected_data
+
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.get_history(symbol="AAPL", interval="weekly", start="2023-01-01", end="2023-01-07")
+
+    assert result == expected_data
+    mock_broker.get_history.assert_called_once_with("AAPL", interval="weekly", start="2023-01-01", end="2023-01-07")
