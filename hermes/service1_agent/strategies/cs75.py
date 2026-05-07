@@ -236,16 +236,29 @@ class CreditSpreads75(AbstractStrategy):
     def manage_positions(self) -> List[TradeAction]:
         """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE."""
         actions: List[TradeAction] = []
-        for trade in self.db.open_trades(self.strategy_id):
+        trades = self.db.open_trades(self.strategy_id)
+        if not trades:
+            return actions
+
+        # Batch fetch quotes for all legs to eliminate N+1 API calls.
+        symbols = set()
+        for t in trades:
+            symbols.add(t["short_leg"])
+            symbols.add(t["long_leg"])
+
+        raw_quotes = self.broker.get_quote(",".join(symbols)) or []
+        quotes = {q["symbol"]: q for q in raw_quotes if "symbol" in q}
+
+        for trade in trades:
             short_leg, long_leg = trade["short_leg"], trade["long_leg"]
             entry_credit = float(trade["entry_credit"])
             info = parse_occ(short_leg)
             if not info:
                 continue
             dte = (info["expiry"] - self.today()).days
-            quotes = self.broker.get_quote(f"{short_leg},{long_leg}") or []
-            sq = next((q for q in quotes if q["symbol"] == short_leg), None)
-            lq = next((q for q in quotes if q["symbol"] == long_leg), None)
+
+            sq = quotes.get(short_leg)
+            lq = quotes.get(long_leg)
             if not (sq and lq):
                 continue
             debit = round(float(sq["ask"]) - float(lq["bid"]), 2)
