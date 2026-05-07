@@ -15,13 +15,17 @@ import pytest
 from hermes.service1_agent.core import AbstractStrategy
 from hermes.service1_agent.main import _parse_iso as _parse_iso_main
 
-# api.py instantiates a HermesDB at module load, which needs the psycopg
-# driver (installed in CI via requirements.txt). Skip the api side locally
-# if it isn't available so this test file is still useful in dev.
+# The watcher's parse_iso lives in _app_state (it was extracted from
+# api.py during the router split — PR B). Importing _app_state requires
+# psycopg because it constructs a ``HermesDB(DSN)`` at module load;
+# CI installs psycopg via requirements.txt, but dev machines without it
+# should still be able to run the rest of this test file.  Catch both
+# ModuleNotFoundError (psycopg missing entirely) and ImportError
+# (anything else that fails during module load).
 try:
-    from hermes.service2_watcher.api import _parse_iso as _parse_iso_api
+    from hermes.service2_watcher._app_state import parse_iso as _parse_iso_api
     _PARSERS = [_parse_iso_main, _parse_iso_api]
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     _PARSERS = [_parse_iso_main]
 
 
