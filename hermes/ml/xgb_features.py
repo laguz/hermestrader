@@ -70,7 +70,10 @@ class FeatureEngineer:
     # 3. SPY beta residual
     def spy_beta_residual(self, daily: pd.DataFrame, spy: pd.DataFrame) -> pd.Series:
         ret = daily["close"].pct_change()
-        spy_ret = spy["close"].reindex(daily.index).pct_change()
+        # Compute SPY returns first, then align — reindexing the price series
+        # before pct_change would compute returns across non-adjacent rows
+        # whenever the two calendars diverge.
+        spy_ret = spy["close"].pct_change().reindex(daily.index)
         beta = (
             ret.rolling(self.beta_lookback).cov(spy_ret)
             / spy_ret.rolling(self.beta_lookback).var()
@@ -104,22 +107,35 @@ class FeatureEngineer:
         if intraday is None or intraday.empty:
             return pd.Series(dtype=float, name="last30_pct")
         intraday = intraday.copy()
-        
+
         # Ensure the index is a DatetimeIndex before accessing .date / .time
         if not isinstance(intraday.index, pd.DatetimeIndex):
             try:
                 intraday.index = pd.to_datetime(intraday.index)
             except Exception:
                 return pd.Series(dtype=float, name="last30_pct")
-                
-        intraday["date"] = intraday.index.date
-        last30_mask = intraday.index.time >= dtime(15, 30)
-        per_day = intraday.groupby("date")["volume"].sum()
-        per_last30 = intraday[last30_mask].groupby("date")["volume"].sum()
+
+        # The 15:30-16:00 window is in US/Eastern. Convert (or assume-localize)
+        # the index to ET so the mask matches the regular-session close
+        # regardless of how the broker delivered the timestamps.
+        idx_et = intraday.index
+        if idx_et.tz is None:
+            idx_et = idx_et.tz_localize("UTC").tz_convert("America/New_York")
+        else:
+            idx_et = idx_et.tz_convert("America/New_York")
+
+        times = idx_et.time
+        last30_mask = (times >= dtime(15, 30)) & (times < dtime(16, 0))
+        # Group on the ET calendar date — using the raw index date would split
+        # the closing window across two UTC days in winter sessions.
+        et_dates = pd.Index([t.date() for t in idx_et])
+
+        per_day = intraday["volume"].groupby(et_dates).sum()
+        per_last30 = intraday["volume"][last30_mask].groupby(et_dates[last30_mask]).sum()
         out = (per_last30 / per_day).rename("last30_pct")
-        out.index = pd.to_datetime(out.index)
-        if intraday.index.tz is not None:
-            out.index = out.index.tz_localize(intraday.index.tz)
+        # Emit a tz-naive DatetimeIndex of ET calendar dates so the result
+        # aligns with the (typically naive) daily-bar index in build().
+        out.index = pd.DatetimeIndex(pd.to_datetime(out.index))
         return out
 
     # 9. Realised volatility 5d (annualised)
@@ -151,6 +167,12 @@ class FeatureEngineer:
         df["day_of_week"] = dow
         df["month"] = month
         df["symbol"] = symbol
+        # Halted bars (high == low), zero-variance windows, and zero SPY
+        # variance can introduce +/-inf into individual features. XGBoost
+        # would happily fit those rows; coerce them to NaN so dropna() drops
+        # the whole row instead.
+        numeric_cols = df.columns.difference(["symbol"])
+        df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
         return df.dropna()
 
 
@@ -212,21 +234,27 @@ class AsyncXGBPredictor:
 
     def _load_models(self) -> None:
         """Load any previously checkpointed models so the predictor is
-        immediately useful before the first retrain cycle completes."""
+        immediately useful before the first retrain cycle completes.
+
+        Scans the model directory rather than iterating the constructor
+        watchlist — strategy watchlists can add symbols beyond ``self.symbols``,
+        and those models also need to warm-start after a restart.
+        """
         try:
             self._model_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.warning("Cannot create model dir %s: %s", self._model_dir, exc)
             return
-        for sym in self.symbols:
-            p = self._model_path(sym)
-            if p.exists():
-                try:
-                    with p.open("rb") as f:
-                        self._models[sym] = pickle.load(f)  # noqa: S301
-                    logger.info("Loaded checkpointed xgb model for %s from %s", sym, p)
-                except Exception as exc:                     # noqa: BLE001
-                    logger.warning("Failed to load model for %s: %s", sym, exc)
+        for p in sorted(self._model_dir.glob("xgb_*.pkl")):
+            sym = p.stem[len("xgb_"):]
+            if not sym:
+                continue
+            try:
+                with p.open("rb") as f:
+                    self._models[sym] = pickle.load(f)  # noqa: S301
+                logger.info("Loaded checkpointed xgb model for %s from %s", sym, p)
+            except Exception as exc:                     # noqa: BLE001
+                logger.warning("Failed to load model for %s: %s", sym, exc)
 
     def _save_model(self, symbol: str, model: Any) -> None:
         """Persist a trained model to disk for warm-start on next boot."""
