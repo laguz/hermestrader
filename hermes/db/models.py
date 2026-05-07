@@ -4,15 +4,15 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, PrimaryKeyConstraint, Sequence, String, Text, create_engine,
+    Numeric, Sequence, String, Text, create_engine,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from hermes.common import OCC_RE as _OCC_RE
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
