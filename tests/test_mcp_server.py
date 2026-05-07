@@ -61,3 +61,29 @@ def test_get_orders_exception(monkeypatch):
 
     with pytest.raises(Exception, match="Broker error"):
         server.get_orders()
+
+def test_analyze_symbol_default_params(monkeypatch):
+    mock_broker = MagicMock()
+    expected_result = {"symbol": "AAPL", "price": 150.0}
+    mock_broker.analyze_symbol.return_value = expected_result
+
+    # Mock the _broker() function
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.analyze_symbol("AAPL")
+
+    assert result == expected_result
+    mock_broker.analyze_symbol.assert_called_once_with("AAPL", period="6m")
+
+def test_analyze_symbol_custom_params(monkeypatch):
+    mock_broker = MagicMock()
+    expected_result = {"symbol": "AAPL", "price": 150.0}
+    mock_broker.analyze_symbol.return_value = expected_result
+
+    # Mock the _broker() function
+    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+
+    result = server.analyze_symbol("AAPL", period="1y")
+
+    assert result == expected_result
+    mock_broker.analyze_symbol.assert_called_once_with("AAPL", period="1y")
