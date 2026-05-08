@@ -65,7 +65,13 @@ class CreditSpreads7(AbstractStrategy):
                     symbol_meta = detailed_wl.get(symbol, {})
                     target_lots = symbol_meta.get("target_lots") or target_lots_global
 
-                max_lots = target_lots
+                # `max_lots_global` is the strategy-level hard cap (the
+                # user-controlled `cs7_max_lots` setting). `target_lots` is
+                # the per-entry desired size. Capacity must enforce the hard
+                # cap; trim target down to it so a per-symbol override
+                # never exceeds the strategy ceiling.
+                max_lots = max_lots_global
+                target_lots = min(target_lots, max_lots_global)
 
                 analysis = self.broker.analyze_symbol(symbol, period="3m")
                 if not analysis or "error" in analysis:

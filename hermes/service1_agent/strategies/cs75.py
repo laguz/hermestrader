@@ -73,7 +73,12 @@ class CreditSpreads75(AbstractStrategy):
                     symbol_meta = detailed_wl.get(symbol, {})
                     target_lots = symbol_meta.get("target_lots") or target_lots_global
 
-                max_lots = target_lots
+                # `max_lots_global` (cs75_max_lots) is the strategy hard
+                # cap; `target_lots` is the per-entry desired size. Enforce
+                # the cap and trim target so a watchlist override never
+                # exceeds it.
+                max_lots = max_lots_global
+                target_lots = min(target_lots, max_lots_global)
 
                 analysis = self.broker.analyze_symbol(symbol, period="6m")
                 if not analysis or "error" in analysis:
