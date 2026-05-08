@@ -56,10 +56,54 @@ class MockBroker:
         return 0.15
 
     def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
+        """Mirror TradierBroker.analyze_symbol over mock bars so the K-Means
+        S/R panel renders in dev/paper mode without real Tradier credentials."""
+        import numpy as np
+        import pandas as pd
+        from hermes.ml.pop_engine import find_key_levels
+
+        bars = self.get_history(symbol, interval="daily")
+        if not bars:
+            return {"error": f"no history for {symbol}"}
+        df = pd.DataFrame(bars)
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+        df = df.dropna(subset=["close", "volume"])
+        if df.empty:
+            return {"error": f"invalid history data for {symbol}"}
+
+        # Mock get_history is reverse-chronological (i=0 is today). Sort
+        # ascending so recency-weighted clustering treats the latest bars
+        # as the most recent.
+        if "date" in df.columns:
+            df = df.sort_values("date").reset_index(drop=True)
+
+        current = float(df["close"].iloc[-1])
+        key_levels = find_key_levels(df["close"], df["volume"], window=5, n_clusters=6)
+
+        log_ret = np.log(df["close"] / df["close"].shift(1)).dropna()
+        realized_vol = float(log_ret.iloc[-21:].std() * np.sqrt(252)) if len(log_ret) >= 21 else 0.0
+        avg_vol = float(log_ret.std() * np.sqrt(252)) if len(log_ret) >= 2 else 0.0
+        if not np.isfinite(realized_vol):
+            realized_vol = 0.0
+        if not np.isfinite(avg_vol):
+            avg_vol = 0.0
+
+        put_entries = [lvl for lvl in key_levels if lvl.get("type") == "support"]
+        call_entries = [lvl for lvl in key_levels if lvl.get("type") == "resistance"]
+        put_entries.sort(key=lambda x: abs(x["price"] - current))
+        call_entries.sort(key=lambda x: abs(x["price"] - current))
+
         return {
-            "current_price": 155.0,
-            "put_entry_points": [{"price": 145.0, "pop": 80}, {"price": 140.0, "pop": 90}],
-            "call_entry_points": [{"price": 165.0, "pop": 80}, {"price": 170.0, "pop": 90}],
+            "symbol": symbol,
+            "current_price": current,
+            "current_vol": realized_vol,
+            "avg_vol": avg_vol,
+            "key_levels": key_levels,
+            "put_entry_points": put_entries,
+            "call_entry_points": call_entries,
+            "samples": len(df),
+            "period": period,
         }
 
     def get_history(self, symbol: str, interval: str = "daily",

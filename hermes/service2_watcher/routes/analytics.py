@@ -245,19 +245,30 @@ def _build_broker_for_analysis():
     Inlined here (rather than re-using a global) so the analysis endpoints
     pick up mode toggles immediately without a watcher restart. The agent
     has its own broker instance — these are independent.
+
+    Falls back to MockBroker when no Tradier credentials are configured,
+    so the K-Means S/R panel still renders in dev/demo mode (matches what
+    the agent does for its own broker).
     """
     from hermes.broker.tradier import TradierBroker
     mode = os.environ.get("HERMES_MODE", "paper").lower()
     if mode == "paper":
-        token = os.environ.get("TRADIER_PAPER_TOKEN") or os.environ.get("TRADIER_ACCESS_TOKEN")
+        token = (os.environ.get("TRADIER_PAPER_TOKEN")
+                 or os.environ.get("TRADIER_ACCESS_TOKEN")
+                 or os.environ.get("TRADIER_API_KEY"))
         account = os.environ.get("TRADIER_PAPER_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
         url = (os.environ.get("TRADIER_PAPER_BASE_URL")
                or os.environ.get("TRADIER_ENDPOINT")
                or "https://sandbox.tradier.com/v1")
     else:
-        token = os.environ.get("TRADIER_LIVE_TOKEN") or os.environ.get("TRADIER_ACCESS_TOKEN")
+        token = (os.environ.get("TRADIER_LIVE_TOKEN")
+                 or os.environ.get("TRADIER_ACCESS_TOKEN")
+                 or os.environ.get("TRADIER_API_KEY"))
         account = os.environ.get("TRADIER_LIVE_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
         url = os.environ.get("TRADIER_LIVE_BASE_URL") or "https://api.tradier.com/v1"
+    if not token or not account:
+        from hermes.service1_agent.mock_broker import MockBroker
+        return MockBroker({})
     return TradierBroker({
         "tradier_access_token": token,
         "tradier_account_id": account,

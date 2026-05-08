@@ -70,6 +70,7 @@ class Trade(Base):
     close_reason = Column(String)
     ai_authored = Column(Boolean, default=False)
     ai_rationale = Column(Text)
+    broker_order_id = Column(String)
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
@@ -332,15 +333,230 @@ class HermesDB:
             ))
             s.commit()
 
-    def record_order_response(self, action, response) -> None:
-        # In production: also persist into trades on fill via webhook/poll.
-        self.write_log(action.strategy_id,
-                       f"order response for {action.symbol}: {response}")
+    # ------------------------------------------------------------------
+    # Order response → trades persistence
+    #
+    # When the broker accepts an order we write a Trade row immediately so
+    # `count_open_contracts` reflects the new exposure on the very next
+    # tick. We then drop the matching `pending_orders` row so capacity is
+    # not double-counted (PendingOrder + Trade for the same fill).
+    #
+    # Rejections (Tradier returns ``status='rejected'`` or an HTTP error
+    # surfaced as ``error`` in the parsed body) leave the trades table
+    # untouched and free the pending row so the cap recovers.
+    # ------------------------------------------------------------------
+    _REJECT_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
 
-    def upsert_positions(self, positions: List[Dict[str, Any]]) -> None:
-        # Implementation-dependent: we rely on broker as source of truth and
-        # simply log; the trades table is the bot's authoritative record.
-        self.write_log("ENGINE", f"synced {len(positions)} positions")
+    def record_order_response(self, action, response) -> None:
+        order = (response or {}).get("order") if isinstance(response, dict) else None
+        order_status = ""
+        broker_order_id: Optional[str] = None
+        if isinstance(order, dict):
+            order_status = str(order.get("status", "")).lower()
+            broker_order_id = (
+                str(order["id"]) if order.get("id") is not None else None
+            )
+
+        rejected = (
+            (isinstance(response, dict) and "errors" in response)
+            or order_status in self._REJECT_STATUSES
+        )
+
+        # Resolve lots from the first sell/open leg (matches record_pending_order)
+        lots = action.quantity or 1
+        for leg in (action.legs or []):
+            leg_side = (leg.get("side") or "").lower()
+            if "sell" in leg_side or "open" in leg_side:
+                try:
+                    lots = int(leg["quantity"])
+                except (KeyError, TypeError, ValueError):
+                    pass
+                break
+
+        side_value = (action.strategy_params or {}).get("side_type")
+        if not side_value or side_value.lower() in {"buy", "sell"}:
+            side_value = None
+            for leg in (action.legs or []):
+                m = _OCC_RE.match(str(leg.get("option_symbol", "") or ""))
+                if m:
+                    side_value = "put" if m.group(3) == "P" else "call"
+                    break
+
+        self._consume_matching_pending(
+            strategy_id=action.strategy_id, symbol=action.symbol,
+            side=(side_value or action.side or "").lower(), lots=lots,
+            terminal_status="REJECTED" if rejected else "SUBMITTED",
+        )
+
+        if rejected:
+            self.write_log(
+                action.strategy_id,
+                f"[ORDER REJECTED] {action.symbol} side={side_value} "
+                f"qty={lots} response={response}",
+            )
+            return
+
+        sp = action.strategy_params or {}
+        short_leg = sp.get("short_leg")
+        long_leg = sp.get("long_leg")
+        if not short_leg or not long_leg:
+            for leg in (action.legs or []):
+                ls = (leg.get("side") or "").lower()
+                osym = leg.get("option_symbol")
+                if not osym:
+                    continue
+                if not short_leg and ("sell" in ls or "open" in ls and "sell" in ls):
+                    short_leg = osym
+                elif not long_leg and ("buy" in ls or "open" in ls and "buy" in ls):
+                    long_leg = osym
+
+        short_strike = self._extract_strike(short_leg)
+        long_strike = self._extract_strike(long_leg)
+        width = action.width
+        if width is None and short_strike is not None and long_strike is not None:
+            width = abs(float(short_strike) - float(long_strike))
+
+        expiry_date = None
+        if action.expiry:
+            try:
+                expiry_date = datetime.strptime(str(action.expiry), "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                expiry_date = None
+
+        entry_credit = None
+        entry_debit = None
+        ot = (action.order_type or "").lower()
+        if action.price is not None:
+            if ot == "credit" or (ot == "" and (action.side or "").lower() == "sell"):
+                entry_credit = float(action.price)
+            else:
+                entry_debit = float(action.price)
+
+        with self.Session() as s:
+            s.add(Trade(
+                strategy_id=action.strategy_id,
+                symbol=action.symbol,
+                side_type=(side_value or "unknown").lower(),
+                short_leg=short_leg,
+                long_leg=long_leg,
+                short_strike=short_strike,
+                long_strike=long_strike,
+                width=float(width) if width is not None else None,
+                lots=lots,
+                entry_credit=entry_credit,
+                entry_debit=entry_debit,
+                expiry=expiry_date,
+                status="OPEN",
+                ai_authored=bool(getattr(action, "ai_authored", False)),
+                ai_rationale=getattr(action, "ai_rationale", None),
+                broker_order_id=broker_order_id,
+            ))
+            s.commit()
+
+        self.write_log(
+            action.strategy_id,
+            f"[ORDER ACCEPTED] {action.symbol} side={side_value} qty={lots} "
+            f"order_id={broker_order_id} status={order_status or 'ok'}",
+        )
+
+    def _consume_matching_pending(self, *, strategy_id: str, symbol: str,
+                                  side: str, lots: int,
+                                  terminal_status: str) -> None:
+        """Delete the most-recent matching PendingOrder so capacity isn't
+        double-counted with the freshly-written Trade row."""
+        with self.Session() as s:
+            row = (s.query(PendingOrder)
+                   .filter(
+                       PendingOrder.strategy_id == strategy_id,
+                       PendingOrder.symbol == symbol,
+                       PendingOrder.side == side,
+                       PendingOrder.status == "PENDING",
+                   )
+                   .order_by(PendingOrder.submitted_at.desc())
+                   .first())
+            if row is None:
+                return
+            row.status = terminal_status
+            s.commit()
+
+    @staticmethod
+    def _extract_strike(occ_symbol: Optional[str]):
+        if not occ_symbol:
+            return None
+        m = _OCC_RE.match(str(occ_symbol))
+        if not m:
+            return None
+        try:
+            return int(m.group(4)) / 1000.0
+        except (TypeError, ValueError):
+            return None
+
+    # ------------------------------------------------------------------
+    # Reconciler — keep the trades table in sync with broker positions.
+    # Called every tick (CascadingEngine.sync_positions).
+    # ------------------------------------------------------------------
+    def upsert_positions(self, positions: List[Dict[str, Any]],
+                         active_order_legs: Optional[Any] = None) -> None:
+        """Reconcile OPEN trades against broker truth.
+
+        A trade is considered "alive" if any of its option legs is either
+        (a) a current filled broker position, or
+        (b) a leg of a resting/accepted broker order. Limit orders that
+        haven't filled yet do NOT show up in `get_positions`, so passing
+        only positions would incorrectly close every just-submitted spread
+        before it fills.
+        """
+        broker_qty: Dict[str, int] = {}
+        for p in positions or []:
+            sym = str(p.get("symbol", "") or "")
+            m = _OCC_RE.match(sym)
+            if not m:
+                continue                          # skip equities
+            try:
+                qty = int(round(float(p.get("quantity", 0) or 0)))
+            except (TypeError, ValueError):
+                qty = 0
+            if qty == 0:
+                continue
+            broker_qty[sym] = broker_qty.get(sym, 0) + abs(qty)
+
+        active_legs: set = set(active_order_legs or [])
+        coverage: set = set(broker_qty.keys()) | active_legs
+
+        with self.Session() as s:
+            open_trades = s.query(Trade).filter_by(status="OPEN").all()
+            closed = 0
+            for t in open_trades:
+                legs = {leg for leg in (t.short_leg, t.long_leg) if leg}
+                if legs & coverage:
+                    continue
+                t.status = "CLOSED"
+                t.closed_at = datetime.utcnow()
+                t.close_reason = "RECONCILED_BROKER_FLAT"
+                closed += 1
+            if closed:
+                s.commit()
+
+        self.write_log(
+            "ENGINE",
+            f"reconciled {len(positions or [])} broker pos; "
+            f"closed_orphans={closed} positions_legs={len(broker_qty)} "
+            f"resting_legs={len(active_legs)}",
+        )
+
+    # ------------------------------------------------------------------
+    # Schema migrations applied at watcher boot. Idempotent.
+    # ------------------------------------------------------------------
+    def run_migrations(self) -> None:
+        from sqlalchemy import text as sa_text
+        stmts = [
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT",
+            "CREATE INDEX IF NOT EXISTS idx_trades_open_order_id "
+            "ON trades(broker_order_id) WHERE status = 'OPEN'",
+        ]
+        with self.engine.begin() as conn:
+            for sql in stmts:
+                conn.execute(sa_text(sql))
 
     def flag_orphans(self, orphan_symbols) -> None:
         with self.Session() as s:

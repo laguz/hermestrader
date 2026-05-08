@@ -257,11 +257,19 @@ def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
         raise ValueError(f"unknown mode {mode!r}; expected one of {VALID_MODES}")
 
     if mode == "paper":
-        token = os.environ.get("TRADIER_PAPER_TOKEN") or os.environ.get("TRADIER_ACCESS_TOKEN")
+        token = (
+            os.environ.get("TRADIER_PAPER_TOKEN")
+            or os.environ.get("TRADIER_ACCESS_TOKEN")
+            or os.environ.get("TRADIER_API_KEY")
+        )
         account = os.environ.get("TRADIER_PAPER_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
         url = os.environ.get("TRADIER_PAPER_BASE_URL", "https://sandbox.tradier.com/v1")
     else:
-        token = os.environ.get("TRADIER_LIVE_TOKEN") or os.environ.get("TRADIER_ACCESS_TOKEN")
+        token = (
+            os.environ.get("TRADIER_LIVE_TOKEN")
+            or os.environ.get("TRADIER_ACCESS_TOKEN")
+            or os.environ.get("TRADIER_API_KEY")
+        )
         account = os.environ.get("TRADIER_LIVE_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
         url = os.environ.get("TRADIER_LIVE_BASE_URL", "https://api.tradier.com/v1")
 
@@ -269,7 +277,7 @@ def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
         raise RuntimeError(
             f"missing Tradier credentials for mode={mode!r}; set "
             f"TRADIER_{mode.upper()}_TOKEN and TRADIER_{mode.upper()}_ACCOUNT_ID "
-            "(or fall back to TRADIER_ACCESS_TOKEN/TRADIER_ACCOUNT_ID)."
+            "(or fall back to TRADIER_ACCESS_TOKEN / TRADIER_API_KEY plus TRADIER_ACCOUNT_ID)."
         )
     return token, account, url
 
@@ -280,6 +288,7 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     has_any_tradier = any(
         os.environ.get(k) for k in (
             "TRADIER_ACCESS_TOKEN", "TRADIER_PAPER_TOKEN", "TRADIER_LIVE_TOKEN",
+            "TRADIER_API_KEY",
         )
     )
     if not has_any_tradier:
@@ -467,13 +476,14 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
             except Exception as _exc:                            # noqa: BLE001
                 log.warning("lot-settings refresh failed: %s", _exc)
 
-            # 1e) Stale pending-order cleanup — orders that were cancelled or
-            #     expired externally on Tradier never receive a fill callback,
-            #     so their PENDING rows would accumulate and shrink
-            #     side_aware_capacity indefinitely.  Mark anything older than
-            #     2× the tick interval as EXPIRED before the engine runs.
+            # 1e) Stale pending-order cleanup — long-tail safety net for
+            #     orders whose response wasn't recorded (e.g. agent crash
+            #     between submission and ack). Normal flow now transitions
+            #     PENDING → SUBMITTED/REJECTED synchronously in
+            #     record_order_response, so a 1-hour threshold is safe and
+            #     won't race a slow broker round-trip.
             try:
-                expired = db.expire_stale_pending_orders(interval_s * 2)
+                expired = db.expire_stale_pending_orders(3600)
                 if expired:
                     log.info("Expired %d stale PENDING order(s)", expired)
                     db.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")

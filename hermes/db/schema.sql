@@ -50,11 +50,16 @@ CREATE TABLE IF NOT EXISTS trades (
     close_reason  TEXT,
     ai_authored   BOOLEAN NOT NULL DEFAULT FALSE,
     ai_rationale  TEXT,
+    broker_order_id TEXT,
     PRIMARY KEY (id, opened_at)
 );
 SELECT create_hypertable('trades', 'opened_at', if_not_exists => TRUE);
+-- In-place migration for DBs created before broker_order_id existed.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_trades_strategy_status
     ON trades(strategy_id, status, symbol);
+CREATE INDEX IF NOT EXISTS idx_trades_open_order_id
+    ON trades(broker_order_id) WHERE status = 'OPEN';
 
 -- ---------------------------------------------------------------------
 -- Pending orders (deduped against side-aware sizing)

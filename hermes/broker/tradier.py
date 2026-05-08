@@ -78,7 +78,11 @@ class TradierBroker:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
-        self.token = self.config.get("tradier_access_token") or os.environ.get("TRADIER_ACCESS_TOKEN")
+        self.token = (
+            self.config.get("tradier_access_token")
+            or os.environ.get("TRADIER_ACCESS_TOKEN")
+            or os.environ.get("TRADIER_API_KEY")
+        )
         self.account_id = self.config.get("tradier_account_id") or os.environ.get("TRADIER_ACCOUNT_ID")
         self.base_url = (
             self.config.get("tradier_base_url")
@@ -86,7 +90,7 @@ class TradierBroker:
             or "https://api.tradier.com/v1"
         ).rstrip("/")
         if not self.token or not self.account_id:
-            raise ValueError("TRADIER_ACCESS_TOKEN and TRADIER_ACCOUNT_ID must be set")
+            raise ValueError("TRADIER_ACCESS_TOKEN (or TRADIER_API_KEY) and TRADIER_ACCOUNT_ID must be set")
 
         self.dry_run = bool(self.config.get("dry_run", False))
         self.current_date: Optional[datetime] = None  # Hermes uses this for time mocking

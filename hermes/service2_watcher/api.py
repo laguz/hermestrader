@@ -55,6 +55,10 @@ async def lifespan(app: FastAPI):
         db.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("ensure_strategies failed: %s", exc)
+    try:
+        db.run_migrations()
+    except Exception as exc:                                       # noqa: BLE001
+        logger.exception("run_migrations failed: %s", exc)
     yield
 
 

@@ -452,7 +452,29 @@ class CascadingEngine:
     # 1
     def sync_positions(self) -> None:
         positions = self.broker.get_positions() or []
-        self.db.upsert_positions(positions)
+        # Resting/accepted orders haven't created positions yet; the
+        # reconciler must treat their legs as still-alive coverage so
+        # just-submitted spreads aren't flipped to CLOSED before fill.
+        active_legs: set = set()
+        try:
+            active_statuses = {"open", "partially_filled", "pending",
+                                "accepted", "calculated"}
+            for o in (self.broker.get_orders() or []):
+                if str(o.get("status", "")).lower() not in active_statuses:
+                    continue
+                legs = o.get("leg") or []
+                if isinstance(legs, dict):
+                    legs = [legs]
+                for leg in legs:
+                    sym = leg.get("option_symbol")
+                    if sym:
+                        active_legs.add(sym)
+                top = o.get("option_symbol")
+                if top:
+                    active_legs.add(top)
+        except Exception:                              # noqa: BLE001
+            logger.exception("[ENGINE] active-order leg fetch failed")
+        self.db.upsert_positions(positions, active_order_legs=active_legs)
 
     # 2
     def reconcile_orphans(self) -> None:
@@ -552,8 +574,17 @@ class CascadingEngine:
             else:
                 self.db.record_pending_order(a)
                 if not getattr(self.broker, "dry_run", False):
-                    resp = self.broker.place_order_from_action(a)
-                    self.db.record_order_response(a, resp)
+                    try:
+                        resp = self.broker.place_order_from_action(a)
+                    except Exception as exc:                       # noqa: BLE001
+                        # Broker raised before we got an order id. Free the
+                        # PENDING row so capacity recovers; a Trade row was
+                        # never written, nothing to roll back.
+                        self.db.record_order_response(a, {"errors": str(exc)})
+                        logger.exception("place_order failed for %s: %s",
+                                          a.symbol, exc)
+                    else:
+                        self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
     def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
