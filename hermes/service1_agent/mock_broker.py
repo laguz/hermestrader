@@ -64,21 +64,44 @@ class MockBroker:
 
     def get_history(self, symbol: str, interval: str = "daily",
                     start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return dummy history data."""
+        """Return dummy history data with deterministic per-symbol noise so
+        downstream rolling stats (volume z-score, realized vol, beta) are
+        well-defined."""
+        import random
         from datetime import datetime, timedelta
         out = []
         now = datetime.utcnow()
-        days = 400 if interval == "daily" else 10
-        for i in range(days):
-            ts = now - timedelta(days=i)
+        is_intraday = interval in ("1min", "5min", "15min")
+        if is_intraday:
+            # ~6.5 trading hours/day × ~10 days, every 5 minutes — plenty for
+            # the FeatureEngineer's last-30-min volume window.
+            steps = 78 * 10
+            step = timedelta(minutes=5)
+        else:
+            steps = 400
+            step = timedelta(days=1)
+
+        rng = random.Random(hash(symbol) & 0xFFFFFFFF)
+        # Anchor base price per symbol so SPY ≠ AAPL ≠ TSLA in mock mode.
+        base = 100.0 + (hash(symbol) % 200)
+        price = base
+        for i in range(steps):
+            ts = now - i * step
+            drift = rng.gauss(0, 0.012) * price
+            price = max(1.0, price + drift)
+            open_p = price + rng.gauss(0, 0.5)
+            close_p = price + rng.gauss(0, 0.5)
+            high_p = max(open_p, close_p) + abs(rng.gauss(0, 0.7))
+            low_p = min(open_p, close_p) - abs(rng.gauss(0, 0.7))
+            vol = int(800_000 + rng.random() * 600_000)
             out.append({
-                "date": ts.strftime("%Y-%m-%d" if interval == "daily" else "%Y-%m-%d %H:%M:%S"),
-                "open": 150.0 + i % 10,
-                "high": 155.0 + i % 10,
-                "low": 145.0 + i % 10,
-                "close": 152.0 + i % 10,
-                "volume": 1000000,
-                "vwap": 152.0 + i % 10
+                "date": ts.strftime("%Y-%m-%d %H:%M:%S" if is_intraday else "%Y-%m-%d"),
+                "open": round(open_p, 2),
+                "high": round(high_p, 2),
+                "low": round(low_p, 2),
+                "close": round(close_p, 2),
+                "volume": vol,
+                "vwap": round((open_p + high_p + low_p + close_p) / 4, 2),
             })
         return out
 
