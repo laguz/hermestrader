@@ -99,7 +99,11 @@ class FeatureEngineer:
     def volume_zscore(self, daily: pd.DataFrame) -> pd.Series:
         sma = daily["volume"].rolling(self.vol_window).mean()
         sd = daily["volume"].rolling(self.vol_window).std()
-        return (daily["volume"] - sma) / sd
+        # Zero-variance windows (halts, illiquid names, mock data) divide to
+        # NaN/inf and the global dropna() in build() then nukes every row.
+        # Treat them as zero deviation instead.
+        z = (daily["volume"] - sma) / sd.replace(0, np.nan)
+        return z.where(sd > 0, 0.0)
 
     # 8. Last-30-minute volume % of total daily volume
     @staticmethod
