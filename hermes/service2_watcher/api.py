@@ -12,6 +12,7 @@ Slim FastAPI app factory. The actual endpoint logic lives in
 - ``llm``         — overseer LLM provider configuration
 - ``analytics``   — ML predictions + closed-trade performance + analysis
 - ``charts``      — chart PNGs + per-symbol LLM chart analyses
+- ``admin``       — instance identity + self-update hook (Hermes-driven)
 
 Run with: ``uvicorn hermes.service2_watcher.api:app``
 
@@ -30,6 +31,7 @@ from hermes.common import STRATEGY_PRIORITIES
 
 from ._app_state import STATIC_DIR, db
 from .routes import (
+    admin,
     agent,
     analytics,
     approvals,
@@ -71,3 +73,4 @@ app.include_router(strategies.router)
 app.include_router(llm.router)
 app.include_router(analytics.router)
 app.include_router(charts.router)
+app.include_router(admin.router)

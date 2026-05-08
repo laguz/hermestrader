@@ -1,3 +1,24 @@
+# ── HermesTrader compose — drives BOTH paper and live instances ──────────────
+#
+# How it works
+# ------------
+# Every variable below has a default that matches the original paper-only
+# layout (port 8081, db port 5433, project name `hermestrader`). To run a
+# *second* instance side-by-side, point at a different env file:
+#
+#   docker compose --env-file .env.paper -p hermes-paper up -d
+#   docker compose --env-file .env.live  -p hermes-live  up -d
+#
+# Each instance gets:
+#   * its own COMPOSE_PROJECT_NAME → distinct container/volume namespaces
+#   * its own host port for the watcher (HERMES_API_PORT)
+#   * its own host port for Postgres (HERMES_DB_PORT)
+#   * its own ~/.hermes-* data dir (HERMES_DATA_DIR) bind-mounted into /data
+#   * its own image tag (HERMES_TAG) — paper rides `latest`, live pins to `stable`
+#
+# Security: the watcher runs with all Linux capabilities dropped except
+# NET_BIND_SERVICE; broker credentials live in the env file, never the image.
+
 services:
   db:
     image: timescale/timescaledb:latest-pg15
@@ -9,33 +30,54 @@ services:
       - hermes_db_data:/var/lib/postgresql/data
       - ./hermes/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
     ports:
-      - "5433:5432"
+      - "${HERMES_DB_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hermes -d hermes"]
       interval: 10s
       timeout: 5s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
 
   watcher:
     image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
     build: .
-    # --reload picks up Python edits automatically; static HTML/CSS/JS under
-    # hermes/service2_watcher/static is served fresh on every request, so the
-    # bind mount alone makes those visible without any restart.
-    command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8081 --reload --reload-dir /app/hermes
+    # The watcher binds inside the container on a fixed port (8080) and we
+    # publish it on the host using HERMES_API_PORT. Keeping the in-container
+    # port stable means health checks and inter-service URLs don't have to
+    # know which instance they're in.
+    command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8080 --reload --reload-dir /app/hermes
     ports:
-      - "8081:8081"
+      - "${HERMES_API_PORT:-8081}:8080"
     env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+      - HERMES_MODE=${HERMES_MODE:-paper}
+      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
+      - HERMES_UPGRADE_MARKER=/data/upgrade_requested
     volumes:
-      # Live-mount the source so host edits appear inside the container
-      # without rebuilding the image. Read-only — the watcher never writes here.
+      # Source code: live-mounted read-only so host edits show up without
+      # a rebuild. The watcher never writes here.
       - ./hermes:/app/hermes:ro
       - ./requirements.txt:/app/requirements.txt:ro
+      # Hermes data dir: persists agent memory, skill state, and upgrade
+      # markers across container restarts. Per-instance on the host.
+      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
     depends_on:
       db:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://localhost:8080/api/health\",timeout=2).status==200 else 1)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   agent:
     image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
@@ -44,14 +86,19 @@ services:
     env_file: .env
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+      - HERMES_MODE=${HERMES_MODE:-paper}
+      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
     volumes:
-      # Same live-mount as the watcher. The agent is a long-running tick loop,
-      # so Python edits require `docker compose restart agent` to take effect.
       - ./hermes:/app/hermes:ro
       - ./requirements.txt:/app/requirements.txt:ro
+      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
     depends_on:
       db:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   mcp:
     image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
@@ -60,9 +107,16 @@ services:
     stdin_open: true
     tty: true
     env_file: .env
+    environment:
+      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
     volumes:
       - ./hermes:/app/hermes:ro
       - ./requirements.txt:/app/requirements.txt:ro
+      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   hermes_db_data:

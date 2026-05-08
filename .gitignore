@@ -1,0 +1,51 @@
+# ── Secrets and per-instance config ────────────────────────────────────
+# Never commit broker credentials. The .env.*.example files are templates.
+.env
+.env.paper
+.env.live
+.env.local
+.env.*.local
+
+# ── Per-instance Hermes data dirs ──────────────────────────────────────
+# When HERMES_DATA_DIR is unset the compose file falls back to
+# ./.hermes-data inside the repo, which we definitely don't want tracked.
+.hermes-data/
+.hermes-paper/
+.hermes-live/
+
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+
+# ── Virtualenvs ────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Editor / OS ────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Local scratch ──────────────────────────────────────────────────────
+scratch/local/
