@@ -1,0 +1,68 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      POSTGRES_DB: hermes
+      POSTGRES_USER: hermes
+      POSTGRES_PASSWORD: hermes
+    volumes:
+      - hermes_db_data:/var/lib/postgresql/data
+      - ./hermes/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hermes -d hermes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  watcher:
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
+    build: .
+    # --reload picks up Python edits automatically; static HTML/CSS/JS under
+    # hermes/service2_watcher/static is served fresh on every request, so the
+    # bind mount alone makes those visible without any restart.
+    command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8081 --reload --reload-dir /app/hermes
+    ports:
+      - "8081:8081"
+    env_file: .env
+    environment:
+      - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+    volumes:
+      # Live-mount the source so host edits appear inside the container
+      # without rebuilding the image. Read-only — the watcher never writes here.
+      - ./hermes:/app/hermes:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  agent:
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
+    build: .
+    command: python -m hermes.service1_agent.main
+    env_file: .env
+    environment:
+      - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+    volumes:
+      # Same live-mount as the watcher. The agent is a long-running tick loop,
+      # so Python edits require `docker compose restart agent` to take effect.
+      - ./hermes:/app/hermes:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  mcp:
+    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
+    build: .
+    command: python -m hermes.mcp.server
+    stdin_open: true
+    tty: true
+    env_file: .env
+    volumes:
+      - ./hermes:/app/hermes:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+
+volumes:
+  hermes_db_data:
