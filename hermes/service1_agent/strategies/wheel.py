@@ -120,14 +120,22 @@ class WheelStrategy(AbstractStrategy):
     def manage_positions(self) -> List[TradeAction]:
         """Roll ITM at <7 DTE (rolls IGNORE max_lots)."""
         actions: List[TradeAction] = []
-        for trade in self.db.open_trades(self.strategy_id):
+        trades = self.db.open_trades(self.strategy_id)
+        if not trades:
+            return actions
+
+        # Batch fetch quotes for all symbols to eliminate N+1 API calls.
+        symbols = {t["symbol"] for t in trades}
+        raw_quotes = self.broker.get_quote(",".join(symbols)) or []
+        quotes = {q["symbol"]: q for q in raw_quotes if "symbol" in q}
+
+        for trade in trades:
             info = parse_occ(trade["short_leg"])
             if not info:
                 continue
             dte = (info["expiry"] - self.today()).days
-            # broker.get_quote returns List[Dict]; take the first element.
-            quotes = self.broker.get_quote(trade["symbol"]) or []
-            quote = quotes[0] if quotes else {}
+
+            quote = quotes.get(trade["symbol"]) or {}
             spot = float(quote.get("last") or 0)
             short_strike = float(trade.get("short_strike") or 0)
             itm = ((info["side"] == "put" and spot < short_strike) or
