@@ -28,6 +28,15 @@ import pandas as pd
 
 logger = logging.getLogger("hermes.charts")
 
+# Matplotlib's font cache, tight-bbox layout, and PNG encoder all touch
+# process-global state. Even with the OO Figure/FigureCanvasAgg API, two
+# concurrent render_chart() calls (e.g. the dashboard loading 5 charts at
+# once via FastAPI's threadpool) corrupt each other's output and produce
+# 5KB blank PNGs. Serialise renders with a module-level lock — render is
+# fast enough (~80 ms) that the queueing cost is invisible behind the
+# 5-minute provider cache.
+_RENDER_LOCK = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Technical indicators
@@ -62,12 +71,22 @@ def render_chart(df: pd.DataFrame, symbol: str, lookback: int = 210) -> bytes:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.gridspec import GridSpec
+        from matplotlib.artist import setp
     except ImportError as exc:
         raise RuntimeError(
             "matplotlib not installed — add it to requirements.txt"
         ) from exc
+
+    with _RENDER_LOCK:
+        return _render_chart_locked(df, symbol, lookback,
+                                    Figure, FigureCanvasAgg, GridSpec, setp)
+
+
+def _render_chart_locked(df, symbol, lookback,
+                         Figure, FigureCanvasAgg, GridSpec, setp) -> bytes:
 
     df = df.tail(lookback).copy()
     df.index = pd.to_datetime(df.index)
@@ -90,7 +109,8 @@ def render_chart(df: pd.DataFrame, symbol: str, lookback: int = 210) -> bytes:
     rsi_vals = _rsi(df["close"]).values
 
     # ── Figure layout: price | volume | RSI ─────────────────────────────────
-    fig = plt.figure(figsize=(13, 7), facecolor="#0d1117")
+    fig = Figure(figsize=(13, 7), facecolor="#0d1117")
+    canvas = FigureCanvasAgg(fig)
     gs  = GridSpec(3, 1, height_ratios=[4, 1, 1.4], hspace=0.06, figure=fig)
     ax_price = fig.add_subplot(gs[0])
     ax_vol   = fig.add_subplot(gs[1], sharex=ax_price)
@@ -149,13 +169,13 @@ def render_chart(df: pd.DataFrame, symbol: str, lookback: int = 210) -> bytes:
     ax_price.legend(fontsize=7, facecolor="#161b22", edgecolor="#30363d",
                     labelcolor="#8b949e", loc="upper left")
     ax_price.set_ylabel("Price ($)", color="#8b949e", fontsize=8)
-    plt.setp(ax_price.get_xticklabels(), visible=False)
+    setp(ax_price.get_xticklabels(), visible=False)
 
     # ── Volume ────────────────────────────────────────────────────────────────
     vol_colors = [GREEN if closes[i] >= opens[i] else RED for i in range(n)]
     ax_vol.bar(x, volumes, color=vol_colors, alpha=0.65, linewidth=0)
     ax_vol.set_ylabel("Vol", color="#8b949e", fontsize=7)
-    plt.setp(ax_vol.get_xticklabels(), visible=False)
+    setp(ax_vol.get_xticklabels(), visible=False)
 
     # ── RSI ───────────────────────────────────────────────────────────────────
     ax_rsi.plot(x, rsi_vals, color="#e3771e", linewidth=1.2)
@@ -182,9 +202,8 @@ def render_chart(df: pd.DataFrame, symbol: str, lookback: int = 210) -> bytes:
              ha="right", va="bottom", color="#30363d", fontsize=7)
 
     buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight",
+    fig.savefig(buf, format="png", bbox_inches="tight",
                 facecolor=fig.get_facecolor(), dpi=120)
-    plt.close(fig)
     buf.seek(0)
     return buf.read()
 
