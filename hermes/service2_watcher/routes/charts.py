@@ -19,7 +19,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from .._app_state import WATCHLIST, db
+from .._app_state import db
 
 router = APIRouter()
 logger = logging.getLogger("hermes.c2.api")
@@ -91,12 +91,24 @@ def chart_analysis(symbol: str) -> Dict[str, Any]:
 
 @router.get("/api/charts")
 def all_chart_analyses() -> Dict[str, Any]:
-    """Latest LLM analysis for every symbol in the watchlist."""
+    """Latest LLM analysis for every symbol in the DB watchlists.
+
+    Sourced strictly from ``strategy_watchlists`` (union across all
+    strategies) so the env-var ``HERMES_WATCHLIST`` fallback can't surface
+    tickers that aren't actually being tracked by an operator.
+    """
+    try:
+        all_wls = db.list_all_watchlists()
+        symbols = sorted({s for syms in all_wls.values() for s in syms})
+    except Exception as exc:                                     # noqa: BLE001
+        logger.warning("Could not load DB watchlists for /api/charts: %s", exc)
+        symbols = []
+
     results: Dict[str, Any] = {}
-    for sym in WATCHLIST:
+    for sym in symbols:
         try:
             rows = db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
             results[sym] = rows[0] if rows else None
         except Exception:                                        # noqa: BLE001
             results[sym] = None
-    return {"analyses": results, "watchlist": WATCHLIST}
+    return {"analyses": results, "watchlist": symbols}

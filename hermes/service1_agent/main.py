@@ -432,11 +432,16 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 unique_syms = set()
                 for syms in all_wls.values():
                     unique_syms.update(syms)
+                # DB-only set — Chart Vision must analyse strictly the symbols
+                # operators have placed in a strategy watchlist (no env-var
+                # bleed-through).
+                db_watchlist = sorted(unique_syms)
                 # Combine DB watchlist with any env-specified defaults
                 current_watchlist = sorted(list(unique_syms | set(conf.get("watchlist", []))))
             except Exception as wl_exc:
                 log.warning("Dynamic watchlist refresh failed: %s", wl_exc)
                 current_watchlist = conf.get("watchlist", [])
+                db_watchlist = []
 
             # 1d) Hard pause — skip the engine but keep the heartbeat so
             #     the watcher's System health card distinguishes "paused"
@@ -561,24 +566,26 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
             # 4) Chart analysis — throttled to once per calendar week,
             #    BUT runs immediately if new symbols are missing analysis.
+            #    Strictly scoped to DB watchlist symbols so env-var defaults
+            #    can't pull extra tickers into the vision pipeline.
             _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
             _CHART_ANALYSIS_INTERVAL_DAYS = 7
-            if chart_provider is not None and engine.overseer is not None:
+            if chart_provider is not None and engine.overseer is not None and db_watchlist:
                 _should_run_charts = False
                 _age_days: float = 0.0
                 try:
-                    # Check if ANY symbol in the current watchlist is missing an AI decision.
+                    # Check if ANY symbol in the watchlist is missing an AI decision.
                     # This forces an analysis run when new symbols like AAPL are added.
                     # Filter by strategy_id="CHART" so advisory-review rows
                     # (one per submitted action) can't crowd CHART rows out
                     # of the limit window and force re-analysis every tick.
                     _recent_decisions = db.recent_ai_decisions(
                         strategy_id="CHART",
-                        limit=max(len(current_watchlist) * 2, 20),
+                        limit=max(len(db_watchlist) * 2, 20),
                     )
                     _analyzed_syms = {d["symbol"] for d in _recent_decisions}
-                    _missing_analysis = any(s not in _analyzed_syms for s in current_watchlist)
-                    
+                    _missing_analysis = any(s not in _analyzed_syms for s in db_watchlist)
+
                     if _missing_analysis:
                         _should_run_charts = True
                         log.info("Forcing chart analysis: some symbols in watchlist are missing analysis.")
@@ -599,12 +606,12 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                     _should_run_charts = True
 
                 if _should_run_charts:
-                    log.info("Running chart vision analysis for %d symbols", len(current_watchlist))
+                    log.info("Running chart vision analysis for %d symbols", len(db_watchlist))
                     try:
-                        engine.overseer.analyze_charts(current_watchlist)
+                        engine.overseer.analyze_charts(db_watchlist)
                         db.set_setting(_CHART_ANALYSIS_KEY, _utcnow_iso())
                         db.write_log("ENGINE",
-                                     f"chart vision: analysed {len(current_watchlist)} symbols "
+                                     f"chart vision: analysed {len(db_watchlist)} symbols "
                                      f"(7-month daily bars, next run in 7 days)")
                     except Exception as _ca_exc:                # noqa: BLE001
                         log.warning("analyze_charts failed: %s", _ca_exc)
