@@ -37,6 +37,7 @@ from .routes import (
     approvals,
     charts,
     llm,
+    ml_diagnostics,
     soul,
     status,
     strategies,
@@ -59,6 +60,23 @@ async def lifespan(app: FastAPI):
         db.run_migrations()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("run_migrations failed: %s", exc)
+    # ML-side migrations — idempotent. Each helper checkfirst=True so
+    # repeated boots are no-ops.
+    try:
+        from hermes.ml import ledger as _ledger
+        from hermes.ml import regime_weights as _regime
+        _ledger.ensure_table(db)
+        _regime.ensure_table(db)
+    except Exception as exc:                                       # noqa: BLE001
+        logger.exception("ml table-ensure failed: %s", exc)
+    # Wire the database-backed regime-weight lookup into pop_engine so
+    # every prediction reads the live posterior weights instead of the
+    # static DEFAULT_REGIME_WEIGHTS.
+    try:
+        from hermes.ml import pop_engine, regime_weights as _regime
+        pop_engine.set_regime_weight_lookup(_regime.make_lookup_fn(db))
+    except Exception as exc:                                       # noqa: BLE001
+        logger.exception("regime_weight lookup wire-up failed: %s", exc)
     yield
 
 
@@ -78,3 +96,4 @@ app.include_router(llm.router)
 app.include_router(analytics.router)
 app.include_router(charts.router)
 app.include_router(admin.router)
+app.include_router(ml_diagnostics.router)

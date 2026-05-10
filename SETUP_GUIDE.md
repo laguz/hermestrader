@@ -175,6 +175,34 @@ Burn-in criteria (full detail in `promote_to_live.md`):
 If any criterion fails, the PR is not opened — Hermes notifies you
 with the specific failed condition.
 
+### Prediction-algorithm changes get an extra gate
+
+Anything in `hermes/ml/**` (pop_engine, xgb_features, calibration,
+meta_learner, regime_weights, drift, ledger, iv_surface, backtester,
+or feature_catalog) is treated as **behaviour-changing live-bound
+code**. Even if a paper deployment looks fine, the live promotion PR
+**must** include the seven-day Brier-score parity proof:
+
+1. Run `GET /api/ml/diagnostics` against the paper instance every day
+   for seven consecutive trading sessions and log the per-symbol
+   Brier score and reliability curve.
+2. Run `POST /api/ml/backtest?symbol=…` for at least three watchlist
+   names against the same window. The backtester must report a
+   non-NaN Brier and an AUC ≥ baseline (the previous live model run
+   over the same window).
+3. The candidate's mean Brier across the seven-day window must be
+   **less than or equal to** the production live model's Brier over
+   the previous seven days. Equivalent calibration, not just better
+   point accuracy, is the bar.
+4. Drift alarms (`/api/ml/diagnostics → predictor.symbols.*.drift`)
+   must be empty at the time the PR opens.
+
+Hermes' `promote_to_live.md` skill enforces (1)–(4) automatically and
+will refuse to open the PR otherwise. Operators may override the gate
+manually only by setting the `ml_promotion_override_reason` system
+setting (operator-only path) — the override is logged and reviewed at
+the next weekly retrospective.
+
 ---
 
 ## Common operations
