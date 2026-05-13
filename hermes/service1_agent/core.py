@@ -55,7 +55,7 @@ class TradeAction:
 class MoneyManager:
     """
     Implements the prompt's money-management contract:
-      * True Available BP = OBP - min_obp_reserve
+      * True Available BP = full option_buying_power reported by the broker
       * Dynamic scaling when requirement > true available BP
       * Side-aware sizing: max_lots - (open_contracts + pending_orders) per (symbol, side)
     """
@@ -133,12 +133,10 @@ class MoneyManager:
 
     def true_available_bp(self) -> float:
         balances = self.broker.get_account_balances() or {}
-        obp = float(balances.get("option_buying_power", 0.0))
-        reserve = float(self.config.get("min_obp_reserve", 0.0))
-        available = max(0.0, obp - reserve)
+        available = max(0.0, float(balances.get("option_buying_power", 0.0)))
         logger.debug(
-            "[MM] true_available_bp: obp=%.2f reserve=%.2f available=%.2f account_type=%s",
-            obp, reserve, available, balances.get("account_type"),
+            "[MM] true_available_bp: obp=%.2f account_type=%s",
+            available, balances.get("account_type"),
         )
         return available
 
@@ -193,14 +191,11 @@ class MoneyManager:
                 reason = f"at capacity (open+pending={max_lots}/{max_lots})"
             elif bp_cap == 0:
                 balances = self.broker.get_account_balances() or {}
-                raw_obp = float(balances.get("option_buying_power", 0.0))
-                reserve = float(self.config.get("min_obp_reserve", 0.0))
-                avail = max(0.0, raw_obp - reserve)
+                avail = max(0.0, float(balances.get("option_buying_power", 0.0)))
                 acct_type = balances.get("account_type", "?")
                 reason = (
-                    f"insufficient BP (raw_obp=${raw_obp:,.0f} reserve=${reserve:,.0f} "
-                    f"avail=${avail:,.0f} need=${requirement_per_lot:,.0f}/lot "
-                    f"acct_type={acct_type})"
+                    f"insufficient BP (avail=${avail:,.0f} "
+                    f"need=${requirement_per_lot:,.0f}/lot acct_type={acct_type})"
                 )
             else:
                 reason = f"bp_cap={bp_cap} side_cap={side_cap}"

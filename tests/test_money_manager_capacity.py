@@ -14,23 +14,17 @@ from ._stubs import StubBroker, StubDB
 
 
 # ── true_available_bp ────────────────────────────────────────────────────────
-def test_true_available_bp_subtracts_reserve():
-    broker = StubBroker(option_buying_power=50_000.0)
-    mm = MoneyManager(broker, StubDB(), config={"min_obp_reserve": 5_000.0})
-    assert mm.true_available_bp() == 45_000.0
-
-
-def test_true_available_bp_floor_at_zero():
-    """Reserve > OBP shouldn't yield negative buying power."""
-    broker = StubBroker(option_buying_power=1_000.0)
-    mm = MoneyManager(broker, StubDB(), config={"min_obp_reserve": 5_000.0})
-    assert mm.true_available_bp() == 0.0
-
-
-def test_true_available_bp_zero_reserve_default():
+def test_true_available_bp_returns_full_option_buying_power():
     broker = StubBroker(option_buying_power=10_000.0)
     mm = MoneyManager(broker, StubDB(), config={})
     assert mm.true_available_bp() == 10_000.0
+
+
+def test_true_available_bp_floor_at_zero():
+    """Negative broker-reported OBP should be clamped to 0."""
+    broker = StubBroker(option_buying_power=-1_000.0)
+    mm = MoneyManager(broker, StubDB(), config={})
+    assert mm.true_available_bp() == 0.0
 
 
 # ── max_affordable_contracts ─────────────────────────────────────────────────
@@ -123,7 +117,7 @@ def test_scale_quantity_writes_block_log_when_zero_due_to_side_cap():
 def test_scale_quantity_writes_block_log_when_zero_due_to_bp():
     db = StubDB()
     broker = StubBroker(option_buying_power=100.0)  # not enough for 1 lot
-    mm = MoneyManager(broker, db, config={"min_obp_reserve": 0.0})
+    mm = MoneyManager(broker, db, config={})
     result = mm.scale_quantity(
         requested_lots=2,
         requirement_per_lot=500.0,

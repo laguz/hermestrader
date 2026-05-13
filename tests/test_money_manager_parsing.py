@@ -13,7 +13,7 @@ from ._stubs import StubBroker, StubDB
 def test_init_stores_attributes():
     broker = StubBroker()
     db = StubDB()
-    config = {"min_obp_reserve": 1000.0}
+    config = {"some_key": "some_value"}
     mm = MoneyManager(broker, db, config)
     assert mm.broker is broker
     assert mm.db is db

@@ -129,7 +129,7 @@ def test_plan_passes_micro_multiplier_to_capacity_calc():
     """Micro options need 1/10 the BP — verify the builder uses the
     multiplier in its requirement calculation."""
     mm = MoneyManager(StubBroker(option_buying_power=500.0),
-                      StubDB(), config={"min_obp_reserve": 0.0})
+                      StubDB(), config={})
     builder = IronCondorBuilder(mm)
     # Standard multiplier (100): width 5 × 100 = $500/lot → 1 lot fits.
     actions_standard = builder.plan(
