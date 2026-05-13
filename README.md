@@ -116,7 +116,7 @@ python -m hermes.service1_agent.main
 
 `MoneyManager` enforces:
 
-- True Available BP = `option_buying_power − min_obp_reserve`.
+- True Available BP = broker-reported `option_buying_power` (full amount, no reserve).
 - Dynamic scaling when requirement > true BP.
 - Side-aware sizing per (symbol, side): `max_lots − (open + pending)`.
 - Iron Condor margin = single riskiest side × 100 × lots.

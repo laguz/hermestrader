@@ -162,15 +162,12 @@ def get_balances() -> Dict[str, Any]:
             paper=os.environ.get("HERMES_MODE", "paper").lower() != "live",
         )
         balances = broker.get_account_balances() or {}
-        reserve = float(os.environ.get("HERMES_MIN_OBP_RESERVE", 5000.0))
-        raw_obp = float(balances.get("option_buying_power", 0.0))
-        true_bp = max(0.0, raw_obp - reserve)
+        obp = max(0.0, float(balances.get("option_buying_power", 0.0)))
         return {
             "ok": True,
             "account_type": balances.get("account_type"),
-            "option_buying_power": raw_obp,
-            "min_obp_reserve": reserve,
-            "true_available_bp": true_bp,
+            "option_buying_power": obp,
+            "true_available_bp": obp,
             "stock_buying_power": balances.get("stock_buying_power"),
             "total_equity": balances.get("total_equity"),
             "cash": balances.get("cash"),
