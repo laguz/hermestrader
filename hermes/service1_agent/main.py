@@ -83,6 +83,118 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
+# Tradier order statuses that mean the broker did NOT accept the order; the
+# approval row must NOT be flipped to EXECUTED for any of these.
+_REJECTED_ORDER_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
+
+
+def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
+    """Execute one C2-approved action and reconcile its approval row.
+
+    Returns one of: ``"executed"``, ``"preview"``, ``"rejected"``, ``"failed"``.
+    Exposed at module scope so the lifecycle is unit-testable without
+    standing up the full tick loop.
+
+    The approval row's final state must always reflect what the broker
+    actually did:
+
+    * ``dry_run=True`` → no broker call; mark FAILED with a preview note so
+      the C2 UI cannot mistake a preview for a live order.
+    * Broker raises  → ``record_order_response`` rolls the PendingOrder
+      back to REJECTED so capacity recovers; approval marked FAILED.
+    * Broker returns ``errors`` / a rejected status → approval marked
+      FAILED; ``record_order_response`` already wrote ``[ORDER REJECTED]``.
+    * Clean response → approval marked EXECUTED and ``[C2 EXECUTED]`` is
+      written for the operator feed.
+    """
+    from hermes.service1_agent.core import TradeAction
+
+    approval_id = item["id"]
+    action_json = item["action_json"]
+    try:
+        action = TradeAction(**action_json)
+    except Exception as exc:                                   # noqa: BLE001
+        log.exception("[C2] Failed to rebuild TradeAction id=%d: %s",
+                      approval_id, exc)
+        db.mark_approval_executed(
+            approval_id, success=False,
+            notes=f"action rebuild error: {exc}",
+        )
+        return "failed"
+
+    broker_dry_run = bool(getattr(broker, "dry_run", False))
+    if broker_dry_run:
+        # No broker call happens — don't pretend it did.  Skip
+        # record_pending_order so capacity isn't consumed by a row
+        # that will never settle.
+        db.mark_approval_executed(
+            approval_id, success=False,
+            notes="dry_run=True — no broker order placed",
+        )
+        log.info("[C2] dry_run preview only — approval id=%d "
+                 "NOT submitted to broker", approval_id)
+        db.write_log(
+            action.strategy_id,
+            f"[C2 PREVIEW] {action.symbol} {action.order_class} "
+            f"qty={action.quantity} approval_id={approval_id} — "
+            f"dry_run=True, no order sent to broker",
+        )
+        return "preview"
+
+    db.record_pending_order(action)
+    try:
+        resp = broker.place_order_from_action(action)
+    except Exception as exc:                                   # noqa: BLE001
+        db.record_order_response(action, {"errors": str(exc)})
+        db.mark_approval_executed(
+            approval_id, success=False,
+            notes=f"broker raised: {exc}",
+        )
+        log.exception("[C2] place_order_from_action raised for "
+                      "approval id=%d: %s", approval_id, exc)
+        db.write_log(
+            action.strategy_id,
+            f"[C2 FAILED] {action.symbol} approval_id={approval_id} "
+            f"broker raised: {exc}",
+        )
+        return "failed"
+
+    db.record_order_response(action, resp)
+
+    order = (resp or {}).get("order") if isinstance(resp, dict) else None
+    order_status = ""
+    if isinstance(order, dict):
+        order_status = str(order.get("status", "")).lower()
+    rejected = (
+        (isinstance(resp, dict) and "errors" in resp)
+        or order_status in _REJECTED_ORDER_STATUSES
+    )
+
+    if rejected:
+        # record_order_response already wrote [ORDER REJECTED].
+        db.mark_approval_executed(
+            approval_id, success=False,
+            notes=f"broker rejected: {resp}",
+        )
+        log.warning("[C2] broker rejected approval id=%d: %s",
+                    approval_id, resp)
+        db.write_log(
+            action.strategy_id,
+            f"[C2 REJECTED] {action.symbol} approval_id={approval_id}",
+        )
+        return "rejected"
+
+    db.mark_approval_executed(approval_id, success=True)
+    log.info("[C2] Executed approved trade: %s %s strategy=%s id=%d",
+             action.symbol, action.order_class, action.strategy_id, approval_id)
+    db.write_log(
+        action.strategy_id,
+        f"[C2 EXECUTED] {action.symbol} {action.order_class} "
+        f"qty={action.quantity} approval_id={approval_id}",
+    )
+    return "executed"
+
+
 def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     """Build the LLM overseer client from current settings.
 
@@ -502,35 +614,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 try:
                     approved = db.fetch_approved_actions()
                     for item in approved:
-                        action_json = item["action_json"]
-                        approval_id = item["id"]
-                        try:
-                            from hermes.service1_agent.core import TradeAction
-                            action = TradeAction(**action_json)
-                            db.record_pending_order(action)
-                            if not getattr(broker, "dry_run", False):
-                                resp = broker.place_order_from_action(action)
-                                db.record_order_response(action, resp)
-                            db.mark_approval_executed(approval_id, success=True)
-                            log.info(
-                                "[C2] Executed approved trade: %s %s strategy=%s id=%d",
-                                action.symbol, action.order_class,
-                                action.strategy_id, approval_id,
-                            )
-                            db.write_log(
-                                action.strategy_id,
-                                f"[C2 EXECUTED] {action.symbol} {action.order_class} "
-                                f"qty={action.quantity} approval_id={approval_id}",
-                            )
-                        except Exception as exc:               # noqa: BLE001
-                            log.exception(
-                                "[C2] Failed to execute approved trade id=%d: %s",
-                                approval_id, exc,
-                            )
-                            db.mark_approval_executed(
-                                approval_id, success=False,
-                                notes=f"execution error: {exc}",
-                            )
+                        _execute_approved_action(item, broker=broker, db=db)
                 except Exception as exc:                       # noqa: BLE001
                     log.warning("fetch_approved_actions failed: %s", exc)
 
