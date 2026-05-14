@@ -94,9 +94,14 @@ def test_plan_skips_when_both_sides_already_open():
 
 
 def test_plan_drops_side_when_capacity_exhausted():
-    """Pre-load the put side at capacity; only the call side should plan."""
+    """Pre-load the put side at capacity on the SAME expiry; only the
+    call side should plan. Capacity is now per option chain, so the
+    open lots must share the planned expiry to exhaust the cap."""
     db = StubDB()
-    db.set_open_trades("TEST", [{"symbol": "AAPL", "side_type": "put", "lots": 5}])
+    db.set_open_trades("TEST", [
+        {"symbol": "AAPL", "side_type": "put", "lots": 5,
+         "expiry": "2025-06-20"},
+    ])
     mm = MoneyManager(StubBroker(option_buying_power=100_000.0), db, config={})
     builder = IronCondorBuilder(mm)
     actions = builder.plan(
@@ -107,6 +112,27 @@ def test_plan_drops_side_when_capacity_exhausted():
     )
     assert len(actions) == 1
     assert actions[0].strategy_params["side_type"] == "call"
+
+
+def test_plan_allows_full_lots_on_a_fresh_expiry():
+    """Per-expiry cap: 5 lots open on expiry X must NOT block expiry Y."""
+    db = StubDB()
+    db.set_open_trades("TEST", [
+        {"symbol": "AAPL", "side_type": "put", "lots": 5,
+         "expiry": "2025-06-20"},
+    ])
+    mm = MoneyManager(StubBroker(option_buying_power=100_000.0), db, config={})
+    builder = IronCondorBuilder(mm)
+    actions = builder.plan(
+        strategy_id="TEST", symbol="AAPL", expiry="2025-07-18",
+        target_lots=2, width=5.0, max_lots=5, existing_sides=[],
+        put_action_factory=lambda **kw: _make_action(side="put", **kw),
+        call_action_factory=lambda **kw: _make_action(side="call", **kw),
+    )
+    # Both sides plan because expiry 2025-07-18 has no committed lots.
+    assert len(actions) == 2
+    sides = {a.strategy_params["side_type"] for a in actions}
+    assert sides == {"put", "call"}
 
 
 def test_plan_returns_empty_when_factory_returns_none():

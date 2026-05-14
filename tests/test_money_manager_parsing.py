@@ -41,7 +41,7 @@ def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {(expected_strat, "AAPL", "put"): 1}
+    assert mm._broker_order_counts == {(expected_strat, "AAPL", "put", "2025-06-20"): 1}
 
 def test_sync_handles_missing_fields_gracefully():
     """Ensure sync doesn't crash on incomplete broker dictionaries."""
@@ -91,7 +91,7 @@ def test_sync_handles_leg_as_dict():
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {("CS75", "AAPL", "call"): 2}
+    assert mm._broker_order_counts == {("CS75", "AAPL", "call", "2025-06-20"): 2}
 
 def test_sync_skips_empty_strategy_id():
     orders = [{

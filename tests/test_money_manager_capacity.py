@@ -58,7 +58,9 @@ def test_side_aware_capacity_subtracts_open_pending_and_broker():
     broker = StubBroker()
     mm = MoneyManager(broker, db, config={})
     # Pre-load broker-side cache as if sync_broker_orders had run.
-    mm._broker_order_counts[("CS75", "AAPL", "put")] = 1
+    # Cache is keyed by (strategy, symbol, side, expiry_iso); when callers
+    # query without an expiry the cap aggregates across expiries.
+    mm._broker_order_counts[("CS75", "AAPL", "put", "2025-06-20")] = 1
     # max_lots=10, open=2, broker=1, pending=0 → 7 remaining.
     assert mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=10) == 7
 
@@ -69,7 +71,7 @@ def test_side_aware_capacity_floors_at_zero():
         {"symbol": "AAPL", "side_type": "put", "lots": 5},
     ])
     mm = MoneyManager(StubBroker(), db, config={})
-    mm._broker_order_counts[("CS75", "AAPL", "put")] = 10
+    mm._broker_order_counts[("CS75", "AAPL", "put", "2025-06-20")] = 10
     # 5 + 10 = 15 > max 5 → returned 0, never negative.
     assert mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=5) == 0
 
@@ -82,6 +84,26 @@ def test_side_aware_capacity_only_counts_matching_side():
     ])
     mm = MoneyManager(StubBroker(), db, config={})
     assert mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=5) == 5
+
+
+def test_side_aware_capacity_scopes_to_expiry_when_provided():
+    """A full expiry must NOT exhaust capacity on a different expiry —
+    max_lots is enforced per option chain when `expiry` is supplied."""
+    db = StubDB()
+    db.set_open_trades("CS75", [
+        # 12 lots already on expiry X
+        {"symbol": "AAPL", "side_type": "put", "lots": 12, "expiry": "2025-06-20"},
+    ])
+    mm = MoneyManager(StubBroker(), db, config={})
+    # Expiry X is full (12/12) → no headroom there.
+    assert mm.side_aware_capacity(
+        "CS75", "AAPL", "put", max_lots=12, expiry="2025-06-20") == 0
+    # Expiry Y is untouched → fresh 12 lots available.
+    assert mm.side_aware_capacity(
+        "CS75", "AAPL", "put", max_lots=12, expiry="2025-07-18") == 12
+    # Without expiry the legacy global cap still applies.
+    assert mm.side_aware_capacity(
+        "CS75", "AAPL", "put", max_lots=12) == 0
 
 
 # ── scale_quantity ───────────────────────────────────────────────────────────

@@ -60,7 +60,7 @@ def test_sync_accepts_sanitised_hyphen_tag():
     }]
     mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {("CS75", "AAPL", "put"): 2}
+    assert mm._broker_order_counts == {("CS75", "AAPL", "put", "2025-06-20"): 2}
 
 
 def test_sync_accepts_legacy_underscore_tag():
@@ -77,7 +77,7 @@ def test_sync_accepts_legacy_underscore_tag():
     }]
     mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {("TT45", "SPY", "call"): 1}
+    assert mm._broker_order_counts == {("TT45", "SPY", "call", "2025-06-20"): 1}
 
 
 def test_sync_handles_single_leg_option_order():
@@ -91,7 +91,7 @@ def test_sync_handles_single_leg_option_order():
     }]
     mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {("WHEEL", "MSFT", "put"): 3}
+    assert mm._broker_order_counts == {("WHEEL", "MSFT", "put", "2025-06-20"): 3}
 
 
 def test_sync_skips_non_hermes_orders():
@@ -133,7 +133,7 @@ def test_sync_handles_sanitised_closing_tag():
     }]
     mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
     mm.sync_broker_orders()
-    assert mm._broker_order_counts == {("CS75", "AAPL", "put"): 1}
+    assert mm._broker_order_counts == {("CS75", "AAPL", "put", "2025-06-20"): 1}
 
 def test_sync_extracts_strategy_id_robustly():
     """Verify strategy ID extraction from various tag shapes including multiples."""
@@ -164,4 +164,4 @@ def test_sync_extracts_strategy_id_robustly():
         }]
         mm.broker = _StubBroker(orders)
         mm.sync_broker_orders()
-        assert mm._broker_order_counts == {(expected, "AAPL", "put"): 1}, f"Failed for tag {tag}"
+        assert mm._broker_order_counts == {(expected, "AAPL", "put", "2025-06-20"): 1}, f"Failed for tag {tag}"
