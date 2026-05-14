@@ -64,9 +64,11 @@ class MoneyManager:
         self.broker = broker
         self.db = db
         self.config = config or {}
-        # In-memory cache of active broker-side orders, refreshed every tick
-        # Map: (strategy_id, symbol, side_type) -> lots
-        self._broker_order_counts: Dict[Tuple[str, str, str], int] = {}
+        # In-memory cache of active broker-side orders, refreshed every tick.
+        # Map: (strategy_id, symbol, side_type, expiry_iso) -> lots
+        # expiry_iso is YYYY-MM-DD; an empty string is used when the OCC
+        # symbol cannot be parsed so the entry is still countable globally.
+        self._broker_order_counts: Dict[Tuple[str, str, str, str], int] = {}
 
     # OCC option symbol regex lives in hermes.common so DB-side parsing in
     # record_pending_order shares one definition with this matcher.
@@ -117,19 +119,23 @@ class MoneyManager:
 
             lots = int(o.get("quantity", 1) or 1)
             side_type = "unknown"
+            expiry_iso = ""
             for leg in legs:
                 occ_sym = str(leg.get("option_symbol", "") or "")
                 m = self._OCC_RE.match(occ_sym)
                 if not m:
                     continue
                 side_type = "put" if m.group(3) == "P" else "call"
+                # OCC expiry is YYMMDD in group 2 → normalise to YYYY-MM-DD
+                yymmdd = m.group(2)
+                expiry_iso = f"20{yymmdd[0:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
                 break
 
             if side_type != "unknown":
-                key = (strategy_id, symbol, side_type)
+                key = (strategy_id, symbol, side_type, expiry_iso)
                 self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + lots
-                logger.debug("[MM] Sync found active broker order: %s %s %s lots=%d",
-                             strategy_id, symbol, side_type, lots)
+                logger.debug("[MM] Sync found active broker order: %s %s %s %s lots=%d",
+                             strategy_id, symbol, side_type, expiry_iso, lots)
 
     def true_available_bp(self) -> float:
         balances = self.broker.get_account_balances() or {}
@@ -152,24 +158,40 @@ class MoneyManager:
         symbol: str,
         side: str,
         max_lots: int,
+        expiry: Optional[str] = None,
     ) -> int:
-        """max_lots - (open_contracts + pending_orders + active_broker_orders) per (symbol, side)."""
+        """max_lots - (open + pending + broker_active) for (strategy, symbol, side).
+
+        When `expiry` (ISO YYYY-MM-DD) is provided the cap is scoped to a
+        single option chain: filling 12 lots in expiry X still leaves
+        max_lots available in expiry Y. With expiry=None the original
+        symbol-wide (global) behaviour is preserved.
+        """
         side = side.lower()
         symbol = symbol.upper()
         # 1. Check DB for filled contracts (status='OPEN')
-        open_qty = self.db.count_open_contracts(strategy_id, symbol, side)
+        open_qty = self.db.count_open_contracts(strategy_id, symbol, side, expiry)
         # 2. Check DB for pending internal orders (pre-submission or approval queue)
-        pending = self.db.count_pending_orders(strategy_id, symbol, side)
+        pending = self.db.count_pending_orders(strategy_id, symbol, side, expiry)
         # 3. Check cached broker-side active orders (resting limits)
-        broker_qty = self._broker_order_counts.get((strategy_id, symbol, side), 0)
-        
+        if expiry is not None:
+            broker_qty = self._broker_order_counts.get(
+                (strategy_id, symbol, side, expiry), 0)
+        else:
+            # Aggregate across every cached expiry for this (strat, sym, side).
+            broker_qty = sum(
+                lots for (sid, sym, sd, _exp), lots in self._broker_order_counts.items()
+                if sid == strategy_id and sym == symbol and sd == side
+            )
+
         total_used = open_qty + pending + broker_qty
         remaining = max_lots - total_used
-        
+
         if broker_qty > 0:
-            logger.debug("[MM] side_aware_capacity %s %s %s: open=%d pending=%d broker=%d total=%d max=%d",
-                         strategy_id, symbol, side, open_qty, pending, broker_qty, total_used, max_lots)
-            
+            logger.debug("[MM] side_aware_capacity %s %s %s exp=%s: open=%d pending=%d broker=%d total=%d max=%d",
+                         strategy_id, symbol, side, expiry or "*",
+                         open_qty, pending, broker_qty, total_used, max_lots)
+
         return max(0, remaining)
 
     def scale_quantity(
@@ -180,15 +202,22 @@ class MoneyManager:
         side: str,
         strategy_id: str,
         max_lots: int,
+        expiry: Optional[str] = None,
     ) -> int:
-        """Apply BP cap and side-aware capacity; never exceed requested."""
+        """Apply BP cap and side-aware capacity; never exceed requested.
+
+        Pass `expiry` to enforce ``max_lots`` per option chain instead of
+        per (symbol, side) globally.
+        """
         bp_cap = self.max_affordable_contracts(requirement_per_lot)
-        side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots)
+        side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
         scaled = min(requested_lots, bp_cap, side_cap)
         if scaled == 0 and requested_lots > 0:
             # Write a DB-visible log so the C2 live feed shows the block reason.
             if side_cap == 0:
-                reason = f"at capacity (open+pending={max_lots}/{max_lots})"
+                scope = f"exp={expiry}" if expiry else "all expiries"
+                reason = (f"at capacity {scope} "
+                          f"(open+pending={max_lots}/{max_lots})")
             elif bp_cap == 0:
                 balances = self.broker.get_account_balances() or {}
                 avail = max(0.0, float(balances.get("option_buying_power", 0.0)))
@@ -291,6 +320,7 @@ class IronCondorBuilder:
                 side=side,
                 strategy_id=strategy_id,
                 max_lots=max_lots,
+                expiry=expiry,
             )
             if lots < 1:
                 # scale_quantity already wrote a BLOCKED log; nothing more needed.

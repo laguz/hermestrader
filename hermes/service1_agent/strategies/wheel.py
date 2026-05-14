@@ -43,19 +43,27 @@ class WheelStrategy(AbstractStrategy):
             shares = int(self.db.equity_position(symbol) or 0)
             shares_lots = shares // 100
 
+            # Pick the target expiry first so capacity is checked per
+            # option chain (max_lots is per-expiry, not symbol-wide).
+            expiry = self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+            if not expiry:
+                self._log(f"✗ {symbol}: no expiry in 30-45 DTE range; skip.")
+                continue
+
             # side_aware_capacity already subtracts open + pending + broker
-            # orders, so capacity here is the actual headroom remaining.
+            # orders for this chain, so capacity here is the actual headroom
+            # remaining on the (symbol, side, expiry) bucket.
             call_capacity = self.mm.side_aware_capacity(
-                self.strategy_id, symbol, "call", max_lots)
+                self.strategy_id, symbol, "call", max_lots, expiry=expiry)
             put_capacity = self.mm.side_aware_capacity(
-                self.strategy_id, symbol, "put", max_lots)
+                self.strategy_id, symbol, "put", max_lots, expiry=expiry)
 
             # Derive committed = open + pending (what side_aware_capacity already subtracted).
             calls_committed = max_lots - call_capacity
             puts_committed = max_lots - put_capacity
 
             self._log(
-                f"→ {symbol}: shares={shares} ({shares_lots} lots) "
+                f"→ {symbol} exp={expiry}: shares={shares} ({shares_lots} lots) "
                 f"calls_committed={calls_committed} puts_committed={puts_committed} "
                 f"call_cap={call_capacity} put_cap={put_capacity}"
             )
@@ -66,11 +74,11 @@ class WheelStrategy(AbstractStrategy):
             if wanted_calls == 0 and call_capacity > 0:
                 self._log(f"ℹ️ {symbol} CALL: no shares to cover (shares_lots={shares_lots}); skip calls.")
             elif wanted_calls == 0 and call_capacity == 0:
-                self._log(f"ℹ️ {symbol} CALL: at capacity ({calls_committed}/{max_lots}); skip calls.")
+                self._log(f"ℹ️ {symbol} CALL: at capacity exp={expiry} ({calls_committed}/{max_lots}); skip calls.")
 
             added_calls = 0
             for _ in range(wanted_calls):
-                a = self._open_wheel_leg(symbol, "call")
+                a = self._open_wheel_leg(symbol, "call", expiry)
                 if a:
                     actions.append(a)
                     added_calls += 1
@@ -81,21 +89,17 @@ class WheelStrategy(AbstractStrategy):
             wanted_puts = min(put_capacity, puts_budget)
             if wanted_puts == 0:
                 self._log(
-                    f"ℹ️ {symbol} PUT: at capacity or budget exhausted "
+                    f"ℹ️ {symbol} PUT: at capacity or budget exhausted exp={expiry} "
                     f"(puts_committed={puts_committed} total_calls={total_calls} max={max_lots}); skip puts."
                 )
 
             for _ in range(wanted_puts):
-                a = self._open_wheel_leg(symbol, "put")
+                a = self._open_wheel_leg(symbol, "put", expiry)
                 if a:
                     actions.append(a)
         return actions
 
-    def _open_wheel_leg(self, symbol: str, side: str) -> Optional[TradeAction]:
-        expiry = self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
-        if not expiry:
-            self._log(f"✗ {symbol} {side}: no expiry in 30-45 DTE range; skip.")
-            return None
+    def _open_wheel_leg(self, symbol: str, side: str, expiry: str) -> Optional[TradeAction]:
         chain = self.broker.get_option_chains(symbol, expiry) or []
         short = self.find_strike_by_delta(chain, side, 0.30, tolerance=0.05)
         if not short:

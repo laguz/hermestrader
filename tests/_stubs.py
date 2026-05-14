@@ -167,14 +167,25 @@ class StubDB:
     def latest_prediction(self, symbol: str):
         return self._predictions.get(symbol)
 
-    def count_open_contracts(self, strategy_id: str, symbol: str, side: str) -> int:
+    def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
+                              expiry: Optional[str] = None) -> int:
         total = 0
         for t in self._open_trades.get(strategy_id, []):
-            if t.get("symbol") == symbol and (t.get("side_type") or "").lower() == side.lower():
-                total += int(t.get("lots") or 0)
+            if t.get("symbol") != symbol:
+                continue
+            if (t.get("side_type") or "").lower() != side.lower():
+                continue
+            if expiry is not None:
+                t_expiry = t.get("expiry")
+                if hasattr(t_expiry, "isoformat"):
+                    t_expiry = t_expiry.isoformat()
+                if t_expiry != expiry:
+                    continue
+            total += int(t.get("lots") or 0)
         return total
 
-    def count_pending_orders(self, strategy_id: str, symbol: str, side: str) -> int:
+    def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
+                              expiry: Optional[str] = None) -> int:
         return 0
 
     def equity_position(self, symbol: str) -> int:

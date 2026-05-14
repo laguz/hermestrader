@@ -714,13 +714,29 @@ class HermesDB:
                                 "expiry": expiry_iso})
         return out
 
-    def count_open_contracts(self, strategy_id: str, symbol: str, side: str) -> int:
+    def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
+                              expiry: Optional[str] = None) -> int:
+        """Sum of OPEN lot count for (strategy, symbol, side).
+
+        When `expiry` is provided (ISO YYYY-MM-DD), scope to that single
+        expiration so max_lots is enforced per option chain instead of
+        across the symbol globally.
+        """
         with self.Session() as s:
-            rows = (s.query(Trade).filter_by(strategy_id=strategy_id, symbol=symbol, status="OPEN")
-                    .filter(Trade.side_type == side).all())
+            q = (s.query(Trade).filter_by(strategy_id=strategy_id, symbol=symbol, status="OPEN")
+                 .filter(Trade.side_type == side))
+            if expiry is not None:
+                try:
+                    exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+                except ValueError:
+                    exp_date = None
+                if exp_date is not None:
+                    q = q.filter(Trade.expiry == exp_date)
+            rows = q.all()
             return sum(int(r.lots or 0) for r in rows)
 
-    def count_pending_orders(self, strategy_id: str, symbol: str, side: str) -> int:
+    def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
+                              expiry: Optional[str] = None) -> int:
         """Return total lot-count of pending exposure for (strategy, symbol, side).
 
         Checks two tables:
@@ -731,6 +747,10 @@ class HermesDB:
         of whether approval_mode is on or off.  Without this, every tick looks
         like capacity is full/zero from open trades but the pending approval
         queue is invisible, causing duplicate entries every tick.
+
+        When `expiry` is provided (ISO YYYY-MM-DD), only count rows whose
+        payload/action_json carries the same expiry, so capacity is scoped
+        to a single option chain rather than the whole symbol.
         """
         side_lower = side.lower()
         with self.Session() as s:
@@ -739,7 +759,13 @@ class HermesDB:
                        .filter_by(strategy_id=strategy_id, symbol=symbol,
                                   side=side_lower, status="PENDING")
                        .all())
-            po_lots = sum(int(r.quantity or 0) for r in po_rows)
+            po_lots = 0
+            for r in po_rows:
+                if expiry is not None:
+                    payload = r.payload or {}
+                    if payload.get("expiry") != expiry:
+                        continue
+                po_lots += int(r.quantity or 0)
 
             # 2) Approval-queued trades not yet executed
             pa_rows = (s.query(PendingApproval)
@@ -752,6 +778,8 @@ class HermesDB:
                 sp = aj.get("strategy_params") or {}
                 # Match side_type (put/call) stored in strategy_params
                 if sp.get("side_type", "").lower() != side_lower:
+                    continue
+                if expiry is not None and aj.get("expiry") != expiry:
                     continue
                 # Sum lots from the first sell/open leg
                 for leg in (aj.get("legs") or []):
