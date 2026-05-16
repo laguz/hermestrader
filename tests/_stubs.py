@@ -168,24 +168,33 @@ class StubDB:
         return self._predictions.get(symbol)
 
     def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
-                              expiry: Optional[str] = None) -> int:
+                              expiry: str) -> int:
+        # Mirror HermesDB: expiry is now required so a stub call without
+        # one fails the same way production would.
+        if not expiry:
+            raise ValueError(
+                "count_open_contracts requires an expiry (YYYY-MM-DD)"
+            )
         total = 0
         for t in self._open_trades.get(strategy_id, []):
             if t.get("symbol") != symbol:
                 continue
             if (t.get("side_type") or "").lower() != side.lower():
                 continue
-            if expiry is not None:
-                t_expiry = t.get("expiry")
-                if hasattr(t_expiry, "isoformat"):
-                    t_expiry = t_expiry.isoformat()
-                if t_expiry != expiry:
-                    continue
+            t_expiry = t.get("expiry")
+            if hasattr(t_expiry, "isoformat"):
+                t_expiry = t_expiry.isoformat()
+            if t_expiry != expiry:
+                continue
             total += int(t.get("lots") or 0)
         return total
 
     def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
-                              expiry: Optional[str] = None) -> int:
+                              expiry: str) -> int:
+        if not expiry:
+            raise ValueError(
+                "count_pending_orders requires an expiry (YYYY-MM-DD)"
+            )
         return 0
 
     def equity_position(self, symbol: str) -> int:
