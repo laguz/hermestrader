@@ -916,29 +916,35 @@ class HermesDB:
         return out
 
     def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
-                              expiry: Optional[str] = None) -> int:
-        """Sum of OPEN lot count for (strategy, symbol, side).
+                              expiry: str) -> int:
+        """Sum of OPEN lot count for (strategy, symbol, side, expiry).
 
-        When `expiry` is provided (ISO YYYY-MM-DD), scope to that single
-        expiration so max_lots is enforced per option chain instead of
-        across the symbol globally.
+        ``expiry`` is required (ISO ``YYYY-MM-DD``). Capacity is always
+        scoped to a single option chain — the prior global mode (sum
+        across all expiries when expiry was None) was removed because
+        it never matched what production strategies actually wanted.
         """
+        if not expiry:
+            raise ValueError(
+                "count_open_contracts requires an expiry (YYYY-MM-DD); the "
+                "symbol-wide global mode has been removed."
+            )
+        try:
+            exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(
+                f"count_open_contracts: invalid expiry {expiry!r}; "
+                "expected YYYY-MM-DD"
+            ) from exc
         with self.Session() as s:
             q = (s.query(Trade).filter_by(strategy_id=strategy_id, symbol=symbol, status="OPEN")
-                 .filter(Trade.side_type == side))
-            if expiry is not None:
-                try:
-                    exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
-                except ValueError:
-                    exp_date = None
-                if exp_date is not None:
-                    q = q.filter(Trade.expiry == exp_date)
+                 .filter(Trade.side_type == side, Trade.expiry == exp_date))
             rows = q.all()
             return sum(int(r.lots or 0) for r in rows)
 
     def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
-                              expiry: Optional[str] = None) -> int:
-        """Return total lot-count of pending exposure for (strategy, symbol, side).
+                              expiry: str) -> int:
+        """Return total lot-count of pending exposure for (strategy, symbol, side, expiry).
 
         Checks two tables:
         * pending_orders   — orders queued for direct broker submission
@@ -949,26 +955,29 @@ class HermesDB:
         like capacity is full/zero from open trades but the pending approval
         queue is invisible, causing duplicate entries every tick.
 
-        When `expiry` is provided (ISO YYYY-MM-DD), only count rows whose
-        payload/action_json carries the same expiry, so capacity is scoped
-        to a single option chain rather than the whole symbol.
+        ``expiry`` is required — counts are always scoped to a single
+        option chain. The previous symbol-wide fallback was removed.
         """
+        if not expiry:
+            raise ValueError(
+                "count_pending_orders requires an expiry (YYYY-MM-DD); the "
+                "symbol-wide global mode has been removed."
+            )
         side_lower = side.lower()
         with self.Session() as s:
-            # 1) Directly-submitted pending orders
+            # 1) Directly-submitted pending orders — scoped to this chain
             po_rows = (s.query(PendingOrder)
                        .filter_by(strategy_id=strategy_id, symbol=symbol,
                                   side=side_lower, status="PENDING")
                        .all())
             po_lots = 0
             for r in po_rows:
-                if expiry is not None:
-                    payload = r.payload or {}
-                    if payload.get("expiry") != expiry:
-                        continue
+                payload = r.payload or {}
+                if payload.get("expiry") != expiry:
+                    continue
                 po_lots += int(r.quantity or 0)
 
-            # 2) Approval-queued trades not yet executed
+            # 2) Approval-queued trades not yet executed — scoped to this chain
             pa_rows = (s.query(PendingApproval)
                        .filter_by(strategy_id=strategy_id, symbol=symbol,
                                   status="PENDING")
@@ -980,7 +989,7 @@ class HermesDB:
                 # Match side_type (put/call) stored in strategy_params
                 if sp.get("side_type", "").lower() != side_lower:
                     continue
-                if expiry is not None and aj.get("expiry") != expiry:
+                if aj.get("expiry") != expiry:
                     continue
                 # Sum lots from the first sell/open leg
                 for leg in (aj.get("legs") or []):

@@ -158,38 +158,42 @@ class MoneyManager:
         symbol: str,
         side: str,
         max_lots: int,
-        expiry: Optional[str] = None,
+        expiry: str,
     ) -> int:
-        """max_lots - (open + pending + broker_active) for (strategy, symbol, side).
+        """max_lots - (open + pending + broker_active) for (strategy, symbol, side, expiry).
 
-        When `expiry` (ISO YYYY-MM-DD) is provided the cap is scoped to a
-        single option chain: filling 12 lots in expiry X still leaves
-        max_lots available in expiry Y. With expiry=None the original
-        symbol-wide (global) behaviour is preserved.
+        ``max_lots`` is **always enforced per option chain** — filling 12
+        lots in expiry X still leaves a fresh ``max_lots`` budget in
+        expiry Y. The previous global (symbol-wide) mode was removed
+        because every production strategy was already calling per-expiry,
+        and the global fallback only ever showed up by accident — turning
+        a chain-scoped cap into a symbol-wide one in tests.
+
+        ``expiry`` MUST be a non-empty ISO ``YYYY-MM-DD`` string.
+        Passing ``None`` or empty raises ``ValueError`` so accidental
+        mis-calls fail loudly instead of silently summing across chains.
         """
+        if not expiry:
+            raise ValueError(
+                "side_aware_capacity requires an expiry (YYYY-MM-DD); the "
+                "global symbol-wide cap mode has been removed."
+            )
         side = side.lower()
         symbol = symbol.upper()
-        # 1. Check DB for filled contracts (status='OPEN')
+        # 1. Check DB for filled contracts (status='OPEN') in this chain
         open_qty = self.db.count_open_contracts(strategy_id, symbol, side, expiry)
-        # 2. Check DB for pending internal orders (pre-submission or approval queue)
+        # 2. Check DB for pending internal orders (pre-submission or approval queue) in this chain
         pending = self.db.count_pending_orders(strategy_id, symbol, side, expiry)
-        # 3. Check cached broker-side active orders (resting limits)
-        if expiry is not None:
-            broker_qty = self._broker_order_counts.get(
-                (strategy_id, symbol, side, expiry), 0)
-        else:
-            # Aggregate across every cached expiry for this (strat, sym, side).
-            broker_qty = sum(
-                lots for (sid, sym, sd, _exp), lots in self._broker_order_counts.items()
-                if sid == strategy_id and sym == symbol and sd == side
-            )
+        # 3. Check cached broker-side active orders (resting limits) in this chain
+        broker_qty = self._broker_order_counts.get(
+            (strategy_id, symbol, side, expiry), 0)
 
         total_used = open_qty + pending + broker_qty
         remaining = max_lots - total_used
 
         if broker_qty > 0:
             logger.debug("[MM] side_aware_capacity %s %s %s exp=%s: open=%d pending=%d broker=%d total=%d max=%d",
-                         strategy_id, symbol, side, expiry or "*",
+                         strategy_id, symbol, side, expiry,
                          open_qty, pending, broker_qty, total_used, max_lots)
 
         return max(0, remaining)
@@ -202,21 +206,25 @@ class MoneyManager:
         side: str,
         strategy_id: str,
         max_lots: int,
-        expiry: Optional[str] = None,
+        expiry: str,
     ) -> int:
-        """Apply BP cap and side-aware capacity; never exceed requested.
+        """Apply BP cap and per-expiry side capacity; never exceed requested.
 
-        Pass `expiry` to enforce ``max_lots`` per option chain instead of
-        per (symbol, side) globally.
+        ``expiry`` is required — capacity is always enforced per option
+        chain. See ``side_aware_capacity`` for the rationale.
         """
+        if not expiry:
+            raise ValueError(
+                "scale_quantity requires an expiry (YYYY-MM-DD); capacity "
+                "is always enforced per option chain."
+            )
         bp_cap = self.max_affordable_contracts(requirement_per_lot)
         side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
         scaled = min(requested_lots, bp_cap, side_cap)
         if scaled == 0 and requested_lots > 0:
             # Write a DB-visible log so the C2 live feed shows the block reason.
             if side_cap == 0:
-                scope = f"exp={expiry}" if expiry else "all expiries"
-                reason = (f"at capacity {scope} "
+                reason = (f"at capacity exp={expiry} "
                           f"(open+pending={max_lots}/{max_lots})")
             elif bp_cap == 0:
                 balances = self.broker.get_account_balances() or {}
