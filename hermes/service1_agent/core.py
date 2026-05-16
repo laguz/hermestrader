@@ -435,6 +435,59 @@ class AbstractStrategy(ABC):
         lm = (float(long_leg["bid"]) + float(long_leg["ask"])) / 2.0
         return round(sm - lm, 2)
 
+    @staticmethod
+    def compute_close_debit(short_quote, long_quote, width):
+        """Sane debit-to-close for a vertical spread.
+
+        Returns ``(debit, blocked, reason)``.
+
+        Closing a credit spread costs ``short_ask − long_bid`` per share.
+        Two failure modes were observed in production:
+
+        1. **Stale / missing quote** — Tradier returns ``bid=0`` on
+           illiquid contracts (especially pre-market on the long-side
+           protection leg). The naive formula then collapses to
+           ``short_ask`` which can be many multiples of the spread
+           width, looking like a max-loss SL trigger when the real
+           debit is bounded by ``width``.
+        2. **Bid-ask asymmetry vs. entry** — entry credit uses
+           mid-mid (``short_credit``) but the original close calc used
+           worst-of (``ask − bid``). Compounded with (1) this fires
+           panic-priced SL closes on transient quote glitches.
+
+        Guards: refuse the calculation when either leg is missing a
+        positive bid AND ask, or when the resulting debit exceeds the
+        spread width by more than 10% (impossible on a real spread).
+        """
+        if not (short_quote and long_quote):
+            return None, True, "missing quote leg"
+        try:
+            sb = float(short_quote.get("bid") or 0)
+            sa = float(short_quote.get("ask") or 0)
+            lb = float(long_quote.get("bid") or 0)
+            la = float(long_quote.get("ask") or 0)
+            w = float(width or 0)
+        except (TypeError, ValueError):
+            return None, True, "quote parse error"
+
+        if sa <= 0 or lb <= 0:
+            return None, True, (
+                f"stale quote: short_ask={sa} long_bid={lb} "
+                f"(short_bid={sb} long_ask={la})"
+            )
+
+        debit = round(sa - lb, 2)
+        # An honest spread debit cannot exceed its width by any
+        # meaningful margin. 10% slack tolerates wide bid-ask noise on
+        # one-lot orders without permitting the phantom $4.14-on-$1
+        # blowouts that triggered the IWM SL false-positive.
+        if w > 0 and debit > w * 1.10:
+            return None, True, (
+                f"phantom debit ${debit:.2f} > width ${w:.2f} × 1.10 "
+                f"(short_ask={sa} long_bid={lb})"
+            )
+        return debit, False, ""
+
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod
     def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...
@@ -556,6 +609,27 @@ class CascadingEngine:
 
     def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
+        # Defence-in-depth market-hours gate. Every broker round-trip
+        # MUST go through this method (entries, managed closes, AI
+        # actions) so a single check here keeps the bot from sending
+        # orders into pre-market / after-hours / weekend / holiday
+        # windows where quote feeds are stale and fills are punitive.
+        # Operators who explicitly want off-hours submission can set
+        # HERMES_ALLOW_OFFHOURS_TRADES=true (see market_hours.py).
+        from hermes.market_hours import should_block_trades
+        blocked, reason = should_block_trades()
+        if blocked:
+            actions = list(actions)
+            for a in actions:
+                self.db.write_log(
+                    a.strategy_id,
+                    f"[OFF-HOURS BLOCKED] {a.symbol} {action_type} "
+                    f"qty={a.quantity} — {reason}; not sent to broker",
+                )
+            if actions:
+                logger.info("[OFF-HOURS] blocked %d %s action(s): %s",
+                            len(actions), action_type, reason)
+            return
         for a in actions:
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
             if self.overseer is not None:

@@ -5,6 +5,11 @@ Provides:
   - market_session()   : current session label + open flag
   - is_market_open()   : True only during regular hours
   - next_open()        : datetime of next regular-session open
+  - should_block_trades(): defence-in-depth gate every order submission
+                          path can call — returns (blocked, reason) so
+                          the broker round-trip never happens outside
+                          the regular session unless the operator has
+                          explicitly opted in via HERMES_ALLOW_OFFHOURS_TRADES.
 
 All times are US/Eastern.  No third-party calendar dependency —
 holidays are maintained in NYSE_HOLIDAYS below.  Add each year's
@@ -12,8 +17,9 @@ dates as they are announced.
 """
 from __future__ import annotations
 
+import os
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 try:
     from zoneinfo import ZoneInfo
@@ -154,6 +160,48 @@ def next_open(now: Optional[datetime] = None) -> datetime:
 
     # Should never happen with a sane holiday list.
     return datetime.combine(candidate, _REGULAR_OPEN, tzinfo=ET)
+
+
+_OFFHOURS_OVERRIDE_ENV = "HERMES_ALLOW_OFFHOURS_TRADES"
+
+
+def offhours_trading_allowed() -> bool:
+    """True if the operator has opted in to off-hours order submission.
+
+    Read fresh from the environment every call so the watcher / agent
+    pick up the toggle without restart. Accept the usual truthy spellings
+    (``true``/``1``/``yes``/``on``); anything else is treated as off.
+    """
+    val = (os.environ.get(_OFFHOURS_OVERRIDE_ENV) or "").strip().lower()
+    return val in {"true", "1", "yes", "on"}
+
+
+def should_block_trades(now: Optional[datetime] = None) -> Tuple[bool, str]:
+    """Defence-in-depth gate for every order-submission path.
+
+    Returns ``(blocked, reason)``. ``blocked=True`` means the caller MUST
+    NOT round-trip the broker. ``reason`` is a short human-readable
+    string suitable for the C2 live feed.
+
+    Rules (in priority order):
+
+    * Operator override (``HERMES_ALLOW_OFFHOURS_TRADES=true``) → never block.
+    * Not a trading day (weekend / NYSE holiday) → block.
+    * Outside the regular 9:30–16:00 ET session → block.
+    * Otherwise → allow.
+
+    The strategy modules (``submit()``, ``_execute_approved_action()``,
+    etc.) call this directly so a closed-market order can never reach the
+    broker, regardless of which entry point produced it.
+    """
+    if offhours_trading_allowed():
+        return False, "offhours override enabled"
+    s = market_session(now)
+    if not s["trading_day"]:
+        return True, f"closed (not a trading day; {s['et_date']})"
+    if not s["is_open"]:
+        return True, f"closed ({s['session']} {s['et_time']} ET)"
+    return False, ""
 
 
 def session_label(now: Optional[datetime] = None) -> str:

@@ -254,9 +254,13 @@ class CreditSpreads75(AbstractStrategy):
         raw_quotes = self.broker.get_quote(",".join(symbols)) or []
         quotes = {q["symbol"]: q for q in raw_quotes if "symbol" in q}
 
+        # Default width matches the strategy spec ($5.00 spreads).
+        cfg_width = float(self.config.get("cs75_width", 5.0))
         for trade in trades:
             short_leg, long_leg = trade["short_leg"], trade["long_leg"]
             entry_credit = float(trade["entry_credit"])
+            row_width = trade.get("width")
+            width = float(row_width) if row_width is not None else cfg_width
             info = parse_occ(short_leg)
             if not info:
                 continue
@@ -264,9 +268,27 @@ class CreditSpreads75(AbstractStrategy):
 
             sq = quotes.get(short_leg)
             lq = quotes.get(long_leg)
-            if not (sq and lq):
+            debit, blocked, reason = self.compute_close_debit(sq, lq, width)
+            # The TIME-EXIT branch must still fire even if quotes are
+            # stale — at ≤8 DTE we cannot afford to defer past the next
+            # quote refresh. Use a synthetic worst-case debit (= width)
+            # for the close limit price so the order still goes in but
+            # priced defensively. TP/SL evaluation is skipped because
+            # those branches need a trustworthy debit reading.
+            if blocked:
+                if dte <= 8:
+                    self._log(
+                        f"⚠️ {trade['symbol']}: close-debit blocked "
+                        f"({reason}) but DTE={dte} ≤ 8 — forcing TIME-EXIT "
+                        f"at width-priced debit"
+                    )
+                    actions.append(self._close_action(trade, width, "TIME-EXIT"))
+                else:
+                    self._log(
+                        f"⚠️ {trade['symbol']} {trade.get('side_type')}: "
+                        f"close-debit blocked ({reason}); skip eval this tick"
+                    )
                 continue
-            debit = round(float(sq["ask"]) - float(lq["bid"]), 2)
 
             close_reason = None
             if 21 <= dte <= 45 and debit <= entry_credit * 0.50:

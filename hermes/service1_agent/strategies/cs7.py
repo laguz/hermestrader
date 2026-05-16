@@ -207,15 +207,28 @@ class CreditSpreads7(AbstractStrategy):
     def manage_positions(self) -> List[TradeAction]:
         """TP @ debit ≤ 2% of width; SL @ debit ≥ 3× entry credit."""
         actions: List[TradeAction] = []
+        # Configured width is the right fallback when a Trade row
+        # somehow lacks one — the previous default of 5.0 came from
+        # CS75 and silently inflated CS7's TP threshold 5×.
+        cfg_width = float(self.config.get("cs7_width", 1.0))
         for trade in self.db.open_trades(self.strategy_id):
             entry_credit = float(trade["entry_credit"])
-            width = float(trade.get("width", 5.0))
+            row_width = trade.get("width")
+            width = float(row_width) if row_width is not None else cfg_width
             quotes = self.broker.get_quote(f"{trade['short_leg']},{trade['long_leg']}") or []
             sq = next((q for q in quotes if q["symbol"] == trade["short_leg"]), None)
             lq = next((q for q in quotes if q["symbol"] == trade["long_leg"]), None)
-            if not (sq and lq):
+            debit, blocked, reason = self.compute_close_debit(sq, lq, width)
+            if blocked:
+                # Skip this tick — quote feed will refresh and we'll
+                # re-evaluate. Crucially, this prevents a stale-quote
+                # SL-3x close on a $1-wide spread firing at $4+ debit
+                # because the long-protection leg has bid=0.
+                self._log(
+                    f"⚠️ {trade['symbol']} {trade.get('side_type')}: "
+                    f"close-debit blocked ({reason}); skip eval this tick"
+                )
                 continue
-            debit = round(float(sq["ask"]) - float(lq["bid"]), 2)
             close_reason = None
             if debit <= width * 0.02:
                 close_reason = "TP-2pctW"
