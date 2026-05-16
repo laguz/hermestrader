@@ -1184,9 +1184,27 @@ class HermesDB:
             return row.ts if row else None
 
     def recent_logs(self, limit: int = 200) -> str:
+        # Render every line in US/Eastern so the Agent Activity Log on
+        # the C2 dashboard reads in market time, matching the rest of
+        # the UI (market session label, next_open, etc.). Postgres
+        # TIMESTAMPTZ values come back as tz-aware UTC datetimes; if a
+        # naive value ever sneaks in (e.g. legacy row, mis-set session
+        # tz), assume UTC defensively rather than localizing wrong.
+        from hermes.market_hours import ET
+        from datetime import timezone as _tz
         with self.Session() as s:
             rows = s.query(BotLog).order_by(BotLog.ts.desc()).limit(limit).all()
-            return "\n".join(f"{r.ts:%H:%M:%S} [{r.strategy_id}] {r.message}" for r in reversed(rows))
+            out = []
+            for r in reversed(rows):
+                ts = r.ts
+                if ts is None:
+                    out.append(f"--:--:-- ET [{r.strategy_id}] {r.message}")
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                local = ts.astimezone(ET)
+                out.append(f"{local:%H:%M:%S} ET [{r.strategy_id}] {r.message}")
+            return "\n".join(out)
 
     def daily_bars(self, symbol: str, lookback_days: int = 400) -> Optional[pd.DataFrame]:
         sql = """
