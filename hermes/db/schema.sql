@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS trades (
 SELECT create_hypertable('trades', 'opened_at', if_not_exists => TRUE);
 -- In-place migration for DBs created before broker_order_id existed.
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT;
+-- Tag persistence (entry + close) so the analytics page can show *why*
+-- a trade was closed instead of the catch-all 'RECONCILED_BROKER_FLAT'.
+-- exit_price holds the closing fill so realized P&L can be computed.
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT;
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4);
 CREATE INDEX IF NOT EXISTS idx_trades_strategy_status
     ON trades(strategy_id, status, symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_open_order_id
