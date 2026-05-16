@@ -122,6 +122,22 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "failed"
 
+    # Market-hours gate — C2-approved trades must respect the same
+    # off-hours block as strategy-emitted ones. Leave the approval row
+    # in PENDING (do NOT mark FAILED) so the next tick during regular
+    # session picks it up automatically.
+    from hermes.market_hours import should_block_trades
+    blocked, reason = should_block_trades()
+    if blocked:
+        log.info("[C2] OFF-HOURS — deferring approval id=%d (%s)",
+                 approval_id, reason)
+        db.write_log(
+            action.strategy_id,
+            f"[C2 DEFERRED] {action.symbol} approval_id={approval_id} — "
+            f"{reason}; will execute on next tick during regular session",
+        )
+        return "deferred"
+
     broker_dry_run = bool(getattr(broker, "dry_run", False))
     if broker_dry_run:
         # No broker call happens — don't pretend it did.  Skip
@@ -640,13 +656,17 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 # Full tick: management + entries.
                 stats = engine.tick(current_watchlist)
             else:
-                # Outside regular hours: management only (exits, rolls, fills).
+                # Outside the regular session we explicitly do NOT call
+                # engine.submit() for any kind of action. Stale pre/after-
+                # hours quotes have produced phantom SL closes (e.g. an
+                # IWM CS7 "SL-3x" at $4.14 debit on a $1-wide spread when
+                # the long-leg bid was 0). Position reconciliation still
+                # runs so the DB stays in sync with the broker; nothing
+                # is sent to the broker.
                 engine.sync_positions()
                 engine.reconcile_orphans()
-                mgmt = engine.process_management()
-                engine.submit(mgmt, action_type="management")
-                stats = {"managed": len(mgmt), "entries": 0,
-                         "note": f"entries skipped ({mkt['session']})"}
+                stats = {"managed": 0, "entries": 0,
+                         "note": f"all submissions skipped ({mkt['session']})"}
 
             # 4) Chart analysis — throttled to once per calendar week,
             #    BUT runs immediately if new symbols are missing analysis.
