@@ -598,6 +598,25 @@ class CascadingEngine:
                 )
             else:
                 self.db.record_pending_order(a)
+                # Management actions whose legs are all *_to_close represent
+                # the close of an existing trade, not a new entry. Route
+                # them to ``close_trade_from_action`` which UPDATES the
+                # original Trade row (status→CLOSED, exit_price, pnl,
+                # close_tag, close_reason) instead of inserting a ghost
+                # OPEN row that the reconciler later flattens with a
+                # generic 'RECONCILED_BROKER_FLAT' and pnl=NULL.
+                #
+                # Any management action that opens a leg (e.g. WHEEL_ROLL,
+                # which buys-to-close + sells-to-open the same strike on
+                # the next month) keeps the legacy path so the new short
+                # still gets a Trade row.
+                is_pure_close = (
+                    action_type == "management"
+                    and bool(a.legs)
+                    and all("to_open" not in (leg.get("side") or "").lower()
+                            for leg in a.legs)
+                )
+                close_method = getattr(self.db, "close_trade_from_action", None)
                 if not getattr(self.broker, "dry_run", False):
                     try:
                         resp = self.broker.place_order_from_action(a)
@@ -605,11 +624,18 @@ class CascadingEngine:
                         # Broker raised before we got an order id. Free the
                         # PENDING row so capacity recovers; a Trade row was
                         # never written, nothing to roll back.
-                        self.db.record_order_response(a, {"errors": str(exc)})
+                        if is_pure_close and close_method is not None:
+                            close_method(a, {"errors": str(exc)})
+                        else:
+                            self.db.record_order_response(
+                                a, {"errors": str(exc)})
                         logger.exception("place_order failed for %s: %s",
                                           a.symbol, exc)
                     else:
-                        self.db.record_order_response(a, resp)
+                        if is_pure_close and close_method is not None:
+                            close_method(a, resp)
+                        else:
+                            self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
     def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:

@@ -195,10 +195,13 @@ def get_analytics() -> Response:
                 for r in raw_open
             ]
 
-            # Recent closed trades
+            # Recent closed trades. ``pnl`` is left as NULL→None (instead of
+            # coerced to 0) so the dashboard can render an "unknown" cell
+            # and not lie when realized P&L couldn't be computed.
             raw_closed = s.execute(sa_text("""
                 SELECT id, strategy_id, symbol, side_type, lots, entry_credit,
-                       pnl, close_reason, expiry, opened_at, closed_at, ai_authored
+                       pnl, close_reason, expiry, opened_at, closed_at, ai_authored,
+                       tag, close_tag, exit_price
                 FROM trades
                 WHERE status = 'CLOSED'
                 ORDER BY closed_at DESC
@@ -212,12 +215,15 @@ def get_analytics() -> Response:
                     "side_type": r.side_type,
                     "lots": int(r.lots or 0),
                     "entry_credit": float(r.entry_credit or 0),
-                    "pnl": float(r.pnl or 0),
+                    "pnl": float(r.pnl) if r.pnl is not None else None,
                     "close_reason": r.close_reason,
                     "expiry": r.expiry.isoformat() if r.expiry else None,
                     "opened_at": r.opened_at.isoformat() if r.opened_at else None,
                     "closed_at": r.closed_at.isoformat() if r.closed_at else None,
                     "ai_authored": bool(r.ai_authored),
+                    "tag": r.tag,
+                    "close_tag": r.close_tag,
+                    "exit_price": float(r.exit_price) if r.exit_price is not None else None,
                 }
                 for r in raw_closed
             ]

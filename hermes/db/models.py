@@ -71,6 +71,14 @@ class Trade(Base):
     ai_authored = Column(Boolean, default=False)
     ai_rationale = Column(Text)
     broker_order_id = Column(String)
+    # Strategy-tag bookkeeping. ``tag`` is the entry-order tag
+    # (e.g. ``HERMES_CS75``); ``close_tag`` is the closing-order tag
+    # (e.g. ``HERMES_CS75_CLOSE_TP-50``). ``exit_price`` is the closing
+    # fill price; combined with ``entry_credit``/``entry_debit`` and
+    # ``lots`` it gives realized P&L (see ``_compute_realized_pnl``).
+    tag = Column(String)
+    close_tag = Column(String)
+    exit_price = Column(Numeric(10, 4))
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
@@ -176,6 +184,61 @@ class IntradayBar(Base):
     low = Column(Numeric(12, 4))
     close = Column(Numeric(12, 4))
     volume = Column(BigInteger)
+
+
+# ---------------------------------------------------------------------------
+# Realized-PnL + tag helpers (module-level so they're trivially testable
+# without a live DB).
+# ---------------------------------------------------------------------------
+def _close_reason_from_tag(tag: Optional[str]) -> Optional[str]:
+    """Recover the close reason that a strategy embedded in its order tag.
+
+    Strategies tag closing orders ``HERMES_<STRAT>_CLOSE_<REASON>`` (e.g.
+    ``HERMES_CS75_CLOSE_TP-50``). Tradier sanitises ``_`` to ``-`` on the
+    wire, so accept either separator on the round-trip.
+    """
+    if not tag:
+        return None
+    norm = str(tag).replace("-", "_")
+    marker = "_CLOSE_"
+    idx = norm.find(marker)
+    if idx == -1:
+        return None
+    suffix = norm[idx + len(marker):].strip()
+    return suffix or None
+
+
+def _compute_realized_pnl(*, entry_credit, entry_debit,
+                          exit_price, lots: int) -> Optional[float]:
+    """Realized P&L on an option spread, in dollars (1 contract = 100 sh).
+
+    For a credit spread: pnl = (entry_credit − exit_debit) × lots × 100.
+    For a debit  spread: pnl = (exit_credit − entry_debit) × lots × 100.
+
+    Returns ``None`` if the inputs are insufficient to compute (e.g. the
+    closing fill price wasn't supplied) — analytics already treats NULL
+    correctly, so we'd rather show "unknown" than a fabricated 0.
+    """
+    if exit_price is None or not lots:
+        return None
+    try:
+        lots_i = int(lots)
+        exit_f = float(exit_price)
+    except (TypeError, ValueError):
+        return None
+    if entry_credit is not None:
+        try:
+            ec = float(entry_credit)
+        except (TypeError, ValueError):
+            return None
+        return round((ec - exit_f) * lots_i * 100.0, 2)
+    if entry_debit is not None:
+        try:
+            ed = float(entry_debit)
+        except (TypeError, ValueError):
+            return None
+        return round((exit_f - ed) * lots_i * 100.0, 2)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -450,12 +513,140 @@ class HermesDB:
                 ai_authored=bool(getattr(action, "ai_authored", False)),
                 ai_rationale=getattr(action, "ai_rationale", None),
                 broker_order_id=broker_order_id,
+                tag=getattr(action, "tag", None),
             ))
             s.commit()
 
         self.write_log(
             action.strategy_id,
             f"[ORDER ACCEPTED] {action.symbol} side={side_value} qty={lots} "
+            f"order_id={broker_order_id} status={order_status or 'ok'}",
+        )
+
+    # ------------------------------------------------------------------
+    # Management-close path
+    #
+    # When a strategy emits a closing order (CS75 _close_action, CS7
+    # close, TT45 hard-21DTE etc.) we MUST NOT insert a fresh OPEN Trade
+    # row — the action references an existing OPEN trade via
+    # ``strategy_params['trade_id']`` and is intended to flatten it.
+    #
+    # ``close_trade_from_action`` updates that row in place: status →
+    # CLOSED, sets ``closed_at`` / ``close_reason`` / ``close_tag`` /
+    # ``exit_price`` and computes realized P&L from the credit-vs-debit
+    # delta so the analytics dashboard shows the actual outcome instead
+    # of a $0 row stamped ``RECONCILED_BROKER_FLAT``.
+    # ------------------------------------------------------------------
+    def close_trade_from_action(self, action, response) -> None:
+        order = (response or {}).get("order") if isinstance(response, dict) else None
+        order_status = ""
+        broker_order_id: Optional[str] = None
+        if isinstance(order, dict):
+            order_status = str(order.get("status", "")).lower()
+            broker_order_id = (
+                str(order["id"]) if order.get("id") is not None else None
+            )
+
+        rejected = (
+            (isinstance(response, dict) and "errors" in response)
+            or order_status in self._REJECT_STATUSES
+        )
+
+        # Re-derive the lot count + side just like record_order_response so
+        # _consume_matching_pending matches the right pending row.
+        lots = action.quantity or 1
+        for leg in (action.legs or []):
+            leg_side = (leg.get("side") or "").lower()
+            if "sell" in leg_side or "open" in leg_side or "close" in leg_side:
+                try:
+                    lots = int(leg["quantity"])
+                except (KeyError, TypeError, ValueError):
+                    pass
+                break
+
+        side_value = (action.strategy_params or {}).get("side_type")
+        if not side_value or side_value.lower() in {"buy", "sell"}:
+            side_value = None
+            for leg in (action.legs or []):
+                m = _OCC_RE.match(str(leg.get("option_symbol", "") or ""))
+                if m:
+                    side_value = "put" if m.group(3) == "P" else "call"
+                    break
+
+        self._consume_matching_pending(
+            strategy_id=action.strategy_id, symbol=action.symbol,
+            side=(side_value or action.side or "").lower(), lots=lots,
+            terminal_status="REJECTED" if rejected else "SUBMITTED",
+        )
+
+        if rejected:
+            self.write_log(
+                action.strategy_id,
+                f"[CLOSE REJECTED] {action.symbol} side={side_value} "
+                f"qty={lots} response={response}",
+            )
+            return
+
+        sp = action.strategy_params or {}
+        trade_id = sp.get("trade_id")
+        close_reason = sp.get("close_reason") or _close_reason_from_tag(
+            getattr(action, "tag", None)) or "MANAGED_CLOSE"
+        exit_price = float(action.price) if action.price is not None else None
+
+        with self.Session() as s:
+            row: Optional[Trade] = None
+            if trade_id is not None:
+                row = (s.query(Trade)
+                       .filter(Trade.id == int(trade_id),
+                               Trade.status == "OPEN")
+                       .first())
+            if row is None:
+                # Fallback: match by leg symbols. Strategies that omit
+                # trade_id (or pass a stale one after a row was already
+                # closed by the reconciler) still get bookkeeping.
+                leg_syms = [
+                    str(leg.get("option_symbol") or "")
+                    for leg in (action.legs or [])
+                    if leg.get("option_symbol")
+                ]
+                if leg_syms:
+                    row = (s.query(Trade)
+                           .filter(Trade.status == "OPEN",
+                                   Trade.symbol == action.symbol,
+                                   Trade.strategy_id == action.strategy_id,
+                                   Trade.short_leg.in_(leg_syms))
+                           .order_by(Trade.opened_at.desc())
+                           .first())
+
+            if row is None:
+                # Nothing to close — log and bail. We deliberately do NOT
+                # insert a ghost OPEN row (that's the pre-fix bug).
+                self.write_log(
+                    action.strategy_id,
+                    f"[CLOSE ORPHAN] {action.symbol} no matching OPEN trade for "
+                    f"trade_id={trade_id} legs={[leg.get('option_symbol') for leg in (action.legs or [])]} "
+                    f"order_id={broker_order_id}",
+                )
+                return
+
+            row.status = "CLOSED"
+            row.closed_at = datetime.utcnow()
+            row.close_reason = close_reason
+            row.close_tag = getattr(action, "tag", None)
+            if exit_price is not None:
+                row.exit_price = exit_price
+            row.pnl = _compute_realized_pnl(
+                entry_credit=row.entry_credit,
+                entry_debit=row.entry_debit,
+                exit_price=exit_price,
+                lots=int(row.lots or 0),
+            )
+            s.commit()
+
+        self.write_log(
+            action.strategy_id,
+            f"[CLOSE FILLED] {action.symbol} trade_id={trade_id} reason={close_reason} "
+            f"exit={exit_price} pnl={float(row.pnl) if row.pnl is not None else None} "
             f"order_id={broker_order_id} status={order_status or 'ok'}",
         )
 
@@ -532,7 +723,12 @@ class HermesDB:
                     continue
                 t.status = "CLOSED"
                 t.closed_at = datetime.utcnow()
-                t.close_reason = "RECONCILED_BROKER_FLAT"
+                # Preserve a strategy-set reason (rare race: the management
+                # close path already stamped this row but the commit
+                # interleaved with this reconcile pass). Otherwise mark it
+                # as a true orphan so analytics can distinguish.
+                if not t.close_reason:
+                    t.close_reason = "RECONCILED_BROKER_FLAT"
                 closed += 1
             if closed:
                 s.commit()
@@ -553,6 +749,11 @@ class HermesDB:
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT",
             "CREATE INDEX IF NOT EXISTS idx_trades_open_order_id "
             "ON trades(broker_order_id) WHERE status = 'OPEN'",
+            # Tag + exit-price bookkeeping for realized-PnL computation.
+            # See Trade model for column docs.
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT",
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT",
+            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4)",
         ]
         with self.engine.begin() as conn:
             for sql in stmts:
