@@ -148,7 +148,7 @@ class MoneyManager:
 
     def max_affordable_contracts(self, requirement_per_contract: float) -> int:
         if requirement_per_contract <= 0:
-            return 0
+            return 999_999
         bp = self.true_available_bp()
         return int(bp // requirement_per_contract)
 
@@ -319,6 +319,10 @@ class IronCondorBuilder:
         # Use the chain's multiplier rather than the hardcoded 100 so micro
         # options (multiplier=10) and other non-standard contracts are handled.
         requirement_per_lot = width * float(multiplier)
+        if existing:
+            # Mode B: The margin requirement is already covered by the existing side
+            requirement_per_lot = 0.0
+            
         actions: List[TradeAction] = []
         for side in sides_to_open:
             lots = self.mm.scale_quantity(
@@ -484,7 +488,7 @@ class AbstractStrategy(ABC):
                 f"(short_bid={sb} long_ask={la})"
             )
 
-        debit = round(sa - lb, 2)
+        debit = max(0.01, round(sa - lb, 2))
         # An honest spread debit cannot exceed its width by any
         # meaningful margin. 10% slack tolerates wide bid-ask noise on
         # one-lot orders without permitting the phantom $4.14-on-$1
