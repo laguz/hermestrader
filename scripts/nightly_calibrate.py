@@ -63,6 +63,8 @@ def main() -> int:
         from hermes.ml.calibration import (
             IsotonicCalibrator, PlattCalibrator, brier_score, log_loss,
         )
+        from hermes.ml.meta_learner import MetaLearner
+        import numpy as np
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("import failed: %s", exc)
         return 1
@@ -100,6 +102,33 @@ def main() -> int:
         else:
             cal = IsotonicCalibrator.fit(preds, outs)
 
+        # Reconstruct MetaLearner training rows from prediction ledger rows
+        meta_rows = []
+        for r in rows:
+            fv_dict = r.get("feature_vector") or {}
+            xgb_p = r["predicted_prob"]
+            iv_r = fv_dict.get("iv_rank_365d")
+            if iv_r is None or not np.isfinite(iv_r):
+                iv_r = 50.0
+            cur_v = fv_dict.get("realized_vol_5d", 0.30)
+            avg_v = 0.30
+            vol_r = cur_v / avg_v if avg_v else 1.0
+            delta_p = 0.84
+            prot_s = 1.0
+            meta_rows.append({
+                "delta_implied_prob": float(delta_p),
+                "xgb_prob": float(xgb_p),
+                "protection_score": float(prot_s),
+                "iv_rank_365d": float(iv_r),
+                "vol_ratio": float(vol_r),
+            })
+
+        try:
+            meta = MetaLearner.fit(meta_rows, outs, calibrator=args.method)
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("MetaLearner fit failed for %s: %s", sym, exc)
+            meta = None
+
         # Bayesian regime-weight update — counts hits/misses across the window.
         hits = int(sum(1 for o in outs if o >= 0.5))
         misses = len(outs) - hits
@@ -117,6 +146,8 @@ def main() -> int:
             try:
                 db.set_setting(f"ml_calibrator__{sym}",
                                json.dumps(cal.to_dict(), sort_keys=True))
+                if meta is not None:
+                    db.set_setting(f"ml_meta_learner__{sym}", meta.to_json())
             except Exception as exc:                               # noqa: BLE001
                 logger.warning("setting write failed for %s: %s", sym, exc)
 

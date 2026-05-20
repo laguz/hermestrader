@@ -54,24 +54,27 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, List[float]] = {
 # Pluggable accessor — set by the watcher boot when a HermesDB session
 # is available (see hermes.service2_watcher.api.AppState). Defaults to
 # the static dict so unit tests don't need a database.
-_RegimeWeightLookup = Callable[[str], List[float]]
+_RegimeWeightLookup = Callable[[str, str], List[float]]
 
 
-def _static_regime_lookup(period: str) -> List[float]:
+def _static_regime_lookup(period: str, symbol: str = "DEFAULT") -> List[float]:
     return DEFAULT_REGIME_WEIGHTS.get(period.upper(), DEFAULT_REGIME_WEIGHTS["3M"])
 
 
-_regime_weight_lookup: _RegimeWeightLookup = _static_regime_lookup
+_regime_weight_lookup: Any = _static_regime_lookup
 
 
-def set_regime_weight_lookup(fn: _RegimeWeightLookup) -> None:
+def set_regime_weight_lookup(fn: Any) -> None:
     """Wire a database-backed accessor (called once on watcher boot)."""
     global _regime_weight_lookup
     _regime_weight_lookup = fn
 
 
-def regime_weights(period: str) -> List[float]:
-    return _regime_weight_lookup(period)
+def regime_weights(period: str, symbol: str = "DEFAULT") -> List[float]:
+    try:
+        return _regime_weight_lookup(period, symbol)
+    except TypeError:
+        return _regime_weight_lookup(period)
 
 
 # ---------------------------------------------------------------------------
@@ -79,35 +82,10 @@ def regime_weights(period: str) -> List[float]:
 # ---------------------------------------------------------------------------
 @dataclass
 class FeatureVector:
-    """Structured features the POP engine scores against.
+    """Feature inputs required to score a single credit-spread level.
 
-    Built once per (symbol, decision-time) and reused for every key
-    level and side.
-
-    Attributes
-    ----------
-    delta:
-        Option delta (signed) for the short strike under consideration.
-        Both legacy and meta paths consume ``1 - |delta|`` as the
-        baseline OTM probability.
-    xgb_prob:
-        Calibrated XGB probability of finishing OTM at the configured
-        horizon. Comes from AsyncXGBPredictor.predict_latest after the
-        per-symbol calibrator has been applied.
-    xgb_prob_lo / xgb_prob_hi:
-        10th- / 90th-quantile head outputs. Optional; when absent the
-        confidence band collapses to the point estimate.
-    current_vol / avg_vol:
-        Realised volatility today and 21-day SMA of same. The legacy
-        log-odds combiner uses this ratio.
-    protection_score:
-        S/R protection score from ``calculate_strike_protection``.
-    iv_rank:
-        365-day IV percentile (0–100) for the symbol.
-    side:
-        'put' or 'call' — flips the sign of the XGB log-odds contribution.
-    period:
-        '3M', '6M', or '1Y' — selects the regime weight set.
+    The dataclass format guarantees that all callers pass identical keys,
+    avoiding key-mismatch runtime errors (FACT #20).
     """
 
     delta: float
@@ -120,6 +98,7 @@ class FeatureVector:
     xgb_prob_hi: Optional[float] = None
     side: str = "put"
     period: str = "3M"
+    symbol: str = "DEFAULT"
 
     def to_meta_dict(self) -> Dict[str, float]:
         """Project the features into the meta-learner's input space."""
@@ -133,20 +112,30 @@ class FeatureVector:
 
 
 # ---------------------------------------------------------------------------
-# Active meta-learner — settable by the watcher; defaults to the
-# untrained identity learner.
+# Active meta-learners — settable by the watcher; maps symbol -> MetaLearner.
 # ---------------------------------------------------------------------------
-_meta_learner: MetaLearner = MetaLearner()
+_meta_learners: Dict[str, MetaLearner] = {}
 
 
-def set_meta_learner(model: Optional[MetaLearner]) -> None:
-    """Install a fitted meta-learner.  Pass None to disable stacking."""
-    global _meta_learner
-    _meta_learner = model or MetaLearner()
+def set_meta_learner(model: Optional[MetaLearner], symbol: str = "DEFAULT") -> None:
+    """Install a fitted meta-learner for a specific symbol. Pass None to disable stacking."""
+    global _meta_learners
+    key = symbol.upper()
+    if model is None:
+        if key in _meta_learners:
+            del _meta_learners[key]
+    else:
+        _meta_learners[key] = model
 
 
-def get_meta_learner() -> MetaLearner:
-    return _meta_learner
+def get_meta_learner(symbol: str = "DEFAULT") -> MetaLearner:
+    return _meta_learners.get(symbol.upper(), MetaLearner())
+
+
+def clear_meta_learners() -> None:
+    """Clear all installed meta-learners."""
+    global _meta_learners
+    _meta_learners.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +254,7 @@ def _legacy_combiner(fv: FeatureVector) -> float:
     l_xgb = calculate_log_odds(fv.xgb_prob)
     if fv.side == "call":
         l_xgb = -l_xgb
-    weights = regime_weights(fv.period)
+    weights = regime_weights(fv.period, fv.symbol)
     beta_0, beta_1, beta_2, beta_3, beta_4 = weights
     score = (
         beta_0
@@ -289,7 +278,7 @@ def predict_pop(fv: FeatureVector) -> float:
     identity, we fall through to the legacy log-odds combiner so the
     transition is bisectable and behaviour-preserving.
     """
-    meta = get_meta_learner()
+    meta = get_meta_learner(fv.symbol)
     if meta.weights:
         return float(meta.predict(fv.to_meta_dict()))
     return _legacy_combiner(fv)
@@ -325,6 +314,7 @@ def predict_single_pop(
     protection_score: float,
     weights: Optional[List[float]] = None,
     side: str = "put",
+    symbol: str = "DEFAULT",
 ) -> float:
     """Legacy signature retained for cs7/cs75/wheel/tt45.
 
@@ -346,6 +336,7 @@ def predict_single_pop(
         protection_score=protection_score,
         side=side,
         period=period,
+        symbol=symbol,
     )
     return predict_pop(fv)
 
@@ -358,6 +349,7 @@ def generate_regime_pops(
     xgb_preds: Dict[str, float],
     regime_weights: Dict[str, List[float]] = DEFAULT_REGIME_WEIGHTS,
     side: str = "put",
+    symbol: str = "DEFAULT",
 ) -> Dict[str, float]:
     """Score a strike across the three regime horizons.
 
@@ -374,6 +366,7 @@ def generate_regime_pops(
             protection_score=protection_score,
             side=side,
             period=tf,
+            symbol=symbol,
         )
         out[tf] = predict_pop(fv)
     return out
@@ -388,6 +381,7 @@ def augment_levels_with_pop(
     period: str = "6m",
     *,
     iv_rank: float = 50.0,
+    symbol: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Inject calibrated POP plus a confidence band into key levels.
 
@@ -433,6 +427,8 @@ def augment_levels_with_pop(
     sigma = max(0.05, current_vol)
     period_key = period.upper()
 
+    sym = symbol or analysis.get("symbol") or xgb_pred.get("symbol") or "DEFAULT"
+
     for level in key_levels:
         strike = float(level.get("price", 0))
         if strike <= 0 or np.isnan(strike):
@@ -469,6 +465,7 @@ def augment_levels_with_pop(
             iv_rank=iv_rank,
             side=side,
             period=period_key,
+            symbol=sym,
         )
         band = predict_pop_with_band(fv)
         if math.isnan(band["pop"]):
@@ -511,6 +508,7 @@ __all__ = [
     "regime_weights",
     "set_meta_learner",
     "get_meta_learner",
+    "clear_meta_learners",
     "find_key_levels",
     "calculate_strike_protection",
     "calculate_log_odds",

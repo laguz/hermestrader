@@ -584,22 +584,35 @@ class AsyncXGBPredictor:
 
         The actual fit lives in scripts/nightly_calibrate.py to keep
         this hot-loop method short; here we just reload whatever the
-        latest calibrator JSON is for each symbol.
+        latest calibrator and meta-learner JSON is for each symbol.
         """
+        from hermes.ml.pop_engine import set_meta_learner
+        from hermes.ml.meta_learner import MetaLearner
+        import json
+
         for sym in self._get_active_symbols():
             try:
                 payload = self.db.get_setting(f"ml_calibrator__{sym}")
             except Exception:                       # noqa: BLE001
                 payload = None
-            if not payload:
-                continue
+            if payload:
+                try:
+                    cal = load_calibrator(json.loads(payload))
+                    if cal is not None:
+                        self._calibrators[sym] = cal
+                except Exception as exc:                # noqa: BLE001
+                    logger.debug("calibrator load failed for %s: %s", sym, exc)
+
             try:
-                import json
-                cal = load_calibrator(json.loads(payload))
-                if cal is not None:
-                    self._calibrators[sym] = cal
-            except Exception as exc:                # noqa: BLE001
-                logger.debug("calibrator load failed for %s: %s", sym, exc)
+                meta_payload = self.db.get_setting(f"ml_meta_learner__{sym}")
+            except Exception:                       # noqa: BLE001
+                meta_payload = None
+            if meta_payload:
+                try:
+                    meta = MetaLearner.from_json(meta_payload)
+                    set_meta_learner(sym, meta)
+                except Exception as exc:                # noqa: BLE001
+                    logger.debug("meta-learner load failed for %s: %s", sym, exc)
 
     # -- prediction ----------------------------------------------------------
     def _predict_all(self) -> List[str]:

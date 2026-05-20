@@ -200,3 +200,51 @@ def test_generate_regime_pops_uses_per_horizon_xgb():
     # The 3M horizon used 0.7, the 1Y horizon used 0.3 — the resulting
     # POPs should be ordered the same way.
     assert out["3M"] > out["1Y"]
+
+
+def test_per_symbol_meta_learner_and_regime_weights():
+    # 1. Test per-symbol regime weights
+    custom_weights = {"3M": [1.0, 2.0, 3.0, 4.0, 5.0]}
+
+    def mock_lookup(period: str, symbol: str = "DEFAULT") -> List[float]:
+        if symbol == "AAPL" and period == "3M":
+            return custom_weights["3M"]
+        return DEFAULT_REGIME_WEIGHTS.get(period.upper(), DEFAULT_REGIME_WEIGHTS["3M"])
+
+    pop_engine.set_regime_weight_lookup(mock_lookup)
+
+    # AAPL should return the customized weights
+    assert pop_engine.regime_weights("3M", symbol="AAPL") == [1.0, 2.0, 3.0, 4.0, 5.0]
+    # Another symbol should fall back to default
+    assert pop_engine.regime_weights("3M", symbol="TSLA") == DEFAULT_REGIME_WEIGHTS["3M"]
+
+    # 2. Test per-symbol MetaLearner
+    rows = [
+        {"delta_implied_prob": 0.8, "xgb_prob": 0.8,
+         "protection_score": 1.5, "iv_rank_365d": 50, "vol_ratio": 1.0}
+        for _ in range(40)
+    ]
+    outcomes_high = [1.0] * 40
+    meta_high = MetaLearner.fit(rows, outcomes_high)
+
+    outcomes_low = [0.0] * 40
+    meta_low = MetaLearner.fit(rows, outcomes_low)
+
+    pop_engine.set_meta_learner(meta_high, "AAPL")
+    pop_engine.set_meta_learner(meta_low, "TSLA")
+
+    fv_aapl = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
+                            iv_rank=50, side="put", period="3M", symbol="AAPL")
+    fv_tsla = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
+                            iv_rank=50, side="put", period="3M", symbol="TSLA")
+
+    # AAPL predictions should be high (closer to 1.0) because of its custom high meta-learner
+    pop_aapl = predict_pop(fv_aapl)
+    # TSLA predictions should be low (closer to 0.0) because of its custom low meta-learner
+    pop_tsla = predict_pop(fv_tsla)
+
+    assert pop_aapl > pop_tsla
+
+    # Clear per-symbol configurations to avoid leaking state to other tests
+    pop_engine.clear_meta_learners()
+    pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)
