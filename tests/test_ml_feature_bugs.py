@@ -130,6 +130,8 @@ def test_spy_beta_residual_uses_returns_then_reindex():
 # ---------------------------------------------------------------------------
 # #3 _load_models scope
 # ---------------------------------------------------------------------------
+from hermes.ml import persistence
+
 class _StubModel:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -138,8 +140,28 @@ class _StubModel:
 def test_load_models_warm_starts_symbols_outside_constructor_watchlist(tmp_path: Path):
     # Two checkpointed models on disk: one for a constructor symbol, one
     # for a strategy-watchlist symbol the predictor wasn't told about.
-    (tmp_path / "xgb_AAPL.pkl").write_bytes(pickle.dumps(_StubModel("AAPL")))
-    (tmp_path / "xgb_TSLA.pkl").write_bytes(pickle.dumps(_StubModel("TSLA")))
+    persistence.save_model(
+        _StubModel("AAPL"),
+        symbol="AAPL",
+        model_name="xgb_q10_7dte",
+        target="return",
+        sample_size=100,
+        schema_stage="raw",
+        horizon_dte=7,
+        quantile=0.1,
+        root=tmp_path,
+    )
+    persistence.save_model(
+        _StubModel("TSLA"),
+        symbol="TSLA",
+        model_name="xgb_q10_7dte",
+        target="return",
+        sample_size=100,
+        schema_stage="raw",
+        horizon_dte=7,
+        quantile=0.1,
+        root=tmp_path,
+    )
 
     pred = AsyncXGBPredictor(
         db=SimpleNamespace(),

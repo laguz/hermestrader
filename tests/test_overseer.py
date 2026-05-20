@@ -176,6 +176,12 @@ def test_safe_json_passes_through_dict():
     assert parsed == {"verdict": "VETO"}
 
 
+def test_safe_json_extracts_markdown_code_block():
+    text = "Here's the result:\n```json\n{\n  \"verdict\": \"VETO\",\n  \"rationale\": \"high risk\"\n}\n```\nHope it helps!"
+    parsed = HermesOverseer._safe_json(text)
+    assert parsed == {"verdict": "VETO", "rationale": "high risk"}
+
+
 # ── soul appended to system prompt ───────────────────────────────────────────
 def test_soul_appended_to_system_prompt():
     db = StubDB()

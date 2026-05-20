@@ -129,6 +129,8 @@ class MetaLearner:
                 v = 0.5 if "prob" in name else 0.0
             if "prob" in name:
                 v = _logit(float(v))
+            elif "rank" in name:
+                v = float(v) / 100.0
             else:
                 v = float(v)
             z += w * v
@@ -167,6 +169,8 @@ class MetaLearner:
                 # Apply logit transform per column so the linear model
                 # operates in log-odds space for probability inputs.
                 X[:, j] = np.array([_logit(v) for v in X[:, j]])
+            elif "rank" in name:
+                X[:, j] = X[:, j] / 100.0
         y = np.asarray(outcomes, dtype=float)
 
         # Plain mini-batch gradient descent — couple of dozen rows
@@ -197,6 +201,16 @@ class MetaLearner:
             calibrated = cal.transform(raw_probs)
         else:
             calibrated = raw_probs
+
+        brier_raw = brier_score(raw_probs.tolist(), y.tolist())
+        brier_cal = brier_score(calibrated.tolist(), y.tolist())
+        if cal_payload is not None and brier_cal > brier_raw:
+            logger.warning(
+                "Calibration degraded Brier score (raw=%f, calibrated=%f). Falling back to uncalibrated.",
+                brier_raw, brier_cal
+            )
+            calibrated = raw_probs
+            cal_payload = None
 
         metrics = {
             "brier_raw": brier_score(raw_probs.tolist(), y.tolist()),

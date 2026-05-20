@@ -148,7 +148,7 @@ class MoneyManager:
 
     def max_affordable_contracts(self, requirement_per_contract: float) -> int:
         if requirement_per_contract <= 0:
-            return 999_999
+            return 0
         bp = self.true_available_bp()
         return int(bp // requirement_per_contract)
 
@@ -218,7 +218,10 @@ class MoneyManager:
                 "scale_quantity requires an expiry (YYYY-MM-DD); capacity "
                 "is always enforced per option chain."
             )
-        bp_cap = self.max_affordable_contracts(requirement_per_lot)
+        if requirement_per_lot <= 0.0:
+            bp_cap = 999_999
+        else:
+            bp_cap = self.max_affordable_contracts(requirement_per_lot)
         side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
         scaled = min(requested_lots, bp_cap, side_cap)
         if scaled == 0 and requested_lots > 0:

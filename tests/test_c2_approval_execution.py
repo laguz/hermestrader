@@ -16,11 +16,18 @@ from __future__ import annotations
 
 import dataclasses
 from typing import Any, Dict, List, Optional
+from unittest.mock import patch
 
 import pytest
 
 from hermes.service1_agent.core import TradeAction
 from hermes.service1_agent.main import _execute_approved_action
+
+
+@pytest.fixture(autouse=True)
+def mock_market_hours():
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "regular session")):
+        yield
 
 
 # ── Fakes ────────────────────────────────────────────────────────────────────

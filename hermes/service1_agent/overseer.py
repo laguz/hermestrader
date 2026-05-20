@@ -215,14 +215,31 @@ class HermesOverseer:
     def _safe_json(text: str) -> Dict[str, Any]:
         if isinstance(text, dict):
             return text
+        if not isinstance(text, str):
+            return {"verdict": "APPROVE", "rationale": "Non-string LLM reply; defaulting."}
+
+        clean_text = text.strip()
+        if "```" in clean_text:
+            parts = clean_text.split("```")
+            for i in range(1, len(parts), 2):
+                block = parts[i].strip()
+                if block.startswith("json"):
+                    block = block[4:].strip()
+                start, end = block.find("{"), block.rfind("}")
+                if start >= 0 and end > start:
+                    try:
+                        return json.loads(block[start:end + 1])
+                    except Exception:                                  # noqa: BLE001
+                        pass
+
         try:
-            return json.loads(text)
+            return json.loads(clean_text)
         except Exception:                                              # noqa: BLE001
             # Try to find a JSON block embedded in prose
-            start, end = text.find("{"), text.rfind("}")
+            start, end = clean_text.find("{"), clean_text.rfind("}")
             if start >= 0 and end > start:
                 try:
-                    return json.loads(text[start:end + 1])
+                    return json.loads(clean_text[start:end + 1])
                 except Exception:                                      # noqa: BLE001
                     pass
         return {"verdict": "APPROVE", "rationale": "Unparseable LLM reply; defaulting."}
