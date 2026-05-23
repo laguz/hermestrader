@@ -28,29 +28,14 @@ logger = logging.getLogger("hermes.c2.api")
 
 
 # ── Environment ───────────────────────────────────────────────────────────────
-DSN = os.environ.get(
-    "HERMES_DSN",
-    "postgresql+psycopg://hermes:hermes@localhost:5432/hermes",
-)
+from hermes.config import settings
 
-# Optional comma-separated default watchlist read at boot. Per-strategy
-# watchlists in the DB always win; this is the fallback when the DB lists
-# are empty (e.g. fresh install, or analysis endpoints with no strategy
-# context).
-WATCHLIST = [
-    s.strip().upper()
-    for s in os.environ.get("HERMES_WATCHLIST", "").split(",")
-    if s.strip()
-]
-
-TICK_INTERVAL_S = int(os.environ.get("HERMES_TICK_INTERVAL", 300))
-
-# A heartbeat is "stale" after roughly two ticks. The +30s slack absorbs
-# Postgres-side write latency; the floor of 60s prevents flapping when
-# the operator runs a very short tick interval for testing.
+DSN = settings.hermes_dsn
+WATCHLIST = settings.watchlist_list
+TICK_INTERVAL_S = settings.hermes_tick_interval
 STALE_AFTER_S = max(60, TICK_INTERVAL_S * 2 + 30)
 
-DEFAULT_LLM_BASE_URL = "http://host.docker.internal:1234/v1"
+DEFAULT_LLM_BASE_URL = settings.llm_base_url or "http://host.docker.internal:1234/v1"
 MAX_SOUL_BYTES = 64 * 1024
 
 
@@ -118,8 +103,9 @@ def seconds_since(dt: Optional[datetime]) -> Optional[float]:
 
 
 def read_version() -> str:
-    """Best-effort read of the repo's ``VERSION`` file (or '/app/VERSION'
-    inside the container). Returns 'dev' if neither is readable."""
+    """Best-effort read of the version from settings or VERSION file."""
+    if settings.hermes_version and settings.hermes_version != "dev":
+        return settings.hermes_version
     for p in (Path(__file__).resolve().parents[2] / "VERSION", Path("/app/VERSION")):
         try:
             return p.read_text().strip()

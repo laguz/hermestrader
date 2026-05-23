@@ -84,11 +84,23 @@ async def lifespan(app: FastAPI):
         pop_engine.set_regime_weight_lookup(_regime.make_lookup_fn(db))
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("regime_weight lookup wire-up failed: %s", exc)
+    # Start the agent thread
+    logger.info("Lifespan starting Hermes agent background thread...")
+    from hermes.service1_agent.main import start_agent_thread, _SHUTDOWN_EVENT
+    agent_thread = start_agent_thread()
+
     yield
+
+    # Shutdown the agent thread on exit
+    logger.info("Lifespan shutting down Hermes agent background thread...")
+    _SHUTDOWN_EVENT.set()
 
 
 app = FastAPI(title="Hermes C2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+from hermes.mcp.server import mcp
+app.mount("/mcp", mcp.sse_app())
 
 # Routers are mounted in declaration order; FastAPI doesn't care about
 # order for non-overlapping prefixes, but listing them resource-by-resource

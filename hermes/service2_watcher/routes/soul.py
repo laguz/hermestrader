@@ -66,6 +66,43 @@ def set_soul(body: SoulBody) -> Dict[str, Any]:
         try:
             with open(soul_path, "w", encoding="utf-8") as f:
                 f.write(body.soul)
+            
+            # Trigger Git Sync
+            try:
+                import git
+                repo_path = os.path.dirname(os.path.abspath(soul_path))
+                if os.path.exists(os.path.join(repo_path, ".git")):
+                    repo = git.Repo(repo_path)
+                    
+                    # Defensively set Git user configuration if missing
+                    with repo.config_writer() as cw:
+                        if not cw.has_option("user", "name"):
+                            cw.set_value("user", "name", "HermesTrader C2")
+                        if not cw.has_option("user", "email"):
+                            cw.set_value("user", "email", "hermes@trader.c2")
+                    
+                    repo.git.add("soul.md")
+                    if repo.is_dirty(index=True, working_tree=False, path="soul.md"):
+                        try:
+                            branch_name = repo.active_branch.name
+                        except TypeError:
+                            branch_name = "detached-head"
+                        
+                        commit_msg = f"docs: update operator doctrine (soul.md) on branch {branch_name}"
+                        repo.index.commit(commit_msg)
+                        db.write_log("ENGINE", f"[GIT] Committed soul.md: {commit_msg}")
+                        
+                        try:
+                            origin = repo.remote(name="origin")
+                            origin.push()
+                            db.write_log("ENGINE", f"[GIT] Pushed soul.md changes to origin/{branch_name}")
+                        except Exception as push_err:
+                            db.write_log("ENGINE", f"[GIT WARNING] Failed to push to remote: {push_err}", level="WARNING")
+                    else:
+                        db.write_log("ENGINE", "[GIT] No changes detected in soul.md for commit")
+            except Exception as git_err:
+                db.write_log("ENGINE", f"[GIT WARNING] Git sync failed: {git_err}", level="WARNING")
+
         except Exception as exc:
             db.write_log("ENGINE", f"Failed to write soul to file path {soul_path}: {exc}", level="WARNING")
 

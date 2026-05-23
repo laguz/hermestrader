@@ -64,6 +64,7 @@ services:
       # markers across container restarts. Per-instance on the host.
       - ${HERMES_DATA_DIR:-./.hermes-data}:/data
       - ./soul.md:/app/soul.md:rw
+      - ./.git:/app/.git:rw
     depends_on:
       db:
         condition: service_healthy
@@ -79,46 +80,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-
-  agent:
-    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
-    build: .
-    command: python -m hermes.service1_agent.main
-    env_file: ${HERMES_ENV_FILE:-.env}
-    environment:
-      - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
-      - HERMES_MODE=${HERMES_MODE:-paper}
-      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
-    volumes:
-      - ./hermes:/app/hermes:ro
-      - ./requirements.txt:/app/requirements.txt:ro
-      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
-      - ./soul.md:/app/soul.md:ro
-    depends_on:
-      db:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-
-  mcp:
-    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
-    build: .
-    command: python -m hermes.mcp.server
-    stdin_open: true
-    tty: true
-    env_file: ${HERMES_ENV_FILE:-.env}
-    environment:
-      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
-    volumes:
-      - ./hermes:/app/hermes:ro
-      - ./requirements.txt:/app/requirements.txt:ro
-      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
 
 volumes:
   hermes_db_data:

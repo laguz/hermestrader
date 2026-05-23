@@ -1,5 +1,6 @@
 import sys
-from unittest.mock import MagicMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Manually mock mcp and other missing dependencies before anything else
@@ -62,38 +63,42 @@ if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
 # Now we can import the server
 from hermes.mcp import server
 
+
 def test_get_orders_happy_path(monkeypatch):
     mock_broker = MagicMock()
     expected_orders = [{"id": "order_1", "status": "filled"}]
-    mock_broker.get_orders.return_value = expected_orders
+    mock_broker.get_orders = AsyncMock(return_value=expected_orders)
 
-    # Mock the _broker() function
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+    # Mock the async _broker() function
+    monkeypatch.setattr(server, "_broker", AsyncMock(return_value=mock_broker))
 
-    result = server.get_orders()
+    result = asyncio.run(server.get_orders())
 
     assert result == expected_orders
     mock_broker.get_orders.assert_called_once()
 
+
 def test_get_orders_empty(monkeypatch):
     mock_broker = MagicMock()
-    mock_broker.get_orders.return_value = []
+    mock_broker.get_orders = AsyncMock(return_value=[])
 
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+    monkeypatch.setattr(server, "_broker", AsyncMock(return_value=mock_broker))
 
-    result = server.get_orders()
+    result = asyncio.run(server.get_orders())
 
     assert result == []
     mock_broker.get_orders.assert_called_once()
 
+
 def test_get_orders_exception(monkeypatch):
     mock_broker = MagicMock()
-    mock_broker.get_orders.side_effect = Exception("Broker error")
+    mock_broker.get_orders = AsyncMock(side_effect=Exception("Broker error"))
 
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+    monkeypatch.setattr(server, "_broker", AsyncMock(return_value=mock_broker))
 
     with pytest.raises(Exception, match="Broker error"):
-        server.get_orders()
+        asyncio.run(server.get_orders())
+
 
 @pytest.mark.parametrize("side, expected_action_side", [
     ("buy_to_open", "buy"),
@@ -106,14 +111,14 @@ def test_get_orders_exception(monkeypatch):
 @pytest.mark.parametrize("tag", [None, "test-tag"])
 def test_place_single_option_order(monkeypatch, side, expected_action_side, order_type, price, tag):
     mock_broker = MagicMock()
-    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 123}
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+    mock_broker.place_order_from_action = AsyncMock(return_value={"status": "ok", "order_id": 123})
+    monkeypatch.setattr(server, "_broker", AsyncMock(return_value=mock_broker))
 
     symbol = "AAPL"
     option_symbol = "AAPL230616C00150000"
     quantity = 2
 
-    result = server.place_single_option_order(
+    result = asyncio.run(server.place_single_option_order(
         symbol=symbol,
         option_symbol=option_symbol,
         side=side,
@@ -121,7 +126,7 @@ def test_place_single_option_order(monkeypatch, side, expected_action_side, orde
         price=price,
         order_type=order_type,
         tag=tag
-    )
+    ))
 
     assert result == {"status": "ok", "order_id": 123}
     mock_broker.place_order_from_action.assert_called_once()
@@ -138,6 +143,7 @@ def test_place_single_option_order(monkeypatch, side, expected_action_side, orde
     assert action.duration == "day"
     assert action.tag == tag
 
+
 @pytest.mark.parametrize("order_type, expected_side", [
     ("credit", "sell"),
     ("debit", "buy"),
@@ -147,8 +153,8 @@ def test_place_single_option_order(monkeypatch, side, expected_action_side, orde
 @pytest.mark.parametrize("tag", [None, "multi-tag"])
 def test_place_multileg_order(monkeypatch, order_type, expected_side, duration, tag):
     mock_broker = MagicMock()
-    mock_broker.place_order_from_action.return_value = {"status": "ok", "order_id": 456}
-    monkeypatch.setattr(server, "_broker", lambda: mock_broker)
+    mock_broker.place_order_from_action = AsyncMock(return_value={"status": "ok", "order_id": 456})
+    monkeypatch.setattr(server, "_broker", AsyncMock(return_value=mock_broker))
 
     symbol = "SPY"
     legs = [
@@ -157,14 +163,14 @@ def test_place_multileg_order(monkeypatch, order_type, expected_side, duration, 
     ]
     price = 1.25
 
-    result = server.place_multileg_order(
+    result = asyncio.run(server.place_multileg_order(
         symbol=symbol,
         legs=legs,
         price=price,
         order_type=order_type,
         duration=duration,
         tag=tag
-    )
+    ))
 
     assert result == {"status": "ok", "order_id": 456}
     mock_broker.place_order_from_action.assert_called_once()

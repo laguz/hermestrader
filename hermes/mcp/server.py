@@ -1,17 +1,8 @@
 """
 Tradier MCP server.
 
-Exposes the TradierBroker as a Model Context Protocol server so any MCP client
-(Claude Desktop, Cowork, custom agents) can call the broker over stdio.
-
-Run:
-    python -m hermes.mcp.server
-
-Required env: TRADIER_ACCESS_TOKEN, TRADIER_ACCOUNT_ID
-Optional env: TRADIER_BASE_URL (default https://api.tradier.com/v1),
-              HERMES_DRY_RUN ("true" → orders use Tradier preview mode)
-
-Install dep: pip install "mcp[cli]" requests
+Exposes the AsyncTradierBroker as a Model Context Protocol server so any MCP client
+(Claude Desktop, Cursor, Windsurf) can call the broker asynchronously over stdio or SSE.
 """
 from __future__ import annotations
 
@@ -20,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from hermes.broker.tradier import TradierBroker
+from hermes.broker.async_tradier import AsyncTradierBroker
 
 mcp = FastMCP("tradier")
 
@@ -61,121 +52,102 @@ def load_env_file() -> None:
                         if k and v and k not in os.environ:
                             os.environ[k] = v
 
+_BROKERS: Dict[str, AsyncTradierBroker] = {}
 
-def _broker() -> TradierBroker:
-    # Built lazily so `--help` and discovery don't require credentials.
-    global _BROKER
-    try:
-        return _BROKER  # type: ignore[name-defined]
-    except NameError:
-        pass
-    
-    load_env_file()
-    
-    mode = os.environ.get("HERMES_MODE", "paper").lower().strip()
-    
-    if mode == "paper":
-        token = (
-            os.environ.get("TRADIER_PAPER_TOKEN")
-            or os.environ.get("TRADIER_ACCESS_TOKEN")
-            or os.environ.get("TRADIER_API_KEY")
-        )
-        account = os.environ.get("TRADIER_PAPER_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
-        url = os.environ.get("TRADIER_PAPER_BASE_URL", "https://sandbox.tradier.com/v1")
-        dry_run = False
-    else:
-        token = (
-            os.environ.get("TRADIER_LIVE_TOKEN")
-            or os.environ.get("TRADIER_ACCESS_TOKEN")
-            or os.environ.get("TRADIER_API_KEY")
-        )
-        account = os.environ.get("TRADIER_LIVE_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
-        url = os.environ.get("TRADIER_LIVE_BASE_URL", "https://api.tradier.com/v1")
-        dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true" or os.environ.get("DRY_RUN", "").lower() == "true"
 
-    # Allow explicit overrides
-    if os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT"):
-        url = os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT")
-        
-    if os.environ.get("HERMES_DRY_RUN"):
-        dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true"
-
-    cfg = {
-        "tradier_access_token": token,
-        "tradier_account_id": account,
-        "tradier_base_url": url,
-        "dry_run": dry_run
-    }
-    _BROKER = TradierBroker(cfg)  # type: ignore[name-defined]
-    return _BROKER  # type: ignore[name-defined]
+async def _broker() -> AsyncTradierBroker:
+    """Resolve and cache AsyncTradierBroker per mode to handle dynamic toggling."""
+    from hermes.config import settings
+    mode = settings.hermes_mode
+    if mode not in _BROKERS:
+        token, account, url = settings.get_tradier_credentials()
+        dry_run = settings.hermes_dry_run if mode == "live" else False
+        cfg = {
+            "tradier_access_token": token,
+            "tradier_account_id": account,
+            "tradier_base_url": url,
+            "dry_run": dry_run
+        }
+        _BROKERS[mode] = AsyncTradierBroker(cfg)
+    return _BROKERS[mode]
 
 
 # --------------------------------------------------------------------- Account
 @mcp.tool()
-def get_account_balances() -> Dict[str, Any]:
+async def get_account_balances() -> Dict[str, Any]:
     """Return Tradier account balances (option_buying_power, total_equity, cash, ...)."""
-    return _broker().get_account_balances()
+    broker = await _broker()
+    return await broker.get_account_balances()
 
 
 @mcp.tool()
-def get_positions() -> List[Dict[str, Any]]:
+async def get_positions() -> List[Dict[str, Any]]:
     """List currently open positions in the configured Tradier account."""
-    return _broker().get_positions()
+    broker = await _broker()
+    return await broker.get_positions()
 
 
 @mcp.tool()
-def get_orders() -> List[Dict[str, Any]]:
+async def get_orders() -> List[Dict[str, Any]]:
     """List recent orders (open and historical) for the configured account."""
-    return _broker().get_orders()
+    broker = await _broker()
+    return await broker.get_orders()
 
 
 @mcp.tool()
-def cancel_order(order_id: str) -> Dict[str, Any]:
+async def cancel_order(order_id: str) -> Dict[str, Any]:
     """Cancel a working order by its Tradier order id."""
-    return _broker().cancel_order(order_id)
+    broker = await _broker()
+    return await broker.cancel_order(order_id)
 
 
 # --------------------------------------------------------------------- Markets
 @mcp.tool()
-def get_quote(symbols: str) -> List[Dict[str, Any]]:
+async def get_quote(symbols: str) -> List[Dict[str, Any]]:
     """Quotes for one or more comma-separated symbols (equity or OCC option)."""
-    return _broker().get_quote(symbols)
+    broker = await _broker()
+    return await broker.get_quote(symbols)
 
 
 @mcp.tool()
-def get_option_expirations(symbol: str) -> List[str]:
+async def get_option_expirations(symbol: str) -> List[str]:
     """Return option expirations for `symbol` as YYYY-MM-DD strings."""
-    return _broker().get_option_expirations(symbol)
+    broker = await _broker()
+    return await broker.get_option_expirations(symbol)
 
 
 @mcp.tool()
-def get_option_chain(symbol: str, expiry: str) -> List[Dict[str, Any]]:
+async def get_option_chain(symbol: str, expiry: str) -> List[Dict[str, Any]]:
     """Full option chain (calls + puts) with greeks for `symbol` on `expiry` (YYYY-MM-DD)."""
-    return _broker().get_option_chains(symbol, expiry)
+    broker = await _broker()
+    return await broker.get_option_chains(symbol, expiry)
 
 
 @mcp.tool()
-def get_delta(option_symbol: str) -> float:
+async def get_delta(option_symbol: str) -> float:
     """Return the delta of a single OCC option symbol."""
-    return _broker().get_delta(option_symbol)
+    broker = await _broker()
+    return await broker.get_delta(option_symbol)
 
 
 @mcp.tool()
-def get_history(symbol: str, interval: str = "daily",
-                start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
+async def get_history(symbol: str, interval: str = "daily",
+                 start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
     """Historical OHLCV bars. interval: 'daily' | 'weekly' | 'monthly'."""
-    return _broker().get_history(symbol, interval=interval, start=start, end=end)
+    broker = await _broker()
+    return await broker.get_history(symbol, interval=interval, start=start, end=end)
 
 
 @mcp.tool()
-def analyze_symbol(symbol: str, period: str = "6m") -> Dict[str, Any]:
+async def analyze_symbol(symbol: str, period: str = "6m") -> Dict[str, Any]:
     """Return current price plus put/call entry-point candidates from price-distribution percentiles."""
-    return _broker().analyze_symbol(symbol, period=period)
+    broker = await _broker()
+    return await broker.analyze_symbol(symbol, period=period)
 
 
 # ----------------------------------------------------------------------- Orders
 @mcp.tool()
-def place_multileg_order(
+async def place_multileg_order(
     symbol: str,
     legs: List[Dict[str, Any]],
     price: float,
@@ -189,8 +161,6 @@ def place_multileg_order(
     Each leg must include `option_symbol`, `quantity`, and either `action`
     (buy_to_open / sell_to_open / buy_to_close / sell_to_close) or `side`
     (buy/sell — defaults to opening).
-
-    Honors HERMES_DRY_RUN=true → routed through Tradier's preview endpoint.
     """
     from hermes.service1_agent.core import TradeAction
     action = TradeAction(
@@ -204,11 +174,12 @@ def place_multileg_order(
         duration=duration,
         tag=tag,
     )
-    return _broker().place_order_from_action(action)
+    broker = await _broker()
+    return await broker.place_order_from_action(action)
 
 
 @mcp.tool()
-def place_single_option_order(
+async def place_single_option_order(
     symbol: str,
     option_symbol: str,
     side: str,
@@ -232,11 +203,12 @@ def place_single_option_order(
         duration=duration,
         tag=tag,
     )
-    return _broker().place_order_from_action(action)
+    broker = await _broker()
+    return await broker.place_order_from_action(action)
 
 
 @mcp.tool()
-def place_equity_order(
+async def place_equity_order(
     symbol: str,
     side: str,
     quantity: int,
@@ -259,13 +231,15 @@ def place_equity_order(
         duration=duration,
         tag=tag,
     )
-    return _broker().place_order_from_action(action)
+    broker = await _broker()
+    return await broker.place_order_from_action(action)
 
 
 @mcp.tool()
-def roll_to_next_month(option_symbol: str) -> str:
+async def roll_to_next_month(option_symbol: str) -> str:
     """Return the OCC symbol for the next available expiry at the same strike/side."""
-    return _broker().roll_to_next_month(option_symbol)
+    broker = await _broker()
+    return await broker.roll_to_next_month(option_symbol)
 
 
 def main() -> None:

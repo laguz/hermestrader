@@ -313,9 +313,9 @@ function switchTab(name){
   document.getElementById('tab-'+name).classList.add('active');
 }
 
-async function loadStatus(){
+async function loadStatus(data){
   try{
-    _status=await api('GET','/api/status');
+    _status=data || await api('GET','/api/status');
     _approvalMode=_status.approval_mode;
     _paused=_status.paused;
     const running=_status.hermes_running;
@@ -395,11 +395,11 @@ function renderAgentStatus(){
   document.getElementById('btn-live').style.borderColor=s.mode==='live'?'var(--orange)':'';
 }
 
-async function loadApprovals(){
+async function loadApprovals(data){
   try{
-    const pending=await api('GET','/api/approvals?status=PENDING&limit=50');
+    const pending=data ? data.pending : await api('GET','/api/approvals?status=PENDING&limit=50');
     renderQueue(pending);
-    const all=await api('GET','/api/approvals?limit=30');
+    const all=data ? data.all : await api('GET','/api/approvals?limit=30');
     renderHistory(all.filter(r=>r.status!=='PENDING').slice(0,20));
   }catch(e){console.error('approvals',e);}
 }
@@ -622,9 +622,9 @@ async function saveLLM(){
   }catch(e){toast('Error: '+e.message,true);}
 }
 
-async function loadLogs(){
+async function loadLogs(data){
   try{
-    const lines=await api('GET','/api/logs?limit=120');
+    const lines=data || await api('GET','/api/logs?limit=120');
     const el=document.getElementById('log-feed');
     el.innerHTML=lines.map(l=>{const t=l.text||'';const cls=t.includes('ERROR')?'log-error':t.includes('[C2]')?'log-c2':'';return`<span class="${cls}">${escHtml(t)}\n</span>`;}).join('');
     el.scrollTop=el.scrollHeight;
@@ -860,9 +860,31 @@ async function loadCharts(){
   }
 }
 
-async function init(){await Promise.all([loadStatus(),loadApprovals(),loadSoul(),loadLLM(),loadLogs(),loadWatchlist()]);}
+function startSSE() {
+  const eventSource = new EventSource('/api/status/stream');
+  eventSource.onmessage = function(event) {
+    try {
+      const data = JSON.parse(event.data);
+      loadStatus(data.status);
+      
+      const pending = data.approvals.filter(r => r.status === 'PENDING');
+      loadApprovals({ pending: pending, all: data.approvals });
+      
+      loadLogs(data.logs);
+    } catch(e) {
+      console.error('SSE message processing error', e);
+    }
+  };
+  eventSource.onerror = function(err) {
+    console.error('SSE error, reconnecting...', err);
+  };
+}
+
+async function init(){
+  await Promise.all([loadStatus(),loadApprovals(),loadSoul(),loadLLM(),loadLogs(),loadWatchlist()]);
+  startSSE();
+}
 init();
-setInterval(()=>{loadStatus();loadApprovals();loadLogs();},8000);
 </script>
 </body>
 </html>

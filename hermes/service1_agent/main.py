@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -29,6 +30,8 @@ from hermes.service1_agent.strategies import (
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("hermes.agent.main")
+
+_SHUTDOWN_EVENT = threading.Event()
 
 # Settings keys shared with the watcher (see hermes/service2_watcher/api.py).
 SETTING_MODE = "hermes_mode"               # "paper" | "live"
@@ -375,40 +378,14 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
 # can flip between sandbox (paper) and live without restart.
 # ---------------------------------------------------------------------------
 def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
-    """Return (token, account_id, base_url) for the requested mode.
-
-    Order of resolution per mode:
-      1. Mode-specific env vars (TRADIER_PAPER_* / TRADIER_LIVE_*)
-      2. Generic TRADIER_ACCESS_TOKEN/TRADIER_ACCOUNT_ID with a mode-derived URL
-    """
-    mode = mode.lower().strip()
-    if mode not in VALID_MODES:
-        raise ValueError(f"unknown mode {mode!r}; expected one of {VALID_MODES}")
-
-    if mode == "paper":
-        token = (
-            os.environ.get("TRADIER_PAPER_TOKEN")
-            or os.environ.get("TRADIER_ACCESS_TOKEN")
-            or os.environ.get("TRADIER_API_KEY")
-        )
-        account = os.environ.get("TRADIER_PAPER_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
-        url = os.environ.get("TRADIER_PAPER_BASE_URL", "https://sandbox.tradier.com/v1")
-    else:
-        token = (
-            os.environ.get("TRADIER_LIVE_TOKEN")
-            or os.environ.get("TRADIER_ACCESS_TOKEN")
-            or os.environ.get("TRADIER_API_KEY")
-        )
-        account = os.environ.get("TRADIER_LIVE_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
-        url = os.environ.get("TRADIER_LIVE_BASE_URL", "https://api.tradier.com/v1")
-
-    if not token or not account:
-        raise RuntimeError(
-            f"missing Tradier credentials for mode={mode!r}; set "
-            f"TRADIER_{mode.upper()}_TOKEN and TRADIER_{mode.upper()}_ACCOUNT_ID "
-            "(or fall back to TRADIER_ACCESS_TOKEN / TRADIER_API_KEY plus TRADIER_ACCOUNT_ID)."
-        )
-    return token, account, url
+    """Return (token, account_id, base_url) for the requested mode."""
+    from hermes.config import settings
+    orig_mode = settings.hermes_mode
+    try:
+        settings.hermes_mode = mode
+        return settings.get_tradier_credentials()
+    finally:
+        settings.hermes_mode = orig_mode
 
 
 def _build_broker(conf: Dict[str, Any], mode: str):
@@ -808,7 +785,17 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
                 db.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:                                     # noqa: BLE001
                 pass
-        time.sleep(interval_s)
+        
+        # Incremental sleep to check for shutdown signals
+        slept = 0
+        while slept < interval_s:
+            if _SHUTDOWN_EVENT.is_set():
+                break
+            time.sleep(1)
+            slept += 1
+        if _SHUTDOWN_EVENT.is_set():
+            log.info("Agent loop detected shutdown signal. Exiting.")
+            break
 
 
 if __name__ == "__main__":
@@ -852,3 +839,49 @@ if __name__ == "__main__":
         log.warning("AsyncXGBPredictor init failed: %s", _ml_exc)
 
     run(_chart_provider, conf)
+
+
+def start_agent_thread() -> threading.Thread:
+    """Helper to spin up the agent loop in a background thread of the watcher process."""
+    conf = {
+        "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
+        "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
+        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
+        "mode": os.environ.get("HERMES_MODE", "paper").lower(),
+    }
+    
+    def target():
+        log.info("Agent background thread starting setup...")
+        _chart_provider = None
+        try:
+            from hermes.charts.provider import HermesChartProvider
+            _chart_db = HermesDB(os.environ.get("HERMES_DSN",
+                                                "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+            _chart_provider = HermesChartProvider(_chart_db, lookback_days=210, cache_ttl_s=300)
+            _chart_provider.start(conf["watchlist"])
+            log.info("HermesChartProvider started in agent thread")
+        except ImportError:
+            log.warning("matplotlib not installed — chart vision disabled (pip install matplotlib)")
+        except Exception as exc:
+            log.warning("HermesChartProvider init failed: %s", exc)
+
+        try:
+            from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
+            _ml_db = HermesDB(os.environ.get("HERMES_DSN",
+                                             "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+            _ml_broker = _build_broker(conf, conf.get("mode", "paper"))
+            _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), _ml_broker, conf["watchlist"])
+            _ml_predictor.start()
+            log.info("AsyncXGBPredictor started in agent thread")
+        except ImportError:
+            log.warning("xgboost or pandas not installed — ML predictor disabled (pip install xgboost pandas)")
+        except Exception as exc:
+            log.warning("AsyncXGBPredictor init failed: %s", exc)
+
+        _SHUTDOWN_EVENT.clear()
+        run(_chart_provider, conf)
+
+    thread = threading.Thread(target=target, name="HermesAgentThread", daemon=True)
+    thread.start()
+    return thread

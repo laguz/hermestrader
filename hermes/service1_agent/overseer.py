@@ -52,7 +52,7 @@ class HermesOverseer:
 
     @property
     def SYSTEM_PROMPT(self) -> str:                              # noqa: N802
-        """Base instructions + market session context + operator doctrine."""
+        """Base instructions + market session context + operator doctrine + strategy metrics."""
         try:
             from hermes.market_hours import session_label
             mkt_line = session_label()
@@ -62,6 +62,21 @@ class HermesOverseer:
         parts = [self.BASE_SYSTEM_PROMPT]
         if mkt_line:
             parts.append(f"\nCURRENT MARKET STATUS: {mkt_line}")
+
+        try:
+            if self.db is not None:
+                perf_metrics = self.db.get_strategy_performance_metrics(days=30)
+                perf_lines = []
+                for strat, data in perf_metrics.items():
+                    perf_lines.append(
+                        f"- {strat}: status={data['status']}, closed={data['closed_trades']}, "
+                        f"passed={data['passed']}, failed={data['failed']}, total_pnl=${data['total_pnl']:.2f}"
+                    )
+                perf_str = "\n".join(perf_lines)
+                parts.append(f"\nRECENT STRATEGY PERFORMANCE (30-DAY WINDOW):\n{perf_str}")
+        except Exception as exc:
+            logger.warning("Failed to fetch performance metrics for SYSTEM_PROMPT: %s", exc)
+
         if self.soul:
             parts.append(
                 "\n--- OPERATOR DOCTRINE (soul.md) ---\n"

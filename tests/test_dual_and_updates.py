@@ -132,13 +132,17 @@ def test_mcp_server_broker_mode_aware_paper(monkeypatch):
     monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("TRADIER_API_KEY", raising=False)
     
-    # We mock TradierBroker so we don't hit requests inside its init
-    with patch("hermes.mcp.server.TradierBroker") as mock_broker_class:
-        # Reset global _BROKER variable to force instantiation
-        if hasattr(server, "_BROKER"):
-            delattr(server, "_BROKER")
+    import hermes.config
+    hermes.config.settings = hermes.config.HermesSettings()
+    
+    # We mock AsyncTradierBroker so we don't hit requests inside its init
+    with patch("hermes.mcp.server.AsyncTradierBroker") as mock_broker_class:
+        # Reset global _BROKERS dict to force instantiation
+        if hasattr(server, "_BROKERS"):
+            server._BROKERS.clear()
             
-        server._broker()
+        import asyncio
+        asyncio.run(server._broker())
         
         mock_broker_class.assert_called_once()
         cfg = mock_broker_class.call_args[0][0]
@@ -155,11 +159,15 @@ def test_mcp_server_broker_mode_aware_live(monkeypatch):
     monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("TRADIER_API_KEY", raising=False)
     
-    with patch("hermes.mcp.server.TradierBroker") as mock_broker_class:
-        if hasattr(server, "_BROKER"):
-            delattr(server, "_BROKER")
+    import hermes.config
+    hermes.config.settings = hermes.config.HermesSettings()
+    
+    with patch("hermes.mcp.server.AsyncTradierBroker") as mock_broker_class:
+        if hasattr(server, "_BROKERS"):
+            server._BROKERS.clear()
             
-        server._broker()
+        import asyncio
+        asyncio.run(server._broker())
         
         mock_broker_class.assert_called_once()
         cfg = mock_broker_class.call_args[0][0]
@@ -167,3 +175,4 @@ def test_mcp_server_broker_mode_aware_live(monkeypatch):
         assert cfg["tradier_account_id"] == "live-acct"
         assert cfg["tradier_base_url"] == "https://api.tradier.com/v1"
         assert cfg["dry_run"] is True
+

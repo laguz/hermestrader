@@ -18,6 +18,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq-dev \
         gcc \
+        git \
         tzdata \
         libfreetype6 \
         libpng-dev \

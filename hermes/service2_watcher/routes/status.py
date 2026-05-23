@@ -14,10 +14,13 @@ The status roll-up is the single read most clients hit, so keep it cheap.
 from __future__ import annotations
 
 import os
+import json
+import asyncio
 from typing import Any, Dict, List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
+from sse_starlette.sse import EventSourceResponse
 
 from hermes.common import STRATEGIES, VALID_MODES
 from hermes.market_hours import market_session, next_open
@@ -142,6 +145,49 @@ def get_status() -> Dict[str, Any]:
         "market_trading_day": mkt["trading_day"],
         "market_next_open": nxt.isoformat() if nxt else None,
     }
+
+
+@router.get("/api/status/stream")
+async def status_stream(request: Request):
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+
+            try:
+                # 1. Fetch status
+                status_data = get_status()
+
+                # 2. Fetch pending approvals (limit 50)
+                pending_approvals = db.list_approvals(status="PENDING", limit=50)
+
+                # 3. Fetch decided/historical approvals (limit 30)
+                decided_approvals = db.list_approvals(limit=30)
+                decided_approvals = [r for r in decided_approvals if r.get("status") != "PENDING"][:20]
+
+                # 4. Fetch logs
+                raw_logs = db.recent_logs(limit=100)
+                logs_list = [{"text": line} for line in (raw_logs or "").splitlines()]
+
+                payload = {
+                    "status": status_data,
+                    "approvals": pending_approvals + decided_approvals,
+                    "logs": logs_list
+                }
+                
+                yield {
+                    "event": "message",
+                    "data": json.dumps(payload)
+                }
+            except Exception as e:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error": str(e)})
+                }
+
+            await asyncio.sleep(2)
+
+    return EventSourceResponse(event_generator())
 
 
 @router.get("/api/health")
