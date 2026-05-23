@@ -234,17 +234,18 @@ class Backtester:
 
     def _roll_forward(self, asof: pd.Timestamp,
                       short_strike: float) -> tuple[Optional[float], float]:
-        """Walk ``horizon`` bars forward and return ``(outcome, credit)``.
+        """Walk ``horizon`` bars forward and return ``(outcome, credit)``,
+        routing the execution through the local MockAsyncTradierBroker matching engine.
 
         outcome = 1.0 if the underlying *never* crosses the short strike
         intraday between asof+1 and asof+horizon; 0.0 otherwise.
 
-        credit = synthetic credit collected at entry. We approximate as
-        ``0.30 * (spot - strike)`` — a rough rule-of-thumb that lets the
-        backtester report a relative P&L number without modelling the
-        full option chain. The constant is exposed via the cost model
-        so callers can override.
+        credit = synthetic credit collected at entry (net of touch losses).
         """
+        import asyncio
+        from hermes.broker.mock_engine import MockAsyncTradierBroker
+        from hermes.service1_agent.core import TradeAction
+
         idx = self.bars.index
         try:
             i_start = idx.get_loc(asof)
@@ -257,15 +258,76 @@ class Backtester:
         if window.empty:
             return None, 0.0
 
+        # Initialize mock broker without costs (Backtester applies its own CostModel)
+        broker = MockAsyncTradierBroker(config={
+            "commission_per_contract": 0.0,
+            "slippage_pct": 0.0
+        })
+
+        spot_entry = float(self.bars.iloc[i_start]["close"])
+        
+        # Tick entry spot price to establish quotes
+        broker.tick_underlying("AAPL", spot_entry, spot_entry, spot_entry, asof.to_pydatetime())
+
+        # Determine option strikes and symbol names
+        expiry_date = window.index[-1].date()
+        yymmdd = expiry_date.strftime("%y%m%d")
+        
+        short_strike_str = f"{int(short_strike * 1000):08d}"
+        long_strike = short_strike - 5.0 if self.side == "put" else short_strike + 5.0
+        long_strike_str = f"{int(long_strike * 1000):08d}"
+
+        short_opt = f"AAPL{yymmdd}{'P' if self.side == 'put' else 'C'}{short_strike_str}"
+        long_opt = f"AAPL{yymmdd}{'P' if self.side == 'put' else 'C'}{long_strike_str}"
+
+        # Approximate credit collected at entry
         if self.side == "put":
-            touched = bool((window["low"] <= short_strike).any())
-            credit = 0.30 * max(self.bars.iloc[i_start]["close"] - short_strike, 0.0)
+            credit = 0.30 * max(spot_entry - short_strike, 0.0)
         else:
-            touched = bool((window["high"] >= short_strike).any())
-            credit = 0.30 * max(short_strike - self.bars.iloc[i_start]["close"], 0.0)
+            credit = 0.30 * max(short_strike - spot_entry, 0.0)
+
+        action = TradeAction(
+            strategy_id="BACKTEST",
+            symbol="AAPL",
+            order_class="multileg",
+            legs=[
+                {"option_symbol": short_opt, "side": "sell_to_open", "quantity": 1},
+                {"option_symbol": long_opt, "side": "buy_to_open", "quantity": 1}
+            ],
+            price=credit,
+            side="sell",
+            quantity=1,
+            order_type="credit"
+        )
+
+        # Place the order synchronously using a new event loop
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(broker.place_order_from_action(action))
+        finally:
+            loop.close()
+
+        # Replay the daily bars through the mock matching engine
+        touched = False
+        for dt, bar in window.iterrows():
+            spot = float(bar["close"])
+            high = float(bar["high"])
+            low = float(bar["low"])
+
+            broker.tick_underlying("AAPL", spot, high, low, dt.to_pydatetime())
+            
+            # If the positions are cleared/empty, it signifies the short option was touched
+            # and the mock matching engine executed the stop-out/close at a loss.
+            if not broker.positions:
+                touched = True
+                break
 
         outcome = 0.0 if touched else 1.0
-        return outcome, float(credit)
+        # Compute realized P&L from the mock broker's cash balance
+        # (initial cash was 100000.0, multiplier is 100)
+        realized_value = (broker.balances["cash"] - 100000.0) / 100.0
+        
+        return outcome, float(realized_value)
 
     # -- default scorer ------------------------------------------------------
     def _default_score(self, asof: pd.Timestamp, frame: pd.DataFrame,

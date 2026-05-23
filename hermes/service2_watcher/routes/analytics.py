@@ -86,12 +86,6 @@ router = APIRouter()
 logger = logging.getLogger("hermes.c2.api")
 
 
-@router.get("/analytics")
-def analytics_page() -> FileResponse:
-    return FileResponse(
-        STATIC_DIR / "analytics.html",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
 
 
 @router.get("/api/analytics")

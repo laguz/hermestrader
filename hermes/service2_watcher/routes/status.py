@@ -49,13 +49,6 @@ from .._app_state import (
 router = APIRouter()
 
 
-@router.get("/")
-def index() -> FileResponse:
-    return FileResponse(
-        STATIC_DIR / "dashboard.html",
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
-
 
 @router.get("/api/status")
 def get_status() -> Dict[str, Any]:
@@ -246,13 +239,18 @@ def get_debug_info() -> Dict[str, Any]:
 
     result: Dict[str, Any] = {"xgboost": xgb_ver, "logs": [], "db": {}}
 
+    try:
+        daily_cnt, intra_cnt = db.ts_engine.get_total_bars_count()
+        result["db"]["bars_daily"] = daily_cnt
+        result["db"]["bars_intraday"] = intra_cnt
+    except Exception as e:                                        # noqa: BLE001
+        result["db"]["bars_daily"] = 0
+        result["db"]["bars_intraday"] = 0
+        logger.warning("Failed to get timeseries count: %s", e)
+
     with db.Session() as s:
         from sqlalchemy import text as sa_text
         try:
-            result["db"]["bars_daily"] = s.execute(sa_text(
-                "SELECT COUNT(*) FROM bars_daily")).scalar()
-            result["db"]["bars_intraday"] = s.execute(sa_text(
-                "SELECT COUNT(*) FROM bars_intraday")).scalar()
             result["db"]["predictions"] = s.execute(sa_text(
                 "SELECT COUNT(*) FROM predictions")).scalar()
             result["db"]["ml_last_error"] = s.execute(sa_text(

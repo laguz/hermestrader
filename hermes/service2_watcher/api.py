@@ -99,6 +99,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Hermes C2", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Ensure assets directory exists to prevent FastAPI crash before Vite compilation
+(STATIC_DIR / "assets").mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+
 from hermes.mcp.server import mcp
 app.mount("/mcp", mcp.sse_app())
 
@@ -116,3 +120,25 @@ app.include_router(analytics.router)
 app.include_router(charts.router)
 app.include_router(admin.router)
 app.include_router(ml_diagnostics.router)
+
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import HTTPException
+
+@app.get("/{fallback_path:path}")
+def spa_fallback(fallback_path: str):
+    if (
+        fallback_path.startswith("api") or
+        fallback_path.startswith("mcp") or
+        fallback_path.startswith("static") or
+        fallback_path.startswith("assets")
+    ):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    index_path = STATIC_DIR / "index.html"
+    if not index_path.exists():
+        return HTMLResponse(
+            "<html><body>Frontend not compiled yet. Run: <code>npm run build</code> inside <code>hermes/ui</code></body></html>",
+            status_code=503
+        )
+    return FileResponse(index_path, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
+

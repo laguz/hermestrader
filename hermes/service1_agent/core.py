@@ -5,6 +5,7 @@ MoneyManager and the CascadingEngine that drives execution priority.
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import math
@@ -14,6 +15,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from hermes.common import OCC_RE
+from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent, MarketDataEvent
 
 if TYPE_CHECKING:
     # Imported only for type checking — resolves the F821 forward references
@@ -528,7 +530,8 @@ class CascadingEngine:
                  overseer: Optional["HermesOverseer"] = None,
                  approval_mode: bool = False,
                  money_manager: Optional["MoneyManager"] = None,
-                 config: Optional[Dict[str, Any]] = None):
+                 config: Optional[Dict[str, Any]] = None,
+                 event_bus: Optional[EventBus] = None):
         self.broker = broker
         self.db = db
         # Sort by declared PRIORITY (1 highest)
@@ -543,6 +546,11 @@ class CascadingEngine:
         # callers that haven't been updated yet still work.
         self.mm = money_manager or (strategies[0].mm if strategies else None)
         self.config = config or {}
+        self.event_bus = event_bus
+        self._quote_cache: Dict[str, Dict[str, Any]] = {}
+        if self.event_bus is not None:
+            self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
+            self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
 
     # 1
     def sync_positions(self) -> None:
@@ -684,6 +692,27 @@ class CascadingEngine:
                             len(actions), action_type, reason)
             return
         for a in actions:
+            if self.event_bus is not None:
+                if self.overseer is not None and action_type != "ai":
+                    # Yield to AI Overseer asynchronously
+                    event = ReviewRequestEvent(
+                        strategy_id=a.strategy_id,
+                        symbol=a.symbol,
+                        trade_action=a
+                    )
+                    self.event_bus.emit(event)
+                else:
+                    # Bypasses AI review (either no overseer, or action is already AI-authored)
+                    event = AIApprovalEvent(
+                        strategy_id=a.strategy_id,
+                        symbol=a.symbol,
+                        verdict="APPROVE",
+                        rationale="Auto-approved (AI-authored or no overseer).",
+                        original_action=a
+                    )
+                    self.event_bus.emit(event)
+                continue
+
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
             if self.overseer is not None:
                 a = self.overseer.review(a)
@@ -780,7 +809,161 @@ class CascadingEngine:
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
-            ai_actions = self.overseer.propose(watchlist) or []
-            self.submit(ai_actions, action_type="ai")
-            ai_count = len(ai_actions)
+            if self.event_bus is not None:
+                # Asynchronously generate AI proposals without blocking the tick loop
+                asyncio.create_task(self._async_propose(watchlist))
+            else:
+                ai_actions = self.overseer.propose(watchlist) or []
+                self.submit(ai_actions, action_type="ai")
+                ai_count = len(ai_actions)
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
+
+    async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
+        """Asynchronously executes or queues an action after AI approval."""
+        a = event.original_action
+        if a is None:
+            logger.warning("AIApprovalEvent has no original_action; skipping.")
+            return
+
+        if event.verdict == "VETO":
+            logger.info("[AI VETOED] Strategy=%s symbol=%s - %s", event.strategy_id, event.symbol, event.rationale)
+            await asyncio.to_thread(
+                self.db.write_log,
+                event.strategy_id,
+                f"[AI VETOED] {event.symbol} — {event.rationale}"
+            )
+            return
+
+        if event.verdict == "MODIFY":
+            # Apply modifications
+            if event.modifications:
+                for k, v in event.modifications.items():
+                    if hasattr(a, k):
+                        setattr(a, k, v)
+                a.ai_authored = True
+                a.ai_rationale = event.rationale
+
+        # Now proceed to order placement / human approval queue (equivalent to the rest of submit)
+        if self.approval_mode:
+            # Dedup check
+            side_type = (a.strategy_params or {}).get("side_type")
+            has_pending = await asyncio.to_thread(
+                self.db.has_pending_approval,
+                a.strategy_id, a.symbol, side_type, a.expiry
+            )
+            if has_pending:
+                logger.info(
+                    "[C2] Skipping duplicate — already PENDING: %s %s side=%s expiry=%s",
+                    a.strategy_id, a.symbol, side_type, a.expiry,
+                )
+                await asyncio.to_thread(
+                    self.db.write_log,
+                    a.strategy_id,
+                    f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} already PENDING approval — skipped"
+                )
+                return
+
+            # Queue for human review
+            action_dict = dataclasses.asdict(a)
+            await asyncio.to_thread(self.db.queue_for_approval, action_dict, action_type="entry")
+            logger.info(
+                "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
+                a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
+            )
+            await asyncio.to_thread(
+                self.db.write_log,
+                a.strategy_id,
+                f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
+                f"side={side_type} expiry={a.expiry} "
+                f"qty={a.quantity} — awaiting human approval"
+            )
+        else:
+            await asyncio.to_thread(self.db.record_pending_order, a)
+            
+            # Determine if pure close
+            is_pure_close = (
+                bool(a.legs)
+                and all("to_open" not in (leg.get("side") or "").lower()
+                        for leg in a.legs)
+            )
+            
+            is_async = asyncio.iscoroutinefunction(self.broker.place_order_from_action)
+            close_method = getattr(self.db, "close_trade_from_action", None)
+            
+            try:
+                if is_async:
+                    resp = await self.broker.place_order_from_action(a)
+                else:
+                    resp = await asyncio.to_thread(self.broker.place_order_from_action, a)
+            except Exception as exc:
+                if is_pure_close and close_method is not None:
+                    await asyncio.to_thread(close_method, a, {"errors": str(exc)})
+                else:
+                    await asyncio.to_thread(self.db.record_order_response, a, {"errors": str(exc)})
+                logger.exception("place_order failed for %s: %s", a.symbol, exc)
+            else:
+                if is_pure_close and close_method is not None:
+                    await asyncio.to_thread(close_method, a, resp)
+                else:
+                    await asyncio.to_thread(self.db.record_order_response, a, resp)
+
+    async def _async_propose(self, watchlist: Sequence[str]) -> None:
+        """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""
+        try:
+            ai_actions = await asyncio.to_thread(self.overseer.propose, watchlist)
+            if ai_actions:
+                self.submit(ai_actions, action_type="ai")
+        except Exception as exc:
+            logger.exception("Error in async propose: %s", exc)
+
+    async def handle_market_data(self, event: MarketDataEvent) -> None:
+        """Evaluates strategies reactively when a new MarketDataEvent is received."""
+        symbol = event.symbol
+        
+        # Update quote cache
+        self._quote_cache[symbol] = {
+            "price": event.price,
+            "volume": event.volume,
+            **event.data
+        }
+        
+        # Guard: off-hours block
+        from hermes.market_hours import should_block_trades
+        blocked, reason = should_block_trades()
+        if blocked:
+            return
+
+        # Run position management for this symbol across all strategies
+        # (run in thread pool using asyncio.to_thread because s.manage_positions is synchronous)
+        mgmt_actions = []
+        for s in self.strategies:
+            try:
+                actions = await asyncio.to_thread(s.manage_positions)
+                if actions:
+                    # Filter actions to only close positions for the ticking symbol
+                    symbol_actions = [a for a in actions if a.symbol == symbol]
+                    mgmt_actions.extend(symbol_actions)
+            except Exception as exc:
+                logger.exception("Management failure in %s for %s: %s", s.NAME, symbol, exc)
+                
+        if mgmt_actions:
+            self.submit(mgmt_actions, action_type="management")
+
+        # Run entries for this symbol across strategies in priority order
+        for s in self.strategies:
+            try:
+                # Check strategy-specific watchlist to make sure this symbol is watched
+                wl = self._watchlist_for(s.strategy_id, [symbol])
+                if symbol not in wl:
+                    continue
+                
+                # Run execute_entries in the thread pool
+                actions = await asyncio.to_thread(s.execute_entries, [symbol])
+                if actions:
+                    self.submit(actions, action_type="entry")
+                    if self.mm is not None:
+                        await asyncio.to_thread(self.mm.sync_broker_orders)
+            except Exception as exc:
+                logger.exception("Entry failure in %s for %s: %s", s.NAME, symbol, exc)
+
+

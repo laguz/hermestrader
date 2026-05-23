@@ -12,7 +12,8 @@ from sqlalchemy import (
     Numeric, Sequence, String, Text, create_engine,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, reconstructor
+from transitions import Machine
 
 from hermes.common import OCC_RE as _OCC_RE
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
@@ -64,7 +65,7 @@ class Trade(Base):
     entry_credit = Column(Numeric(10, 4))
     entry_debit = Column(Numeric(10, 4))
     expiry = Column(Date)
-    status = Column(String, nullable=False, default="OPEN")
+    status = Column(String, nullable=False, default="PROPOSED")
     pnl = Column(Numeric(12, 2))
     closed_at = Column(DateTime(timezone=True))
     close_reason = Column(String)
@@ -83,6 +84,38 @@ class Trade(Base):
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
     )
+
+    STATES = ["PROPOSED", "PENDING_BROKER", "PARTIAL_FILL", "OPEN", "CLOSING", "CLOSED"]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._init_fsm()
+
+    @reconstructor
+    def _init_fsm(self):
+        # Prevent recreating machine if called multiple times
+        if hasattr(self, 'machine'):
+            return
+            
+        # The FSM will bind directly to `self.status`
+        initial_state = getattr(self, 'status', None) or "PROPOSED"
+        self.machine = Machine(
+            model=self,
+            states=self.STATES,
+            initial=initial_state,
+            model_attribute='status',
+            send_event=True,
+            ignore_invalid_triggers=False
+        )
+        
+        # Valid State Transitions
+        self.machine.add_transition('submit_to_broker', 'PROPOSED', 'PENDING_BROKER')
+        self.machine.add_transition('broker_reject', 'PENDING_BROKER', 'CLOSED')
+        self.machine.add_transition('partial_fill', 'PENDING_BROKER', 'PARTIAL_FILL')
+        self.machine.add_transition('fill', ['PENDING_BROKER', 'PARTIAL_FILL'], 'OPEN')
+        self.machine.add_transition('begin_close', 'OPEN', 'CLOSING')
+        self.machine.add_transition('finish_close', 'CLOSING', 'CLOSED')
+        self.machine.add_transition('force_close', '*', 'CLOSED')
 
 
 class PendingOrder(Base):
@@ -251,6 +284,10 @@ class HermesDB:
     def __init__(self, dsn: str):
         self.engine = create_engine(dsn, pool_pre_ping=True, future=True)
         self.Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
+
+        from hermes.db.timeseries import TimeSeriesEngine
+        self.ts_engine = TimeSeriesEngine(self)
+
         # Defensive: create any ORM-mapped tables that don't already exist.
         # schema.sql is the source of truth (TimescaleDB hypertables, indexes,
         # compression policies, continuous aggregates), but if it was never
@@ -630,7 +667,8 @@ class HermesDB:
                 )
                 return
 
-            row.status = "CLOSED"
+            # Use FSM to force close instead of direct string mutation
+            row.force_close()
             row.closed_at = datetime.utcnow()
             row.close_reason = close_reason
             row.close_tag = getattr(action, "tag", None)
@@ -722,7 +760,8 @@ class HermesDB:
                 legs = {leg for leg in (t.short_leg, t.long_leg) if leg}
                 if legs & coverage:
                     continue
-                t.status = "CLOSED"
+                # Use FSM transition
+                t.force_close()
                 t.closed_at = datetime.utcnow()
                 # Preserve a strategy-set reason (rare race: the management
                 # close path already stamped this row but the commit
@@ -1246,122 +1285,21 @@ class HermesDB:
             return "\n".join(out)
 
     def daily_bars(self, symbol: str, lookback_days: int = 400) -> Optional[pd.DataFrame]:
-        sql = """
-            SELECT ts, open, high, low, close, volume, vwap_close
-            FROM bars_daily
-            WHERE symbol = %s AND ts >= now() - (%s || ' days')::interval
-            ORDER BY ts
-        """
-        df = pd.read_sql(sql, self.engine, params=(symbol, lookback_days), parse_dates=["ts"])
-        if df.empty:
-            return None
-        df = df.set_index("ts")
-        return df
+        return self.ts_engine.daily_bars(symbol, lookback_days)
 
     def intraday_bars(self, symbol: str, lookback_days: int = 10) -> pd.DataFrame:
-        sql = """
-            SELECT ts, open, high, low, close, volume
-            FROM bars_intraday
-            WHERE symbol = %s AND ts >= now() - (%s || ' days')::interval
-            ORDER BY ts
-        """
-        df = pd.read_sql(sql, self.engine, params=(symbol, lookback_days), parse_dates=["ts"])
-        return df.set_index("ts") if not df.empty else df
+        return self.ts_engine.intraday_bars(symbol, lookback_days)
 
     def save_daily_bars(self, symbol: str, df: pd.DataFrame) -> None:
         """Upsert daily bars for a symbol from a DataFrame."""
-        if df.empty:
-            return
-        
-        # Reset index if ts is the index
-        if df.index.name == 'ts' or 'ts' not in df.columns:
-            reset_df = df.reset_index()
-            if 'ts' not in reset_df.columns and 'index' in reset_df.columns:
-                reset_df = reset_df.rename(columns={'index': 'ts'})
-        else:
-            reset_df = df.copy()
-            
-        from sqlalchemy.dialects.postgresql import insert
-        
-        data = []
-        for _, row in reset_df.iterrows():
-            data.append({
-                'ts': pd.to_datetime(row['ts']),
-                'symbol': symbol,
-                'open': row.get('open'),
-                'high': row.get('high'),
-                'low': row.get('low'),
-                'close': row.get('close'),
-                'volume': row.get('volume'),
-                'vwap_close': row.get('vwap_close')
-            })
-
-        if not data:
-            return
-
-        stmt = insert(DailyBar).values(data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['ts', 'symbol'],
-            set_={
-                'open': stmt.excluded.open,
-                'high': stmt.excluded.high,
-                'low': stmt.excluded.low,
-                'close': stmt.excluded.close,
-                'volume': stmt.excluded.volume,
-                'vwap_close': stmt.excluded.vwap_close
-            }
-        )
-        with self.engine.begin() as conn:
-            conn.execute(stmt)
+        self.ts_engine.save_daily_bars(symbol, df)
 
     def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
         """Upsert intraday bars for a symbol from a DataFrame."""
-        if df.empty:
-            return
-            
-        # Reset index if ts is the index
-        if df.index.name == 'ts' or 'ts' not in df.columns:
-            reset_df = df.reset_index()
-            if 'ts' not in reset_df.columns and 'index' in reset_df.columns:
-                reset_df = reset_df.rename(columns={'index': 'ts'})
-        else:
-            reset_df = df.copy()
-
-        from sqlalchemy.dialects.postgresql import insert
-        
-        data = []
-        for _, row in reset_df.iterrows():
-            data.append({
-                'ts': pd.to_datetime(row['ts']),
-                'symbol': symbol,
-                'open': row.get('open'),
-                'high': row.get('high'),
-                'low': row.get('low'),
-                'close': row.get('close'),
-                'volume': row.get('volume')
-            })
-
-        if not data:
-            return
-
-        stmt = insert(IntradayBar).values(data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['ts', 'symbol'],
-            set_={
-                'open': stmt.excluded.open,
-                'high': stmt.excluded.high,
-                'low': stmt.excluded.low,
-                'close': stmt.excluded.close,
-                'volume': stmt.excluded.volume
-            }
-        )
-        with self.engine.begin() as conn:
-            conn.execute(stmt)
+        self.ts_engine.save_intraday_bars(symbol, df)
 
     def last_price(self, symbol: str) -> Optional[float]:
-        with self.Session() as s:
-            row = s.query(DailyBar).filter_by(symbol=symbol).order_by(DailyBar.ts.desc()).first()
-            return float(row.close) if row and row.close is not None else None
+        return self.ts_engine.last_price(symbol)
 
     def pnl_daily(self, days: int = 60) -> List[Dict[str, Any]]:
         sql = """
@@ -1376,23 +1314,7 @@ class HermesDB:
 
     def get_price_on_date(self, symbol: str, dt: date) -> Optional[float]:
         """Fetch close price of the symbol on or before the specified date."""
-        if not dt:
-            return None
-        from datetime import datetime, time, date
-        if isinstance(dt, datetime):
-            dt_end = dt
-        elif isinstance(dt, date):
-            dt_end = datetime.combine(dt, time.max)
-        else:
-            dt_end = dt
-        with self.Session() as s:
-            row = (
-                s.query(DailyBar)
-                .filter(DailyBar.symbol == symbol, DailyBar.ts <= dt_end)
-                .order_by(DailyBar.ts.desc())
-                .first()
-            )
-            return float(row.close) if row and row.close is not None else None
+        return self.ts_engine.get_price_on_date(symbol, dt)
 
     def get_strategy_performance_metrics(self, days: int = 30) -> Dict[str, Any]:
         """Calculate recent trading performance (PASS/FAIL/NEUTRAL) for each strategy.

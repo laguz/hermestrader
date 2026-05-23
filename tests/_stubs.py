@@ -212,6 +212,18 @@ class StubDB:
     def write_ai_decision(self, *_a, **_kw):
         pass
 
+    def record_pending_order(self, action):
+        self.pending_orders.append(action)
+
+    def record_order_response(self, action, response):
+        pass
+
+    def close_trade_from_action(self, action, response):
+        pass
+
+    def queue_for_approval(self, action_dict, action_type="entry"):
+        pass
+
     def recent_logs(self, limit: int = 200) -> str:
         return "\n".join(self.logs[-limit:])
 

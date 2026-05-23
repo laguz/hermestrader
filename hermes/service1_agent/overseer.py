@@ -6,6 +6,7 @@ provider-agnostic — `LLMClient` is any object with `.chat(messages, images=...
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -13,6 +14,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent
 from .core import TradeAction
 
 logger = logging.getLogger("hermes.agent.overseer")
@@ -31,7 +33,8 @@ class HermesOverseer:
 
     def __init__(self, llm_client, db, *, vision_enabled: bool = True,
                  chart_provider=None, autonomy: str = "advisory",
-                 soul: Optional[str] = None):
+                 soul: Optional[str] = None,
+                 event_bus: Optional[EventBus] = None):
         """
         autonomy: 'advisory'  → log decisions, never block (default for new deployments)
                   'enforcing' → veto/modify takes effect
@@ -49,6 +52,9 @@ class HermesOverseer:
         self.chart_provider = chart_provider
         self.autonomy = autonomy
         self.soul = (soul or "").strip()
+        self.event_bus = event_bus
+        self._queue: Optional[asyncio.Queue[ReviewRequestEvent]] = None
+        self._worker_task: Optional[asyncio.Task] = None
 
     @property
     def SYSTEM_PROMPT(self) -> str:                              # noqa: N802
@@ -284,3 +290,78 @@ class HermesOverseer:
                 except Exception:                                      # noqa: BLE001
                     pass
         return {"verdict": "APPROVE", "rationale": "Unparseable LLM reply; defaulting."}
+
+    @property
+    def queue(self) -> asyncio.Queue[ReviewRequestEvent]:
+        """Lazy-initialize queue so synchronous tests don't fail due to missing event loop."""
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        return self._queue
+
+    async def start(self) -> None:
+        """Start the autonomous background worker."""
+        if self.event_bus is None:
+            return
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = asyncio.create_task(self._run_loop())
+            self.event_bus.subscribe(ReviewRequestEvent, self.handle_review_request)
+            logger.info("HermesOverseer background worker started.")
+
+    async def stop(self) -> None:
+        """Stop the autonomous background worker."""
+        if self._worker_task:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except asyncio.CancelledError:
+                pass
+            self._worker_task = None
+            logger.info("HermesOverseer background worker stopped.")
+
+    async def handle_review_request(self, event: ReviewRequestEvent) -> None:
+        """Puts review requests onto the queue for sequential processing."""
+        await self.queue.put(event)
+
+    async def _run_loop(self) -> None:
+        """Sequentially processes review requests from the queue."""
+        while True:
+            try:
+                event = await self.queue.get()
+                action = event.trade_action
+                
+                # Execute LLM review in a threadpool so it doesn't block the asyncio event loop
+                decision = await asyncio.to_thread(self._consult, action)
+                
+                # Write to database (advisory/enforcing decision)
+                if self.db is not None:
+                    await asyncio.to_thread(
+                        self.db.write_ai_decision,
+                        action.strategy_id,
+                        action.symbol,
+                        self.autonomy,
+                        decision
+                    )
+                
+                verdict = decision.get("verdict", "APPROVE").upper()
+                modifications = decision.get("modifications") or {}
+                rationale = decision.get("rationale") or ""
+                
+                # Emit AIApprovalEvent onto the event bus
+                approval_event = AIApprovalEvent(
+                    strategy_id=action.strategy_id,
+                    symbol=action.symbol,
+                    verdict=verdict,
+                    rationale=rationale,
+                    modifications=modifications,
+                    original_action=action
+                )
+                if self.event_bus:
+                    self.event_bus.emit(approval_event)
+                
+                self.queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Error in HermesOverseer worker loop: %s", exc, exc_info=True)
+
+
