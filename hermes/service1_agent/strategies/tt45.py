@@ -36,18 +36,30 @@ class TastyTrade45(AbstractStrategy):
         width = float(self.config.get("tt45_width", 5.0))
         max_lots = int(self.config.get("tt45_max_lots", 5))
         target_lots = int(self.config.get("tt45_target_lots", 5))
+
+        # DTE window and delta target — live-tunable via system_settings.
+        try:
+            entry_min_dte = int(self.db.get_setting("tt45_min_dte") or 30)
+            entry_max_dte = int(self.db.get_setting("tt45_max_dte") or 60)
+            entry_delta = float(self.db.get_setting("tt45_delta") or 0.16)
+        except (TypeError, ValueError):
+            entry_min_dte, entry_max_dte, entry_delta = 30, 60, 0.16
+
         symbols = list(watchlist)
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — target={target_lots} max={max_lots} width={width} delta=0.16")
+        self._log(
+            f"↻ scanning {len(symbols)} symbol(s) — target={target_lots} max={max_lots} "
+            f"width={width} delta={entry_delta} dte={entry_min_dte}-{entry_max_dte}"
+        )
 
         for symbol in symbols:
             try:
                 # Always prefer to complete an existing IC over opening a new one.
                 expiry = self.find_active_ic_expiry(symbol)
                 if not expiry:
-                    expiry = self.find_expiry_in_dte_range(symbol, 30, 60, prefer="max")
+                    expiry = self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
 
                 if not expiry:
-                    self._log(f"ℹ️ {symbol}: no expiry in 30-60 DTE range; skip.")
+                    self._log(f"ℹ️ {symbol}: no expiry in {entry_min_dte}-{entry_max_dte} DTE range; skip.")
                     continue
                 existing = {leg["side"] for leg in self.db.open_legs(self.strategy_id, symbol)
                             if leg.get("expiry") == expiry}
@@ -57,9 +69,9 @@ class TastyTrade45(AbstractStrategy):
                 def factory(side: str):
                     def _b(symbol, expiry, lots, width):
                         chain = self.broker.get_option_chains(symbol, expiry) or []
-                        short_leg = self.find_strike_by_delta(chain, side, 0.16, tolerance=0.05)
+                        short_leg = self.find_strike_by_delta(chain, side, entry_delta, tolerance=0.05)
                         if not short_leg:
-                            self._log(f"✗ {symbol} {side}: no strike near 0.16Δ (±0.05) in chain; skip.")
+                            self._log(f"✗ {symbol} {side}: no strike near {entry_delta:.2f}Δ (±0.05) in chain; skip.")
                             return None
                         long_strike = (float(short_leg["strike"]) - width
                                        if side == "put" else float(short_leg["strike"]) + width)

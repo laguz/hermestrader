@@ -46,10 +46,19 @@ class CreditSpreads7(AbstractStrategy):
         target_lots_global = int(self.config.get("cs7_target_lots", 1))
         min_credit = round(width * 0.12, 2)
 
+        # DTE target — live-tunable via system_settings; fallback to 7.
+        try:
+            entry_dte = int(self.db.get_setting("cs7_dte") or 7)
+        except (TypeError, ValueError):
+            entry_dte = 7
+
         detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
 
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global} min_credit=${min_credit:.2f}")
+        self._log(
+            f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} "
+            f"max={max_lots_global} min_credit=${min_credit:.2f} dte={entry_dte}"
+        )
 
         for sym_raw in symbols:
             try:
@@ -89,16 +98,17 @@ class CreditSpreads7(AbstractStrategy):
                 existing_sides: set = set()
 
                 if mode_a:
-                    # New entry: only the exact 7-DTE row works.
-                    expiry = self.find_expiry_in_dte_range(symbol, 7, 7)
+                    # New entry: target the configured DTE (default exact 7).
+                    expiry = self.find_expiry_in_dte_range(symbol, entry_dte, entry_dte)
                     if not expiry:
-                        self._log(f"ℹ️ {symbol}: no exact 7 DTE expiry found for new entry; skip.")
+                        self._log(f"ℹ️ {symbol}: no exact {entry_dte} DTE expiry found for new entry; skip.")
                         continue
                 else:
-                    # Completion (Mode B): only complete if 4–7 DTE remain.
+                    # Completion (Mode B): only complete if within the lower half of the DTE window.
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                    if not (4 <= dte <= 7):
-                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 4-7 completion window; skip.")
+                    completion_min = max(1, entry_dte - 3)
+                    if not (completion_min <= dte <= entry_dte):
+                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside {completion_min}-{entry_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
                                       for leg in self.db.open_legs(self.strategy_id, symbol)

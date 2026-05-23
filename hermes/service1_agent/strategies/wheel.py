@@ -122,14 +122,65 @@ class WheelStrategy(AbstractStrategy):
         )
 
     def manage_positions(self) -> List[TradeAction]:
-        """Roll ITM at <7 DTE (rolls IGNORE max_lots)."""
+        """Roll ITM at <7 DTE; detect put assignments and open covered calls."""
         actions: List[TradeAction] = []
+
+        # Fetch live broker positions once for assignment detection.
+        try:
+            live_positions = self.broker.get_positions() or []
+        except Exception as exc:                                   # noqa: BLE001
+            self._log(f"⚠️ could not fetch positions for assignment check: {exc}")
+            live_positions = []
+
+        live_option_symbols = {
+            str(p.get("symbol", "")).upper()
+            for p in live_positions
+            if p.get("asset_type", "").lower() == "option" or "option_symbol" in p
+        }
+        live_equity_lots: dict = {}
+        for p in live_positions:
+            sym = str(p.get("symbol", "")).upper()
+            asset = str(p.get("asset_type") or p.get("type") or "").lower()
+            if asset in ("stock", "equity", "") and not any(c.isdigit() for c in sym[-8:]):
+                qty = int(float(p.get("quantity") or p.get("qty") or 0))
+                live_equity_lots[sym] = live_equity_lots.get(sym, 0) + qty
+
         for trade in self.db.open_trades(self.strategy_id):
             info = parse_occ(trade["short_leg"])
             if not info:
                 continue
+
             dte = (info["expiry"] - self.today()).days
-            # broker.get_quote returns List[Dict]; take the first element.
+
+            # ── Assignment detection (puts only) ──────────────────────────
+            # If the short put is no longer at the broker and equity appeared,
+            # the option was assigned.  We open a covered call to continue
+            # the wheel cycle and let reconcile_orphans handle the put row.
+            if info["side"] == "put" and trade["short_leg"] not in live_option_symbols:
+                symbol = trade["symbol"].upper()
+                equity_qty = live_equity_lots.get(symbol, 0)
+                call_lots = equity_qty // 100
+                if call_lots > 0:
+                    self._log(
+                        f"✓ {symbol}: put {trade['short_leg']} assigned — "
+                        f"{equity_qty} shares detected; opening {call_lots} covered call(s)"
+                    )
+                    expiry = self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+                    if expiry:
+                        call_action = self._open_wheel_leg(symbol, "call", expiry)
+                        if call_action:
+                            call_action.quantity = call_lots
+                            call_action.strategy_params = {
+                                **(call_action.strategy_params or {}),
+                                "triggered_by": "assignment",
+                                "assigned_put": trade["short_leg"],
+                            }
+                            actions.append(call_action)
+                    else:
+                        self._log(f"⚠️ {symbol}: no 30-45 DTE expiry for post-assignment call; skip.")
+                continue  # Skip ITM-roll check; put is gone
+
+            # ── ITM roll at <7 DTE ────────────────────────────────────────
             quotes = self.broker.get_quote(trade["symbol"]) or []
             quote = quotes[0] if quotes else {}
             spot = float(quote.get("last") or 0)
@@ -141,10 +192,8 @@ class WheelStrategy(AbstractStrategy):
                     strategy_id=self.strategy_id, symbol=trade["symbol"],
                     order_class="multileg",
                     legs=[
-                        # Buy back the current short, then sell the next-month equivalent.
-                        {"option_symbol": trade["short_leg"], "side": "buy_to_close",  "quantity": int(trade["lots"])},
-                        # broker.roll_to_next_month picks the next available
-                        # expiry at the same strike + side.
+                        {"option_symbol": trade["short_leg"], "side": "buy_to_close",
+                         "quantity": int(trade["lots"])},
                         {"option_symbol": self.broker.roll_to_next_month(trade["short_leg"]),
                          "side": "sell_to_open", "quantity": int(trade["lots"])},
                     ],

@@ -120,6 +120,7 @@ class PendingApproval(Base):
     notes = Column(Text)
     decided_at = Column(DateTime(timezone=True))
     executed_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
 
 
 class BotLog(Base):
@@ -754,6 +755,8 @@ class HermesDB:
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT",
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT",
             "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4)",
+            # Approval expiry — auto-reject stale approvals spanning weekends / holidays.
+            "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
         ]
         with self.engine.begin() as conn:
             for sql in stmts:
@@ -1058,10 +1061,44 @@ class HermesDB:
                 s.commit()
         return expired
 
+    def expire_stale_approvals(self) -> int:
+        """Auto-reject PENDING approvals whose expires_at has passed.
+
+        Called each tick so trades queued before a weekend cannot execute
+        Monday on stale quotes.  Returns the number of rows auto-rejected.
+        """
+        now = datetime.utcnow()
+        expired = 0
+        with self.Session() as s:
+            stale = (
+                s.query(PendingApproval)
+                .filter(
+                    PendingApproval.status == "PENDING",
+                    PendingApproval.expires_at.isnot(None),
+                    PendingApproval.expires_at < now,
+                )
+                .all()
+            )
+            for row in stale:
+                row.status = "EXPIRED"
+                row.decided_at = now
+                row.notes = (row.notes or "") + " [auto-expired: stale approval past deadline]"
+                expired += 1
+            if expired:
+                s.commit()
+        return expired
+
     # ---- approval queue --------------------------------------------------
     def queue_for_approval(self, action_json: Dict[str, Any],
-                           action_type: str = "entry") -> int:
-        """Write a proposed TradeAction to the approval queue.  Returns the new row id."""
+                           action_type: str = "entry",
+                           expires_hours: float = 24.0) -> int:
+        """Write a proposed TradeAction to the approval queue.  Returns the new row id.
+
+        ``expires_hours`` sets how long the approval stays PENDING before the
+        tick loop auto-rejects it (default 24 h).  Pass 0 to disable expiry.
+        """
+        expires_at = (datetime.utcnow() + timedelta(hours=expires_hours)
+                      if expires_hours > 0 else None)
         with self.Session() as s:
             row = PendingApproval(
                 strategy_id=action_json.get("strategy_id", "UNKNOWN"),
@@ -1069,6 +1106,7 @@ class HermesDB:
                 action_type=action_type,
                 action_json=action_json,
                 status="PENDING",
+                expires_at=expires_at,
             )
             s.add(row)
             s.flush()
@@ -1095,6 +1133,7 @@ class HermesDB:
                     "notes": r.notes,
                     "decided_at": r.decided_at.isoformat() if r.decided_at else None,
                     "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else None,
                 }
                 for r in rows
             ]

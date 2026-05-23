@@ -447,6 +447,12 @@ def _build_broker(conf: Dict[str, Any], mode: str):
 def run(chart_provider, conf: Dict[str, Any]) -> None:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+    # Apply schema migrations before anything else so fresh deployments are
+    # never left running against a stale schema (e.g. missing expires_at).
+    try:
+        db.run_migrations()
+    except Exception as exc:                                      # noqa: BLE001
+        log.exception("run_migrations failed at startup: %s", exc)
     # Seed the strategies registry — required before any watchlist row can be
     # inserted (FK from strategy_watchlists.strategy_id). Idempotent.
     try:
@@ -489,7 +495,39 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
              current_mode, current_overseer_cfg["autonomy"],
              current_overseer_cfg["paused"], len(current_overseer_cfg["soul"]))
 
+    # Circuit breaker: pause broker calls after N consecutive tick failures.
+    _CB_THRESHOLD = 5          # consecutive failures before tripping
+    _CB_COOLDOWN_S = 300       # seconds to wait before re-attempting
+    _cb_fail_count = 0
+    _cb_tripped_at: float = 0.0
+
     while True:
+        # Circuit breaker: if the broker has failed _CB_THRESHOLD times in a
+        # row, pause for _CB_COOLDOWN_S seconds before retrying so we don't
+        # hammer a flaky API or exhaust rate limits.
+        if _cb_fail_count >= _CB_THRESHOLD:
+            if _cb_tripped_at == 0.0:
+                _cb_tripped_at = time.time()
+                log.error(
+                    "[CIRCUIT BREAKER] %d consecutive tick failures — pausing broker "
+                    "calls for %ds", _cb_fail_count, _CB_COOLDOWN_S,
+                )
+                try:
+                    db.set_setting(SETTING_TRADIER_ERROR,
+                                   f"circuit breaker tripped after {_cb_fail_count} failures")
+                    db.write_log("ENGINE",
+                                 f"[CIRCUIT BREAKER] pausing {_CB_COOLDOWN_S}s after "
+                                 f"{_cb_fail_count} consecutive failures", level="ERROR")
+                except Exception:                                     # noqa: BLE001
+                    pass
+            if time.time() - _cb_tripped_at < _CB_COOLDOWN_S:
+                time.sleep(interval_s)
+                continue
+            # Cooldown elapsed — reset and try again.
+            _cb_fail_count = 0
+            _cb_tripped_at = 0.0
+            log.info("[CIRCUIT BREAKER] cooldown elapsed — resuming tick loop")
+
         try:
             # 1) Mode reconciliation — pick up any toggle the watcher made.
             desired_mode = (db.get_setting(SETTING_MODE) or current_mode).lower()
@@ -611,17 +649,32 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
             # 1e) Stale pending-order cleanup — long-tail safety net for
             #     orders whose response wasn't recorded (e.g. agent crash
-            #     between submission and ack). Normal flow now transitions
-            #     PENDING → SUBMITTED/REJECTED synchronously in
-            #     record_order_response, so a 1-hour threshold is safe and
-            #     won't race a slow broker round-trip.
+            #     between submission and ack). TTL is live-tunable via
+            #     system_settings key "pending_order_ttl_s" (default 3600 s).
             try:
-                expired = db.expire_stale_pending_orders(3600)
+                _ttl_raw = db.get_setting("pending_order_ttl_s")
+                _pending_ttl_s = int(_ttl_raw) if _ttl_raw else 3600
+            except (TypeError, ValueError):
+                _pending_ttl_s = 3600
+            try:
+                expired = db.expire_stale_pending_orders(_pending_ttl_s)
                 if expired:
                     log.info("Expired %d stale PENDING order(s)", expired)
                     db.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
             except Exception as exc:                          # noqa: BLE001
                 log.warning("expire_stale_pending_orders failed: %s", exc)
+
+            # 1e-ii) Stale approval cleanup — auto-reject PENDING approvals
+            #        whose expires_at has passed (e.g. queued Friday 4 pm,
+            #        never actioned before Monday open).
+            try:
+                expired_approvals = db.expire_stale_approvals()
+                if expired_approvals:
+                    log.info("Auto-expired %d stale approval(s)", expired_approvals)
+                    db.write_log("ENGINE",
+                                 f"auto-expired {expired_approvals} stale approval(s) past deadline")
+            except Exception as exc:                          # noqa: BLE001
+                log.warning("expire_stale_approvals failed: %s", exc)
 
             # 1f) Execute C2-approved orders — process any trade the operator
             #     has approved since the last tick.  Runs before the strategy
@@ -728,7 +781,9 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
             db.set_setting("market_session", mkt["session"])
             log.info("tick complete: %s  [%s]", stats, session_label())
             db.write_log("ENGINE", f"heartbeat tick complete: {stats} | {session_label()}")
+            _cb_fail_count = 0   # reset circuit breaker on clean tick
         except Exception as exc:                                  # noqa: BLE001
+            _cb_fail_count += 1
             log.exception("tick failed: %s", exc)
             try:
                 exc_str = str(exc)[:500]

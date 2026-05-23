@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -151,6 +152,12 @@ class HermesOverseer:
             except Exception as exc:                                   # noqa: BLE001
                 logger.warning("Chart analysis failed for %s: %s", symbol, exc)
 
+    # Token budget for log context: ~2 000 tokens ≈ 8 000 chars. Keeps cheap
+    # local LLMs from overflowing their context window on vision prompts.
+    _MAX_LOG_CHARS = 8_000
+    # Retry policy for transient LLM failures (network blip, timeout).
+    _LLM_MAX_RETRIES = 3
+
     # -- LLM I/O -------------------------------------------------------------
     def _consult(self, action: TradeAction) -> Dict[str, Any]:
         prompt = (
@@ -160,6 +167,9 @@ class HermesOverseer:
             f"ACTION:\n{json.dumps(asdict(action), default=str)}\n"
         )
         recent_logs = self.db.recent_logs(limit=200)
+        # Enforce token budget: truncate from the front (oldest entries dropped).
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
         prompt += f"RECENT_LOGS:\n{recent_logs}\n"
         images = []
         if self.vision_enabled and self.chart_provider is not None:
@@ -167,30 +177,46 @@ class HermesOverseer:
                 images.append(self.chart_provider.snapshot(action.symbol))
             except Exception:                                          # noqa: BLE001
                 pass
+
+        messages = [{"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user",   "content": prompt}]
+        last_exc: Exception = RuntimeError("no attempts made")
+        for attempt in range(self._LLM_MAX_RETRIES):
+            try:
+                msg = self.llm.chat(messages, images=images)
+                # Clear any stored LLM error on success.
+                try:
+                    self.db.set_setting("llm_last_error", "")
+                    self.db.set_setting(
+                        "llm_last_ok_ts",
+                        datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    )
+                except Exception:                                      # noqa: BLE001
+                    pass
+                return self._safe_json(msg)
+            except Exception as exc:                                   # noqa: BLE001
+                last_exc = exc
+                if attempt < self._LLM_MAX_RETRIES - 1:
+                    wait_s = 2 ** attempt          # 1 s, 2 s
+                    logger.warning(
+                        "LLM attempt %d/%d failed for %s; retrying in %ds: %s",
+                        attempt + 1, self._LLM_MAX_RETRIES,
+                        action.symbol, wait_s, exc,
+                    )
+                    time.sleep(wait_s)
+
+        logger.warning("LLM call failed after %d attempts — passing action through: %s",
+                       self._LLM_MAX_RETRIES, last_exc)
         try:
-            msg = self.llm.chat(
-                [{"role": "system", "content": self.SYSTEM_PROMPT},
-                 {"role": "user",   "content": prompt}],
-                images=images,
-            )
-            # Clear any stored LLM error on success.
-            try:
-                self.db.set_setting("llm_last_error", "")
-                self.db.set_setting(
-                    "llm_last_ok_ts",
-                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
-            except Exception:                                          # noqa: BLE001
-                pass
-            return self._safe_json(msg)
-        except Exception as exc:                                       # noqa: BLE001
-            logger.warning("LLM call failed — passing action through: %s", exc)
-            try:
-                self.db.set_setting("llm_last_error", str(exc)[:500])
-            except Exception:                                          # noqa: BLE001
-                pass
-            # Fail-safe: pass the action through rather than crashing the tick.
-            return {"verdict": "APPROVE", "rationale": f"LLM unavailable ({exc}); defaulting to APPROVE."}
+            self.db.set_setting("llm_last_error", str(last_exc)[:500])
+        except Exception:                                              # noqa: BLE001
+            pass
+        # Fail-safe: pass action through but flag so the operator can see it.
+        return {
+            "verdict": "APPROVE",
+            "rationale": f"LLM unavailable after {self._LLM_MAX_RETRIES} attempts ({last_exc}); defaulting to APPROVE.",
+            "llm_error_fallback": True,
+        }
 
     def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
         prompt = (

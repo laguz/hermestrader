@@ -50,11 +50,21 @@ class CreditSpreads75(AbstractStrategy):
         max_lots_global = int(self.config.get("cs75_max_lots", 1))
         target_lots_global = int(self.config.get("cs75_target_lots", 1))
 
+        # DTE window — live-tunable via system_settings; fallback to spec defaults.
+        try:
+            entry_min_dte = int(self.db.get_setting("cs75_min_dte") or 39)
+            entry_max_dte = int(self.db.get_setting("cs75_max_dte") or 45)
+        except (TypeError, ValueError):
+            entry_min_dte, entry_max_dte = 39, 45
+
         # Per-symbol target overrides live in strategy_watchlists.target_lots.
         detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
 
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} max={max_lots_global}")
+        self._log(
+            f"↻ scanning {len(symbols)} symbol(s) — global_target={target_lots_global} "
+            f"max={max_lots_global} dte={entry_min_dte}-{entry_max_dte}"
+        )
 
         for sym_raw in symbols:
             try:
@@ -97,11 +107,11 @@ class CreditSpreads75(AbstractStrategy):
                 existing_sides: set = set()
 
                 if mode_a:
-                    expiry = self.find_expiry_in_dte_range(symbol, 39, 45, prefer="max")
+                    expiry = self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
                 else:
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                    if dte < 14 or dte > 45:
-                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 14-45 completion window; skip.")
+                    if dte < 14 or dte > entry_max_dte:
+                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 14-{entry_max_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
                                       for leg in self.db.open_legs(self.strategy_id, symbol)

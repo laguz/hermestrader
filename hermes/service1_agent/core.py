@@ -609,15 +609,51 @@ class CascadingEngine:
         # Dedup watchlist to prevent multiple scans of the same symbol in one tick
         unique_watchlist = list(dict.fromkeys(watchlist))
         total_entries = 0
-        
+        max_per_tick = int(self.config.get("max_orders_per_tick", 5))
+        tick_submitted = 0
+
         for s in self.strategies:
             try:
+                if tick_submitted >= max_per_tick:
+                    logger.warning(
+                        "[ENGINE] max_orders_per_tick=%d reached; skipping %s entries",
+                        max_per_tick, s.NAME,
+                    )
+                    self.db.write_log(
+                        s.strategy_id,
+                        f"[GUARD] max_orders_per_tick={max_per_tick} reached; "
+                        f"{s.NAME} entries skipped this tick",
+                    )
+                    break
+
                 wl = self._watchlist_for(s.strategy_id, unique_watchlist)
                 # Drain entire watchlist for THIS strategy.
                 actions = s.execute_entries(wl)
+
+                # Cap to remaining budget for this tick.
+                remaining = max_per_tick - tick_submitted
+                if len(actions) > remaining:
+                    logger.warning(
+                        "[ENGINE] %s generated %d actions; trimming to %d (max_orders_per_tick=%d)",
+                        s.NAME, len(actions), remaining, max_per_tick,
+                    )
+                    self.db.write_log(
+                        s.strategy_id,
+                        f"[GUARD] {s.NAME} generated {len(actions)} actions; "
+                        f"trimmed to {remaining} (max_orders_per_tick={max_per_tick})",
+                    )
+                    actions = actions[:remaining]
+
                 # Submit immediately so subsequent strategies see these as PENDING.
                 self.submit(actions, action_type="entry")
+                tick_submitted += len(actions)
                 total_entries += len(actions)
+
+                # Re-sync broker orders so the next strategy's capacity check
+                # reflects any orders just placed (fills between ticks are now visible).
+                if actions:
+                    self.mm.sync_broker_orders()
+
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
         return total_entries
