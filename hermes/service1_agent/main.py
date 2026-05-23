@@ -366,7 +366,8 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
         log.info("Strategies disabled by C2 panel: %s", disabled)
 
     return CascadingEngine(broker, db, active_strategies, overseer=overseer,
-                           approval_mode=approval_mode, money_manager=mm)
+                           approval_mode=approval_mode, money_manager=mm,
+                           config=config)
 
 
 # ---------------------------------------------------------------------------

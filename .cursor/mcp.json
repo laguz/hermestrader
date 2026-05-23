@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tradier": {
+      "command": "python3",
+      "args": ["-m", "hermes.mcp.server"]
+    }
+  }
+}

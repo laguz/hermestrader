@@ -1,0 +1,95 @@
+# Tradier API Documentation
+
+## Guides
+- [Tradier Advisor API](https://docs.tradier.com/docs/getting-started-advisors.md)
+- [Tradier Brokerage API](https://docs.tradier.com/docs/getting-started.md): This page will help you get started with the Tradier API.
+- [LLM Resources](https://docs.tradier.com/docs/llm-resources.md): Tradier MCP and your favorite LLM tool
+- [Tradier MCP](https://docs.tradier.com/docs/tradier-mcp.md): Tradier is building a custom MCP server to work with popular large language models and tools.
+- [Account Details](https://docs.tradier.com/docs/account-details.md): Learn about getting started with our account endpoints
+- [Attribution Guidelines](https://docs.tradier.com/docs/attribution-guidelines.md)
+- [OAuth Authentication](https://docs.tradier.com/docs/authentication.md)
+- [Endpoints](https://docs.tradier.com/docs/endpoints.md)
+- [Error Responses](https://docs.tradier.com/docs/error-responses.md)
+- [Exchange Codes](https://docs.tradier.com/docs/exchange-codes.md)
+- [FAQ](https://docs.tradier.com/docs/faq.md)
+- [Historical Data](https://docs.tradier.com/docs/historical-data.md)
+- [Libraries](https://docs.tradier.com/docs/libraries.md): Here you can find a list of open-source and supporting libraries for the Tradier API.
+- [Market Data](https://docs.tradier.com/docs/market-data.md)
+- [Rate Limiting](https://docs.tradier.com/docs/rate-limiting.md)
+- [Response Format](https://docs.tradier.com/docs/response-format.md)
+- [Streaming Data](https://docs.tradier.com/docs/streaming-data.md): Details on streaming market and account data
+- [Trade Link](https://docs.tradier.com/docs/trade-link.md): Trade link is a tool to prepopulate trades on our client dashboard for your followers
+- [Trading](https://docs.tradier.com/docs/trading.md): Details on placing orders with the API
+- [Account Streaming Responses](https://docs.tradier.com/docs/account-streaming-responses.md): Response and definitions for account streaming
+- [Balances](https://docs.tradier.com/docs/balances.md): The return from the /balances endpoint
+- [Calendar](https://docs.tradier.com/docs/calendar.md): The return from the /balances endpoint and definitions
+- [Clock](https://docs.tradier.com/docs/clock.md)
+- [ETB List](https://docs.tradier.com/docs/etb.md): The ETB list contains securities that are able to be sold short with a Tradier Brokerage account. The list is quite comprehensive and can result in a long download response time.
+- [Gainloss](https://docs.tradier.com/docs/gainloss.md)
+- [Historical Market Data](https://docs.tradier.com/docs/historical.md)
+- [History](https://docs.tradier.com/docs/history.md)
+- [Orders](https://docs.tradier.com/docs/orders.md)
+- [Positions](https://docs.tradier.com/docs/positions.md): Return and definitions for the /v1/accounts/{account_id}/positions endpoint
+- [Preview An Order](https://docs.tradier.com/docs/preview.md)
+- [User Profile](https://docs.tradier.com/docs/profile.md)
+- [Quotes](https://docs.tradier.com/docs/quotes.md): Please note that some fields are only present in an option quote. These fields are only relevant to options.
+- [Search/Lookup Symbol](https://docs.tradier.com/docs/search.md)
+- [Streaming Session ID](https://docs.tradier.com/docs/session.md): Reference and response for a session ID to use with streaming.
+- [Streaming Market Data](https://docs.tradier.com/docs/streaming.md): Response definitions and payload examples for the streaming service
+- [Time and Sales](https://docs.tradier.com/docs/timesale.md): Response and definitions for the time and sales data
+- [Watch Lists](https://docs.tradier.com/docs/watchlists.md)
+- [Tradier Status Page](https://docs.tradier.com/docs/tradier-status-page.md)
+
+## API Reference
+- [Joint Margin](https://docs.tradier.com/reference/joint-margin.md)
+- [Delete a Position Group](https://docs.tradier.com/reference/brokerage-api-accounts-delete-account-position-groups.md): Deletes a position group for a specific account.
+- [Get Account Balance](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-balance.md): Get the current account balance and margin information.
+- [Get Account Gain/Loss](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-gainloss.md): Get cost basis and gain/loss information for an account. This includes information for all closed positions. Cost basis information is updated through a nightly batch reconciliation process with our clearing firm
+- [Get Account's Balances Overtime](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-historical-balance.md): Get the historical account balances to track value over time
+- [Get Account History](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-history.md): Get historical activity for an account
+- [Get Account Order](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-order.md): Get a specific order by ID
+- [Get Account Orders](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-orders.md): Get current market session orders for an account.
+- [Get Account Position Groups](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-position-groups.md): Retrieves all position groups for a specific account.
+- [Get Account Positions](https://docs.tradier.com/reference/brokerage-api-accounts-get-account-positions.md): Get the current positions being held in an account
+- [Create a New Position Group](https://docs.tradier.com/reference/brokerage-api-accounts-post-account-position-groups.md): Creates a new position group for a specific account.
+- [Update Position Group](https://docs.tradier.com/reference/brokerage-api-accounts-put-account-position-groups.md): Updates an existing position group for a specific account.
+- [Get Market Calendar](https://docs.tradier.com/reference/brokerage-api-markets-get-calendar.md): Get the market calendar for current or a specific month
+- [Get Market Clock](https://docs.tradier.com/reference/brokerage-api-markets-get-clock.md): Get the intraday market status. This call will change and return information pertaining to the current day. If programming logic on whether the market is open/closed – this API call should be used to determine the current state.
+- [Get ETB Securities](https://docs.tradier.com/reference/brokerage-api-markets-get-etb.md): The ETB list contains securities that are able to be sold short with a Tradier Brokerage account. The list is quite comprehensive and can result in a long download response time.
+- [Get historical pricing for a security.](https://docs.tradier.com/reference/brokerage-api-markets-get-history.md): Get historical pricing for a specific security. This data will usually cover the entire lifetime of the company if sending reasonable start/end times. You can fetch historical pricing for options by passing the OCC option symbol (ex. AAPL220617C00270000) as the symbol.
+- [Get Lookup Options Symbols](https://docs.tradier.com/reference/brokerage-api-markets-get-lookup-options-symbols.md): Get all options symbols for the given underlying. This will include additional option roots (ex. SPXW, RUTW) if applicable.
+- [Get Market Lookup](https://docs.tradier.com/reference/brokerage-api-markets-get-lookup.md): Search for a symbol using the ticker symbol or partial symbol. Results are in descending order by average volume of the security. This can be used for simple search functions.
+- [Get Options Chains](https://docs.tradier.com/reference/brokerage-api-markets-get-options-chains.md): Get option chains for a specific underlying symbol and expiration date. Greek and IV data is included courtesy of ORATS. Please check out their APIs for more in-depth options data.
+- [Get Options Expirations](https://docs.tradier.com/reference/brokerage-api-markets-get-options-expirations.md): Get available expiration dates for a specific underlying symbol
+- [Get Options Strikes](https://docs.tradier.com/reference/brokerage-api-markets-get-options-strikes.md): Get available strike prices for a specific underlying symbol and expiration date
+- [Get Quotes](https://docs.tradier.com/reference/brokerage-api-markets-get-quotes.md): Get quotes for one or more symbols
+- [Get Market Search](https://docs.tradier.com/reference/brokerage-api-markets-get-search.md): Search for securities by partial match on symbol or company name. Results are in descending order by average volume of the security. This can be used for simple search functions
+- [Get Time & Sales](https://docs.tradier.com/reference/brokerage-api-markets-get-timesales.md): Time and Sales (timesales) is typically used for charting purposes. It captures pricing across a time slice at predefined intervals. Tick data is also available through this endpoint. This results in a very large data set for high-volume symbols, so the time slice needs to be much smaller to keep downloads time reasonable.
+- [Post Quotes](https://docs.tradier.com/reference/brokerage-api-markets-post-quotes.md): Get quotes for a larger list of symbols
+- [Create Account Session](https://docs.tradier.com/reference/brokerage-api-streaming-create-account-session.md): Create a session for streaming account-specific events
+- [Create Market Session](https://docs.tradier.com/reference/brokerage-api-streaming-create-market-session.md): Create a session for streaming market data
+- [HTTP Streaming](https://docs.tradier.com/reference/http-streaming.md)
+- [Streaming](https://docs.tradier.com/reference/streaming.md): Stream market data and account events in real-time.
+- [Websocket Account Data Streaming](https://docs.tradier.com/reference/websocket-account-data-streaming.md)
+- [Websocket Market Data Streaming](https://docs.tradier.com/reference/websocket-market-data-streaming.md)
+- [Advanced Orders](https://docs.tradier.com/reference/advanced-orders.md)
+- [Cancel Order](https://docs.tradier.com/reference/brokerage-api-trading-cancel-order.md): Cancel an existing order
+- [Change Order](https://docs.tradier.com/reference/brokerage-api-trading-change-order.md): Modify an existing order
+- [Place Order](https://docs.tradier.com/reference/brokerage-api-trading-place-order.md): Place a trading order. Supports equity, option, multileg, combo, OTO, OCO, and OTOCO order types.
+- [Trading](https://docs.tradier.com/reference/trading.md): Place equity and complex option trades including advanced orders.
+- [Getting Started Trading](https://docs.tradier.com/reference/trading-getting-started.md)
+- [Previewing an Order](https://docs.tradier.com/reference/trading-preview-order.md): Previewing an order provides insight into validation and cost an order might have on an account. We recommend most developers and platforms leverage previews before placing orders.
+- [Get User Profile](https://docs.tradier.com/reference/brokerage-api-user-get-profile.md): Get the profile information for the current user
+- [Add Symbols to Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-add-watchlist-symbol.md): Add symbols to an existing watchlist. If the symbol exists, it will be over-written.
+- [Create Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-create-watchlist.md): Create a new watchlist. The new watchlist created will use the specified name and optional symbols upon creation.
+- [Delete Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-delete-watchlist.md): Delete a specific watchlist
+- [Get Specific Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-get-specific-watchlist.md): Retrieve a specific watchlist by id
+- [Get All Watchlists](https://docs.tradier.com/reference/brokerage-api-watchlists-get-watchlists.md): Retrieve all of a user's watchlists
+- [Remove Symbol from Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-remove-watchlist-symbol.md): Remove a symbol from a specific watchlist
+- [Update Watchlist](https://docs.tradier.com/reference/brokerage-api-watchlists-update-watchlist.md): Update an existing watchlist. This request will override the existing watchlist information with the parameters sent in the body.
+
+## Recipes
+- [Get A Quote](https://docs.tradier.com/recipes/get-a-quote.md)
+- [Get Time and Sales Data ](https://docs.tradier.com/recipes/get-time-and-sales-data.md)
+- [Place an Order](https://docs.tradier.com/recipes/place-an-order.md)
+- [Websocket Stream Quotes and Trades](https://docs.tradier.com/recipes/websocket-stream-quotes-and-trades.md)

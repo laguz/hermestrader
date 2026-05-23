@@ -35,6 +35,31 @@ provider-agnostic (`hermes/llm/clients.py`).
 5. **Don't introduce new dependencies casually.** The Dockerfile pins
    `requirements.txt`; both must stay in sync.
 
+## Tradier MCP Server
+
+The project includes an MCP (Model Context Protocol) server located at [server.py](file:///Users/laguz/Git/hermestrader/hermes/mcp/server.py). This server exposes the `TradierBroker` functionality so that any MCP-compliant AI client (such as Cursor, Windsurf, or Claude Desktop) can query the broker over stdio.
+
+### Key Tools Exposed
+- **Account**: `get_account_balances`, `get_positions`, `get_orders`, `cancel_order`
+- **Market Data**: `get_quote`, `get_option_expirations`, `get_option_chain`, `get_delta`, `get_history`, `analyze_symbol`
+- **Orders**: `place_multileg_order`, `place_single_option_order`, `place_equity_order`, `roll_to_next_month`
+
+### Execution & Configuration
+- **Run server locally**: Run `./hermes.sh mcp` to start the server. This automatically sources the workspace `.env` file and exports the necessary Tradier environment variables (`TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, etc.).
+- **Automatic Env Loading**: The server automatically attempts to resolve and load environment variables from the `.env` file at the project root if they are not already set in the parent process.
+- **Cursor Integration**: Pre-configured in [mcp.json](file:///Users/laguz/Git/hermestrader/.cursor/mcp.json). Because it loads `.env` automatically, this configuration file does not require hardcoded secrets and is safe to commit.
+- **Claude Desktop Config**:
+  ```json
+  "mcpServers": {
+    "tradier": {
+      "command": "python3",
+      "args": ["-m", "hermes.mcp.server"]
+    }
+  }
+  ```
+
+For details on the Tradier API endpoints and resource URLs, refer to [tradier_llms.txt](file:///Users/laguz/Git/hermestrader/docs/tradier_llms.txt) (obtained from official Tradier documentation).
+
 ## Testing
 
 ```bash

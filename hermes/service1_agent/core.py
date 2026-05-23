@@ -527,7 +527,8 @@ class CascadingEngine:
     def __init__(self, broker, db, strategies: Sequence[AbstractStrategy],
                  overseer: Optional["HermesOverseer"] = None,
                  approval_mode: bool = False,
-                 money_manager: Optional["MoneyManager"] = None):
+                 money_manager: Optional["MoneyManager"] = None,
+                 config: Optional[Dict[str, Any]] = None):
         self.broker = broker
         self.db = db
         # Sort by declared PRIORITY (1 highest)
@@ -541,6 +542,7 @@ class CascadingEngine:
         # capacity decisions run. Falls back to the first strategy's mm so
         # callers that haven't been updated yet still work.
         self.mm = money_manager or (strategies[0].mm if strategies else None)
+        self.config = config or {}
 
     # 1
     def sync_positions(self) -> None:

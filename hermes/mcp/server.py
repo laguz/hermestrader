@@ -25,6 +25,26 @@ from hermes.broker.tradier import TradierBroker
 mcp = FastMCP("tradier")
 
 
+def load_env_file() -> None:
+    """Auto-detect and load environment variables from the project's .env file
+    if credentials are not already present in the environment.
+    """
+    if "TRADIER_ACCESS_TOKEN" not in os.environ and "TRADIER_API_KEY" not in os.environ:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
+        dotenv_path = os.path.join(project_root, ".env")
+        if os.path.exists(dotenv_path):
+            with open(dotenv_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip("'\"")
+                        if k and v and k not in os.environ:
+                            os.environ[k] = v
+
+
 def _broker() -> TradierBroker:
     # Built lazily so `--help` and discovery don't require credentials.
     global _BROKER
@@ -32,6 +52,8 @@ def _broker() -> TradierBroker:
         return _BROKER  # type: ignore[name-defined]
     except NameError:
         pass
+    
+    load_env_file()
     
     dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true"
     # Honor TRADIER_ENDPOINT from .env if TRADIER_BASE_URL is missing

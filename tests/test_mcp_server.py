@@ -16,16 +16,45 @@ class FastMCP:
         return mcp_instance
 
 # Setup sys.modules mocks ONLY if they are missing
-missing_deps = [
-    "mcp", "mcp.server", "mcp.server.fastmcp",
-    "requests", "numpy", "pandas", "tenacity",
-    "hermes.ml.pop_engine"
-]
-for dep in missing_deps:
-    try:
-        __import__(dep)
-    except ImportError:
-        sys.modules[dep] = MagicMock()
+try:
+    import mcp
+except ImportError:
+    sys.modules["mcp"] = MagicMock()
+
+try:
+    import mcp.server
+except ImportError:
+    sys.modules["mcp.server"] = MagicMock()
+
+try:
+    import mcp.server.fastmcp
+except ImportError:
+    sys.modules["mcp.server.fastmcp"] = MagicMock()
+
+try:
+    import requests
+except ImportError:
+    sys.modules["requests"] = MagicMock()
+
+try:
+    import numpy
+except ImportError:
+    sys.modules["numpy"] = MagicMock()
+
+try:
+    import pandas
+except ImportError:
+    sys.modules["pandas"] = MagicMock()
+
+try:
+    import tenacity
+except ImportError:
+    sys.modules["tenacity"] = MagicMock()
+
+try:
+    import hermes.ml.pop_engine
+except ImportError:
+    sys.modules["hermes.ml.pop_engine"] = MagicMock()
 
 if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
     sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
@@ -150,3 +179,22 @@ def test_place_multileg_order(monkeypatch, order_type, expected_side, duration, 
     assert action.order_type == order_type
     assert action.duration == duration
     assert action.tag == tag
+
+
+def test_load_env_file(monkeypatch, tmp_path):
+    import os
+    monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TRADIER_API_KEY", raising=False)
+
+    dummy_server_dir = tmp_path / "hermes" / "mcp"
+    dummy_server_dir.mkdir(parents=True)
+
+    dotenv_file = tmp_path / ".env"
+    dotenv_file.write_text("TRADIER_API_KEY=test-token-123\nTRADIER_ACCOUNT_ID=test-acct-456\n")
+
+    monkeypatch.setattr(server, "__file__", str(dummy_server_dir / "server.py"))
+
+    server.load_env_file()
+
+    assert os.environ.get("TRADIER_API_KEY") == "test-token-123"
+    assert os.environ.get("TRADIER_ACCOUNT_ID") == "test-acct-456"

@@ -249,6 +249,20 @@ cmd_check_deps() {
     fi
 }
 
+cmd_mcp() {
+    info "Starting Tradier MCP server..."
+    if [ -f .env ]; then
+        info "Loading environment variables from .env"
+        set -o allexport
+        source .env
+        set +o allexport
+    fi
+    if [ -n "${TRADIER_API_KEY:-}" ] && [ -z "${TRADIER_ACCESS_TOKEN:-}" ]; then
+        export TRADIER_ACCESS_TOKEN="$TRADIER_API_KEY"
+    fi
+    python3 -m hermes.mcp.server
+}
+
 cmd_push() {
     info "Pushing ${BOLD}${IMAGE_FULL}${NC} to Docker Hub…"
     docker push "$IMAGE_FULL"
@@ -296,6 +310,7 @@ cmd_help() {
     echo "  build            Build the Docker image locally"
     echo "  push             Push the local image to Docker Hub"
     echo "  check-deps       Verify chart-vision (matplotlib) is working in the container"
+    echo "  mcp              Start the Tradier MCP server on the host (loads .env)"
     echo "  version          Show the running Hermes version"
     echo "  help             Show this help"
     echo ""
@@ -317,6 +332,7 @@ case "${1:-help}" in
     build)          cmd_build ;;
     push)           cmd_push ;;
     check-deps)     cmd_check_deps ;;
+    mcp)            cmd_mcp ;;
     version|-v|--version) cmd_version ;;
     help|--help|-h) cmd_help ;;
     *)              err "Unknown command: $1"; cmd_help; exit 1 ;;
