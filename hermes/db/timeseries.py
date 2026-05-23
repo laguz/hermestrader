@@ -1,19 +1,22 @@
 import os
 import logging
+import time
 from pathlib import Path
-from datetime import datetime, date, timedelta, time, timezone
+from datetime import datetime, date, timedelta, time as datetime_time, timezone
 from typing import Optional, Dict, Any, Tuple, List
 import pandas as pd
 import numpy as np
+import duckdb
 
 logger = logging.getLogger("hermes.db.timeseries")
 
 
 class TimeSeriesEngine:
-    """Decoupled flat-file time-series engine for daily and intraday bars.
+    """Decoupled flat-file and columnar time-series engine for daily and intraday bars.
     
-    Price history is persisted on disk as compressed CSV files inside a 
-    durable volume path to avoid relational database bloating.
+    Price history is persisted on disk in a DuckDB database file inside a 
+    durable volume path to avoid relational database bloating, with automated
+    CSV/SQL fallback migration logic.
     """
 
     def __init__(self, db_repo: Any, root_path: Optional[Path] = None):
@@ -35,6 +38,51 @@ class TimeSeriesEngine:
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "daily").mkdir(parents=True, exist_ok=True)
         (self.root / "intraday").mkdir(parents=True, exist_ok=True)
+        
+        self.db_path = self.root / "timeseries.db"
+        self._init_db()
+
+    def _get_conn(self) -> duckdb.DuckDBPyConnection:
+        for i in range(20):
+            try:
+                return duckdb.connect(database=str(self.db_path))
+            except duckdb.IOException as e:
+                if "lock" in str(e).lower() or "database is locked" in str(e).lower():
+                    time.sleep(0.05 + 0.05 * i)
+                    continue
+                raise
+        raise TimeoutError(f"Could not acquire DuckDB connection at {self.db_path} - database is locked.")
+
+    def _init_db(self):
+        conn = self._get_conn()
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_bars (
+                    symbol VARCHAR,
+                    ts TIMESTAMP,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE,
+                    volume BIGINT,
+                    vwap_close DOUBLE,
+                    PRIMARY KEY (symbol, ts)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS intraday_bars (
+                    symbol VARCHAR,
+                    ts TIMESTAMP,
+                    open DOUBLE,
+                    high DOUBLE,
+                    low DOUBLE,
+                    close DOUBLE,
+                    volume BIGINT,
+                    PRIMARY KEY (symbol, ts)
+                )
+            """)
+        finally:
+            conn.close()
 
     def _daily_path(self, symbol: str) -> Path:
         return self.root / "daily" / f"{symbol.upper()}.csv"
@@ -43,7 +91,7 @@ class TimeSeriesEngine:
         return self.root / "intraday" / f"{symbol.upper()}.csv"
 
     def save_daily_bars(self, symbol: str, df: pd.DataFrame) -> None:
-        """Upsert daily bars for a symbol from a DataFrame."""
+        """Upsert daily bars for a symbol from a DataFrame into DuckDB."""
         if df.empty:
             return
 
@@ -60,25 +108,29 @@ class TimeSeriesEngine:
             if col not in reset_df.columns:
                 reset_df[col] = np.nan
 
-        new_df = reset_df[cols_to_keep].copy()
+        write_df = reset_df[cols_to_keep].copy()
+        write_df["ts"] = pd.to_datetime(write_df["ts"])
+        write_df["open"] = write_df["open"].astype(float)
+        write_df["high"] = write_df["high"].astype(float)
+        write_df["low"] = write_df["low"].astype(float)
+        write_df["close"] = write_df["close"].astype(float)
+        write_df["volume"] = pd.to_numeric(write_df["volume"], errors='coerce').fillna(0).astype('int64')
+        write_df["vwap_close"] = write_df["vwap_close"].astype(float)
 
-        path = self._daily_path(symbol)
-        if path.exists():
-            try:
-                existing_df = pd.read_csv(path)
-                existing_df["ts"] = pd.to_datetime(existing_df["ts"])
-                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                combined_df = combined_df.drop_duplicates(subset=["ts"], keep="last")
-                combined_df = combined_df.sort_values(by="ts")
-                combined_df.to_csv(path, index=False)
-            except Exception as exc:
-                logger.exception("Failed to append daily bars for %s: %s", symbol, exc)
-                new_df.sort_values(by="ts").to_csv(path, index=False)
-        else:
-            new_df.sort_values(by="ts").to_csv(path, index=False)
+        symbol_upper = symbol.upper()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO daily_bars SELECT ? as symbol, ts, open, high, low, close, volume, vwap_close FROM write_df",
+                (symbol_upper,)
+            )
+        except Exception as exc:
+            logger.exception("Failed to insert daily bars for %s: %s", symbol_upper, exc)
+        finally:
+            conn.close()
 
     def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
-        """Upsert intraday bars for a symbol from a DataFrame."""
+        """Upsert intraday bars for a symbol from a DataFrame into DuckDB."""
         if df.empty:
             return
 
@@ -95,51 +147,69 @@ class TimeSeriesEngine:
             if col not in reset_df.columns:
                 reset_df[col] = np.nan
 
-        new_df = reset_df[cols_to_keep].copy()
+        write_df = reset_df[cols_to_keep].copy()
+        write_df["ts"] = pd.to_datetime(write_df["ts"])
+        write_df["open"] = write_df["open"].astype(float)
+        write_df["high"] = write_df["high"].astype(float)
+        write_df["low"] = write_df["low"].astype(float)
+        write_df["close"] = write_df["close"].astype(float)
+        write_df["volume"] = pd.to_numeric(write_df["volume"], errors='coerce').fillna(0).astype('int64')
 
-        path = self._intraday_path(symbol)
-        if path.exists():
-            try:
-                existing_df = pd.read_csv(path)
-                existing_df["ts"] = pd.to_datetime(existing_df["ts"])
-                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                combined_df = combined_df.drop_duplicates(subset=["ts"], keep="last")
-                combined_df = combined_df.sort_values(by="ts")
-                combined_df.to_csv(path, index=False)
-            except Exception as exc:
-                logger.exception("Failed to append intraday bars for %s: %s", symbol, exc)
-                new_df.sort_values(by="ts").to_csv(path, index=False)
-        else:
-            new_df.sort_values(by="ts").to_csv(path, index=False)
+        symbol_upper = symbol.upper()
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO intraday_bars SELECT ? as symbol, ts, open, high, low, close, volume FROM write_df",
+                (symbol_upper,)
+            )
+        except Exception as exc:
+            logger.exception("Failed to insert intraday bars for %s: %s", symbol_upper, exc)
+        finally:
+            conn.close()
+
+    def _query_duckdb(self, table_name: str, symbol: str, lookback_days: int) -> Optional[pd.DataFrame]:
+        cutoff = datetime.utcnow() - timedelta(days=lookback_days)
+        conn = self._get_conn()
+        try:
+            res = conn.execute(
+                f"SELECT ts, open, high, low, close, volume" + 
+                (", vwap_close" if table_name == "daily_bars" else "") +
+                f" FROM {table_name} WHERE symbol = ? AND ts >= ? ORDER BY ts",
+                (symbol, cutoff)
+            )
+            return res.fetchdf()
+        except Exception as exc:
+            logger.error("Failed to query DuckDB table %s for %s: %s", table_name, symbol, exc)
+            return None
+        finally:
+            conn.close()
 
     def daily_bars(self, symbol: str, lookback_days: int = 400) -> Optional[pd.DataFrame]:
-        """Fetch daily bars for a symbol with timezone-aware alignment."""
-        path = self._daily_path(symbol)
-        df = None
-        if path.exists():
-            try:
-                df = pd.read_csv(path)
-            except Exception as exc:
-                logger.error("Failed to read daily CSV for %s: %s", symbol, exc)
+        """Fetch daily bars for a symbol from DuckDB, with legacy fallback migration."""
+        symbol_upper = symbol.upper()
+        df = self._query_duckdb("daily_bars", symbol_upper, lookback_days)
 
         if df is None or df.empty:
-            df = self._migrate_daily_from_sql(symbol)
+            # Check for legacy CSV
+            path = self._daily_path(symbol_upper)
+            if path.exists():
+                try:
+                    csv_df = pd.read_csv(path)
+                    self.save_daily_bars(symbol_upper, csv_df)
+                    df = self._query_duckdb("daily_bars", symbol_upper, lookback_days)
+                except Exception as exc:
+                    logger.error("Failed to migrate daily CSV for %s: %s", symbol_upper, exc)
+
+            # If still empty, fall back to SQL database tables
+            if df is None or df.empty:
+                df = self._migrate_daily_from_sql(symbol_upper)
+                if df is not None and not df.empty:
+                    df = self._query_duckdb("daily_bars", symbol_upper, lookback_days)
 
         if df is None or df.empty:
             return None
 
         df["ts"] = pd.to_datetime(df["ts"])
-        
-        # Align cutoff timezone awareness
-        if df["ts"].dt.tz is not None:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-        else:
-            cutoff = datetime.utcnow() - timedelta(days=lookback_days)
-
-        df = df[df["ts"] >= cutoff]
-        if df.empty:
-            return None
-
         df = df.set_index("ts")
         for col in ["open", "high", "low", "close", "volume", "vwap_close"]:
             if col not in df.columns:
@@ -147,32 +217,31 @@ class TimeSeriesEngine:
         return df
 
     def intraday_bars(self, symbol: str, lookback_days: int = 10) -> pd.DataFrame:
-        """Fetch intraday bars for a symbol with timezone-aware alignment."""
-        path = self._intraday_path(symbol)
-        df = None
-        if path.exists():
-            try:
-                df = pd.read_csv(path)
-            except Exception as exc:
-                logger.error("Failed to read intraday CSV for %s: %s", symbol, exc)
+        """Fetch intraday bars for a symbol from DuckDB, with legacy fallback migration."""
+        symbol_upper = symbol.upper()
+        df = self._query_duckdb("intraday_bars", symbol_upper, lookback_days)
 
         if df is None or df.empty:
-            df = self._migrate_intraday_from_sql(symbol)
+            # Check for legacy CSV
+            path = self._intraday_path(symbol_upper)
+            if path.exists():
+                try:
+                    csv_df = pd.read_csv(path)
+                    self.save_intraday_bars(symbol_upper, csv_df)
+                    df = self._query_duckdb("intraday_bars", symbol_upper, lookback_days)
+                except Exception as exc:
+                    logger.error("Failed to migrate intraday CSV for %s: %s", symbol_upper, exc)
+
+            # If still empty, fall back to SQL database tables
+            if df is None or df.empty:
+                df = self._migrate_intraday_from_sql(symbol_upper)
+                if df is not None and not df.empty:
+                    df = self._query_duckdb("intraday_bars", symbol_upper, lookback_days)
 
         if df is None or df.empty:
             return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
         df["ts"] = pd.to_datetime(df["ts"])
-
-        if df["ts"].dt.tz is not None:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-        else:
-            cutoff = datetime.utcnow() - timedelta(days=lookback_days)
-
-        df = df[df["ts"] >= cutoff]
-        if df.empty:
-            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
-
         df = df.set_index("ts")
         for col in ["open", "high", "low", "close", "volume"]:
             if col not in df.columns:
@@ -196,7 +265,7 @@ class TimeSeriesEngine:
         if isinstance(dt, datetime):
             dt_end = dt
         elif isinstance(dt, date):
-            dt_end = datetime.combine(dt, time.max)
+            dt_end = datetime.combine(dt, datetime_time.max)
         else:
             dt_end = dt
 
@@ -224,28 +293,21 @@ class TimeSeriesEngine:
         return float(val) if val is not None and not pd.isna(val) else None
 
     def get_total_bars_count(self) -> Tuple[int, int]:
-        """Count unique daily and intraday bar records stored on disk."""
+        """Count unique daily and intraday bar records stored in DuckDB."""
         daily_count = 0
         intraday_count = 0
-
-        daily_dir = self.root / "daily"
-        if daily_dir.exists():
-            for p in daily_dir.glob("*.csv"):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        daily_count += sum(1 for _ in f) - 1
-                except Exception:
-                    pass
-
-        intraday_dir = self.root / "intraday"
-        if intraday_dir.exists():
-            for p in intraday_dir.glob("*.csv"):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        intraday_count += sum(1 for _ in f) - 1
-                except Exception:
-                    pass
-
+        conn = self._get_conn()
+        try:
+            res_daily = conn.execute("SELECT COUNT(*) FROM daily_bars").fetchone()
+            if res_daily:
+                daily_count = res_daily[0]
+            res_intra = conn.execute("SELECT COUNT(*) FROM intraday_bars").fetchone()
+            if res_intra:
+                intraday_count = res_intra[0]
+        except Exception as exc:
+            logger.error("Failed to count bars in DuckDB: %s", exc)
+        finally:
+            conn.close()
         return daily_count, intraday_count
 
     def _migrate_daily_from_sql(self, symbol: str) -> Optional[pd.DataFrame]:
@@ -274,7 +336,7 @@ class TimeSeriesEngine:
                     })
                 df = pd.DataFrame(data)
                 self.save_daily_bars(symbol, df)
-                logger.info("Migrated daily bars for %s from SQL to timeseries CSV", symbol)
+                logger.info("Migrated daily bars for %s from SQL to timeseries DuckDB", symbol)
                 return df
         except Exception as exc:
             logger.debug("Failed daily bars SQL migration fallback for %s: %s", symbol, exc)
@@ -305,7 +367,7 @@ class TimeSeriesEngine:
                     })
                 df = pd.DataFrame(data)
                 self.save_intraday_bars(symbol, df)
-                logger.info("Migrated intraday bars for %s from SQL to timeseries CSV", symbol)
+                logger.info("Migrated intraday bars for %s from SQL to timeseries DuckDB", symbol)
                 return df
         except Exception as exc:
             logger.debug("Failed intraday bars SQL migration fallback for %s: %s", symbol, exc)

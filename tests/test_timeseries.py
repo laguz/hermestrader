@@ -1,6 +1,7 @@
 import os
 import shutil
 import pytest
+import duckdb
 from pathlib import Path
 from datetime import datetime, date, timedelta, time, timezone
 import pandas as pd
@@ -162,22 +163,19 @@ def test_sql_fallback_migration_daily(tmp_ts_dir, test_db):
         
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     
-    # Verify file does not exist initially
-    path = engine._daily_path(symbol)
-    assert not path.exists()
+    # Verify DuckDB table is empty initially
+    db_df = engine._query_duckdb("daily_bars", symbol, 10)
+    assert db_df is None or db_df.empty
     
-    # Query via daily_bars: triggers fallback SQL query & disk migration
+    # Query via daily_bars: triggers fallback SQL query & DuckDB migration
     loaded = engine.daily_bars(symbol, lookback_days=10)
     assert loaded is not None
     assert len(loaded) == 2
     
-    # Confirm CSV is now written to disk
-    assert path.exists()
-    
-    # Verify values inside CSV are correct
-    csv_df = pd.read_csv(path)
-    assert len(csv_df) == 2
-    assert csv_df.iloc[-1]["close"] == 412.0
+    # Confirm data is in DuckDB
+    db_df = engine._query_duckdb("daily_bars", symbol, 10)
+    assert len(db_df) == 2
+    assert db_df.iloc[-1]["close"] == 412.0
 
 
 def test_sql_fallback_migration_intraday(tmp_ts_dir, test_db):
@@ -190,16 +188,15 @@ def test_sql_fallback_migration_intraday(tmp_ts_dir, test_db):
         s.commit()
         
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
-    path = engine._intraday_path(symbol)
-    assert not path.exists()
+    db_df = engine._query_duckdb("intraday_bars", symbol, 1)
+    assert db_df is None or db_df.empty
     
     loaded = engine.intraday_bars(symbol, lookback_days=1)
     assert len(loaded) == 1
-    assert path.exists()
     
-    csv_df = pd.read_csv(path)
-    assert len(csv_df) == 1
-    assert csv_df.iloc[0]["close"] == 805.0
+    db_df = engine._query_duckdb("intraday_bars", symbol, 1)
+    assert len(db_df) == 1
+    assert db_df.iloc[0]["close"] == 805.0
 
 
 def test_get_total_bars_count(tmp_ts_dir, test_db):
@@ -222,3 +219,91 @@ def test_get_total_bars_count(tmp_ts_dir, test_db):
     daily, intra = engine.get_total_bars_count()
     assert daily == 6  # 2 symbols * 3 bars
     assert intra == 3  # 1 symbol * 3 bars
+
+
+def test_csv_migration_daily(tmp_ts_dir, test_db):
+    engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
+    symbol = "CSV1"
+    
+    # 1. Create a legacy CSV file manually
+    dates = pd.date_range("2026-05-01", periods=3, freq="D")
+    df = pd.DataFrame({
+        "ts": dates,
+        "open": [10.0, 11.0, 12.0],
+        "high": [15.0, 16.0, 17.0],
+        "low": [9.0, 10.0, 11.0],
+        "close": [12.0, 13.0, 14.0],
+        "volume": [100, 110, 120],
+        "vwap_close": [11.5, 12.5, 13.5]
+    })
+    path = engine._daily_path(symbol)
+    df.to_csv(path, index=False)
+    
+    # Verify DuckDB is empty initially
+    db_df = engine._query_duckdb("daily_bars", symbol, 100)
+    assert db_df is None or db_df.empty
+    
+    # 2. Query daily_bars: should trigger CSV migration
+    loaded = engine.daily_bars(symbol, lookback_days=100)
+    assert loaded is not None
+    assert len(loaded) == 3
+    
+    # Verify DuckDB is populated now
+    db_df = engine._query_duckdb("daily_bars", symbol, 100)
+    assert len(db_df) == 3
+    assert db_df.iloc[-1]["close"] == 14.0
+
+
+def lock_worker(db_path, lock_evt, release_evt):
+    import duckdb
+    import time
+    conn = duckdb.connect(db_path)
+    lock_evt.set()
+    release_evt.wait(timeout=2.0)
+    time.sleep(0.3)
+    conn.close()
+
+
+def test_concurrent_lock_retry(tmp_ts_dir, test_db):
+    import multiprocessing
+    import threading
+    import time as py_time
+    engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
+    symbol = "LOCK"
+    
+    lock_conn_event = multiprocessing.Event()
+    release_event = multiprocessing.Event()
+    db_path_str = str(engine.db_path)
+    
+    p = multiprocessing.Process(
+        target=lock_worker,
+        args=(db_path_str, lock_conn_event, release_event)
+    )
+    p.start()
+    
+    lock_conn_event.wait(timeout=2.0)
+    
+    df = pd.DataFrame({
+        "ts": [datetime.utcnow()],
+        "open": [100.0],
+        "high": [101.0],
+        "low": [99.0],
+        "close": [100.0],
+        "volume": [1000],
+        "vwap_close": [100.0]
+    })
+    
+    def delayed_release():
+        py_time.sleep(0.2)
+        release_event.set()
+    threading.Thread(target=delayed_release).start()
+    
+    start_time = py_time.time()
+    engine.save_daily_bars(symbol, df)
+    duration = py_time.time() - start_time
+    
+    assert duration >= 0.2
+    
+    loaded = engine.daily_bars(symbol, lookback_days=10)
+    assert len(loaded) == 1
+    p.join()
