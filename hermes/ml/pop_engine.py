@@ -102,9 +102,10 @@ class FeatureVector:
 
     def to_meta_dict(self) -> Dict[str, float]:
         """Project the features into the meta-learner's input space."""
+        adjusted_xgb = float(self.xgb_prob) if self.side == "put" else (1.0 - float(self.xgb_prob))
         return {
             "delta_implied_prob": 1.0 - abs(float(self.delta)),
-            "xgb_prob": float(self.xgb_prob),
+            "xgb_prob": adjusted_xgb,
             "protection_score": float(self.protection_score),
             "iv_rank_365d": float(self.iv_rank),
             "vol_ratio": float(self.current_vol) / max(float(self.avg_vol), 1e-5),
@@ -494,8 +495,9 @@ def _coerce_xgb_prob(xgb_pred: Mapping[str, Any], current_vol: float) -> float:
 
     pred_ret = xgb_pred.get("predicted_return")
     if pred_ret is not None and np.isfinite(pred_ret):
-        sigma_daily = max(0.005, current_vol / math.sqrt(252))
-        z = float(pred_ret) / sigma_daily
+        horizon_dte = int(xgb_pred.get("horizon_dte", 7))
+        sigma_horizon = max(0.005, current_vol * math.sqrt(horizon_dte / 365.0))
+        z = float(pred_ret) / sigma_horizon
         return float(np.clip(norm.cdf(z), 0.01, 0.99))
 
     return 0.5

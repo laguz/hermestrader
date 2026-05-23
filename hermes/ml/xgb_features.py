@@ -642,7 +642,7 @@ class AsyncXGBPredictor:
                 offset = float(getattr(model, "_hermes_offset", 0.0))
                 yhat += offset
                 quantile_returns[q] = yhat
-                quantile_probs[q] = self._return_to_prob(yhat, sym)
+                quantile_probs[q] = self._return_to_prob(yhat, sym, horizon)
 
             # Apply per-symbol calibrator to the median (q50) probability.
             cal = self._calibrators.get(sym)
@@ -684,7 +684,7 @@ class AsyncXGBPredictor:
             warnings.append("No predictions produced")
         return warnings
 
-    def _return_to_prob(self, yhat: float, symbol: str) -> float:
+    def _return_to_prob(self, yhat: float, symbol: str, horizon_dte: int) -> float:
         """Convert a predicted return into a probability of finishing
         OTM, using the symbol's own current realised vol so vol regimes
         are respected (no more 0.5 + return*5)."""
@@ -692,8 +692,8 @@ class AsyncXGBPredictor:
             vol = float(self.db.get_setting(f"ml_current_vol__{symbol}") or 0.30)
         except Exception:                           # noqa: BLE001
             vol = 0.30
-        sigma_daily = max(0.005, vol / math.sqrt(252))
-        z = float(yhat) / sigma_daily
+        sigma_horizon = max(0.005, vol * math.sqrt(horizon_dte / 365.0))
+        z = float(yhat) / sigma_horizon
         from scipy.stats import norm
         return float(np.clip(norm.cdf(z), 0.01, 0.99))
 

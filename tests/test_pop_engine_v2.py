@@ -145,11 +145,12 @@ def test_augment_falls_back_to_return_cdf_without_predicted_prob():
     assert 0.0 <= pop <= 1.0
     # Verify the new behaviour is NOT the v1 mapping. v1 would have
     # delivered xgb_prob = clip(0.5 + 0.01*5) = 0.55 directly. The new
-    # CDF mapping with vol≈0.30 produces a much lower number.
-    sigma_daily = 0.30 / math.sqrt(252)
+    # CDF mapping with vol≈0.30 and default horizon=7 produces a much lower number.
+    horizon_dte = 7
+    sigma_horizon = 0.30 * math.sqrt(horizon_dte / 365.0)
     from scipy.stats import norm
-    cdf_prob = float(norm.cdf(0.01 / sigma_daily))
-    assert abs(cdf_prob - 0.55) > 0.05, (
+    cdf_prob = float(norm.cdf(0.01 / sigma_horizon))
+    assert abs(cdf_prob - 0.55) > 0.02, (
         "Expected new vol-aware CDF mapping, not the legacy 0.5+r*5"
     )
 

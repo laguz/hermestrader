@@ -76,6 +76,53 @@ def main() -> int:
     )
     db = HermesDB(dsn)
 
+    # 0. Backfill outcomes in prediction ledger
+    try:
+        from datetime import datetime, timezone, timedelta
+        from hermes.ml.ledger import PredictionLedger
+        from hermes.db.models import DailyBar
+        
+        logger.info("evaluating and marking prediction ledger outcomes...")
+        with db.Session() as session:
+            now = datetime.now(timezone.utc)
+            unmarked_rows = (session.query(PredictionLedger)
+                             .filter(PredictionLedger.realized_outcome.is_(None))
+                             .all())
+            
+            marked_count = 0
+            for row in unmarked_rows:
+                horizon = row.horizon_dte or 7
+                target_date = row.ts + timedelta(days=horizon)
+                if target_date > now:
+                    continue
+                
+                bar = (session.query(DailyBar)
+                       .filter(DailyBar.symbol == row.symbol, DailyBar.ts >= target_date)
+                       .order_by(DailyBar.ts.asc())
+                       .first())
+                if not bar:
+                    continue
+                
+                if bar.ts > now:
+                    continue
+                
+                realized_close = float(bar.close)
+                spot = float(row.spot) if row.spot else realized_close
+                outcome = 1.0 if realized_close > spot else 0.0
+                
+                row.realized_outcome = outcome
+                row.realized_close = realized_close
+                row.realized_at = datetime.now(timezone.utc)
+                marked_count += 1
+                
+            if marked_count > 0:
+                session.commit()
+                logger.info("Marked %d new prediction outcomes", marked_count)
+            else:
+                logger.info("No new prediction outcomes to mark")
+    except Exception as exc:
+        logger.warning("Outcome marking failed: %s", exc)
+
     symbols = _enumerate_symbols(db, args.symbols)
     if not symbols:
         logger.info("no symbols with ledger rows; nothing to calibrate")
@@ -85,7 +132,7 @@ def main() -> int:
     for sym in symbols:
         try:
             rows = ledger_mod.fetch_for_calibration(
-                db, sym, "xgb-q50-7dte", days=args.days, require_outcome=True,
+                db, sym, "xgb_q50_07dte", days=args.days, require_outcome=True,
             )
         except Exception as exc:                                   # noqa: BLE001
             logger.warning("ledger fetch failed for %s: %s", sym, exc)
@@ -102,29 +149,84 @@ def main() -> int:
         else:
             cal = IsotonicCalibrator.fit(preds, outs)
 
-        # Reconstruct MetaLearner training rows from prediction ledger rows
+        # Reconstruct MetaLearner training rows from prediction ledger rows via synthetic strikes
         meta_rows = []
-        for r in rows:
-            fv_dict = r.get("feature_vector") or {}
-            xgb_p = r["predicted_prob"]
-            iv_r = fv_dict.get("iv_rank_365d")
-            if iv_r is None or not np.isfinite(iv_r):
-                iv_r = 50.0
-            cur_v = fv_dict.get("realized_vol_5d", 0.30)
-            avg_v = 0.30
-            vol_r = cur_v / avg_v if avg_v else 1.0
-            delta_p = 0.84
-            prot_s = 1.0
-            meta_rows.append({
-                "delta_implied_prob": float(delta_p),
-                "xgb_prob": float(xgb_p),
-                "protection_score": float(prot_s),
-                "iv_rank_365d": float(iv_r),
-                "vol_ratio": float(vol_r),
-            })
+        meta_outs = []
+        df_all = db.daily_bars(sym, lookback_days=args.days + 300)
+        if df_all is not None and not df_all.empty:
+            from datetime import timedelta
+            from scipy.stats import norm
+            import math
+            from hermes.ml.pop_engine import calculate_strike_protection, find_key_levels
+            
+            for r in rows:
+                spot = r.get("spot")
+                if not spot or spot <= 0:
+                    continue
+                
+                df_asof = df_all.loc[:r["ts"]]
+                if len(df_asof) < 20:
+                    continue
+                
+                try:
+                    key_levels = find_key_levels(df_asof["close"], df_asof["volume"])
+                except Exception:
+                    key_levels = []
+                
+                fv_dict = r.get("feature_vector") or {}
+                xgb_p = r["predicted_prob"]
+                iv_r = fv_dict.get("iv_rank_365d")
+                if iv_r is None or not np.isfinite(iv_r):
+                    iv_r = 50.0
+                cur_v = fv_dict.get("realized_vol_5d", 0.30)
+                avg_v = 0.30
+                vol_r = cur_v / avg_v if avg_v else 1.0
+                
+                log_ret = np.log(df_asof["close"] / df_asof["close"].shift(1))
+                vol = float(log_ret.tail(20).std() * math.sqrt(252))
+                if not np.isfinite(vol) or vol <= 0:
+                    vol = cur_v
+                
+                horizon = r.get("horizon_dte", 7)
+                t_years = horizon / 365.0
+                sigma_horizon = vol * math.sqrt(t_years)
+                
+                deltas = [-0.10, -0.15, -0.20, -0.30, -0.40, 0.10, 0.15, 0.20, 0.30, 0.40]
+                target_date = r["ts"] + timedelta(days=horizon)
+                window = df_all.loc[r["ts"] : target_date]
+                window_after = window.loc[window.index > r["ts"]]
+                if window_after.empty:
+                    continue
+                
+                for d in deltas:
+                    z_score = norm.ppf(1.0 - abs(d))
+                    if d < 0:
+                        strike = spot * math.exp(-z_score * sigma_horizon)
+                        touched = (window_after["low"] <= strike).any()
+                        side = "put"
+                    else:
+                        strike = spot * math.exp(z_score * sigma_horizon)
+                        touched = (window_after["high"] >= strike).any()
+                        side = "call"
+                        
+                    outcome = 0.0 if touched else 1.0
+                    spread_type = f"{side}_credit"
+                    prot_s = calculate_strike_protection(key_levels, spot, strike, spread_type)
+                    
+                    delta_p = 1.0 - abs(d)
+                    xgb_prob_adjusted = xgb_p if side == "put" else (1.0 - xgb_p)
+                    
+                    meta_rows.append({
+                        "delta_implied_prob": float(delta_p),
+                        "xgb_prob": float(xgb_prob_adjusted),
+                        "protection_score": float(prot_s),
+                        "iv_rank_365d": float(iv_r),
+                        "vol_ratio": float(vol_r),
+                    })
+                    meta_outs.append(float(outcome))
 
         try:
-            meta = MetaLearner.fit(meta_rows, outs, calibrator=args.method)
+            meta = MetaLearner.fit(meta_rows, meta_outs, calibrator=args.method)
         except Exception as exc:                                   # noqa: BLE001
             logger.warning("MetaLearner fit failed for %s: %s", sym, exc)
             meta = None

@@ -179,6 +179,8 @@ def fetch_for_calibration(
                                      if r.realized_outcome is not None else None),
                 "realized_pnl": (float(r.realized_pnl)
                                  if r.realized_pnl is not None else None),
+                "spot": float(r.spot or 0.0),
+                "horizon_dte": int(r.horizon_dte or 7),
                 "feature_vector": r.feature_vector or {},
             }
             for r in rows
