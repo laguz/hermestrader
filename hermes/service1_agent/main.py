@@ -454,6 +454,14 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
         db.run_migrations()
     except Exception as exc:                                      # noqa: BLE001
         log.exception("run_migrations failed at startup: %s", exc)
+    # Startup update check and soul syncing
+    try:
+        from hermes.utils import sync_soul_file_to_db, check_for_updates
+        import threading
+        sync_soul_file_to_db(db)
+        threading.Thread(target=check_for_updates, daemon=True).start()
+    except Exception as exc:                                      # noqa: BLE001
+        log.exception("Agent startup update/soul sync failed: %s", exc)
     # Seed the strategies registry — required before any watchlist row can be
     # inserted (FK from strategy_watchlists.strategy_id). Idempotent.
     try:

@@ -59,3 +59,101 @@ def decrypt_value(value: str) -> str:
     except Exception as exc:
         logger.warning("Decryption failed: %s", exc)
         return value
+
+
+def check_for_updates() -> None:
+    """Check for updates to Hermes by querying GitHub.
+    
+    Checks the remote VERSION and the latest commit details on the active branch
+    (main for paper, live for live mode). Writes the results to the database
+    as a JSON-serialized update_status setting.
+    """
+    import json
+    import requests
+    from datetime import datetime, timezone
+    from hermes.db.models import HermesDB
+    from hermes.service2_watcher._app_state import read_version
+
+    mode = os.environ.get("HERMES_MODE", "paper").lower().strip()
+    branch = "live" if mode == "live" else "main"
+    local_version = read_version()
+
+    logger.info("Starting startup update check for mode=%s (branch=%s), local version=%s...", mode, branch, local_version)
+
+    update_available = False
+    remote_version = local_version
+    latest_commit_sha = ""
+    latest_commit_msg = ""
+    error_msg = None
+
+    # 1. Fetch remote VERSION from GitHub
+    try:
+        ver_url = f"https://raw.githubusercontent.com/laguz/hermestrader/{branch}/VERSION"
+        res = requests.get(ver_url, timeout=10)
+        if res.status_code == 200:
+            remote_version = res.text.strip()
+            if remote_version != local_version and local_version != "dev":
+                update_available = True
+                logger.warning(
+                    "[UPDATE AVAILABLE] A newer version of Hermes is available! "
+                    "Local version: %s, Remote version: %s. Run ./hermes.sh update to pull.",
+                    local_version, remote_version
+                )
+        else:
+            logger.warning("Could not fetch remote version, status code: %d", res.status_code)
+    except Exception as e:
+        logger.warning("Failed to fetch remote version from GitHub: %s", e)
+        error_msg = str(e)
+
+    # 2. Fetch latest commit from GitHub to display details
+    try:
+        commit_url = f"https://api.github.com/repos/laguz/hermestrader/commits/{branch}"
+        headers = {"User-Agent": "HermesTrader-App"}
+        res = requests.get(commit_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            commit_data = res.json()
+            latest_commit_sha = commit_data.get("sha", "")[:8]
+            commit_obj = commit_data.get("commit", {})
+            latest_commit_msg = commit_obj.get("message", "").split("\n")[0]
+            logger.info("Latest remote commit on %s: %s - %s", branch, latest_commit_sha, latest_commit_msg)
+        else:
+            logger.warning("Could not fetch latest commit, status code: %d", res.status_code)
+    except Exception as e:
+        logger.warning("Failed to fetch latest commit from GitHub: %s", e)
+
+    # Save result to database
+    try:
+        dsn = os.environ.get("HERMES_DSN", "postgresql+psycopg://hermes:hermes@db:5432/hermes")
+        db = HermesDB(dsn)
+        payload = {
+            "update_available": update_available,
+            "local_version": local_version,
+            "remote_version": remote_version,
+            "latest_commit_sha": latest_commit_sha,
+            "latest_commit_msg": latest_commit_msg,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "error": error_msg
+        }
+        db.set_setting("update_status", json.dumps(payload))
+        db.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}")
+    except Exception as e:
+        logger.warning("Failed to save update status to DB: %s", e)
+
+
+def sync_soul_file_to_db(db) -> None:
+    """Read the content of the mounted soul.md file and sync it to the DB if different.
+    
+    This acts as the source-of-truth loader on container startup.
+    """
+    soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
+    if os.path.exists(soul_path):
+        try:
+            with open(soul_path, "r", encoding="utf-8") as f:
+                file_soul = f.read()
+            db_soul = db.get_setting("soul_md") or ""
+            if file_soul != db_soul:
+                logger.info("Syncing soul.md from file to database (length: %d)", len(file_soul))
+                db.set_setting("soul_md", file_soul)
+                db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
+        except Exception as exc:
+            logger.warning("Failed to sync soul.md to database: %s", exc)

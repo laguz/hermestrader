@@ -61,6 +61,13 @@ def set_soul(body: SoulBody) -> Dict[str, Any]:
             )
         db.set_setting(SETTING_SOUL, body.soul)
         db.write_log("ENGINE", f"[C2] Soul updated ({len(body.soul.encode())}B)")
+        import os
+        soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
+        try:
+            with open(soul_path, "w", encoding="utf-8") as f:
+                f.write(body.soul)
+        except Exception as exc:
+            db.write_log("ENGINE", f"Failed to write soul to file path {soul_path}: {exc}", level="WARNING")
 
     if body.autonomy is not None:
         a = body.autonomy.lower().strip()

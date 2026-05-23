@@ -370,7 +370,16 @@ function renderAgentStatus(){
       ?'<span style="color:var(--red)">'+truncErr(s.ml_error)+'</span>'
       :'<span style="color:var(--muted)">—</span>';
   const llmLabel='LLM'+(s.llm_model?' <span style="color:var(--muted);font-weight:400;font-size:11px">('+s.llm_model+')</span>':'');
-  document.getElementById('agent-status-block').innerHTML=`
+    let verHtml = `<span style="color:var(--muted)">${s.version||'—'}</span>`;
+    if (s.update_status && s.update_status.update_available) {
+      const remoteVer = s.update_status.remote_version || '';
+      const sha = s.update_status.latest_commit_sha || '';
+      const msg = s.update_status.latest_commit_msg || '';
+      verHtml = `<span style="color:var(--yellow);font-weight:bold;">${s.version||'—'} (${remoteVer})</span>
+                 <span class="pill orange" style="cursor:pointer;margin-left:6px;padding:1px 5px;font-size:10px;font-weight:bold;" 
+                       onclick="alert('A new version of Hermes is available!\\n\\nLocal Version: ${s.version}\\nRemote Version: ${remoteVer}\\nLatest Commit: [${sha}] ${msg.replace(/\'/g, '\\\'')}\\n\\nTo upgrade, run:\\n./hermes.sh update')">UPDATE</span>`;
+    }
+    document.getElementById('agent-status-block').innerHTML=`
     <div class="status-row"><span>Agent</span><span>${s.hermes_running?'<span style="color:var(--green)">Online</span>':'<span style="color:var(--red)">Offline</span>'}</span></div>
     <div class="status-row"><span>Last seen</span><span>${ageStr}</span></div>
     <div class="status-row"><span>Uptime</span><span>${s.uptime_s!=null?Math.round(s.uptime_s/60)+'m':'—'}</span></div>
@@ -381,7 +390,7 @@ function renderAgentStatus(){
     <div class="status-row"><span>Approval</span><span>${s.approval_mode?'<span style="color:var(--orange)">Required</span>':'<span style="color:var(--green)">Auto</span>'}</span></div>
     <div class="status-row"><span>Pending</span><span style="color:var(--orange);font-weight:700">${s.pending_approvals||0}</span></div>
     <div class="status-row"><span>Market</span><span>${s.market_is_open?'<span style="color:var(--green)">OPEN</span>':'<span style="color:var(--muted)">'+(s.market_session||'closed').replace('_',' ')+'</span>'} <span style="color:var(--muted);font-size:11px">${s.market_et_time||''} ET</span></span></div>
-    <div class="status-row"><span>Version</span><span style="color:var(--muted)">${s.version||'—'}</span></div>`;
+    <div class="status-row"><span>Version</span><span>${verHtml}</span></div>`;
   document.getElementById('btn-paper').style.borderColor=s.mode==='paper'?'var(--blue)':'';
   document.getElementById('btn-live').style.borderColor=s.mode==='live'?'var(--orange)':'';
 }

@@ -107,6 +107,15 @@ def get_status() -> Dict[str, Any]:
                "et_time": "--:--", "et_date": "", "trading_day": False}
         nxt = None
 
+    import json
+    update_status_raw = db.get_setting("update_status")
+    update_status = None
+    if update_status_raw:
+        try:
+            update_status = json.loads(update_status_raw)
+        except Exception:
+            pass
+
     return {
         "hermes_running": hermes_running,
         "hermes_last_seen_age_s": last_log_age,
@@ -126,6 +135,7 @@ def get_status() -> Dict[str, Any]:
         "stale_after_s": STALE_AFTER_S,
         "tick_interval_s": TICK_INTERVAL_S,
         "version": os.environ.get("HERMES_VERSION") or read_version(),
+        "update_status": update_status,
         "market_session": mkt["session"],
         "market_is_open": mkt["is_open"],
         "market_et_time": mkt["et_time"],
@@ -155,12 +165,12 @@ def get_balances() -> Dict[str, Any]:
     look wrong (e.g. "why is CS75 saying insufficient BP?").
     """
     try:
-        from hermes.broker.tradier import TradierBroker
-        broker = TradierBroker(
-            api_key=os.environ.get("TRADIER_API_KEY", ""),
-            account_id=os.environ.get("TRADIER_ACCOUNT_ID", ""),
-            paper=os.environ.get("HERMES_MODE", "paper").lower() != "live",
-        )
+        from hermes.service1_agent.main import _build_broker
+        conf = {
+            "mode": os.environ.get("HERMES_MODE", "paper"),
+            "dry_run": os.environ.get("HERMES_DRY_RUN", "").lower() == "true",
+        }
+        broker = _build_broker(conf, conf["mode"])
         balances = broker.get_account_balances() or {}
         obp = max(0.0, float(balances.get("option_buying_power", 0.0)))
         return {

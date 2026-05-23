@@ -26,13 +26,30 @@ mcp = FastMCP("tradier")
 
 
 def load_env_file() -> None:
-    """Auto-detect and load environment variables from the project's .env file
+    """Auto-detect and load environment variables from the project's env file
     if credentials are not already present in the environment.
     """
     if "TRADIER_ACCESS_TOKEN" not in os.environ and "TRADIER_API_KEY" not in os.environ:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-        dotenv_path = os.path.join(project_root, ".env")
+        
+        env_file = os.environ.get("HERMES_ENV_FILE")
+        if env_file:
+            if not os.path.isabs(env_file):
+                dotenv_path = os.path.join(project_root, env_file)
+            else:
+                dotenv_path = env_file
+        else:
+            # Detect based on path name or existence of files
+            dotenv_path = os.path.join(project_root, ".env")
+            if not os.path.exists(dotenv_path):
+                if "live" in project_root.lower() and os.path.exists(os.path.join(project_root, ".env.live")):
+                    dotenv_path = os.path.join(project_root, ".env.live")
+                elif os.path.exists(os.path.join(project_root, ".env.paper")):
+                    dotenv_path = os.path.join(project_root, ".env.paper")
+                elif os.path.exists(os.path.join(project_root, ".env.live")):
+                    dotenv_path = os.path.join(project_root, ".env.live")
+
         if os.path.exists(dotenv_path):
             with open(dotenv_path, "r") as f:
                 for line in f:
@@ -55,17 +72,39 @@ def _broker() -> TradierBroker:
     
     load_env_file()
     
-    dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true"
-    # Honor TRADIER_ENDPOINT from .env if TRADIER_BASE_URL is missing
-    base_url = os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT")
+    mode = os.environ.get("HERMES_MODE", "paper").lower().strip()
     
-    # If dry_run is on and no URL provided, default to sandbox
-    if dry_run and not base_url:
-        base_url = "https://sandbox.tradier.com/v1"
+    if mode == "paper":
+        token = (
+            os.environ.get("TRADIER_PAPER_TOKEN")
+            or os.environ.get("TRADIER_ACCESS_TOKEN")
+            or os.environ.get("TRADIER_API_KEY")
+        )
+        account = os.environ.get("TRADIER_PAPER_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
+        url = os.environ.get("TRADIER_PAPER_BASE_URL", "https://sandbox.tradier.com/v1")
+        dry_run = False
+    else:
+        token = (
+            os.environ.get("TRADIER_LIVE_TOKEN")
+            or os.environ.get("TRADIER_ACCESS_TOKEN")
+            or os.environ.get("TRADIER_API_KEY")
+        )
+        account = os.environ.get("TRADIER_LIVE_ACCOUNT_ID") or os.environ.get("TRADIER_ACCOUNT_ID")
+        url = os.environ.get("TRADIER_LIVE_BASE_URL", "https://api.tradier.com/v1")
+        dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true" or os.environ.get("DRY_RUN", "").lower() == "true"
+
+    # Allow explicit overrides
+    if os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT"):
+        url = os.environ.get("TRADIER_BASE_URL") or os.environ.get("TRADIER_ENDPOINT")
+        
+    if os.environ.get("HERMES_DRY_RUN"):
+        dry_run = os.environ.get("HERMES_DRY_RUN", "").lower() == "true"
 
     cfg = {
-        "dry_run": dry_run,
-        "tradier_base_url": base_url
+        "tradier_access_token": token,
+        "tradier_account_id": account,
+        "tradier_base_url": url,
+        "dry_run": dry_run
     }
     _BROKER = TradierBroker(cfg)  # type: ignore[name-defined]
     return _BROKER  # type: ignore[name-defined]

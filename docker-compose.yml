@@ -49,7 +49,7 @@ services:
     command: uvicorn hermes.service2_watcher.api:app --host 0.0.0.0 --port 8080 --reload --reload-dir /app/hermes
     ports:
       - "${HERMES_API_PORT:-8081}:8080"
-    env_file: .env
+    env_file: ${HERMES_ENV_FILE:-.env}
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
       - HERMES_MODE=${HERMES_MODE:-paper}
@@ -63,6 +63,7 @@ services:
       # Hermes data dir: persists agent memory, skill state, and upgrade
       # markers across container restarts. Per-instance on the host.
       - ${HERMES_DATA_DIR:-./.hermes-data}:/data
+      - ./soul.md:/app/soul.md:rw
     depends_on:
       db:
         condition: service_healthy
@@ -83,7 +84,7 @@ services:
     image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
     build: .
     command: python -m hermes.service1_agent.main
-    env_file: .env
+    env_file: ${HERMES_ENV_FILE:-.env}
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
       - HERMES_MODE=${HERMES_MODE:-paper}
@@ -92,6 +93,7 @@ services:
       - ./hermes:/app/hermes:ro
       - ./requirements.txt:/app/requirements.txt:ro
       - ${HERMES_DATA_DIR:-./.hermes-data}:/data
+      - ./soul.md:/app/soul.md:ro
     depends_on:
       db:
         condition: service_healthy
@@ -106,7 +108,7 @@ services:
     command: python -m hermes.mcp.server
     stdin_open: true
     tty: true
-    env_file: .env
+    env_file: ${HERMES_ENV_FILE:-.env}
     environment:
       - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
     volumes:

@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
         db.run_migrations()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("run_migrations failed: %s", exc)
+    try:
+        from hermes.utils import sync_soul_file_to_db, check_for_updates
+        import threading
+        sync_soul_file_to_db(db)
+        threading.Thread(target=check_for_updates, daemon=True).start()
+    except Exception as exc:                                       # noqa: BLE001
+        logger.exception("lifespan startup update/soul sync failed: %s", exc)
     # ML-side migrations — idempotent. Each helper checkfirst=True so
     # repeated boots are no-ops.
     try:

@@ -185,6 +185,7 @@ def test_load_env_file(monkeypatch, tmp_path):
     import os
     monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("TRADIER_API_KEY", raising=False)
+    monkeypatch.delenv("TRADIER_ACCOUNT_ID", raising=False)
 
     dummy_server_dir = tmp_path / "hermes" / "mcp"
     dummy_server_dir.mkdir(parents=True)
