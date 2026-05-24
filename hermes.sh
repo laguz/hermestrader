@@ -99,12 +99,22 @@ _current_version() {
         "$(docker compose --env-file "$env_file" -p "$proj_name" ps -q watcher 2>/dev/null | head -1)" 2>/dev/null || echo "unknown"
 }
 
+_get_env_image() {
+    local env_file="$1"
+    local img tag
+    img=$(grep -E "^HERMES_IMAGE=" "$env_file" 2>/dev/null | cut -d= -f2- | tr -d "'\"" || echo "")
+    tag=$(grep -E "^HERMES_TAG=" "$env_file" 2>/dev/null | cut -d= -f2- | tr -d "'\"" || echo "")
+    [ -z "$img" ] && img="laguz3/hermes"
+    [ -z "$tag" ] && tag="latest"
+    echo "${img}:${tag}"
+}
+
 _pull() {
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
         info "Pulling images for ${BOLD}${proj_name}${NC} using ${env_file}…"
-        if docker compose --env-file "$env_file" -p "$proj_name" pull 2>&1; then
+        if docker compose --env-file "$env_file" -p "$proj_name" pull -q >/dev/null 2>&1; then
             ok "Pull complete for ${proj_name}"
         else
             warn "Pull failed for ${proj_name} — will use local image or build from source"
@@ -116,13 +126,14 @@ _up() {
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
-        local api_port
+        local api_port inst_image
         api_port=$(grep -E "^HERMES_API_PORT=" "$env_file" | cut -d= -f2- | tr -d "'\"" || echo "8080")
+        inst_image=$(_get_env_image "$env_file")
         info "Starting Hermes ${BOLD}${proj_name}${NC} services…"
         docker compose --env-file "$env_file" -p "$proj_name" up -d
         ok "Hermes ${proj_name} is running"
         echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:${api_port}"
-        echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
+        echo -e "   ${CYAN}Image${NC}      → ${inst_image}"
         _show_version "$env_file" "$proj_name"
     done
 }
@@ -365,12 +376,14 @@ cmd_version() {
     build_date=$(date +"%Y.%-m.%-d")
     echo -e "${BOLD}Hermes Agent${NC} v${HERMES_VERSION} (${build_date})"
     echo ""
-    echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
     # Show container image ID + creation time for each service
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
+        local inst_image
+        inst_image=$(_get_env_image "$env_file")
         echo -e "\n${BOLD}=== ${proj_name} ===${NC}"
+        echo -e "   ${CYAN}Image${NC}      → ${inst_image}"
         for svc in watcher; do
             local cid
             cid=$(docker compose --env-file "$env_file" -p "$proj_name" ps -q "$svc" 2>/dev/null | head -1)
