@@ -12,7 +12,7 @@
 #   ./hermes.sh status           Show running containers
 #   ./hermes.sh build            Build the image locally (dev workflow)
 #   ./hermes.sh push   # ── Config ────────────────────────────────────────────────────────────
-HERMES_IMAGE="${HERMES_IMAGE:-laguz3/hermes}"
+HERMES_IMAGE="${HERMES_IMAGE:-ghcr.io/nousresearch/hermes-agent}"
 HERMES_TAG="${HERMES_TAG:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"

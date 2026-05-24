@@ -40,7 +40,7 @@ services:
       - no-new-privileges:true
 
   watcher:
-    image: ${HERMES_IMAGE:-laguz3/hermes}:${HERMES_TAG:-latest}
+    image: ${HERMES_IMAGE:-ghcr.io/nousresearch/hermes-agent}:${HERMES_TAG:-latest}
     build: .
     # The watcher binds inside the container on a fixed port (8080) and we
     # publish it on the host using HERMES_API_PORT. Keeping the in-container
