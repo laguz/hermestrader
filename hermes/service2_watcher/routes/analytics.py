@@ -89,7 +89,7 @@ logger = logging.getLogger("hermes.c2.api")
 
 
 @router.get("/api/analytics")
-def get_analytics() -> Response:
+async def get_analytics() -> Response:
     """ML predictions + closed-trade performance + open trades + P&L series."""
     from sqlalchemy import text as sa_text
 
@@ -228,7 +228,7 @@ def get_analytics() -> Response:
 
     # Daily P&L series (last 60 days) from pnl_daily view
     try:
-        result["pnl_series"] = db.pnl_daily(days=60)
+        result["pnl_series"] = await db.pnl_daily(days=60)
         for row in result["pnl_series"]:
             if hasattr(row.get("day"), "isoformat"):
                 row["day"] = row["day"].isoformat()
