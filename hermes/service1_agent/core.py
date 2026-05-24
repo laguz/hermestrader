@@ -25,6 +25,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("hermes.agent.core")
 
+import inspect
+
+class AsyncBrokerWrapper:
+    """Wraps a synchronous or asynchronous broker to present a unified async interface."""
+    def __init__(self, broker):
+        self.broker = broker
+
+    def __getattr__(self, name):
+        attr = getattr(self.broker, name)
+        if callable(attr):
+            async def _async_wrapper(*args, **kwargs):
+                if asyncio.iscoroutinefunction(attr) or inspect.iscoroutinefunction(attr):
+                    return await attr(*args, **kwargs)
+                res = attr(*args, **kwargs)
+                if inspect.iscoroutine(res) or asyncio.iscoroutine(res):
+                    return await res
+                return res
+            return _async_wrapper
+        return attr
+
 
 # ---------------------------------------------------------------------------
 # TradeAction — single canonical order envelope used by every strategy
@@ -63,7 +83,7 @@ class MoneyManager:
     """
 
     def __init__(self, broker, db, config: Dict[str, Any]):
-        self.broker = broker
+        self.broker = AsyncBrokerWrapper(broker)
         self.db = db
         self.config = config or {}
         # In-memory cache of active broker-side orders, refreshed every tick.
@@ -76,7 +96,7 @@ class MoneyManager:
     # record_pending_order shares one definition with this matcher.
     _OCC_RE = OCC_RE
 
-    def sync_broker_orders(self) -> None:
+    async def sync_broker_orders(self) -> None:
         """Fetch all active orders from the broker and cache their counts.
 
         Hermes-authored orders carry a tag like ``HERMES_CS75`` that Tradier's
@@ -86,7 +106,7 @@ class MoneyManager:
         """
         self._broker_order_counts = {}
         try:
-            orders = self.broker.get_orders() or []
+            orders = await self.broker.get_orders() or []
         except Exception:
             logger.exception("[MM] Failed to fetch broker orders for sync")
             return
@@ -139,8 +159,8 @@ class MoneyManager:
                 logger.debug("[MM] Sync found active broker order: %s %s %s %s lots=%d",
                              strategy_id, symbol, side_type, expiry_iso, lots)
 
-    def true_available_bp(self) -> float:
-        balances = self.broker.get_account_balances() or {}
+    async def true_available_bp(self) -> float:
+        balances = await self.broker.get_account_balances() or {}
         available = max(0.0, float(balances.get("option_buying_power", 0.0)))
         logger.debug(
             "[MM] true_available_bp: obp=%.2f account_type=%s",
@@ -148,10 +168,10 @@ class MoneyManager:
         )
         return available
 
-    def max_affordable_contracts(self, requirement_per_contract: float) -> int:
+    async def max_affordable_contracts(self, requirement_per_contract: float) -> int:
         if requirement_per_contract <= 0:
             return 0
-        bp = self.true_available_bp()
+        bp = await self.true_available_bp()
         return int(bp // requirement_per_contract)
 
     def side_aware_capacity(
@@ -200,7 +220,7 @@ class MoneyManager:
 
         return max(0, remaining)
 
-    def scale_quantity(
+    async def scale_quantity(
         self,
         requested_lots: int,
         requirement_per_lot: float,
@@ -223,7 +243,7 @@ class MoneyManager:
         if requirement_per_lot <= 0.0:
             bp_cap = 999_999
         else:
-            bp_cap = self.max_affordable_contracts(requirement_per_lot)
+            bp_cap = await self.max_affordable_contracts(requirement_per_lot)
         side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
         scaled = min(requested_lots, bp_cap, side_cap)
         if scaled == 0 and requested_lots > 0:
@@ -232,7 +252,7 @@ class MoneyManager:
                 reason = (f"at capacity exp={expiry} "
                           f"(open+pending={max_lots}/{max_lots})")
             elif bp_cap == 0:
-                balances = self.broker.get_account_balances() or {}
+                balances = await self.broker.get_account_balances() or {}
                 avail = max(0.0, float(balances.get("option_buying_power", 0.0)))
                 acct_type = balances.get("account_type", "?")
                 reason = (
@@ -286,7 +306,7 @@ class IronCondorBuilder:
         """
         return float(width) * int(multiplier) * int(lots)
 
-    def plan(
+    async def plan(
         self,
         *,
         strategy_id: str,
@@ -330,7 +350,7 @@ class IronCondorBuilder:
             
         actions: List[TradeAction] = []
         for side in sides_to_open:
-            lots = self.mm.scale_quantity(
+            lots = await self.mm.scale_quantity(
                 requested_lots=target_lots,
                 requirement_per_lot=requirement_per_lot,
                 symbol=symbol,
@@ -343,7 +363,10 @@ class IronCondorBuilder:
                 # scale_quantity already wrote a BLOCKED log; nothing more needed.
                 continue
             factory = put_action_factory if side == "put" else call_action_factory
-            action = factory(symbol=symbol, expiry=expiry, lots=lots, width=width)
+            if asyncio.iscoroutinefunction(factory):
+                action = await factory(symbol=symbol, expiry=expiry, lots=lots, width=width)
+            else:
+                action = factory(symbol=symbol, expiry=expiry, lots=lots, width=width)
             if action is not None:
                 actions.append(action)
         return actions
@@ -366,7 +389,7 @@ class AbstractStrategy(ABC):
         dry_run: bool = False,
         overseer: Optional["HermesOverseer"] = None,
     ):
-        self.broker = broker
+        self.broker = AsyncBrokerWrapper(broker)
         self.db = db
         self.mm = money_manager
         self.ic = ic_builder
@@ -392,9 +415,9 @@ class AbstractStrategy(ABC):
         logger.info(line)
         self.db.write_log(self.strategy_id, msg)
 
-    def find_expiry_in_dte_range(self, symbol: str, min_dte: int, max_dte: int,
+    async def find_expiry_in_dte_range(self, symbol: str, min_dte: int, max_dte: int,
                                  prefer: str = "max") -> Optional[str]:
-        expirations = self.broker.get_option_expirations(symbol) or []
+        expirations = await self.broker.get_option_expirations(symbol) or []
         today = self.today()
         candidates: List[date] = []
         for e in expirations:
@@ -507,10 +530,10 @@ class AbstractStrategy(ABC):
 
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod
-    def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...
+    async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...
 
     @abstractmethod
-    def manage_positions(self) -> List[TradeAction]: ...
+    async def manage_positions(self) -> List[TradeAction]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -532,7 +555,7 @@ class CascadingEngine:
                  money_manager: Optional["MoneyManager"] = None,
                  config: Optional[Dict[str, Any]] = None,
                  event_bus: Optional[EventBus] = None):
-        self.broker = broker
+        self.broker = AsyncBrokerWrapper(broker)
         self.db = db
         # Sort by declared PRIORITY (1 highest)
         self.strategies = sorted(strategies, key=lambda s: s.PRIORITY)
@@ -553,8 +576,8 @@ class CascadingEngine:
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
 
     # 1
-    def sync_positions(self) -> None:
-        positions = self.broker.get_positions() or []
+    async def sync_positions(self) -> None:
+        positions = await self.broker.get_positions() or []
         # Resting/accepted orders haven't created positions yet; the
         # reconciler must treat their legs as still-alive coverage so
         # just-submitted spreads aren't flipped to CLOSED before fill.
@@ -562,7 +585,7 @@ class CascadingEngine:
         try:
             active_statuses = {"open", "partially_filled", "pending",
                                 "accepted", "calculated"}
-            for o in (self.broker.get_orders() or []):
+            for o in (await self.broker.get_orders() or []):
                 if str(o.get("status", "")).lower() not in active_statuses:
                     continue
                 legs = o.get("leg") or []
@@ -580,20 +603,20 @@ class CascadingEngine:
         self.db.upsert_positions(positions, active_order_legs=active_legs)
 
     # 2
-    def reconcile_orphans(self) -> None:
+    async def reconcile_orphans(self) -> None:
         """Flag broker positions not tied to any strategy as MANUAL_ORPHAN."""
         tracked = self.db.tracked_option_symbols()
-        live = {p["symbol"] for p in self.broker.get_positions() or []}
+        live = {p["symbol"] for p in await self.broker.get_positions() or []}
         orphans = live - tracked
         if orphans:
             self.db.flag_orphans(orphans)
 
     # 3
-    def process_management(self) -> List[TradeAction]:
+    async def process_management(self) -> List[TradeAction]:
         actions: List[TradeAction] = []
         for s in self.strategies:
             try:
-                actions.extend(s.manage_positions())
+                actions.extend(await s.manage_positions())
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Management failure in %s: %s", s.NAME, exc)
         return actions
@@ -611,7 +634,7 @@ class CascadingEngine:
             return list(default)
         return wl or list(default)
 
-    def process_entries(self, watchlist: Sequence[str]) -> int:
+    async def process_entries(self, watchlist: Sequence[str]) -> int:
         """Execute entries in priority order. Submits actions after each strategy
         to ensure MoneyManager capacity is updated for the next priority level.
         Returns total number of entry actions planned.
@@ -638,7 +661,7 @@ class CascadingEngine:
 
                 wl = self._watchlist_for(s.strategy_id, unique_watchlist)
                 # Drain entire watchlist for THIS strategy.
-                actions = s.execute_entries(wl)
+                actions = await s.execute_entries(wl)
 
                 # Cap to remaining budget for this tick.
                 remaining = max_per_tick - tick_submitted
@@ -655,20 +678,20 @@ class CascadingEngine:
                     actions = actions[:remaining]
 
                 # Submit immediately so subsequent strategies see these as PENDING.
-                self.submit(actions, action_type="entry")
+                await self.submit(actions, action_type="entry")
                 tick_submitted += len(actions)
                 total_entries += len(actions)
 
                 # Re-sync broker orders so the next strategy's capacity check
                 # reflects any orders just placed (fills between ticks are now visible).
                 if actions:
-                    self.mm.sync_broker_orders()
+                    await self.mm.sync_broker_orders()
 
             except Exception as exc:                     # noqa: BLE001
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
         return total_entries
 
-    def submit(self, actions: Iterable[TradeAction],
+    async def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
         # Defence-in-depth market-hours gate. Every broker round-trip
         # MUST go through this method (entries, managed closes, AI
@@ -775,7 +798,7 @@ class CascadingEngine:
                 close_method = getattr(self.db, "close_trade_from_action", None)
                 if not getattr(self.broker, "dry_run", False):
                     try:
-                        resp = self.broker.place_order_from_action(a)
+                        resp = await self.broker.place_order_from_action(a)
                     except Exception as exc:                       # noqa: BLE001
                         # Broker raised before we got an order id. Free the
                         # PENDING row so capacity recovers; a Trade row was
@@ -794,18 +817,18 @@ class CascadingEngine:
                             self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
-    def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
-        self.sync_positions()
+    async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
+        await self.sync_positions()
         # Refresh real-time broker order counts to prevent duplicate entries.
         # mm may be None on legacy callers that haven't been updated yet;
         # skip rather than crash the entire tick.
         if self.mm is not None:
-            self.mm.sync_broker_orders()
-        self.reconcile_orphans()
-        mgmt = self.process_management()
-        self.submit(mgmt, action_type="management")
+            await self.mm.sync_broker_orders()
+        await self.reconcile_orphans()
+        mgmt = await self.process_management()
+        await self.submit(mgmt, action_type="management")
         # Entries are now submitted internally strategy-by-strategy.
-        num_entries = self.process_entries(watchlist)
+        num_entries = await self.process_entries(watchlist)
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
@@ -813,8 +836,8 @@ class CascadingEngine:
                 # Asynchronously generate AI proposals without blocking the tick loop
                 asyncio.create_task(self._async_propose(watchlist))
             else:
-                ai_actions = self.overseer.propose(watchlist) or []
-                self.submit(ai_actions, action_type="ai")
+                ai_actions = await asyncio.to_thread(self.overseer.propose, watchlist)
+                await self.submit(ai_actions, action_type="ai")
                 ai_count = len(ai_actions)
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
 
@@ -887,14 +910,10 @@ class CascadingEngine:
                         for leg in a.legs)
             )
             
-            is_async = asyncio.iscoroutinefunction(self.broker.place_order_from_action)
             close_method = getattr(self.db, "close_trade_from_action", None)
             
             try:
-                if is_async:
-                    resp = await self.broker.place_order_from_action(a)
-                else:
-                    resp = await asyncio.to_thread(self.broker.place_order_from_action, a)
+                resp = await self.broker.place_order_from_action(a)
             except Exception as exc:
                 if is_pure_close and close_method is not None:
                     await asyncio.to_thread(close_method, a, {"errors": str(exc)})
@@ -912,7 +931,7 @@ class CascadingEngine:
         try:
             ai_actions = await asyncio.to_thread(self.overseer.propose, watchlist)
             if ai_actions:
-                self.submit(ai_actions, action_type="ai")
+                await self.submit(ai_actions, action_type="ai")
         except Exception as exc:
             logger.exception("Error in async propose: %s", exc)
 
@@ -934,11 +953,10 @@ class CascadingEngine:
             return
 
         # Run position management for this symbol across all strategies
-        # (run in thread pool using asyncio.to_thread because s.manage_positions is synchronous)
         mgmt_actions = []
         for s in self.strategies:
             try:
-                actions = await asyncio.to_thread(s.manage_positions)
+                actions = await s.manage_positions()
                 if actions:
                     # Filter actions to only close positions for the ticking symbol
                     symbol_actions = [a for a in actions if a.symbol == symbol]
@@ -947,7 +965,7 @@ class CascadingEngine:
                 logger.exception("Management failure in %s for %s: %s", s.NAME, symbol, exc)
                 
         if mgmt_actions:
-            self.submit(mgmt_actions, action_type="management")
+            await self.submit(mgmt_actions, action_type="management")
 
         # Run entries for this symbol across strategies in priority order
         for s in self.strategies:
@@ -957,13 +975,10 @@ class CascadingEngine:
                 if symbol not in wl:
                     continue
                 
-                # Run execute_entries in the thread pool
-                actions = await asyncio.to_thread(s.execute_entries, [symbol])
+                actions = await s.execute_entries([symbol])
                 if actions:
-                    self.submit(actions, action_type="entry")
+                    await self.submit(actions, action_type="entry")
                     if self.mm is not None:
-                        await asyncio.to_thread(self.mm.sync_broker_orders)
+                        await self.mm.sync_broker_orders()
             except Exception as exc:
                 logger.exception("Entry failure in %s for %s: %s", s.NAME, symbol, exc)
-
-

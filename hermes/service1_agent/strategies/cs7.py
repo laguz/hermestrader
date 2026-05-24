@@ -39,7 +39,7 @@ class CreditSpreads7(AbstractStrategy):
     PRIORITY = 2
     NAME = "CS7"
 
-    def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
+    async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         width = float(self.config.get("cs7_width", 1.0))
         max_lots_global = int(self.config.get("cs7_max_lots", 1))
@@ -82,7 +82,7 @@ class CreditSpreads7(AbstractStrategy):
                 max_lots = max_lots_global
                 target_lots = min(target_lots, max_lots_global)
 
-                analysis = self.broker.analyze_symbol(symbol, period="3m")
+                analysis = await self.broker.analyze_symbol(symbol, period="3m")
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
@@ -99,7 +99,7 @@ class CreditSpreads7(AbstractStrategy):
 
                 if mode_a:
                     # New entry: target the configured DTE (default exact 7).
-                    expiry = self.find_expiry_in_dte_range(symbol, entry_dte, entry_dte)
+                    expiry = await self.find_expiry_in_dte_range(symbol, entry_dte, entry_dte)
                     if not expiry:
                         self._log(f"ℹ️ {symbol}: no exact {entry_dte} DTE expiry found for new entry; skip.")
                         continue
@@ -117,15 +117,15 @@ class CreditSpreads7(AbstractStrategy):
                 self._log(f"→ {symbol}: {'MODE A' if mode_a else 'MODE B'} expiry={expiry} existing_sides={sorted(existing_sides)}")
 
                 def factory(side: str):
-                    def _b(symbol, expiry, lots, width):
-                        return self._build_short_premium_spread(
+                    async def _b(symbol, expiry, lots, width):
+                        return await self._build_short_premium_spread(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,
                             width=width, min_credit=min_credit, analysis=analysis,
                             current_price=price,
                         )
                     return _b
 
-                planned = self.ic.plan(
+                planned = await self.ic.plan(
                     strategy_id=self.strategy_id, symbol=symbol, expiry=expiry,
                     target_lots=target_lots, width=width, max_lots=max_lots,
                     existing_sides=existing_sides,
@@ -137,9 +137,9 @@ class CreditSpreads7(AbstractStrategy):
                 self._log(f"❌ {symbol}: unexpected error — {exc}")
         return actions
 
-    def _build_short_premium_spread(self, *, symbol, expiry, side, lots,
+    async def _build_short_premium_spread(self, *, symbol, expiry, side, lots,
                                     width, min_credit, analysis, current_price) -> Optional[TradeAction]:
-        chain = self.broker.get_option_chains(symbol, expiry) or []
+        chain = await self.broker.get_option_chains(symbol, expiry) or []
         if not chain:
             return None
 
@@ -214,7 +214,7 @@ class CreditSpreads7(AbstractStrategy):
             expiry=expiry, width=width,
         )
 
-    def manage_positions(self) -> List[TradeAction]:
+    async def manage_positions(self) -> List[TradeAction]:
         """TP @ debit ≤ 2% of width; SL @ debit ≥ 3× entry credit."""
         actions: List[TradeAction] = []
         # Configured width is the right fallback when a Trade row
@@ -225,7 +225,7 @@ class CreditSpreads7(AbstractStrategy):
             entry_credit = float(trade["entry_credit"])
             row_width = trade.get("width")
             width = float(row_width) if row_width is not None else cfg_width
-            quotes = self.broker.get_quote(f"{trade['short_leg']},{trade['long_leg']}") or []
+            quotes = await self.broker.get_quote(f"{trade['short_leg']},{trade['long_leg']}") or []
             sq = next((q for q in quotes if q["symbol"] == trade["short_leg"]), None)
             lq = next((q for q in quotes if q["symbol"] == trade["long_leg"]), None)
             debit, blocked, reason = self.compute_close_debit(sq, lq, width)

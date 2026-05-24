@@ -75,7 +75,7 @@ async def test_async_overseer_approval_flow():
     action = _action("AAPL")
     
     # Submitting should emit ReviewRequestEvent asynchronously
-    engine.submit([action])
+    await engine.submit([action])
 
     # Wait for the async processing to occur
     await asyncio.sleep(0.1)
@@ -118,7 +118,7 @@ async def test_async_overseer_veto_flow():
 
     action = _action("MSFT")
     
-    engine.submit([action])
+    await engine.submit([action])
     await asyncio.sleep(0.1)
 
     # Broker should NOT have placed the order
@@ -166,7 +166,7 @@ async def test_async_overseer_modify_flow():
     initial_price = action.price
     assert initial_price == 1.50
     
-    engine.submit([action])
+    await engine.submit([action])
     await asyncio.sleep(0.1)
 
     # Broker should have placed the order with the modified price

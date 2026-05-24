@@ -51,25 +51,25 @@ router = APIRouter()
 
 
 @router.get("/api/status")
-def get_status() -> Dict[str, Any]:
-    last_log_ts = db.latest_log_ts()
+async def get_status() -> Dict[str, Any]:
+    last_log_ts = await db.latest_log_ts_async()
     last_log_age = seconds_since(last_log_ts)
     hermes_running = last_log_age is not None and last_log_age <= STALE_AFTER_S
 
-    started_iso = db.get_setting(SETTING_AGENT_STARTED)
+    started_iso = await db.get_setting_async(SETTING_AGENT_STARTED)
     started_at = parse_iso(started_iso)
     uptime_s = seconds_since(started_at) if hermes_running else None
 
-    last_ok = parse_iso(db.get_setting(SETTING_TRADIER_OK_TS))
-    tradier_error = (db.get_setting(SETTING_TRADIER_ERROR) or "").strip()
+    last_ok = parse_iso(await db.get_setting_async(SETTING_TRADIER_OK_TS))
+    tradier_error = (await db.get_setting_async(SETTING_TRADIER_ERROR) or "").strip()
     tradier_ok = (
         seconds_since(last_ok) is not None
         and seconds_since(last_ok) <= STALE_AFTER_S
         and not tradier_error
     )
 
-    llm_error = (db.get_setting(SETTING_LLM_ERROR) or "").strip()
-    llm_last_ok = parse_iso(db.get_setting(SETTING_LLM_OK_TS))
+    llm_error = (await db.get_setting_async(SETTING_LLM_ERROR) or "").strip()
+    llm_last_ok = parse_iso(await db.get_setting_async(SETTING_LLM_OK_TS))
     # LLM may not be used every tick (advisory autonomy with no actions);
     # be 4x more lenient than the Tradier window before declaring unhealthy.
     llm_ok = (
@@ -79,21 +79,21 @@ def get_status() -> Dict[str, Any]:
         and not llm_error
     )
 
-    mode = (db.get_setting(SETTING_MODE) or "paper").lower()
+    mode = (await db.get_setting_async(SETTING_MODE) or "paper").lower()
     if mode not in VALID_MODES:
         mode = "paper"
 
-    paused = (db.get_setting(SETTING_PAUSED) or "false").lower() == "true"
-    approval_mode = (db.get_setting(SETTING_APPROVAL_MODE) or "true").lower() == "true"
-    pending_count = len(db.list_approvals(status="PENDING", limit=500))
+    paused = (await db.get_setting_async(SETTING_PAUSED) or "false").lower() == "true"
+    approval_mode = (await db.get_setting_async(SETTING_APPROVAL_MODE) or "true").lower() == "true"
+    pending_count = len(await db.list_approvals_async(status="PENDING", limit=500))
 
-    strategy_enabled = {
-        sid: (db.get_setting(strategy_enabled_key(sid)) or "true").lower() != "false"
-        for sid in STRATEGIES
-    }
+    strategy_enabled = {}
+    for sid in STRATEGIES:
+        val = await db.get_setting_async(strategy_enabled_key(sid))
+        strategy_enabled[sid] = (val or "true").lower() != "false"
 
-    llm_model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
-    llm_provider = (db.get_setting(SETTING_LLM_PROVIDER) or "mock").strip()
+    llm_model = (await db.get_setting_async(SETTING_LLM_MODEL) or "").strip()
+    llm_provider = (await db.get_setting_async(SETTING_LLM_PROVIDER) or "mock").strip()
 
     try:
         mkt = market_session()
@@ -104,7 +104,7 @@ def get_status() -> Dict[str, Any]:
         nxt = None
 
     import json
-    update_status_raw = db.get_setting("update_status")
+    update_status_raw = await db.get_setting_async("update_status")
     update_status = None
     if update_status_raw:
         try:
@@ -149,17 +149,17 @@ async def status_stream(request: Request):
 
             try:
                 # 1. Fetch status
-                status_data = get_status()
+                status_data = await get_status()
 
                 # 2. Fetch pending approvals (limit 50)
-                pending_approvals = db.list_approvals(status="PENDING", limit=50)
+                pending_approvals = await db.list_approvals_async(status="PENDING", limit=50)
 
                 # 3. Fetch decided/historical approvals (limit 30)
-                decided_approvals = db.list_approvals(limit=30)
+                decided_approvals = await db.list_approvals_async(limit=30)
                 decided_approvals = [r for r in decided_approvals if r.get("status") != "PENDING"][:20]
 
                 # 4. Fetch logs
-                raw_logs = db.recent_logs(limit=100)
+                raw_logs = await db.recent_logs_async(limit=100)
                 logs_list = [{"text": line} for line in (raw_logs or "").splitlines()]
 
                 payload = {
@@ -189,15 +189,15 @@ def health() -> Dict[str, Any]:
 
 
 @router.get("/api/logs")
-def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
-    raw = db.recent_logs(limit=min(limit, 500))
+async def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
+    raw = await db.recent_logs_async(limit=min(limit, 500))
     # recent_logs returns a single concatenated string; the dashboard's
     # activity feed wants one entry per line.
     return [{"text": line} for line in (raw or "").splitlines()]
 
 
 @router.get("/api/balances")
-def get_balances() -> Dict[str, Any]:
+async def get_balances() -> Dict[str, Any]:
     """Live Tradier balances + the computed true-available BP.
 
     Diagnostic endpoint — the operator uses this when capacity decisions
@@ -210,7 +210,7 @@ def get_balances() -> Dict[str, Any]:
             "dry_run": os.environ.get("HERMES_DRY_RUN", "").lower() == "true",
         }
         broker = _build_broker(conf, conf["mode"])
-        balances = broker.get_account_balances() or {}
+        balances = await broker.get_account_balances() or {}
         obp = max(0.0, float(balances.get("option_buying_power", 0.0)))
         return {
             "ok": True,
@@ -227,7 +227,7 @@ def get_balances() -> Dict[str, Any]:
 
 
 @router.get("/api/debug")
-def get_debug_info() -> Dict[str, Any]:
+async def get_debug_info() -> Dict[str, Any]:
     """Counts of bars / predictions / recent logs — used when the dashboard
     looks empty and the operator needs to know whether the agent or the
     DB is at fault."""
@@ -240,7 +240,7 @@ def get_debug_info() -> Dict[str, Any]:
     result: Dict[str, Any] = {"xgboost": xgb_ver, "logs": [], "db": {}}
 
     try:
-        daily_cnt, intra_cnt = db.ts_engine.get_total_bars_count()
+        daily_cnt, intra_cnt = await asyncio.to_thread(db.ts_engine.get_total_bars_count)
         result["db"]["bars_daily"] = daily_cnt
         result["db"]["bars_intraday"] = intra_cnt
     except Exception as e:                                        # noqa: BLE001
@@ -248,21 +248,23 @@ def get_debug_info() -> Dict[str, Any]:
         result["db"]["bars_intraday"] = 0
         logger.warning("Failed to get timeseries count: %s", e)
 
-    with db.Session() as s:
+    async with db.AsyncSession() as s:
         from sqlalchemy import text as sa_text
         try:
-            result["db"]["predictions"] = s.execute(sa_text(
-                "SELECT COUNT(*) FROM predictions")).scalar()
-            result["db"]["ml_last_error"] = s.execute(sa_text(
+            res = await s.execute(sa_text("SELECT COUNT(*) FROM predictions"))
+            result["db"]["predictions"] = res.scalar()
+            res_err = await s.execute(sa_text(
                 "SELECT value FROM system_settings WHERE key='ml_last_error'"
-            )).scalar()
+            ))
+            result["db"]["ml_last_error"] = res_err.scalar()
         except Exception as e:                                    # noqa: BLE001
             result["db"]["error"] = str(e)
 
         try:
-            raw = s.execute(sa_text(
+            res_raw = await s.execute(sa_text(
                 "SELECT message FROM bot_logs ORDER BY ts DESC LIMIT 10"
-            )).fetchall()
+            ))
+            raw = res_raw.fetchall()
             result["logs"] = [r[0] for r in raw]
         except Exception:                                         # noqa: BLE001
             pass

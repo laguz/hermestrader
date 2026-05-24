@@ -15,7 +15,7 @@ def test_init_stores_attributes():
     db = StubDB()
     config = {"some_key": "some_value"}
     mm = MoneyManager(broker, db, config)
-    assert mm.broker is broker
+    assert mm.broker.broker is broker
     assert mm.db is db
     assert mm.config == config
     assert mm._broker_order_counts == {}
@@ -30,7 +30,8 @@ def test_init_handles_none_config():
     ("HERMES_WHEEL_v1", "WHEEL"),
     ("HERMES-CS7-2023-10-27", "CS7"),
 ])
-def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
+@pytest.mark.asyncio
+async def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
     """Verify strategy ID extraction from various tag shapes."""
     orders = [{
         "status": "open",
@@ -40,10 +41,11 @@ def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
         "option_symbol": "AAPL250620P00150000",
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
-    mm.sync_broker_orders()
+    await mm.sync_broker_orders()
     assert mm._broker_order_counts == {(expected_strat, "AAPL", "put", "2025-06-20"): 1}
 
-def test_sync_handles_missing_fields_gracefully():
+@pytest.mark.asyncio
+async def test_sync_handles_missing_fields_gracefully():
     """Ensure sync doesn't crash on incomplete broker dictionaries."""
     malformed_orders = [
         {},  # empty
@@ -53,10 +55,11 @@ def test_sync_handles_missing_fields_gracefully():
     ]
     mm = MoneyManager(StubBroker(orders=malformed_orders), StubDB(), {})
     # Should not raise
-    mm.sync_broker_orders()
+    await mm.sync_broker_orders()
     assert mm._broker_order_counts == {}
 
-def test_sync_handles_malformed_occ_symbols():
+@pytest.mark.asyncio
+async def test_sync_handles_malformed_occ_symbols():
     orders = [{
         "status": "open",
         "tag": "HERMES_CS75",
@@ -64,10 +67,11 @@ def test_sync_handles_malformed_occ_symbols():
         "option_symbol": "INVALID_OCC",
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
-    mm.sync_broker_orders()
+    await mm.sync_broker_orders()
     assert mm._broker_order_counts == {}
 
-def test_sync_survives_broker_exception(caplog):
+@pytest.mark.asyncio
+async def test_sync_survives_broker_exception(caplog):
     broker = StubBroker()
     def raise_exc():
         raise RuntimeError("Tradier Down")
@@ -75,12 +79,13 @@ def test_sync_survives_broker_exception(caplog):
 
     mm = MoneyManager(broker, StubDB(), {})
     with caplog.at_level(logging.ERROR):
-        mm.sync_broker_orders()
+        await mm.sync_broker_orders()
 
     assert mm._broker_order_counts == {}
     assert "Failed to fetch broker orders for sync" in caplog.text
 
-def test_sync_handles_leg_as_dict():
+@pytest.mark.asyncio
+async def test_sync_handles_leg_as_dict():
     """Tradier sometimes returns a single leg as a dict instead of a list of dicts."""
     orders = [{
         "status": "open",
@@ -90,10 +95,11 @@ def test_sync_handles_leg_as_dict():
         "leg": {"option_symbol": "AAPL250620C00150000", "quantity": 2},
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
-    mm.sync_broker_orders()
+    await mm.sync_broker_orders()
     assert mm._broker_order_counts == {("CS75", "AAPL", "call", "2025-06-20"): 2}
 
-def test_sync_skips_empty_strategy_id():
+@pytest.mark.asyncio
+async def test_sync_skips_empty_strategy_id():
     orders = [{
         "status": "open",
         "tag": "HERMES_", # prefix only
@@ -101,5 +107,5 @@ def test_sync_skips_empty_strategy_id():
         "option_symbol": "AAPL250620P00150000",
     }]
     mm = MoneyManager(StubBroker(orders=orders), StubDB(), {})
-    mm.sync_broker_orders()
+    await mm.sync_broker_orders()
     assert mm._broker_order_counts == {}

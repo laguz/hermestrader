@@ -80,34 +80,39 @@ def test_nearest_strike_returns_none_for_empty_chain():
     assert nearest_strike([], "put", 100.0) is None
 
 
+import pytest
+
 # ── find_expiry_in_dte_range ─────────────────────────────────────────────────
-def test_find_expiry_picks_max_in_window():
+@pytest.mark.asyncio
+async def test_find_expiry_picks_max_in_window():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat()
                    for d in (10, 20, 30, 40, 50)]
     broker = StubBroker(expirations=expirations)
     s = _make_strategy(broker=broker)
-    chosen = s.find_expiry_in_dte_range("AAPL", min_dte=15, max_dte=45, prefer="max")
+    chosen = await s.find_expiry_in_dte_range("AAPL", min_dte=15, max_dte=45, prefer="max")
     # Window is 15–45 days; max in that window is +40.
     assert chosen == (today + timedelta(days=40)).isoformat()
 
 
-def test_find_expiry_picks_min_when_requested():
+@pytest.mark.asyncio
+async def test_find_expiry_picks_min_when_requested():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat()
                    for d in (10, 20, 30, 40, 50)]
     broker = StubBroker(expirations=expirations)
     s = _make_strategy(broker=broker)
-    chosen = s.find_expiry_in_dte_range("AAPL", min_dte=15, max_dte=45, prefer="min")
+    chosen = await s.find_expiry_in_dte_range("AAPL", min_dte=15, max_dte=45, prefer="min")
     assert chosen == (today + timedelta(days=20)).isoformat()
 
 
-def test_find_expiry_returns_none_when_window_empty():
+@pytest.mark.asyncio
+async def test_find_expiry_returns_none_when_window_empty():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat() for d in (10, 200)]
     broker = StubBroker(expirations=expirations)
     s = _make_strategy(broker=broker)
-    assert s.find_expiry_in_dte_range("AAPL", 30, 60) is None
+    assert await s.find_expiry_in_dte_range("AAPL", 30, 60) is None
 
 
 # ── find_strike_by_delta ─────────────────────────────────────────────────────

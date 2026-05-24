@@ -44,7 +44,7 @@ class CreditSpreads75(AbstractStrategy):
     PRIORITY = 1
     NAME = "CS75"
 
-    def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
+    async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         width = float(self.config.get("cs75_width", 5.0))
         max_lots_global = int(self.config.get("cs75_max_lots", 1))
@@ -90,7 +90,7 @@ class CreditSpreads75(AbstractStrategy):
                 max_lots = max_lots_global
                 target_lots = min(target_lots, max_lots_global)
 
-                analysis = self.broker.analyze_symbol(symbol, period="6m")
+                analysis = await self.broker.analyze_symbol(symbol, period="6m")
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
@@ -107,7 +107,7 @@ class CreditSpreads75(AbstractStrategy):
                 existing_sides: set = set()
 
                 if mode_a:
-                    expiry = self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
+                    expiry = await self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
                 else:
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                     if dte < 14 or dte > entry_max_dte:
@@ -132,15 +132,15 @@ class CreditSpreads75(AbstractStrategy):
                 )
 
                 def factory(side: str):
-                    def _build(symbol, expiry, lots, width):
-                        return self._build_spread_action(
+                    async def _build(symbol, expiry, lots, width):
+                        return await self._build_spread_action(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,
                             width=width, min_credit=min_credit, analysis=analysis,
                             current_price=price,
                         )
                     return _build
 
-                planned = self.ic.plan(
+                planned = await self.ic.plan(
                     strategy_id=self.strategy_id,
                     symbol=symbol, expiry=expiry,
                     target_lots=target_lots, width=width, max_lots=max_lots,
@@ -153,9 +153,9 @@ class CreditSpreads75(AbstractStrategy):
                 self._log(f"❌ {symbol}: {exc}")
         return actions
 
-    def _build_spread_action(self, *, symbol, expiry, side, lots, width,
+    async def _build_spread_action(self, *, symbol, expiry, side, lots, width,
                              min_credit, analysis, current_price) -> Optional[TradeAction]:
-        chain = self.broker.get_option_chains(symbol, expiry) or []
+        chain = await self.broker.get_option_chains(symbol, expiry) or []
         if not chain:
             self._log(f"{symbol} {side}: empty chain for {expiry}; skip.")
             return None
@@ -248,7 +248,7 @@ class CreditSpreads75(AbstractStrategy):
             expiry=expiry, width=width,
         )
 
-    def manage_positions(self) -> List[TradeAction]:
+    async def manage_positions(self) -> List[TradeAction]:
         """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE."""
         actions: List[TradeAction] = []
         trades = self.db.open_trades(self.strategy_id)
@@ -261,7 +261,7 @@ class CreditSpreads75(AbstractStrategy):
             symbols.add(t["short_leg"])
             symbols.add(t["long_leg"])
 
-        raw_quotes = self.broker.get_quote(",".join(symbols)) or []
+        raw_quotes = await self.broker.get_quote(",".join(symbols)) or []
         quotes = {q["symbol"]: q for q in raw_quotes if "symbol" in q}
 
         # Default width matches the strategy spec ($5.00 spreads).

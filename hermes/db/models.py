@@ -278,12 +278,42 @@ def _compute_realized_pnl(*, entry_credit, entry_debit,
 # ---------------------------------------------------------------------------
 # Repository — the only place SQL lives.
 # ---------------------------------------------------------------------------
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+def sync_to_async_dsn(dsn: str) -> str:
+    if dsn.startswith("sqlite:///"):
+        return dsn.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    if dsn.startswith("sqlite://"):
+        return dsn.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    if dsn.startswith("postgresql://"):
+        return dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    return dsn
+
+
 class HermesDB:
     """Thin repo layer; matches the surface the engine + UI consume."""
 
     def __init__(self, dsn: str):
+        # Adapt schema dynamically for SQLite compatibility
+        if "sqlite" in dsn:
+            from sqlalchemy import JSON
+            from sqlalchemy.dialects.postgresql import JSONB
+            for table in Base.metadata.tables.values():
+                composite_pk = len(table.primary_key.columns) > 1
+                if composite_pk:
+                    for col in table.primary_key.columns:
+                        if col.autoincrement:
+                            col.autoincrement = False
+                for col in table.columns:
+                    if isinstance(col.type, JSONB):
+                        col.type = JSON()
+
         self.engine = create_engine(dsn, pool_pre_ping=True, future=True)
         self.Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
+
+        async_dsn = sync_to_async_dsn(dsn)
+        self.async_engine = create_async_engine(async_dsn, pool_pre_ping=True, future=True)
+        self.AsyncSession = async_sessionmaker(self.async_engine, expire_on_commit=False, class_=AsyncSession, future=True)
 
         from hermes.db.timeseries import TimeSeriesEngine
         self.ts_engine = TimeSeriesEngine(self)
@@ -1283,6 +1313,64 @@ class HermesDB:
                 local = ts.astimezone(ET)
                 out.append(f"{local:%H:%M:%S} ET [{r.strategy_id}] {r.message}")
             return "\n".join(out)
+
+    async def get_setting_async(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        from sqlalchemy import select
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(SystemSetting).filter_by(key=key))
+            row = result.scalars().first()
+            return row.value if row else default
+
+    async def latest_log_ts_async(self) -> Optional[datetime]:
+        from sqlalchemy import select
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(BotLog).order_by(BotLog.ts.desc()))
+            row = result.scalars().first()
+            return row.ts if row else None
+
+    async def recent_logs_async(self, limit: int = 200) -> str:
+        from sqlalchemy import select
+        from hermes.market_hours import ET
+        from datetime import timezone as _tz
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(BotLog).order_by(BotLog.ts.desc()).limit(limit))
+            rows = result.scalars().all()
+            out = []
+            for r in reversed(rows):
+                ts = r.ts
+                if ts is None:
+                    out.append(f"--:--:-- ET [{r.strategy_id}] {r.message}")
+                    continue
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_tz.utc)
+                local = ts.astimezone(ET)
+                out.append(f"{local:%H:%M:%S} ET [{r.strategy_id}] {r.message}")
+            return "\n".join(out)
+
+    async def list_approvals_async(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        from sqlalchemy import select
+        async with self.AsyncSession() as s:
+            q = select(PendingApproval).order_by(PendingApproval.created_at.desc())
+            if status:
+                q = q.filter(PendingApproval.status == status.upper())
+            result = await s.execute(q.limit(limit))
+            rows = result.scalars().all()
+            return [
+                {
+                    "id": r.id,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "action_type": r.action_type,
+                    "action_json": r.action_json,
+                    "status": r.status,
+                    "notes": r.notes,
+                    "decided_at": r.decided_at.isoformat() if r.decided_at else None,
+                    "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+                    "expires_at": r.expires_at.isoformat() if r.expires_at else None,
+                }
+                for r in rows
+            ]
 
     def daily_bars(self, symbol: str, lookback_days: int = 400) -> Optional[pd.DataFrame]:
         return self.ts_engine.daily_bars(symbol, lookback_days)

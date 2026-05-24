@@ -4,26 +4,11 @@ import os
 from datetime import date, datetime, timedelta
 import pytest
 
-from sqlalchemy import JSON
-from sqlalchemy.dialects.postgresql import JSONB
-
 from hermes.db.models import HermesDB, Trade, Base, _compute_realized_pnl
 
 
 @pytest.fixture
 def db():
-    # Adapt Base.metadata dynamically for SQLite compatibility BEFORE instantiating HermesDB
-    for table in Base.metadata.tables.values():
-        composite_pk = len(table.primary_key.columns) > 1
-        if composite_pk:
-            for col in table.primary_key.columns:
-                if col.autoincrement:
-                    col.autoincrement = False
-                    
-        for col in table.columns:
-            if isinstance(col.type, JSONB):
-                col.type = JSON()
-
     db_file = "test_temp.db"
     if os.path.exists(db_file):
         try:

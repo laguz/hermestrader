@@ -33,7 +33,7 @@ class WheelStrategy(AbstractStrategy):
     PRIORITY = 4
     NAME = "WHEEL"
 
-    def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
+    async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         max_lots = int(self.config.get("wheel_max_lots", 5))
         symbols = list(watchlist)
@@ -45,7 +45,7 @@ class WheelStrategy(AbstractStrategy):
 
             # Pick the target expiry first so capacity is checked per
             # option chain (max_lots is per-expiry, not symbol-wide).
-            expiry = self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+            expiry = await self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
             if not expiry:
                 self._log(f"✗ {symbol}: no expiry in 30-45 DTE range; skip.")
                 continue
@@ -78,7 +78,7 @@ class WheelStrategy(AbstractStrategy):
 
             added_calls = 0
             for _ in range(wanted_calls):
-                a = self._open_wheel_leg(symbol, "call", expiry)
+                a = await self._open_wheel_leg(symbol, "call", expiry)
                 if a:
                     actions.append(a)
                     added_calls += 1
@@ -94,13 +94,13 @@ class WheelStrategy(AbstractStrategy):
                 )
 
             for _ in range(wanted_puts):
-                a = self._open_wheel_leg(symbol, "put", expiry)
+                a = await self._open_wheel_leg(symbol, "put", expiry)
                 if a:
                     actions.append(a)
         return actions
 
-    def _open_wheel_leg(self, symbol: str, side: str, expiry: str) -> Optional[TradeAction]:
-        chain = self.broker.get_option_chains(symbol, expiry) or []
+    async def _open_wheel_leg(self, symbol: str, side: str, expiry: str) -> Optional[TradeAction]:
+        chain = await self.broker.get_option_chains(symbol, expiry) or []
         short = self.find_strike_by_delta(chain, side, 0.30, tolerance=0.05)
         if not short:
             self._log(f"✗ {symbol} {side}: no strike near 0.30Δ (±0.05) in chain for {expiry}; skip.")
@@ -121,13 +121,13 @@ class WheelStrategy(AbstractStrategy):
             expiry=expiry,
         )
 
-    def manage_positions(self) -> List[TradeAction]:
+    async def manage_positions(self) -> List[TradeAction]:
         """Roll ITM at <7 DTE; detect put assignments and open covered calls."""
         actions: List[TradeAction] = []
 
         # Fetch live broker positions once for assignment detection.
         try:
-            live_positions = self.broker.get_positions() or []
+            live_positions = await self.broker.get_positions() or []
         except Exception as exc:                                   # noqa: BLE001
             self._log(f"⚠️ could not fetch positions for assignment check: {exc}")
             live_positions = []
@@ -165,9 +165,9 @@ class WheelStrategy(AbstractStrategy):
                         f"✓ {symbol}: put {trade['short_leg']} assigned — "
                         f"{equity_qty} shares detected; opening {call_lots} covered call(s)"
                     )
-                    expiry = self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+                    expiry = await self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
                     if expiry:
-                        call_action = self._open_wheel_leg(symbol, "call", expiry)
+                        call_action = await self._open_wheel_leg(symbol, "call", expiry)
                         if call_action:
                             call_action.quantity = call_lots
                             call_action.strategy_params = {
@@ -181,7 +181,7 @@ class WheelStrategy(AbstractStrategy):
                 continue  # Skip ITM-roll check; put is gone
 
             # ── ITM roll at <7 DTE ────────────────────────────────────────
-            quotes = self.broker.get_quote(trade["symbol"]) or []
+            quotes = await self.broker.get_quote(trade["symbol"]) or []
             quote = quotes[0] if quotes else {}
             spot = float(quote.get("last") or 0)
             short_strike = float(trade.get("short_strike") or 0)
@@ -194,7 +194,7 @@ class WheelStrategy(AbstractStrategy):
                     legs=[
                         {"option_symbol": trade["short_leg"], "side": "buy_to_close",
                          "quantity": int(trade["lots"])},
-                        {"option_symbol": self.broker.roll_to_next_month(trade["short_leg"]),
+                        {"option_symbol": await self.broker.roll_to_next_month(trade["short_leg"]),
                          "side": "sell_to_open", "quantity": int(trade["lots"])},
                     ],
                     price=None, side="buy", quantity=1, order_type="market",

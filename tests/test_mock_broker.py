@@ -30,6 +30,8 @@ class _StubDB:
         pass
 
 
+import pytest
+
 def test_mock_broker_get_orders_returns_empty_list():
     """Required by MoneyManager.sync_broker_orders — must not raise."""
     broker = MockBroker({})
@@ -43,14 +45,15 @@ def test_mock_broker_balances_include_account_type():
     assert balances.get("option_buying_power", 0) > 0
 
 
-def test_engine_tick_against_mock_broker_does_not_raise():
+@pytest.mark.asyncio
+async def test_engine_tick_against_mock_broker_does_not_raise():
     """End-to-end: with a real MockBroker, tick() should run cleanly."""
     broker = MockBroker({})
     db = _StubDB()
     mm = MoneyManager(broker=broker, db=db, config={})
     engine = CascadingEngine(broker=broker, db=db, strategies=[],
                              money_manager=mm)
-    stats = engine.tick(watchlist=[])
+    stats = await engine.tick(watchlist=[])
     assert "managed" in stats and "entries" in stats
     # sync_broker_orders should have run without raising and produced no
     # broker-side counts (mock returns no orders).

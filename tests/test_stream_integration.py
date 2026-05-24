@@ -17,11 +17,11 @@ class DummyStrategy(AbstractStrategy):
         self.execute_entries_called = False
         self.last_watchlist = None
 
-    def manage_positions(self) -> list:
+    async def manage_positions(self) -> list:
         self.manage_positions_called = True
         return []
 
-    def execute_entries(self, watchlist) -> list:
+    async def execute_entries(self, watchlist) -> list:
         self.execute_entries_called = True
         self.last_watchlist = list(watchlist)
         return []

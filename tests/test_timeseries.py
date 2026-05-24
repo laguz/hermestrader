@@ -22,9 +22,6 @@ def tmp_ts_dir(tmp_path):
 
 @pytest.fixture
 def test_db():
-    from sqlalchemy import JSON
-    from sqlalchemy.dialects.postgresql import JSONB
-
     # Make SQLite database in memory / temp file
     db_file = "test_ts_fallback.db"
     if os.path.exists(db_file):
@@ -32,17 +29,6 @@ def test_db():
             os.remove(db_file)
         except OSError:
             pass
-
-    # Standard SQLite table PK/autoincrement fix
-    for table in Base.metadata.tables.values():
-        composite_pk = len(table.primary_key.columns) > 1
-        if composite_pk:
-            for col in table.primary_key.columns:
-                if col.autoincrement:
-                    col.autoincrement = False
-        for col in table.columns:
-            if isinstance(col.type, JSONB):
-                col.type = JSON()
 
     db_instance = HermesDB(f"sqlite:///{db_file}")
     yield db_instance

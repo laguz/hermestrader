@@ -1,8 +1,10 @@
-from unittest.mock import patch
+import pytest
+from unittest.mock import AsyncMock, patch
 
 from hermes.broker.tradier import TradierBroker
 
-def test_get_delta_broker_success():
+@pytest.mark.asyncio
+async def test_get_delta_broker_success():
     """Test TradierBroker.get_delta correctly extracts delta from quotes."""
     config = {
         "tradier_access_token": "mock_token",
@@ -20,32 +22,43 @@ def test_get_delta_broker_success():
         }
     ]
 
-    with patch.object(broker, "get_quote", return_value=mock_quotes):
-        delta = broker.get_delta("AAPL240621C00150000")
+    with patch.object(broker, "get_quote", new_callable=AsyncMock) as mock_get_quote:
+        mock_get_quote.return_value = mock_quotes
+        delta = await broker.get_delta("AAPL240621C00150000")
         assert delta == 0.5234
+    await broker.close()
 
-def test_get_delta_broker_no_quotes():
+@pytest.mark.asyncio
+async def test_get_delta_broker_no_quotes():
     """Test TradierBroker.get_delta returns 0.0 when no quotes are found."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
 
-    with patch.object(broker, "get_quote", return_value=[]):
-        delta = broker.get_delta("INVALID")
+    with patch.object(broker, "get_quote", new_callable=AsyncMock) as mock_get_quote:
+        mock_get_quote.return_value = []
+        delta = await broker.get_delta("INVALID")
         assert delta == 0.0
+    await broker.close()
 
-def test_get_delta_broker_no_greeks():
+@pytest.mark.asyncio
+async def test_get_delta_broker_no_greeks():
     """Test TradierBroker.get_delta returns 0.0 when greeks are missing."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
     mock_quotes = [{"symbol": "SYM"}] # No 'greeks' key
 
-    with patch.object(broker, "get_quote", return_value=mock_quotes):
-        delta = broker.get_delta("SYM")
+    with patch.object(broker, "get_quote", new_callable=AsyncMock) as mock_get_quote:
+        mock_get_quote.return_value = mock_quotes
+        delta = await broker.get_delta("SYM")
         assert delta == 0.0
+    await broker.close()
 
-def test_get_delta_broker_none_delta():
+@pytest.mark.asyncio
+async def test_get_delta_broker_none_delta():
     """Test TradierBroker.get_delta returns 0.0 when delta is None."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
     mock_quotes = [{"symbol": "SYM", "greeks": {"delta": None}}]
 
-    with patch.object(broker, "get_quote", return_value=mock_quotes):
-        delta = broker.get_delta("SYM")
+    with patch.object(broker, "get_quote", new_callable=AsyncMock) as mock_get_quote:
+        mock_get_quote.return_value = mock_quotes
+        delta = await broker.get_delta("SYM")
         assert delta == 0.0
+    await broker.close()

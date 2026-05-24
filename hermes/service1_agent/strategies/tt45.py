@@ -31,7 +31,7 @@ class TastyTrade45(AbstractStrategy):
     PRIORITY = 3
     NAME = "TT45"
 
-    def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
+    async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
         width = float(self.config.get("tt45_width", 5.0))
         max_lots = int(self.config.get("tt45_max_lots", 5))
@@ -56,7 +56,7 @@ class TastyTrade45(AbstractStrategy):
                 # Always prefer to complete an existing IC over opening a new one.
                 expiry = self.find_active_ic_expiry(symbol)
                 if not expiry:
-                    expiry = self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
+                    expiry = await self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
 
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no expiry in {entry_min_dte}-{entry_max_dte} DTE range; skip.")
@@ -67,8 +67,8 @@ class TastyTrade45(AbstractStrategy):
                 self._log(f"→ {symbol}: expiry={expiry} {dte}DTE existing_sides={sorted(existing)}")
 
                 def factory(side: str):
-                    def _b(symbol, expiry, lots, width):
-                        chain = self.broker.get_option_chains(symbol, expiry) or []
+                    async def _b(symbol, expiry, lots, width):
+                        chain = await self.broker.get_option_chains(symbol, expiry) or []
                         short_leg = self.find_strike_by_delta(chain, side, entry_delta, tolerance=0.05)
                         if not short_leg:
                             self._log(f"✗ {symbol} {side}: no strike near {entry_delta:.2f}Δ (±0.05) in chain; skip.")
@@ -116,7 +116,7 @@ class TastyTrade45(AbstractStrategy):
                         )
                     return _b
 
-                planned = self.ic.plan(
+                planned = await self.ic.plan(
                     strategy_id=self.strategy_id, symbol=symbol, expiry=expiry,
                     target_lots=target_lots, width=width, max_lots=max_lots,
                     existing_sides=existing,
@@ -128,7 +128,7 @@ class TastyTrade45(AbstractStrategy):
                 self._log(f"❌ {symbol}: unexpected error — {exc}")
         return actions
 
-    def manage_positions(self) -> List[TradeAction]:
+    async def manage_positions(self) -> List[TradeAction]:
         """Hard exit at 21 DTE; neutralise challenged side (|Δ_short| > 0.30)."""
         actions: List[TradeAction] = []
         trades = self.db.open_trades(self.strategy_id)
@@ -141,7 +141,7 @@ class TastyTrade45(AbstractStrategy):
         short_legs = list({t["short_leg"] for t in trades if t.get("short_leg")})
         deltas = {}
         if short_legs:
-            quotes = self.broker.get_quote(",".join(short_legs))
+            quotes = await self.broker.get_quote(",".join(short_legs))
             for q in quotes:
                 symbol = q.get("symbol")
                 greeks = q.get("greeks") or {}

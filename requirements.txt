@@ -37,3 +37,5 @@ GitPython==3.1.50
 httpx==0.28.1
 sse-starlette==3.4.4
 transitions==0.9.3
+aiosqlite==0.22.1
+
