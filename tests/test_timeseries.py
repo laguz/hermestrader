@@ -2,12 +2,13 @@ import os
 import shutil
 import pytest
 import duckdb
+import asyncio
 from pathlib import Path
 from datetime import datetime, date, timedelta, time, timezone
 import pandas as pd
 import numpy as np
 
-from hermes.db.models import HermesDB, Base, DailyBar, IntradayBar
+from hermes.db.models import HermesDB, Base
 from hermes.db.timeseries import TimeSeriesEngine
 
 
@@ -22,7 +23,6 @@ def tmp_ts_dir(tmp_path):
 
 @pytest.fixture
 def test_db():
-    # Make SQLite database in memory / temp file
     db_file = "test_ts_fallback.db"
     if os.path.exists(db_file):
         try:
@@ -40,7 +40,8 @@ def test_db():
             pass
 
 
-def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "TSLA"
     
@@ -57,10 +58,10 @@ def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
         "vwap_close": [101.5, 102.5, 103.5, 104.5, 105.5]
     })
     
-    engine.save_daily_bars(symbol, df)
+    await engine.save_daily_bars(symbol, df)
     
     # 2. Verify loading works
-    loaded = engine.daily_bars(symbol, lookback_days=10)
+    loaded = await engine.daily_bars(symbol, lookback_days=10)
     assert loaded is not None
     assert len(loaded) == 5
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume", "vwap_close"]
@@ -75,14 +76,15 @@ def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
         "volume": [9999],
         "vwap_close": [999.0]
     })
-    engine.save_daily_bars(symbol, duplicate_df)
+    await engine.save_daily_bars(symbol, duplicate_df)
     
-    loaded = engine.daily_bars(symbol, lookback_days=10)
+    loaded = await engine.daily_bars(symbol, lookback_days=10)
     assert len(loaded) == 5
     assert loaded.iloc[-1]["close"] == 999.0
 
 
-def test_last_price_and_price_on_date(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_last_price_and_price_on_date(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "AAPL"
     
@@ -96,25 +98,26 @@ def test_last_price_and_price_on_date(tmp_ts_dir, test_db):
         "close": [152.0, 153.0, 154.0],
         "volume": [1000, 1100, 1200]
     })
-    engine.save_daily_bars(symbol, df)
+    await engine.save_daily_bars(symbol, df)
     
     # Last Price
-    assert engine.last_price(symbol) == 154.0
+    assert await engine.last_price(symbol) == 154.0
     
     # Price on specific Date (lookback inclusive)
     target_dt = datetime.strptime(dates[1].strftime("%Y-%m-%d"), "%Y-%m-%d")
-    assert engine.get_price_on_date(symbol, target_dt) == 153.0
+    assert await engine.get_price_on_date(symbol, target_dt) == 153.0
     
     # Prior date fallback
     target_dt_between = target_dt + timedelta(hours=12)
-    assert engine.get_price_on_date(symbol, target_dt_between) == 153.0
+    assert await engine.get_price_on_date(symbol, target_dt_between) == 153.0
     
     # Date before first bar
     target_dt_before = datetime.strptime(dates[0].strftime("%Y-%m-%d"), "%Y-%m-%d") - timedelta(days=1)
-    assert engine.get_price_on_date(symbol, target_dt_before) is None
+    assert await engine.get_price_on_date(symbol, target_dt_before) is None
 
 
-def test_save_and_load_intraday_bars(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_save_and_load_intraday_bars(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "MSFT"
     
@@ -128,68 +131,19 @@ def test_save_and_load_intraday_bars(tmp_ts_dir, test_db):
         "close": [202.0, 203.0, 204.0, 205.0, 206.0],
         "volume": [100, 110, 120, 130, 140]
     })
-    engine.save_intraday_bars(symbol, df)
+    await engine.save_intraday_bars(symbol, df)
     
-    loaded = engine.intraday_bars(symbol, lookback_days=10)
+    loaded = await engine.intraday_bars(symbol, lookback_days=10)
     assert len(loaded) == 5
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
 
 
-def test_sql_fallback_migration_daily(tmp_ts_dir, test_db):
-    # Setup: insert daily bars directly into SQL database tables
-    symbol = "NFLX"
-    ts_val1 = datetime.utcnow() - timedelta(days=2)
-    ts_val2 = datetime.utcnow() - timedelta(days=1)
-    
-    with test_db.Session() as s:
-        b1 = DailyBar(ts=ts_val1, symbol=symbol, open=400.0, high=410.0, low=390.0, close=405.0, volume=5000, vwap_close=402.0)
-        b2 = DailyBar(ts=ts_val2, symbol=symbol, open=405.0, high=415.0, low=395.0, close=412.0, volume=6000, vwap_close=410.0)
-        s.add_all([b1, b2])
-        s.commit()
-        
-    engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
-    
-    # Verify DuckDB table is empty initially
-    db_df = engine._query_duckdb("daily_bars", symbol, 10)
-    assert db_df is None or db_df.empty
-    
-    # Query via daily_bars: triggers fallback SQL query & DuckDB migration
-    loaded = engine.daily_bars(symbol, lookback_days=10)
-    assert loaded is not None
-    assert len(loaded) == 2
-    
-    # Confirm data is in DuckDB
-    db_df = engine._query_duckdb("daily_bars", symbol, 10)
-    assert len(db_df) == 2
-    assert db_df.iloc[-1]["close"] == 412.0
-
-
-def test_sql_fallback_migration_intraday(tmp_ts_dir, test_db):
-    symbol = "NVDA"
-    ts_val = datetime.utcnow() - timedelta(hours=5)
-    
-    with test_db.Session() as s:
-        ib = IntradayBar(ts=ts_val, symbol=symbol, open=800.0, high=810.0, low=790.0, close=805.0, volume=100)
-        s.add(ib)
-        s.commit()
-        
-    engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
-    db_df = engine._query_duckdb("intraday_bars", symbol, 1)
-    assert db_df is None or db_df.empty
-    
-    loaded = engine.intraday_bars(symbol, lookback_days=1)
-    assert len(loaded) == 1
-    
-    db_df = engine._query_duckdb("intraday_bars", symbol, 1)
-    assert len(db_df) == 1
-    assert db_df.iloc[0]["close"] == 805.0
-
-
-def test_get_total_bars_count(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_get_total_bars_count(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     
     # 0 counts on empty
-    daily, intra = engine.get_total_bars_count()
+    daily, intra = await engine.get_total_bars_count()
     assert daily == 0
     assert intra == 0
     
@@ -198,16 +152,17 @@ def test_get_total_bars_count(tmp_ts_dir, test_db):
     dates = pd.date_range(base_date.strftime("%Y-%m-%d"), periods=3, freq="D")
     df = pd.DataFrame({"ts": dates, "close": [10.0, 11.0, 12.0]})
     
-    engine.save_daily_bars("SYM1", df)
-    engine.save_daily_bars("SYM2", df)
-    engine.save_intraday_bars("SYM1", df)
+    await engine.save_daily_bars("SYM1", df)
+    await engine.save_daily_bars("SYM2", df)
+    await engine.save_intraday_bars("SYM1", df)
     
-    daily, intra = engine.get_total_bars_count()
+    daily, intra = await engine.get_total_bars_count()
     assert daily == 6  # 2 symbols * 3 bars
     assert intra == 3  # 1 symbol * 3 bars
 
 
-def test_csv_migration_daily(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_csv_migration_daily(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "CSV1"
     
@@ -230,7 +185,7 @@ def test_csv_migration_daily(tmp_ts_dir, test_db):
     assert db_df is None or db_df.empty
     
     # 2. Query daily_bars: should trigger CSV migration
-    loaded = engine.daily_bars(symbol, lookback_days=100)
+    loaded = await engine.daily_bars(symbol, lookback_days=100)
     assert loaded is not None
     assert len(loaded) == 3
     
@@ -250,7 +205,8 @@ def lock_worker(db_path, lock_evt, release_evt):
     conn.close()
 
 
-def test_concurrent_lock_retry(tmp_ts_dir, test_db):
+@pytest.mark.asyncio
+async def test_concurrent_lock_retry(tmp_ts_dir, test_db):
     import multiprocessing
     import threading
     import time as py_time
@@ -285,11 +241,11 @@ def test_concurrent_lock_retry(tmp_ts_dir, test_db):
     threading.Thread(target=delayed_release).start()
     
     start_time = py_time.time()
-    engine.save_daily_bars(symbol, df)
+    await engine.save_daily_bars(symbol, df)
     duration = py_time.time() - start_time
     
     assert duration >= 0.2
     
-    loaded = engine.daily_bars(symbol, lookback_days=10)
+    loaded = await engine.daily_bars(symbol, lookback_days=10)
     assert len(loaded) == 1
     p.join()

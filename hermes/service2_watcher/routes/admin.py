@@ -188,7 +188,7 @@ def request_upgrade(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/api/admin/ml-intervals")
-def get_ml_intervals() -> Dict[str, Any]:
+async def get_ml_intervals() -> Dict[str, Any]:
     """Return the live values stored in system_settings.
 
     Empty / missing keys mean "use the PredictorConfig default" — we
@@ -197,7 +197,7 @@ def get_ml_intervals() -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for label, key in _ML_INTERVAL_KEYS.items():
         try:
-            raw = db.get_setting(key)
+            raw = await db.get_setting(key)
         except Exception:                                          # noqa: BLE001
             raw = None
         out[label] = raw if raw not in (None, "") else None
@@ -205,7 +205,7 @@ def get_ml_intervals() -> Dict[str, Any]:
 
 
 @router.post("/api/admin/ml-intervals")
-def set_ml_intervals(
+async def set_ml_intervals(
     request: Request,
     body: Dict[str, Any] = Body(default_factory=dict),
 ) -> Dict[str, Any]:
@@ -235,10 +235,10 @@ def set_ml_intervals(
             if not (lo <= fv <= hi):
                 raise HTTPException(
                     400, f"{label}: must be in [{lo}, {hi}], got {fv}")
-            db.set_setting(key, str(fv))
+            await db.set_setting(key, str(fv))
             applied[label] = fv
         else:
-            db.set_setting(key, str(value))
+            await db.set_setting(key, str(value))
             applied[label] = value
 
     logger.info("admin: ml-intervals updated: %s", applied)

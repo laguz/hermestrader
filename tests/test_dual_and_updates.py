@@ -2,7 +2,7 @@ import sys
 import os
 import json
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 # Manually mock mcp and other missing dependencies before importing server
 def tool_decorator(*args, **kwargs):
@@ -40,7 +40,7 @@ from hermes.mcp import server
 
 def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     # Setup a mock database
-    mock_db = MagicMock()
+    mock_db = AsyncMock()
     mock_db.get_setting.return_value = "old soul content"
     
     # Setup temp soul.md file
@@ -56,7 +56,7 @@ def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     mock_db.write_log.assert_called_once()
 
 def test_sync_soul_file_to_db_no_change(tmp_path, monkeypatch):
-    mock_db = MagicMock()
+    mock_db = AsyncMock()
     mock_db.get_setting.return_value = "same content"
     
     soul_file = tmp_path / "soul.md"
@@ -71,7 +71,7 @@ def test_sync_soul_file_to_db_no_change(tmp_path, monkeypatch):
 @patch("requests.get")
 @patch("hermes.db.models.HermesDB")
 def test_check_for_updates_happy_path(mock_db_class, mock_get, monkeypatch):
-    mock_db = MagicMock()
+    mock_db = AsyncMock()
     mock_db_class.return_value = mock_db
     
     # Mock VERSION response

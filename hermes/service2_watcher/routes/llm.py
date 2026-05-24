@@ -39,24 +39,24 @@ from .._app_state import (
 router = APIRouter()
 
 
-def _read_llm_config() -> Dict[str, Any]:
-    provider = (db.get_setting(SETTING_LLM_PROVIDER) or "mock").lower()
+async def _read_llm_config() -> Dict[str, Any]:
+    provider = (await db.get_setting(SETTING_LLM_PROVIDER) or "mock").lower()
     if provider not in VALID_LLM_PROVIDERS:
         provider = "mock"
-    base_url = (db.get_setting(SETTING_LLM_BASE_URL) or DEFAULT_LLM_BASE_URL).strip()
-    model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
-    api_key = decrypt_value((db.get_setting(SETTING_LLM_API_KEY) or "").strip())
+    base_url = (await db.get_setting(SETTING_LLM_BASE_URL) or DEFAULT_LLM_BASE_URL).strip()
+    model = (await db.get_setting(SETTING_LLM_MODEL) or "").strip()
+    api_key = decrypt_value((await db.get_setting(SETTING_LLM_API_KEY) or "").strip())
     try:
-        temperature = float(db.get_setting(SETTING_LLM_TEMPERATURE) or 0.2)
+        temperature = float(await db.get_setting(SETTING_LLM_TEMPERATURE) or 0.2)
     except ValueError:
         temperature = 0.2
     try:
-        timeout_s = max(5.0, float(db.get_setting(SETTING_LLM_TIMEOUT) or DEFAULT_LLM_TIMEOUT_S))
+        timeout_s = max(5.0, float(await db.get_setting(SETTING_LLM_TIMEOUT) or DEFAULT_LLM_TIMEOUT_S))
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
-    vision = (db.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
-    last_ok = parse_iso(db.get_setting(SETTING_LLM_OK_TS))
-    last_err = (db.get_setting(SETTING_LLM_ERROR) or "").strip() or None
+    vision = (await db.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
+    last_ok = parse_iso(await db.get_setting(SETTING_LLM_OK_TS))
+    last_err = (await db.get_setting(SETTING_LLM_ERROR) or "").strip() or None
     return {
         "provider": provider,
         "base_url": base_url,
@@ -86,12 +86,12 @@ class LLMConfigBody(BaseModel):
 
 
 @router.get("/api/llm")
-def get_llm() -> Dict[str, Any]:
-    return _read_llm_config()
+async def get_llm() -> Dict[str, Any]:
+    return await _read_llm_config()
 
 
 @router.put("/api/llm")
-def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
+async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
     if body.provider is not None:
         p = body.provider.lower().strip()
         if p not in VALID_LLM_PROVIDERS:
@@ -99,31 +99,31 @@ def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"provider must be one of {list(VALID_LLM_PROVIDERS)}",
             )
-        db.set_setting(SETTING_LLM_PROVIDER, p)
+        await db.set_setting(SETTING_LLM_PROVIDER, p)
         # Pre-fill the canonical cloud URL when switching to ollama_cloud so
         # the agent can connect even if the operator didn't explicitly set
         # base_url.
         if p == "ollama_cloud" and not (body.base_url or "").strip():
-            db.set_setting(SETTING_LLM_BASE_URL, "https://api.ollama.com/v1")
+            await db.set_setting(SETTING_LLM_BASE_URL, "https://api.ollama.com/v1")
     if body.base_url is not None:
         url = body.base_url.strip()
         if url and not (url.startswith("http://") or url.startswith("https://")):
             raise HTTPException(status_code=400, detail="base_url must start with http(s)://")
-        db.set_setting(SETTING_LLM_BASE_URL, url)
+        await db.set_setting(SETTING_LLM_BASE_URL, url)
     if body.model is not None:
-        db.set_setting(SETTING_LLM_MODEL, body.model.strip())
+        await db.set_setting(SETTING_LLM_MODEL, body.model.strip())
     if body.api_key is not None:
-        db.set_setting(SETTING_LLM_API_KEY, encrypt_value(body.api_key.strip()))
+        await db.set_setting(SETTING_LLM_API_KEY, encrypt_value(body.api_key.strip()))
     if body.temperature is not None:
         if not (0.0 <= body.temperature <= 2.0):
             raise HTTPException(status_code=400, detail="temperature must be in [0.0, 2.0]")
-        db.set_setting(SETTING_LLM_TEMPERATURE, str(body.temperature))
+        await db.set_setting(SETTING_LLM_TEMPERATURE, str(body.temperature))
     if body.vision is not None:
-        db.set_setting(SETTING_LLM_VISION, "true" if body.vision else "false")
+        await db.set_setting(SETTING_LLM_VISION, "true" if body.vision else "false")
     if body.timeout_s is not None:
         if not (5.0 <= body.timeout_s <= 600.0):
             raise HTTPException(status_code=400, detail="timeout_s must be in [5, 600]")
-        db.set_setting(SETTING_LLM_TIMEOUT, str(body.timeout_s))
-    db.set_setting(SETTING_LLM_ERROR, "")
-    db.write_log("ENGINE", "[C2] LLM config updated")
-    return _read_llm_config()
+        await db.set_setting(SETTING_LLM_TIMEOUT, str(body.timeout_s))
+    await db.set_setting(SETTING_LLM_ERROR, "")
+    await db.write_log("ENGINE", "[C2] LLM config updated")
+    return await _read_llm_config()

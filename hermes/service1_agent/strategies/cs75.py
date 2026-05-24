@@ -52,13 +52,13 @@ class CreditSpreads75(AbstractStrategy):
 
         # DTE window — live-tunable via system_settings; fallback to spec defaults.
         try:
-            entry_min_dte = int(self.db.get_setting("cs75_min_dte") or 39)
-            entry_max_dte = int(self.db.get_setting("cs75_max_dte") or 45)
+            entry_min_dte = int(await self.db.get_setting("cs75_min_dte") or 39)
+            entry_max_dte = int(await self.db.get_setting("cs75_max_dte") or 45)
         except (TypeError, ValueError):
             entry_min_dte, entry_max_dte = 39, 45
 
         # Per-symbol target overrides live in strategy_watchlists.target_lots.
-        detailed_wl = self.db.list_watchlist_detailed(self.strategy_id)
+        detailed_wl = await self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
 
         self._log(
@@ -96,13 +96,13 @@ class CreditSpreads75(AbstractStrategy):
                     continue
 
                 # Centralised POP: 6M regime for CS75 (longer-dated entries).
-                xgb_pred = self.db.latest_prediction(symbol) or {}
+                xgb_pred = await self.db.latest_prediction(symbol) or {}
                 analysis = augment_levels_with_pop(analysis, xgb_pred, period="6m")
 
                 price = analysis["current_price"]
 
                 # Mode A vs Mode B (see module docstring).
-                expiry = self.find_active_ic_expiry(symbol)
+                expiry = await self.find_active_ic_expiry(symbol)
                 mode_a = not expiry
                 existing_sides: set = set()
 
@@ -114,7 +114,7 @@ class CreditSpreads75(AbstractStrategy):
                         self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 14-{entry_max_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
-                                      for leg in self.db.open_legs(self.strategy_id, symbol)
+                                      for leg in await self.db.open_legs(self.strategy_id, symbol)
                                       if leg.get("expiry") == expiry}
 
                 if not expiry:
@@ -251,7 +251,7 @@ class CreditSpreads75(AbstractStrategy):
     async def manage_positions(self) -> List[TradeAction]:
         """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE."""
         actions: List[TradeAction] = []
-        trades = self.db.open_trades(self.strategy_id)
+        trades = await self.db.open_trades(self.strategy_id)
         if not trades:
             return actions
 

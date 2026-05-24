@@ -241,30 +241,32 @@ class HermesChartProvider:
     def start(self, symbols) -> None:
         """Warm up the cache for `symbols` in a background thread."""
         def _warm():
+            import asyncio
             for sym in symbols:
                 try:
-                    self._render_and_cache(sym)
+                    asyncio.run(self._render_and_cache(sym))
                 except Exception as exc:                         # noqa: BLE001
                     logger.debug("Chart warm-up failed for %s: %s", sym, exc)
         t = threading.Thread(target=_warm, name="chart-warmup", daemon=True)
         t.start()
 
-    def snapshot(self, symbol: str) -> Optional[bytes]:
+    async def snapshot(self, symbol: str) -> Optional[bytes]:
         """Return cached PNG bytes, re-rendering if stale. Returns None on failure."""
         now = time.monotonic()
         with self._lock:
             cached = self._cache.get(symbol)
             if cached and (now - cached[0]) < self.cache_ttl_s:
                 return cached[1]
-        return self._render_and_cache(symbol)
+        return await self._render_and_cache(symbol)
 
-    def _render_and_cache(self, symbol: str) -> Optional[bytes]:
+    async def _render_and_cache(self, symbol: str) -> Optional[bytes]:
         try:
-            bars = self.db.daily_bars(symbol, lookback_days=self.lookback + 10)
+            bars = await self.db.daily_bars(symbol, lookback_days=self.lookback + 10)
             if bars is None or bars.empty:
                 logger.warning("No bars for %s — chart skipped", symbol)
                 return None
-            png = render_chart(bars, symbol, lookback=self.lookback)
+            import asyncio
+            png = await asyncio.to_thread(render_chart, bars, symbol, lookback=self.lookback)
             with self._lock:
                 self._cache[symbol] = (time.monotonic(), png)
             logger.debug("Chart rendered for %s: %d bytes", symbol, len(png))

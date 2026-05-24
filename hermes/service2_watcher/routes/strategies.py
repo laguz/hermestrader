@@ -25,16 +25,18 @@ router = APIRouter()
 
 
 # ── Strategy on/off ──────────────────────────────────────────────────────────
+# ── Strategy on/off ──────────────────────────────────────────────────────────
 @router.get("/api/strategies")
-def get_strategies() -> List[Dict[str, Any]]:
-    return [
-        {
+async def get_strategies() -> List[Dict[str, Any]]:
+    out = []
+    for sid in STRATEGIES:
+        enabled_val = await db.get_setting(strategy_enabled_key(sid))
+        out.append({
             "id": sid,
             "priority": STRATEGY_PRIORITIES[sid],
-            "enabled": (db.get_setting(strategy_enabled_key(sid)) or "true").lower() != "false",
-        }
-        for sid in STRATEGIES
-    ]
+            "enabled": (enabled_val or "true").lower() != "false",
+        })
+    return out
 
 
 class StrategyToggleBody(BaseModel):
@@ -42,15 +44,15 @@ class StrategyToggleBody(BaseModel):
 
 
 @router.put("/api/strategies/{strategy_id}")
-def toggle_strategy(strategy_id: str, body: StrategyToggleBody) -> Dict[str, Any]:
+async def toggle_strategy(strategy_id: str, body: StrategyToggleBody) -> Dict[str, Any]:
     sid = strategy_id.upper()
     if sid not in STRATEGIES:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown strategy {strategy_id!r}; valid: {list(STRATEGIES)}",
         )
-    db.set_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
-    db.write_log(
+    await db.set_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
+    await db.write_log(
         "ENGINE",
         f"[C2] Strategy {sid} {'ENABLED' if body.enabled else 'DISABLED'}",
     )
@@ -67,12 +69,12 @@ _LOT_SPECS = {
 }
 
 
-def _read_lots() -> Dict[str, Any]:
+async def _read_lots() -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for sid, spec in _LOT_SPECS.items():
         entry: Dict[str, Any] = {}
         for role, (key, default) in spec.items():
-            raw = db.get_setting(key)
+            raw = await db.get_setting(key)
             try:
                 entry[role] = int(raw) if raw is not None else default
             except (ValueError, TypeError):
@@ -83,8 +85,8 @@ def _read_lots() -> Dict[str, Any]:
 
 
 @router.get("/api/lots")
-def get_lots() -> Dict[str, Any]:
-    return _read_lots()
+async def get_lots() -> Dict[str, Any]:
+    return await _read_lots()
 
 
 class LotBody(BaseModel):
@@ -94,7 +96,7 @@ class LotBody(BaseModel):
 
 
 @router.put("/api/lots")
-def set_lots(body: LotBody) -> Dict[str, Any]:
+async def set_lots(body: LotBody) -> Dict[str, Any]:
     sid = body.strategy_id.upper()
     if sid not in _LOT_SPECS:
         raise HTTPException(
@@ -106,13 +108,13 @@ def set_lots(body: LotBody) -> Dict[str, Any]:
     if body.target_lots is not None:
         if body.target_lots < 1 or body.target_lots > 100:
             raise HTTPException(status_code=400, detail="target_lots must be 1–100")
-        db.set_setting(spec["target"][0], str(body.target_lots))
+        await db.set_setting(spec["target"][0], str(body.target_lots))
         changed.append(f"target→{body.target_lots}")
     if body.max_lots is not None:
         if body.max_lots < 1 or body.max_lots > 100:
             raise HTTPException(status_code=400, detail="max_lots must be 1–100")
-        db.set_setting(spec["max"][0], str(body.max_lots))
+        await db.set_setting(spec["max"][0], str(body.max_lots))
         changed.append(f"max→{body.max_lots}")
     if changed:
-        db.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")
-    return _read_lots()
+        await db.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")
+    return await _read_lots()

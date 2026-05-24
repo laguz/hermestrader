@@ -240,7 +240,7 @@ async def get_debug_info() -> Dict[str, Any]:
     result: Dict[str, Any] = {"xgboost": xgb_ver, "logs": [], "db": {}}
 
     try:
-        daily_cnt, intra_cnt = await asyncio.to_thread(db.ts_engine.get_total_bars_count)
+        daily_cnt, intra_cnt = await db.ts_engine.get_total_bars_count()
         result["db"]["bars_daily"] = daily_cnt
         result["db"]["bars_intraday"] = intra_cnt
     except Exception as e:                                        # noqa: BLE001

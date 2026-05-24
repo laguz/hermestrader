@@ -26,24 +26,24 @@ router = APIRouter()
 
 
 @router.post("/api/agent/pause")
-def pause_agent() -> Dict[str, Any]:
-    db.set_setting(SETTING_PAUSED, "true")
-    db.write_log("ENGINE", "[C2] Agent PAUSED by operator")
+async def pause_agent() -> Dict[str, Any]:
+    await db.set_setting(SETTING_PAUSED, "true")
+    await db.write_log("ENGINE", "[C2] Agent PAUSED by operator")
     return {"paused": True}
 
 
 @router.post("/api/agent/resume")
-def resume_agent() -> Dict[str, Any]:
-    db.set_setting(SETTING_PAUSED, "false")
-    db.write_log("ENGINE", "[C2] Agent RESUMED by operator")
+async def resume_agent() -> Dict[str, Any]:
+    await db.set_setting(SETTING_PAUSED, "false")
+    await db.write_log("ENGINE", "[C2] Agent RESUMED by operator")
     return {"paused": False}
 
 
 @router.post("/api/ml/trigger")
-def trigger_ml_predictor() -> Dict[str, Any]:
+async def trigger_ml_predictor() -> Dict[str, Any]:
     """Force the XGBoost background thread to retrain and predict immediately."""
-    db.set_setting("ml_force_run", "true")
-    db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
+    await db.set_setting("ml_force_run", "true")
+    await db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
     return {"status": "triggered"}
 
 
@@ -52,13 +52,13 @@ class ModeBody(BaseModel):
 
 
 @router.put("/api/mode")
-def set_mode(body: ModeBody) -> Dict[str, Any]:
+async def set_mode(body: ModeBody) -> Dict[str, Any]:
     m = body.mode.lower().strip()
     if m not in VALID_MODES:
         raise HTTPException(
             status_code=400,
             detail=f"mode must be one of {list(VALID_MODES)}",
         )
-    db.set_setting(SETTING_MODE, m)
-    db.write_log("ENGINE", f"[C2] Mode switched to {m}")
+    await db.set_setting(SETTING_MODE, m)
+    await db.write_log("ENGINE", f"[C2] Mode switched to {m}")
     return {"mode": m}

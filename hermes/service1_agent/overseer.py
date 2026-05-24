@@ -56,8 +56,7 @@ class HermesOverseer:
         self._queue: Optional[asyncio.Queue[ReviewRequestEvent]] = None
         self._worker_task: Optional[asyncio.Task] = None
 
-    @property
-    def SYSTEM_PROMPT(self) -> str:                              # noqa: N802
+    async def get_system_prompt(self) -> str:
         """Base instructions + market session context + operator doctrine + strategy metrics."""
         try:
             from hermes.market_hours import session_label
@@ -71,7 +70,7 @@ class HermesOverseer:
 
         try:
             if self.db is not None:
-                perf_metrics = self.db.get_strategy_performance_metrics(days=30)
+                perf_metrics = await self.db.get_strategy_performance_metrics(days=30)
                 perf_lines = []
                 for strat, data in perf_metrics.items():
                     perf_lines.append(
@@ -92,15 +91,15 @@ class HermesOverseer:
         return "\n".join(parts)
 
     # -- review existing rule-driven actions ---------------------------------
-    def review(self, action: TradeAction) -> Optional[TradeAction]:
+    async def review(self, action: TradeAction) -> Optional[TradeAction]:
         if self.autonomy == "advisory":
-            decision = self._consult(action)
-            self.db.write_ai_decision(action.strategy_id, action.symbol,
+            decision = await self._consult(action)
+            await self.db.write_ai_decision(action.strategy_id, action.symbol,
                                       "advisory", decision)
             return action
 
-        decision = self._consult(action)
-        self.db.write_ai_decision(action.strategy_id, action.symbol,
+        decision = await self._consult(action)
+        await self.db.write_ai_decision(action.strategy_id, action.symbol,
                                   self.autonomy, decision)
 
         verdict = decision.get("verdict", "APPROVE").upper()
@@ -115,13 +114,13 @@ class HermesOverseer:
         return action
 
     # -- propose new actions (vision-driven) ---------------------------------
-    def propose(self, watchlist: Iterable[str]) -> List[TradeAction]:
+    async def propose(self, watchlist: Iterable[str]) -> List[TradeAction]:
         if self.autonomy != "autonomous":
             return []
         proposed: List[TradeAction] = []
         for symbol in watchlist:
-            chart = self.chart_provider.snapshot(symbol) if self.chart_provider else None
-            payload = self._propose_for(symbol, chart)
+            chart = await self.chart_provider.snapshot(symbol) if self.chart_provider else None
+            payload = await self._propose_for(symbol, chart)
             if not payload:
                 continue
             try:
@@ -132,7 +131,7 @@ class HermesOverseer:
         return proposed
 
     # -- chart-only analysis (always runs when vision enabled) ---------------
-    def analyze_charts(self, watchlist: Iterable[str]) -> None:
+    async def analyze_charts(self, watchlist: Iterable[str]) -> None:
         """Run a vision-only read on each symbol's chart and store the result.
 
         Runs regardless of autonomy level — purely informational.  Results are
@@ -141,9 +140,10 @@ class HermesOverseer:
         if not self.vision_enabled or self.chart_provider is None:
             return
         for symbol in watchlist:
-            chart = self.chart_provider.snapshot(symbol)
+            chart = await self.chart_provider.snapshot(symbol)
             if chart is None:
                 continue
+            system_prompt = await self.get_system_prompt()
             prompt = (
                 f"Analyse this price chart for {symbol}. "
                 "Identify the current trend, key support/resistance levels, "
@@ -156,8 +156,9 @@ class HermesOverseer:
                 "outlook, rationale} — all string values."
             )
             try:
-                msg = self.llm.chat(
-                    [{"role": "system", "content": self.SYSTEM_PROMPT},
+                msg = await asyncio.to_thread(
+                    self.llm.chat,
+                    [{"role": "system", "content": system_prompt},
                      {"role": "user",   "content": prompt}],
                     images=[chart],
                 )
@@ -165,7 +166,7 @@ class HermesOverseer:
                 verdict  = analysis.get("outlook", "NEUTRAL").upper()
                 rationale = analysis.get("rationale", "")
                 self.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
-                self.db.write_ai_decision(
+                await self.db.write_ai_decision(
                     "CHART", symbol, "vision",
                     {"type": "chart_analysis", **analysis},
                 )
@@ -180,14 +181,14 @@ class HermesOverseer:
     _LLM_MAX_RETRIES = 3
 
     # -- LLM I/O -------------------------------------------------------------
-    def _consult(self, action: TradeAction) -> Dict[str, Any]:
+    async def _consult(self, action: TradeAction) -> Dict[str, Any]:
         prompt = (
             "Review this trade action against general market context, the recent "
             "execution log, and (if attached) the underlying's chart. "
             "Reply with JSON {verdict: APPROVE|VETO|MODIFY, rationale, modifications?}.\n"
             f"ACTION:\n{json.dumps(asdict(action), default=str)}\n"
         )
-        recent_logs = self.db.recent_logs(limit=200)
+        recent_logs = await self.db.recent_logs(limit=200)
         # Enforce token budget: truncate from the front (oldest entries dropped).
         if len(recent_logs) > self._MAX_LOG_CHARS:
             recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
@@ -195,20 +196,23 @@ class HermesOverseer:
         images = []
         if self.vision_enabled and self.chart_provider is not None:
             try:
-                images.append(self.chart_provider.snapshot(action.symbol))
+                img = await self.chart_provider.snapshot(action.symbol)
+                if img is not None:
+                    images.append(img)
             except Exception:                                          # noqa: BLE001
                 pass
 
-        messages = [{"role": "system", "content": self.SYSTEM_PROMPT},
+        system_prompt = await self.get_system_prompt()
+        messages = [{"role": "system", "content": system_prompt},
                     {"role": "user",   "content": prompt}]
         last_exc: Exception = RuntimeError("no attempts made")
         for attempt in range(self._LLM_MAX_RETRIES):
             try:
-                msg = self.llm.chat(messages, images=images)
+                msg = await asyncio.to_thread(self.llm.chat, messages, images=images)
                 # Clear any stored LLM error on success.
                 try:
-                    self.db.set_setting("llm_last_error", "")
-                    self.db.set_setting(
+                    await self.db.set_setting("llm_last_error", "")
+                    await self.db.set_setting(
                         "llm_last_ok_ts",
                         datetime.now(timezone.utc).isoformat(timespec="seconds"),
                     )
@@ -224,12 +228,12 @@ class HermesOverseer:
                         attempt + 1, self._LLM_MAX_RETRIES,
                         action.symbol, wait_s, exc,
                     )
-                    time.sleep(wait_s)
+                    await asyncio.sleep(wait_s)
 
         logger.warning("LLM call failed after %d attempts — passing action through: %s",
                        self._LLM_MAX_RETRIES, last_exc)
         try:
-            self.db.set_setting("llm_last_error", str(last_exc)[:500])
+            await self.db.set_setting("llm_last_error", str(last_exc)[:500])
         except Exception:                                              # noqa: BLE001
             pass
         # Fail-safe: pass action through but flag so the operator can see it.
@@ -239,14 +243,16 @@ class HermesOverseer:
             "llm_error_fallback": True,
         }
 
-    def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
+    async def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
+        system_prompt = await self.get_system_prompt()
         prompt = (
             f"Propose ONE high-conviction options TradeAction for {symbol} or null. "
             "Use only fields from the dataclass schema. JSON only."
         )
         try:
-            msg = self.llm.chat(
-                [{"role": "system", "content": self.SYSTEM_PROMPT},
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[chart] if chart is not None else [],
             )
@@ -329,13 +335,12 @@ class HermesOverseer:
                 event = await self.queue.get()
                 action = event.trade_action
                 
-                # Execute LLM review in a threadpool so it doesn't block the asyncio event loop
-                decision = await asyncio.to_thread(self._consult, action)
+                # Execute LLM review
+                decision = await self._consult(action)
                 
                 # Write to database (advisory/enforcing decision)
                 if self.db is not None:
-                    await asyncio.to_thread(
-                        self.db.write_ai_decision,
+                    await self.db.write_ai_decision(
                         action.strategy_id,
                         action.symbol,
                         self.autonomy,
@@ -363,5 +368,3 @@ class HermesOverseer:
                 break
             except Exception as exc:
                 logger.error("Error in HermesOverseer worker loop: %s", exc, exc_info=True)
-
-

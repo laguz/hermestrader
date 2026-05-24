@@ -16,6 +16,7 @@ class HermesSettings(BaseSettings):
     hermes_watchlist: str = Field(default="AAPL,SPY,QQQ,NVDA,AMD,KO")
     hermes_ai_autonomy: str = Field(default="advisory")
     hermes_dry_run: bool = Field(default=True)
+    hermes_use_mcp_broker: bool = Field(default=True)
     hermes_soul_path: str = Field(default="/app/soul.md")
     hermes_version: str = Field(default="dev")
 
@@ -90,6 +91,39 @@ class HermesSettings(BaseSettings):
                     f"and TRADIER_{mode.upper()}_ACCOUNT_ID, or TRADIER_ACCESS_TOKEN and TRADIER_ACCOUNT_ID."
                 )
         return token, account, url
+
+    async def reconcile_with_db(self, db: Any) -> None:
+        """Fetch settings from database and update local settings attributes."""
+        import logging
+        logger = logging.getLogger("hermes.config")
+        try:
+            mappings = [
+                ("hermes_mode", "hermes_mode", str),
+                ("agent_autonomy", "hermes_ai_autonomy", str),
+                ("llm_provider", "llm_provider", str),
+                ("llm_base_url", "llm_base_url", str),
+                ("llm_model", "llm_model", str),
+                ("llm_temperature", "llm_temperature", float),
+                ("llm_vision", "llm_vision", lambda v: str(v).lower() == "true"),
+                ("llm_timeout_s", "llm_timeout_s", float),
+            ]
+            for db_key, attr, cast in mappings:
+                val = await db.get_setting(db_key)
+                if val is not None and str(val).strip() != "":
+                    try:
+                        setattr(self, attr, cast(str(val).strip()))
+                    except Exception as cast_err:
+                        logger.warning("Failed to cast setting %s=%s: %s", db_key, val, cast_err)
+            
+            # handle LLM API key decryption if present
+            raw_key = await db.get_setting("llm_api_key")
+            if raw_key is not None and str(raw_key).strip() != "":
+                from hermes.utils import decrypt_value
+                decrypted = decrypt_value(str(raw_key).strip())
+                if decrypted:
+                    self.llm_api_key = decrypted
+        except Exception as e:
+            logger.warning("Failed to reconcile settings with database: %s", e)
 
 
 # Export a global singleton settings instance

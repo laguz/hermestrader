@@ -142,32 +142,32 @@ class StubDB:
         self._predictions[symbol] = dict(pred)
 
     # ── HermesDB surface ────────────────────────────────────────────────────
-    def write_log(self, *_args, **_kwargs):
+    async def write_log(self, *_args, **_kwargs):
         self.logs.append(_args[1] if len(_args) > 1 else "")
 
-    def upsert_positions(self, *_a, **_kw):
+    async def upsert_positions(self, *_a, **_kw):
         pass
 
-    def tracked_option_symbols(self):
+    async def tracked_option_symbols(self):
         return set()
 
-    def flag_orphans(self, *_a, **_kw):
+    async def flag_orphans(self, *_a, **_kw):
         pass
 
-    def open_trades(self, strategy_id: str):
+    async def open_trades(self, strategy_id: str):
         return list(self._open_trades.get(strategy_id, []))
 
-    def open_legs(self, strategy_id: str, symbol: str):
+    async def open_legs(self, strategy_id: str, symbol: str):
         return list(self._open_legs.get((strategy_id, symbol), []))
 
-    def list_watchlist_detailed(self, strategy_id: str):
+    async def list_watchlist_detailed(self, strategy_id: str):
         return {sym: {"target_lots": None}
                 for sym in self._watchlists.get(strategy_id, [])}
 
-    def latest_prediction(self, symbol: str):
+    async def latest_prediction(self, symbol: str):
         return self._predictions.get(symbol)
 
-    def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
+    async def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
                               expiry: str) -> int:
         # Mirror HermesDB: expiry is now required so a stub call without
         # one fails the same way production would.
@@ -189,7 +189,7 @@ class StubDB:
             total += int(t.get("lots") or 0)
         return total
 
-    def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
+    async def count_pending_orders(self, strategy_id: str, symbol: str, side: str,
                               expiry: str) -> int:
         if not expiry:
             raise ValueError(
@@ -197,34 +197,34 @@ class StubDB:
             )
         return 0
 
-    def equity_position(self, symbol: str) -> int:
+    async def equity_position(self, symbol: str) -> int:
         return 0
 
-    def has_pending_approval(self, *_a, **_kw):
+    async def has_pending_approval(self, *_a, **_kw):
         return False
 
-    def get_setting(self, key: str, default: Optional[str] = None):
+    async def get_setting(self, key: str, default: Optional[str] = None):
         return self.settings.get(key, default)
 
-    def set_setting(self, key: str, value: str):
+    async def set_setting(self, key: str, value: str):
         self.settings[key] = str(value)
 
-    def write_ai_decision(self, *_a, **_kw):
+    async def write_ai_decision(self, *_a, **_kw):
         pass
 
-    def record_pending_order(self, action):
+    async def record_pending_order(self, action):
         self.pending_orders.append(action)
 
-    def record_order_response(self, action, response):
+    async def record_order_response(self, action, response):
         pass
 
-    def close_trade_from_action(self, action, response):
+    async def close_trade_from_action(self, action, response):
         pass
 
-    def queue_for_approval(self, action_dict, action_type="entry"):
+    async def queue_for_approval(self, action_dict, action_type="entry"):
         pass
 
-    def recent_logs(self, limit: int = 200) -> str:
+    async def recent_logs(self, limit: int = 200) -> str:
         return "\n".join(self.logs[-limit:])
 
 

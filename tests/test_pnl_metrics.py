@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import date, datetime, timedelta
 import pytest
+import pandas as pd
 
 from hermes.db.models import HermesDB, Trade, Base, _compute_realized_pnl
 
@@ -17,13 +18,6 @@ def db():
             pass
         
     db_instance = HermesDB(f"sqlite:///{db_file}")
-    db_instance.ensure_strategies({
-        "CS7": 1,
-        "CS75": 2,
-        "TT45": 3,
-        "WHEEL": 4
-    })
-    
     yield db_instance
     
     db_instance.engine.dispose()
@@ -34,10 +28,18 @@ def db():
             pass
 
 
-def test_pnl_metrics_option_spreads(db):
+@pytest.mark.asyncio
+async def test_pnl_metrics_option_spreads(db):
+    await db.ensure_strategies({
+        "CS7": 1,
+        "CS75": 2,
+        "TT45": 3,
+        "WHEEL": 4
+    })
+
     # CS7: FAIL threshold: < 5% (0.05) return, PASS threshold: >= 10% (0.10) return
     # We will create two trades: one FAIL, one PASS
-    with db.Session() as s:
+    async with db.AsyncSession() as s:
         # Trade 1: CS7 FAIL
         # Width: 5.0, lots: 1, entry_credit: 1.50 -> risk_capital = 3.50 * 100 = 350
         # realized_pnl = 10.0 (return = 10/350 = 2.8% < 5% FAIL)
@@ -75,9 +77,9 @@ def test_pnl_metrics_option_spreads(db):
             opened_at=datetime.utcnow() - timedelta(days=10)
         )
         s.add_all([t1, t2])
-        s.commit()
+        await s.commit()
         
-    metrics = db.get_strategy_performance_metrics(days=30)
+    metrics = await db.get_strategy_performance_metrics(days=30)
     cs7 = metrics["CS7"]
     assert cs7["closed_trades"] == 2
     assert cs7["passed"] == 1
@@ -86,10 +88,18 @@ def test_pnl_metrics_option_spreads(db):
     assert cs7["total_pnl"] == 60.0
 
 
-def test_pnl_metrics_cs75_and_tt45(db):
+@pytest.mark.asyncio
+async def test_pnl_metrics_cs75_and_tt45(db):
+    await db.ensure_strategies({
+        "CS7": 1,
+        "CS75": 2,
+        "TT45": 3,
+        "WHEEL": 4
+    })
+
     # CS75 FAIL <= 7%, PASS >= 22%
     # TT45 FAIL <= 3%, PASS >= 5%
-    with db.Session() as s:
+    async with db.AsyncSession() as s:
         # CS75 PASS
         # Width: 10.0, lots: 2, entry_credit: 2.0 -> risk_capital = (10 - 2) * 2 * 100 = 1600
         # realized_pnl = 400.0 (return = 400/1600 = 25% >= 22% PASS)
@@ -127,9 +137,9 @@ def test_pnl_metrics_cs75_and_tt45(db):
             opened_at=datetime.utcnow() - timedelta(days=15)
         )
         s.add_all([t1, t2])
-        s.commit()
+        await s.commit()
         
-    metrics = db.get_strategy_performance_metrics(days=30)
+    metrics = await db.get_strategy_performance_metrics(days=30)
     
     assert metrics["CS75"]["passed"] == 1
     assert metrics["CS75"]["failed"] == 0
@@ -140,7 +150,15 @@ def test_pnl_metrics_cs75_and_tt45(db):
     assert metrics["TT45"]["status"] == "FAIL"
 
 
-def test_pnl_metrics_wheel(db):
+@pytest.mark.asyncio
+async def test_pnl_metrics_wheel(db):
+    await db.ensure_strategies({
+        "CS7": 1,
+        "CS75": 2,
+        "TT45": 3,
+        "WHEEL": 4
+    })
+
     # Symbol 1: AAPL (PASS)
     # - Put assigned: strike 100, lots 1. Stock price on expiry: 95.0. Option pnl = 100 (premium kept)
     # - Call assigned: strike 105, lots 1. Stock price on expiry: 110.0. Option pnl = 50 (premium kept)
@@ -153,25 +171,31 @@ def test_pnl_metrics_wheel(db):
     # Net shares: 100. Stock cash flow: -20000. Stock value: 15000.
     # Total PnL: 200 - 20000 + 15000 = -4800 (negative -> FAIL)
     
-    # Seed bars_daily so that get_price_on_date can find the prices
-    with db.Session() as s:
-        from hermes.db.models import DailyBar
-        expiry_put_aapl = date.today() - timedelta(days=15)
-        expiry_call_aapl = date.today() - timedelta(days=5)
-        expiry_put_tsla = date.today() - timedelta(days=10)
-        
-        # Daily Bar for put expiry AAPL: price 95.0 (assigned)
-        b1 = DailyBar(ts=datetime.combine(expiry_put_aapl, datetime.min.time()), symbol="AAPL", close=95.0)
-        # Daily Bar for call expiry AAPL: price 110.0 (assigned)
-        b2 = DailyBar(ts=datetime.combine(expiry_call_aapl, datetime.min.time()), symbol="AAPL", close=110.0)
-        # Daily Bar for put expiry TSLA: price 190.0 (assigned)
-        b3 = DailyBar(ts=datetime.combine(expiry_put_tsla, datetime.min.time()), symbol="TSLA", close=190.0)
-        # Latest prices
-        b4 = DailyBar(ts=datetime.utcnow(), symbol="AAPL", close=110.0)
-        b5 = DailyBar(ts=datetime.utcnow(), symbol="TSLA", close=150.0)
-        
-        s.add_all([b1, b2, b3, b4, b5])
-        
+    expiry_put_aapl = date.today() - timedelta(days=15)
+    expiry_call_aapl = date.today() - timedelta(days=5)
+    expiry_put_tsla = date.today() - timedelta(days=10)
+    
+    # Seed daily bars using timeseries engine (decoupled from relational DB)
+    df_aapl = pd.DataFrame({
+        "ts": [
+            datetime.combine(expiry_put_aapl, datetime.min.time()),
+            datetime.combine(expiry_call_aapl, datetime.min.time()),
+            datetime.utcnow()
+        ],
+        "close": [95.0, 110.0, 110.0]
+    })
+    await db.ts_engine.save_daily_bars("AAPL", df_aapl)
+    
+    df_tsla = pd.DataFrame({
+        "ts": [
+            datetime.combine(expiry_put_tsla, datetime.min.time()),
+            datetime.utcnow()
+        ],
+        "close": [190.0, 150.0]
+    })
+    await db.ts_engine.save_daily_bars("TSLA", df_tsla)
+
+    async with db.AsyncSession() as s:
         # Trades
         # AAPL Put
         t1 = Trade(
@@ -220,9 +244,9 @@ def test_pnl_metrics_wheel(db):
         )
         
         s.add_all([t1, t2, t3])
-        s.commit()
+        await s.commit()
         
-    metrics = db.get_strategy_performance_metrics(days=30)
+    metrics = await db.get_strategy_performance_metrics(days=30)
     wheel = metrics["WHEEL"]
     assert wheel["passed"] == 1
     assert wheel["failed"] == 1

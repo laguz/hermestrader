@@ -163,7 +163,8 @@ def test_short_credit_can_be_negative():
 
 
 # ── find_active_ic_expiry — determinism (issue #10 from review) ──────────────
-def test_find_active_ic_picks_earliest_incomplete_expiry():
+@pytest.mark.asyncio
+async def test_find_active_ic_picks_earliest_incomplete_expiry():
     db = StubDB()
     db.set_open_legs("TEST", "AAPL", [
         {"option_symbol": "AAPL250620P00090000", "side": "put", "expiry": "2025-06-20"},
@@ -171,10 +172,11 @@ def test_find_active_ic_picks_earliest_incomplete_expiry():
         {"option_symbol": "AAPL250516P00090000", "side": "put", "expiry": "2025-05-16"},
     ])
     s = _make_strategy(db=db)
-    assert s.find_active_ic_expiry("AAPL") == "2025-05-16"
+    assert await s.find_active_ic_expiry("AAPL") == "2025-05-16"
 
 
-def test_find_active_ic_skips_complete_ic():
+@pytest.mark.asyncio
+async def test_find_active_ic_skips_complete_ic():
     db = StubDB()
     db.set_open_legs("TEST", "AAPL", [
         # Complete on 2025-05-16
@@ -184,9 +186,10 @@ def test_find_active_ic_skips_complete_ic():
         {"option_symbol": "AAPL250620P00090000", "side": "put", "expiry": "2025-06-20"},
     ])
     s = _make_strategy(db=db)
-    assert s.find_active_ic_expiry("AAPL") == "2025-06-20"
+    assert await s.find_active_ic_expiry("AAPL") == "2025-06-20"
 
 
-def test_find_active_ic_returns_none_when_nothing_open():
+@pytest.mark.asyncio
+async def test_find_active_ic_returns_none_when_nothing_open():
     s = _make_strategy()  # default StubDB has no open legs
-    assert s.find_active_ic_expiry("AAPL") is None
+    assert await s.find_active_ic_expiry("AAPL") is None

@@ -25,9 +25,9 @@ router = APIRouter()
 
 
 @router.get("/api/watchlist")
-def get_watchlist() -> Dict[str, Any]:
+async def get_watchlist() -> Dict[str, Any]:
     """Return per-strategy watchlists + the global default from env."""
-    per_strategy = db.list_all_watchlists()
+    per_strategy = await db.list_all_watchlists_async()
     return {
         "global_default": WATCHLIST,
         "per_strategy": per_strategy,
@@ -40,22 +40,22 @@ class WatchlistBody(BaseModel):
 
 
 @router.put("/api/watchlist/{strategy_id}")
-def set_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]:
+async def set_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]:
     sid = strategy_id.upper()
     if sid not in STRATEGY_PRIORITIES:
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
     cleaned = [s.strip().upper() for s in body.symbols if s.strip()]
-    saved = db.set_watchlist(sid, cleaned)
-    db.write_log("ENGINE", f"[C2] Watchlist updated for {sid}: {saved}")
+    saved = await db.set_watchlist_async(sid, cleaned)
+    await db.write_log_async("ENGINE", f"[C2] Watchlist updated for {sid}: {saved}")
     return {"strategy_id": sid, "symbols": saved}
 
 
 @router.delete("/api/watchlist/{strategy_id}")
-def reset_watchlist(strategy_id: str) -> Dict[str, Any]:
+async def reset_watchlist(strategy_id: str) -> Dict[str, Any]:
     """Clear per-strategy watchlist so it falls back to the global default."""
     sid = strategy_id.upper()
     if sid not in STRATEGY_PRIORITIES:
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
-    db.set_watchlist(sid, [])
-    db.write_log("ENGINE", f"[C2] Watchlist reset for {sid} — using global default")
+    await db.set_watchlist_async(sid, [])
+    await db.write_log_async("ENGINE", f"[C2] Watchlist reset for {sid} — using global default")
     return {"strategy_id": sid, "symbols": [], "using_default": True}

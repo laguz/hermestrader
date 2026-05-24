@@ -217,16 +217,18 @@ class PredictorConfig:
         if db is None or not hasattr(db, "get_setting"):
             return cfg
 
+        import asyncio
+
         def _f(key: str, default: float) -> float:
             try:
-                v = db.get_setting(key)
+                v = asyncio.run(db.get_setting(key))
                 return float(v) if v not in (None, "") else default
             except (TypeError, ValueError):
                 return default
 
         def _s(key: str, default: str) -> str:
             try:
-                v = db.get_setting(key)
+                v = asyncio.run(db.get_setting(key))
                 return str(v) if v else default
             except Exception:                     # noqa: BLE001
                 return default
@@ -706,7 +708,8 @@ class AsyncXGBPredictor:
             meta = next(iter(heads.values()))[1] if heads else None
             feature_vec = (x_last.iloc[0].to_dict()
                            if not x_last.empty else {})
-            ledger_mod.write_record(self.db, ledger_mod.LedgerRecord(
+            import asyncio
+            asyncio.run(ledger_mod.write_record(self.db, ledger_mod.LedgerRecord(
                 symbol=symbol,
                 model_name=self._model_name(self._cfg.horizons_dte[0], 0.5),
                 horizon_dte=self._cfg.horizons_dte[0],
@@ -721,7 +724,7 @@ class AsyncXGBPredictor:
                 feature_vector={k: (float(v) if isinstance(v, (int, float)) else v)
                                 for k, v in feature_vec.items()
                                 if not isinstance(v, str)},
-            ))
+            )))
         except Exception as exc:                    # noqa: BLE001
             logger.debug("ledger write failed for %s: %s", symbol, exc)
 

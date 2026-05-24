@@ -17,16 +17,16 @@ from hermes.service1_agent.mock_broker import MockBroker
 
 
 class _StubDB:
-    def write_log(self, *_a, **_kw):
+    async def write_log(self, *_a, **_kw):
         pass
 
-    def upsert_positions(self, *_a, **_kw):
+    async def upsert_positions(self, *_a, **_kw):
         pass
 
-    def tracked_option_symbols(self):
+    async def tracked_option_symbols(self):
         return set()
 
-    def flag_orphans(self, *_a, **_kw):
+    async def flag_orphans(self, *_a, **_kw):
         pass
 
 

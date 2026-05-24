@@ -3,25 +3,6 @@
 Track every published prediction so the meta-learner and the nightly
 calibration job can train on actual production outcomes rather than
 synthetic backtests.
-
-Why this exists
----------------
-Prior to this module the ``predictions`` table held only the most
-recent point estimate per (symbol, ts). There was nowhere to attach
-which model produced the row, which feature schema was live at the
-time, or — critically — what the realised outcome turned out to be.
-
-The ledger fixes that by recording, for every prediction:
-
-- model_hash + schema_hash (so postmortems know exactly which code
-  produced the number)
-- the full feature vector (JSONB) the prediction was scored against
-- the predicted probability and any confidence band
-- a placeholder for the realised outcome, which the nightly evaluator
-  fills in once the relevant DTE has rolled past
-
-Every row joins cleanly with the ``trades`` and ``bars_daily`` tables
-to derive realised outcomes — see ``mark_outcome`` below.
 """
 from __future__ import annotations
 
@@ -31,26 +12,22 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
-    BigInteger, Column, DateTime, Float, Integer, Sequence, String,
+    BigInteger, Column, DateTime, Float, Integer, Sequence, String, select,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
-try:                                                  # pragma: no cover
+try:
     from hermes.db.models import Base, HermesDB
-except Exception:                                     # pragma: no cover
-    Base = None                                       # type: ignore
-    HermesDB = None                                   # type: ignore
+except Exception:
+    Base = None
+    HermesDB = None
 
 logger = logging.getLogger("hermes.ml.ledger")
 
 
-# ---------------------------------------------------------------------------
-# ORM model — adds itself to hermes.db.models.Base if available so the
-# table is created on watcher boot via Base.metadata.create_all.
-# ---------------------------------------------------------------------------
-if Base is not None:                                  # pragma: no branch
+if Base is not None:
 
-    class PredictionLedger(Base):                     # type: ignore[misc, valid-type]
+    class PredictionLedger(Base):
         """Long-running ledger of every published prediction.
 
         Composite PK on (ts, symbol, model_name) so we can store
@@ -86,12 +63,9 @@ if Base is not None:                                  # pragma: no branch
         realized_pnl = Column(Float)
         realized_close = Column(Float)
 else:
-    PredictionLedger = None                           # type: ignore
+    PredictionLedger = None
 
 
-# ---------------------------------------------------------------------------
-# Plain-Python record for callers that do not want SQLAlchemy on the path.
-# ---------------------------------------------------------------------------
 @dataclass
 class LedgerRecord:
     symbol: str
@@ -109,18 +83,15 @@ class LedgerRecord:
     ts: Optional[datetime] = None
 
 
-# ---------------------------------------------------------------------------
-# DB operations
-# ---------------------------------------------------------------------------
-def write_record(db: "HermesDB", rec: LedgerRecord) -> None:
+async def write_record(db: "HermesDB", rec: LedgerRecord) -> None:
     """Insert a fresh prediction row.  Idempotent for a single (ts,
     symbol, model_name) tuple — the composite PK rejects duplicates.
     """
     if PredictionLedger is None:
         logger.debug("PredictionLedger ORM unavailable; skipping write")
         return
-    with db.Session() as s:
-        row = PredictionLedger(                       # type: ignore[call-arg]
+    async with db.AsyncSession() as s:
+        row = PredictionLedger(
             ts=rec.ts or datetime.now(timezone.utc),
             symbol=rec.symbol.upper(),
             model_name=rec.model_name,
@@ -137,13 +108,13 @@ def write_record(db: "HermesDB", rec: LedgerRecord) -> None:
         )
         s.add(row)
         try:
-            s.commit()
-        except Exception as exc:                      # noqa: BLE001
-            s.rollback()
+            await s.commit()
+        except Exception as exc:
+            await s.rollback()
             logger.debug("ledger write skipped (likely duplicate): %s", exc)
 
 
-def fetch_for_calibration(
+async def fetch_for_calibration(
     db: "HermesDB",
     symbol: str,
     model_name: str,
@@ -151,22 +122,20 @@ def fetch_for_calibration(
     days: int = 90,
     require_outcome: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Pull recent rows for a (symbol, model_name) pair.
-
-    The nightly calibration job feeds the ``predicted_prob`` /
-    ``realized_outcome`` columns from this query into IsotonicCalibrator.
-    """
+    """Pull recent rows for a (symbol, model_name) pair."""
     if PredictionLedger is None:
         return []
-    with db.Session() as s:
-        q = s.query(PredictionLedger).filter(
+    async with db.AsyncSession() as s:
+        q = select(PredictionLedger).filter(
             PredictionLedger.symbol == symbol.upper(),
             PredictionLedger.model_name == model_name,
             PredictionLedger.ts >= datetime.now(timezone.utc) - timedelta(days=days),
         )
         if require_outcome:
             q = q.filter(PredictionLedger.realized_outcome.is_not(None))
-        rows = q.order_by(PredictionLedger.ts).all()
+        
+        result = await s.execute(q.order_by(PredictionLedger.ts))
+        rows = result.scalars().all()
         return [
             {
                 "ts": r.ts,
@@ -187,7 +156,7 @@ def fetch_for_calibration(
         ]
 
 
-def mark_outcome(
+async def mark_outcome(
     db: "HermesDB",
     symbol: str,
     model_name: str,
@@ -197,17 +166,13 @@ def mark_outcome(
     realized_close: Optional[float] = None,
     realized_pnl: Optional[float] = None,
 ) -> bool:
-    """Backfill the realised columns once the trade horizon expires.
-
-    The nightly evaluator computes realised outcomes by joining each
-    ledger row against bars_daily / trades and calling this method.
-    """
+    """Backfill the realised columns once the trade horizon expires."""
     if PredictionLedger is None:
         return False
-    with db.Session() as s:
-        row = (s.query(PredictionLedger)
-               .filter_by(ts=ts, symbol=symbol.upper(), model_name=model_name)
-               .first())
+    async with db.AsyncSession() as s:
+        q = select(PredictionLedger).filter_by(ts=ts, symbol=symbol.upper(), model_name=model_name).limit(1)
+        result = await s.execute(q)
+        row = result.scalars().first()
         if row is None:
             return False
         row.realized_outcome = float(outcome)
@@ -216,21 +181,22 @@ def mark_outcome(
             row.realized_close = float(realized_close)
         if realized_pnl is not None:
             row.realized_pnl = float(realized_pnl)
-        s.commit()
+        await s.commit()
         return True
 
 
 def ensure_table(db: "HermesDB") -> None:
     """Create the prediction_ledger table if it does not yet exist.
 
-    HermesDB.run_migrations is the canonical place to call this from on
-    watcher boot; idempotent so it is also safe to call ad-hoc.
+    Uses a synchronous connection since it's run at startup.
     """
     if PredictionLedger is None:
         return
     try:
-        PredictionLedger.__table__.create(bind=db.engine, checkfirst=True)
-    except Exception as exc:                          # noqa: BLE001
+        # Use sync engine context for table creation on startup
+        with db.engine.begin() as conn:
+            Base.metadata.create_all(bind=conn, tables=[PredictionLedger.__table__], checkfirst=True)
+    except Exception as exc:
         logger.warning("could not ensure prediction_ledger: %s", exc)
 
 

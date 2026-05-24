@@ -66,7 +66,8 @@ async def test_max_affordable_rounds_down():
 
 
 # ── side_aware_capacity ──────────────────────────────────────────────────────
-def test_side_aware_capacity_subtracts_open_pending_and_broker():
+@pytest.mark.asyncio
+async def test_side_aware_capacity_subtracts_open_pending_and_broker():
     """Open trades + cached broker orders on the same chain reduce capacity."""
     db = StubDB()
     db.set_open_trades("CS75", [
@@ -76,11 +77,12 @@ def test_side_aware_capacity_subtracts_open_pending_and_broker():
     mm = MoneyManager(broker, db, config={})
     mm._broker_order_counts[("CS75", "AAPL", "put", _EXP)] = 1
     # max_lots=10, open=2, broker=1, pending=0 → 7 remaining on this chain.
-    assert mm.side_aware_capacity(
+    assert await mm.side_aware_capacity(
         "CS75", "AAPL", "put", max_lots=10, expiry=_EXP) == 7
 
 
-def test_side_aware_capacity_floors_at_zero():
+@pytest.mark.asyncio
+async def test_side_aware_capacity_floors_at_zero():
     db = StubDB()
     db.set_open_trades("CS75", [
         {"symbol": "AAPL", "side_type": "put", "lots": 5, "expiry": _EXP},
@@ -88,22 +90,24 @@ def test_side_aware_capacity_floors_at_zero():
     mm = MoneyManager(StubBroker(), db, config={})
     mm._broker_order_counts[("CS75", "AAPL", "put", _EXP)] = 10
     # 5 + 10 = 15 > max 5 → returned 0, never negative.
-    assert mm.side_aware_capacity(
+    assert await mm.side_aware_capacity(
         "CS75", "AAPL", "put", max_lots=5, expiry=_EXP) == 0
 
 
-def test_side_aware_capacity_only_counts_matching_side():
+@pytest.mark.asyncio
+async def test_side_aware_capacity_only_counts_matching_side():
     """Open call lots shouldn't reduce put capacity (or vice versa)."""
     db = StubDB()
     db.set_open_trades("CS75", [
         {"symbol": "AAPL", "side_type": "call", "lots": 5, "expiry": _EXP},
     ])
     mm = MoneyManager(StubBroker(), db, config={})
-    assert mm.side_aware_capacity(
+    assert await mm.side_aware_capacity(
         "CS75", "AAPL", "put", max_lots=5, expiry=_EXP) == 5
 
 
-def test_side_aware_capacity_isolates_chains():
+@pytest.mark.asyncio
+async def test_side_aware_capacity_isolates_chains():
     """A full chain must NOT exhaust capacity on a different chain —
     max_lots is enforced per option chain, always."""
     db = StubDB()
@@ -112,22 +116,23 @@ def test_side_aware_capacity_isolates_chains():
     ])
     mm = MoneyManager(StubBroker(), db, config={})
     # Expiry X is full (12/12) → no headroom there.
-    assert mm.side_aware_capacity(
+    assert await mm.side_aware_capacity(
         "CS75", "AAPL", "put", max_lots=12, expiry=_EXP) == 0
     # Expiry Y is untouched → fresh 12 lots available.
-    assert mm.side_aware_capacity(
+    assert await mm.side_aware_capacity(
         "CS75", "AAPL", "put", max_lots=12, expiry="2025-07-18") == 12
 
 
-def test_side_aware_capacity_requires_expiry():
+@pytest.mark.asyncio
+async def test_side_aware_capacity_requires_expiry():
     """The global (symbol-wide) mode was removed. Calling without an
     expiry must raise so accidental mis-calls fail loudly instead of
     silently summing across chains."""
     mm = MoneyManager(StubBroker(), StubDB(), config={})
     with pytest.raises(ValueError, match="expiry"):
-        mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=10, expiry=None)
+        await mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=10, expiry=None)
     with pytest.raises(ValueError, match="expiry"):
-        mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=10, expiry="")
+        await mm.side_aware_capacity("CS75", "AAPL", "put", max_lots=10, expiry="")
 
 
 # ── scale_quantity ───────────────────────────────────────────────────────────

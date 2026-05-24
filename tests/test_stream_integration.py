@@ -97,39 +97,40 @@ async def test_stream_client_to_engine_flow():
     with patch("websockets.connect", return_value=mock_ws):
         await stream_client.start()
         
-        # Give start loop a moment to run and send subscription
-        await asyncio.sleep(0.05)
-        
-        # Verify subscription was sent
-        assert len(mock_ws.sent_messages) == 1
-        sub_data = json.loads(mock_ws.sent_messages[0])
-        assert sub_data["symbols"] == ["AAPL"]
-        assert sub_data["sessionid"] == "mock_session_id"
+        try:
+            # Give start loop a moment to run and send subscription
+            await asyncio.sleep(0.05)
+            
+            # Verify subscription was sent
+            assert len(mock_ws.sent_messages) == 1
+            sub_data = json.loads(mock_ws.sent_messages[0])
+            assert sub_data["symbols"] == ["AAPL"]
+            assert sub_data["sessionid"] == "mock_session_id"
 
-        # Emit mock quote message through websocket queue
-        quote_msg = json.dumps({
-            "type": "quote",
-            "symbol": "AAPL",
-            "bid": "150.00",
-            "ask": "150.10",
-            "last": "150.05"
-        })
-        await mock_ws.message_queue.put(quote_msg)
+            # Emit mock quote message through websocket queue
+            quote_msg = json.dumps({
+                "type": "quote",
+                "symbol": "AAPL",
+                "bid": "150.00",
+                "ask": "150.10",
+                "last": "150.05"
+            })
+            await mock_ws.message_queue.put(quote_msg)
 
-        # Allow time for event dispatching and handler execution
-        await asyncio.sleep(0.1)
+            # Allow time for event dispatching and handler execution
+            await asyncio.sleep(0.1)
 
-        # Verify quote cache updated in engine
-        assert "AAPL" in engine._quote_cache
-        assert engine._quote_cache["AAPL"]["price"] == 150.05
-        assert engine._quote_cache["AAPL"]["bid"] == "150.00"
-        assert engine._quote_cache["AAPL"]["ask"] == "150.10"
+            # Verify quote cache updated in engine
+            assert "AAPL" in engine._quote_cache
+            assert engine._quote_cache["AAPL"]["price"] == 150.05
+            assert engine._quote_cache["AAPL"]["bid"] == "150.00"
+            assert engine._quote_cache["AAPL"]["ask"] == "150.10"
 
-        # Verify strategy callbacks triggered
-        assert strategy.manage_positions_called is True
-        assert strategy.execute_entries_called is True
-        assert strategy.last_watchlist == ["AAPL"]
-
-        # Clean up
-        await stream_client.stop()
-        await bus.stop()
+            # Verify strategy callbacks triggered
+            assert strategy.manage_positions_called is True
+            assert strategy.execute_entries_called is True
+            assert strategy.last_watchlist == ["AAPL"]
+        finally:
+            # Clean up
+            await stream_client.stop()
+            await bus.stop()

@@ -40,7 +40,7 @@ class WheelStrategy(AbstractStrategy):
         self._log(f"↻ scanning {len(symbols)} symbol(s) — max_lots={max_lots} delta=0.30")
 
         for symbol in symbols:
-            shares = int(self.db.equity_position(symbol) or 0)
+            shares = int(await self.db.equity_position(symbol) or 0)
             shares_lots = shares // 100
 
             # Pick the target expiry first so capacity is checked per
@@ -53,9 +53,9 @@ class WheelStrategy(AbstractStrategy):
             # side_aware_capacity already subtracts open + pending + broker
             # orders for this chain, so capacity here is the actual headroom
             # remaining on the (symbol, side, expiry) bucket.
-            call_capacity = self.mm.side_aware_capacity(
+            call_capacity = await self.mm.side_aware_capacity(
                 self.strategy_id, symbol, "call", max_lots, expiry=expiry)
-            put_capacity = self.mm.side_aware_capacity(
+            put_capacity = await self.mm.side_aware_capacity(
                 self.strategy_id, symbol, "put", max_lots, expiry=expiry)
 
             # Derive committed = open + pending (what side_aware_capacity already subtracted).
@@ -145,7 +145,7 @@ class WheelStrategy(AbstractStrategy):
                 qty = int(float(p.get("quantity") or p.get("qty") or 0))
                 live_equity_lots[sym] = live_equity_lots.get(sym, 0) + qty
 
-        for trade in self.db.open_trades(self.strategy_id):
+        for trade in await self.db.open_trades(self.strategy_id):
             info = parse_occ(trade["short_leg"])
             if not info:
                 continue

@@ -121,7 +121,6 @@ def check_for_updates() -> None:
     except Exception as e:
         logger.warning("Failed to fetch latest commit from GitHub: %s", e)
 
-    # Save result to database
     try:
         dsn = os.environ.get("HERMES_DSN", "postgresql+psycopg://hermes:hermes@db:5432/hermes")
         db = HermesDB(dsn)
@@ -134,8 +133,9 @@ def check_for_updates() -> None:
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "error": error_msg
         }
-        db.set_setting("update_status", json.dumps(payload))
-        db.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}")
+        import asyncio
+        asyncio.run(db.set_setting("update_status", json.dumps(payload)))
+        asyncio.run(db.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}"))
     except Exception as e:
         logger.warning("Failed to save update status to DB: %s", e)
 
@@ -145,15 +145,16 @@ def sync_soul_file_to_db(db) -> None:
     
     This acts as the source-of-truth loader on container startup.
     """
+    import asyncio
     soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
     if os.path.exists(soul_path):
         try:
             with open(soul_path, "r", encoding="utf-8") as f:
                 file_soul = f.read()
-            db_soul = db.get_setting("soul_md") or ""
+            db_soul = asyncio.run(db.get_setting("soul_md")) or ""
             if file_soul != db_soul:
                 logger.info("Syncing soul.md from file to database (length: %d)", len(file_soul))
-                db.set_setting("soul_md", file_soul)
-                db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
+                asyncio.run(db.set_setting("soul_md", file_soul))
+                asyncio.run(db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)"))
         except Exception as exc:
             logger.warning("Failed to sync soul.md to database: %s", exc)

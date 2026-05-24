@@ -29,10 +29,17 @@ import inspect
 
 class AsyncBrokerWrapper:
     """Wraps a synchronous or asynchronous broker to present a unified async interface."""
-    def __init__(self, broker):
+    def __init__(self, broker, db=None):
         self.broker = broker
+        self.db = db
+        from hermes.broker.circuit_breaker import CircuitBreaker
+        if not hasattr(AsyncBrokerWrapper, "_shared_cb"):
+            AsyncBrokerWrapper._shared_cb = CircuitBreaker()
 
     def __getattr__(self, name):
+        if name == "place_order_from_action":
+            return self._place_order_from_action_wrapped
+
         attr = getattr(self.broker, name)
         if callable(attr):
             async def _async_wrapper(*args, **kwargs):
@@ -44,6 +51,47 @@ class AsyncBrokerWrapper:
                 return res
             return _async_wrapper
         return attr
+
+    async def _place_order_from_action_wrapped(self, action):
+        from hermes.broker.circuit_breaker import CircuitBreakerError
+        cb = AsyncBrokerWrapper._shared_cb
+        state = cb.check_state()
+        if state == "OPEN":
+            logger.error("Circuit breaker is OPEN. Fast-failing order placement.")
+            raise CircuitBreakerError("Circuit breaker is OPEN. Orders are blocked.")
+
+        try:
+            attr = getattr(self.broker, "place_order_from_action")
+            if asyncio.iscoroutinefunction(attr) or inspect.iscoroutinefunction(attr):
+                res = await attr(action)
+            else:
+                res = attr(action)
+                if inspect.iscoroutine(res) or asyncio.iscoroutine(res):
+                    res = await res
+
+            rejected = False
+            if isinstance(res, dict):
+                if "errors" in res or "error" in res:
+                    rejected = True
+                order = res.get("order")
+                if isinstance(order, dict):
+                    status = str(order.get("status", "")).lower()
+                    if status in {"rejected", "error", "expired", "canceled", "cancelled"}:
+                        rejected = True
+
+            if rejected:
+                await cb.record_failure(self.db, f"Order rejected: {res}")
+                if cb.state == "OPEN":
+                    raise CircuitBreakerError("Order rejected and circuit breaker tripped to OPEN.")
+            else:
+                cb.record_success()
+
+            return res
+
+        except Exception as e:
+            if not isinstance(e, CircuitBreakerError):
+                await cb.record_failure(self.db, f"Order placement exception: {e}")
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +131,7 @@ class MoneyManager:
     """
 
     def __init__(self, broker, db, config: Dict[str, Any]):
-        self.broker = AsyncBrokerWrapper(broker)
+        self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         self.config = config or {}
         # In-memory cache of active broker-side orders, refreshed every tick.
@@ -174,7 +222,7 @@ class MoneyManager:
         bp = await self.true_available_bp()
         return int(bp // requirement_per_contract)
 
-    def side_aware_capacity(
+    async def side_aware_capacity(
         self,
         strategy_id: str,
         symbol: str,
@@ -203,9 +251,9 @@ class MoneyManager:
         side = side.lower()
         symbol = symbol.upper()
         # 1. Check DB for filled contracts (status='OPEN') in this chain
-        open_qty = self.db.count_open_contracts(strategy_id, symbol, side, expiry)
+        open_qty = await self.db.count_open_contracts(strategy_id, symbol, side, expiry)
         # 2. Check DB for pending internal orders (pre-submission or approval queue) in this chain
-        pending = self.db.count_pending_orders(strategy_id, symbol, side, expiry)
+        pending = await self.db.count_pending_orders(strategy_id, symbol, side, expiry)
         # 3. Check cached broker-side active orders (resting limits) in this chain
         broker_qty = self._broker_order_counts.get(
             (strategy_id, symbol, side, expiry), 0)
@@ -244,7 +292,7 @@ class MoneyManager:
             bp_cap = 999_999
         else:
             bp_cap = await self.max_affordable_contracts(requirement_per_lot)
-        side_cap = self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
+        side_cap = await self.side_aware_capacity(strategy_id, symbol, side, max_lots, expiry)
         scaled = min(requested_lots, bp_cap, side_cap)
         if scaled == 0 and requested_lots > 0:
             # Write a DB-visible log so the C2 live feed shows the block reason.
@@ -261,7 +309,7 @@ class MoneyManager:
                 )
             else:
                 reason = f"bp_cap={bp_cap} side_cap={side_cap}"
-            self.db.write_log(
+            await self.db.write_log(
                 strategy_id,
                 f"[MM] BLOCKED {symbol} {side.upper()}: {reason} — 0 lots available",
             )
@@ -270,7 +318,7 @@ class MoneyManager:
                 "[MM] Scaled %s/%s %s %d→%d (bp_cap=%d side_cap=%d)",
                 strategy_id, symbol, side, requested_lots, scaled, bp_cap, side_cap,
             )
-            self.db.write_log(
+            await self.db.write_log(
                 strategy_id,
                 f"[MM] Scaled {symbol} {side.upper()} {requested_lots}→{scaled} lots "
                 f"(bp_cap={bp_cap} side_cap={side_cap})",
@@ -328,7 +376,7 @@ class IronCondorBuilder:
         existing = {s.lower() for s in existing_sides}
         if {"put", "call"}.issubset(existing):
             # Both sides already open — nothing to do, log so operator can see.
-            self.mm.db.write_log(
+            await self.mm.db.write_log(
                 strategy_id,
                 f"[IC] {symbol} {expiry}: full IC already open on both sides; skip",
             )
@@ -389,7 +437,7 @@ class AbstractStrategy(ABC):
         dry_run: bool = False,
         overseer: Optional["HermesOverseer"] = None,
     ):
-        self.broker = AsyncBrokerWrapper(broker)
+        self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         self.mm = money_manager
         self.ic = ic_builder
@@ -413,7 +461,11 @@ class AbstractStrategy(ABC):
         line = f"{ts} [{self.NAME}] {msg}"
         self.execution_logs.append(line)
         logger.info(line)
-        self.db.write_log(self.strategy_id, msg)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self.db.write_log(self.strategy_id, msg))
+        except RuntimeError:
+            asyncio.run(self.db.write_log(self.strategy_id, msg))
 
     async def find_expiry_in_dte_range(self, symbol: str, min_dte: int, max_dte: int,
                                  prefer: str = "max") -> Optional[str]:
@@ -430,7 +482,7 @@ class AbstractStrategy(ABC):
         chosen = max(candidates) if prefer == "max" else min(candidates)
         return chosen.strftime("%Y-%m-%d")
 
-    def find_active_ic_expiry(self, symbol: str) -> Optional[str]:
+    async def find_active_ic_expiry(self, symbol: str) -> Optional[str]:
         """Return the expiry of an incomplete Iron Condor for this strategy and symbol.
 
         Deterministic ordering: when multiple incomplete ICs exist, return
@@ -438,7 +490,7 @@ class AbstractStrategy(ABC):
         closest to its DTE deadline. Without sorting, dict iteration order
         determined the choice — stable in CPython but reads as non-obvious.
         """
-        open_legs = self.db.open_legs(self.strategy_id, symbol)
+        open_legs = await self.db.open_legs(self.strategy_id, symbol)
         expiry_sides: Dict[str, set] = {}
         for leg in open_legs:
             exp = leg.get("expiry")
@@ -555,7 +607,7 @@ class CascadingEngine:
                  money_manager: Optional["MoneyManager"] = None,
                  config: Optional[Dict[str, Any]] = None,
                  event_bus: Optional[EventBus] = None):
-        self.broker = AsyncBrokerWrapper(broker)
+        self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         # Sort by declared PRIORITY (1 highest)
         self.strategies = sorted(strategies, key=lambda s: s.PRIORITY)
@@ -600,16 +652,16 @@ class CascadingEngine:
                     active_legs.add(top)
         except Exception:                              # noqa: BLE001
             logger.exception("[ENGINE] active-order leg fetch failed")
-        self.db.upsert_positions(positions, active_order_legs=active_legs)
+        await self.db.upsert_positions(positions, active_order_legs=active_legs)
 
     # 2
     async def reconcile_orphans(self) -> None:
         """Flag broker positions not tied to any strategy as MANUAL_ORPHAN."""
-        tracked = self.db.tracked_option_symbols()
+        tracked = await self.db.tracked_option_symbols()
         live = {p["symbol"] for p in await self.broker.get_positions() or []}
         orphans = live - tracked
         if orphans:
-            self.db.flag_orphans(orphans)
+            await self.db.flag_orphans(orphans)
 
     # 3
     async def process_management(self) -> List[TradeAction]:
@@ -622,17 +674,23 @@ class CascadingEngine:
         return actions
 
     # 4
-    def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
+    async def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
         """Per-strategy watchlist with fallback to the engine-level default."""
         getter = getattr(self.db, "list_watchlist", None)
         if getter is None:
             return list(default)
         try:
-            wl = getter(strategy_id) or []
+            import inspect
+            if inspect.iscoroutinefunction(getter):
+                wl = await getter(strategy_id)
+            else:
+                wl = getter(strategy_id)
+                if inspect.iscoroutine(wl):
+                    wl = await wl
         except Exception as exc:                          # noqa: BLE001
             logger.exception("watchlist read failed for %s: %s", strategy_id, exc)
             return list(default)
-        return wl or list(default)
+        return (wl or []) or list(default)
 
     async def process_entries(self, watchlist: Sequence[str]) -> int:
         """Execute entries in priority order. Submits actions after each strategy
@@ -652,14 +710,14 @@ class CascadingEngine:
                         "[ENGINE] max_orders_per_tick=%d reached; skipping %s entries",
                         max_per_tick, s.NAME,
                     )
-                    self.db.write_log(
+                    await self.db.write_log(
                         s.strategy_id,
                         f"[GUARD] max_orders_per_tick={max_per_tick} reached; "
                         f"{s.NAME} entries skipped this tick",
                     )
                     break
 
-                wl = self._watchlist_for(s.strategy_id, unique_watchlist)
+                wl = await self._watchlist_for(s.strategy_id, unique_watchlist)
                 # Drain entire watchlist for THIS strategy.
                 actions = await s.execute_entries(wl)
 
@@ -670,7 +728,7 @@ class CascadingEngine:
                         "[ENGINE] %s generated %d actions; trimming to %d (max_orders_per_tick=%d)",
                         s.NAME, len(actions), remaining, max_per_tick,
                     )
-                    self.db.write_log(
+                    await self.db.write_log(
                         s.strategy_id,
                         f"[GUARD] {s.NAME} generated {len(actions)} actions; "
                         f"trimmed to {remaining} (max_orders_per_tick={max_per_tick})",
@@ -705,7 +763,7 @@ class CascadingEngine:
         if blocked:
             actions = list(actions)
             for a in actions:
-                self.db.write_log(
+                await self.db.write_log(
                     a.strategy_id,
                     f"[OFF-HOURS BLOCKED] {a.symbol} {action_type} "
                     f"qty={a.quantity} — {reason}; not sent to broker",
@@ -748,14 +806,14 @@ class CascadingEngine:
                 # Without this, every tick re-generates and re-queues the same
                 # spread because the approval hasn't been actioned yet.
                 side_type = (a.strategy_params or {}).get("side_type")
-                if self.db.has_pending_approval(a.strategy_id, a.symbol,
+                if await self.db.has_pending_approval(a.strategy_id, a.symbol,
                                                 side_type, a.expiry):
                     logger.info(
                         "[C2] Skipping duplicate — already PENDING: %s %s "
                         "side=%s expiry=%s",
                         a.strategy_id, a.symbol, side_type, a.expiry,
                     )
-                    self.db.write_log(
+                    await self.db.write_log(
                         a.strategy_id,
                         f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
                         f"already PENDING approval — skipped",
@@ -764,19 +822,19 @@ class CascadingEngine:
 
                 # Queue for human review instead of firing directly.
                 action_dict = dataclasses.asdict(a)
-                self.db.queue_for_approval(action_dict, action_type=action_type)
+                await self.db.queue_for_approval(action_dict, action_type=action_type)
                 logger.info(
                     "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
                     a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
                 )
-                self.db.write_log(
+                await self.db.write_log(
                     a.strategy_id,
                     f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
                     f"side={side_type} expiry={a.expiry} "
                     f"qty={a.quantity} — awaiting human approval",
                 )
             else:
-                self.db.record_pending_order(a)
+                await self.db.record_pending_order(a)
                 # Management actions whose legs are all *_to_close represent
                 # the close of an existing trade, not a new entry. Route
                 # them to ``close_trade_from_action`` which UPDATES the
@@ -804,17 +862,17 @@ class CascadingEngine:
                         # PENDING row so capacity recovers; a Trade row was
                         # never written, nothing to roll back.
                         if is_pure_close and close_method is not None:
-                            close_method(a, {"errors": str(exc)})
+                            await close_method(a, {"errors": str(exc)})
                         else:
-                            self.db.record_order_response(
+                            await self.db.record_order_response(
                                 a, {"errors": str(exc)})
                         logger.exception("place_order failed for %s: %s",
                                           a.symbol, exc)
                     else:
                         if is_pure_close and close_method is not None:
-                            close_method(a, resp)
+                            await close_method(a, resp)
                         else:
-                            self.db.record_order_response(a, resp)
+                            await self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
@@ -850,8 +908,7 @@ class CascadingEngine:
 
         if event.verdict == "VETO":
             logger.info("[AI VETOED] Strategy=%s symbol=%s - %s", event.strategy_id, event.symbol, event.rationale)
-            await asyncio.to_thread(
-                self.db.write_log,
+            await self.db.write_log(
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
@@ -870,8 +927,7 @@ class CascadingEngine:
         if self.approval_mode:
             # Dedup check
             side_type = (a.strategy_params or {}).get("side_type")
-            has_pending = await asyncio.to_thread(
-                self.db.has_pending_approval,
+            has_pending = await self.db.has_pending_approval(
                 a.strategy_id, a.symbol, side_type, a.expiry
             )
             if has_pending:
@@ -879,8 +935,7 @@ class CascadingEngine:
                     "[C2] Skipping duplicate — already PENDING: %s %s side=%s expiry=%s",
                     a.strategy_id, a.symbol, side_type, a.expiry,
                 )
-                await asyncio.to_thread(
-                    self.db.write_log,
+                await self.db.write_log(
                     a.strategy_id,
                     f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} already PENDING approval — skipped"
                 )
@@ -888,20 +943,19 @@ class CascadingEngine:
 
             # Queue for human review
             action_dict = dataclasses.asdict(a)
-            await asyncio.to_thread(self.db.queue_for_approval, action_dict, action_type="entry")
+            await self.db.queue_for_approval(action_dict, action_type="entry")
             logger.info(
                 "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
                 a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
             )
-            await asyncio.to_thread(
-                self.db.write_log,
+            await self.db.write_log(
                 a.strategy_id,
                 f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
                 f"side={side_type} expiry={a.expiry} "
                 f"qty={a.quantity} — awaiting human approval"
             )
         else:
-            await asyncio.to_thread(self.db.record_pending_order, a)
+            await self.db.record_pending_order(a)
             
             # Determine if pure close
             is_pure_close = (
@@ -916,20 +970,20 @@ class CascadingEngine:
                 resp = await self.broker.place_order_from_action(a)
             except Exception as exc:
                 if is_pure_close and close_method is not None:
-                    await asyncio.to_thread(close_method, a, {"errors": str(exc)})
+                    await close_method(a, {"errors": str(exc)})
                 else:
-                    await asyncio.to_thread(self.db.record_order_response, a, {"errors": str(exc)})
+                    await self.db.record_order_response(a, {"errors": str(exc)})
                 logger.exception("place_order failed for %s: %s", a.symbol, exc)
             else:
                 if is_pure_close and close_method is not None:
-                    await asyncio.to_thread(close_method, a, resp)
+                    await close_method(a, resp)
                 else:
-                    await asyncio.to_thread(self.db.record_order_response, a, resp)
+                    await self.db.record_order_response(a, resp)
 
     async def _async_propose(self, watchlist: Sequence[str]) -> None:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""
         try:
-            ai_actions = await asyncio.to_thread(self.overseer.propose, watchlist)
+            ai_actions = await self.overseer.propose(watchlist)
             if ai_actions:
                 await self.submit(ai_actions, action_type="ai")
         except Exception as exc:
@@ -970,8 +1024,7 @@ class CascadingEngine:
         # Run entries for this symbol across strategies in priority order
         for s in self.strategies:
             try:
-                # Check strategy-specific watchlist to make sure this symbol is watched
-                wl = self._watchlist_for(s.strategy_id, [symbol])
+                wl = await self._watchlist_for(s.strategy_id, [symbol])
                 if symbol not in wl:
                     continue
                 

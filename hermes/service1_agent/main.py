@@ -92,7 +92,7 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
 _REJECTED_ORDER_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
 
 
-def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
+async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     """Execute one C2-approved action and reconcile its approval row.
 
     Returns one of: ``"executed"``, ``"preview"``, ``"rejected"``, ``"failed"``.
@@ -111,7 +111,9 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     * Clean response → approval marked EXECUTED and ``[C2 EXECUTED]`` is
       written for the operator feed.
     """
-    from hermes.service1_agent.core import TradeAction
+    from hermes.service1_agent.core import TradeAction, AsyncBrokerWrapper
+
+    async_broker = AsyncBrokerWrapper(broker, db)
 
     approval_id = item["id"]
     action_json = item["action_json"]
@@ -120,7 +122,7 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     except Exception as exc:                                   # noqa: BLE001
         log.exception("[C2] Failed to rebuild TradeAction id=%d: %s",
                       approval_id, exc)
-        db.mark_approval_executed(
+        await db.mark_approval_executed(
             approval_id, success=False,
             notes=f"action rebuild error: {exc}",
         )
@@ -135,7 +137,7 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     if blocked:
         log.info("[C2] OFF-HOURS — deferring approval id=%d (%s)",
                  approval_id, reason)
-        db.write_log(
+        await db.write_log(
             action.strategy_id,
             f"[C2 DEFERRED] {action.symbol} approval_id={approval_id} — "
             f"{reason}; will execute on next tick during regular session",
@@ -147,13 +149,13 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         # No broker call happens — don't pretend it did.  Skip
         # record_pending_order so capacity isn't consumed by a row
         # that will never settle.
-        db.mark_approval_executed(
+        await db.mark_approval_executed(
             approval_id, success=False,
             notes="dry_run=True — no broker order placed",
         )
         log.info("[C2] dry_run preview only — approval id=%d "
                  "NOT submitted to broker", approval_id)
-        db.write_log(
+        await db.write_log(
             action.strategy_id,
             f"[C2 PREVIEW] {action.symbol} {action.order_class} "
             f"qty={action.quantity} approval_id={approval_id} — "
@@ -161,25 +163,25 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "preview"
 
-    db.record_pending_order(action)
+    await db.record_pending_order(action)
     try:
-        resp = broker.place_order_from_action(action)
+        resp = await async_broker.place_order_from_action(action)
     except Exception as exc:                                   # noqa: BLE001
-        db.record_order_response(action, {"errors": str(exc)})
-        db.mark_approval_executed(
+        await db.record_order_response(action, {"errors": str(exc)})
+        await db.mark_approval_executed(
             approval_id, success=False,
             notes=f"broker raised: {exc}",
         )
         log.exception("[C2] place_order_from_action raised for "
                       "approval id=%d: %s", approval_id, exc)
-        db.write_log(
+        await db.write_log(
             action.strategy_id,
             f"[C2 FAILED] {action.symbol} approval_id={approval_id} "
             f"broker raised: {exc}",
         )
         return "failed"
 
-    db.record_order_response(action, resp)
+    await db.record_order_response(action, resp)
 
     order = (resp or {}).get("order") if isinstance(resp, dict) else None
     order_status = ""
@@ -192,22 +194,22 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
 
     if rejected:
         # record_order_response already wrote [ORDER REJECTED].
-        db.mark_approval_executed(
+        await db.mark_approval_executed(
             approval_id, success=False,
             notes=f"broker rejected: {resp}",
         )
         log.warning("[C2] broker rejected approval id=%d: %s",
                     approval_id, resp)
-        db.write_log(
+        await db.write_log(
             action.strategy_id,
             f"[C2 REJECTED] {action.symbol} approval_id={approval_id}",
         )
         return "rejected"
 
-    db.mark_approval_executed(approval_id, success=True)
+    await db.mark_approval_executed(approval_id, success=True)
     log.info("[C2] Executed approved trade: %s %s strategy=%s id=%d",
              action.symbol, action.order_class, action.strategy_id, approval_id)
-    db.write_log(
+    await db.write_log(
         action.strategy_id,
         f"[C2 EXECUTED] {action.symbol} {action.order_class} "
         f"qty={action.quantity} approval_id={approval_id}",
@@ -215,27 +217,27 @@ def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     return "executed"
 
 
-def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
+async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     """Build the LLM overseer client from current settings.
 
     Returns (client, snapshot, vision_enabled). `snapshot` is the dict of
     config values used so the tick loop can detect changes and rebuild.
     """
-    provider = (db.get_setting(SETTING_LLM_PROVIDER) or "mock").lower()
-    base_url = (db.get_setting(SETTING_LLM_BASE_URL) or "").strip()
-    model = (db.get_setting(SETTING_LLM_MODEL) or "").strip()
-    api_key = decrypt_value((db.get_setting(SETTING_LLM_API_KEY) or "").strip()) or None
-    temperature_raw = (db.get_setting(SETTING_LLM_TEMPERATURE) or "0.2").strip()
+    provider = ((await db.get_setting(SETTING_LLM_PROVIDER)) or "mock").lower()
+    base_url = ((await db.get_setting(SETTING_LLM_BASE_URL)) or "").strip()
+    model = ((await db.get_setting(SETTING_LLM_MODEL)) or "").strip()
+    api_key = decrypt_value(((await db.get_setting(SETTING_LLM_API_KEY)) or "").strip()) or None
+    temperature_raw = ((await db.get_setting(SETTING_LLM_TEMPERATURE)) or "0.2").strip()
     try:
         temperature = float(temperature_raw)
     except ValueError:
         temperature = 0.2
-    timeout_raw = (db.get_setting(SETTING_LLM_TIMEOUT) or str(DEFAULT_LLM_TIMEOUT_S)).strip()
+    timeout_raw = ((await db.get_setting(SETTING_LLM_TIMEOUT)) or str(DEFAULT_LLM_TIMEOUT_S)).strip()
     try:
         timeout_s = max(5.0, float(timeout_raw))
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
-    vision = (db.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
+    vision = ((await db.get_setting(SETTING_LLM_VISION)) or "true").lower() != "false"
     snapshot = {
         "provider": provider,
         "base_url": base_url,
@@ -268,14 +270,14 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
                          model, vision, timeout_s)
                 try:
-                    db.set_setting(SETTING_LLM_ERROR, "")
+                    await db.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:                               # noqa: BLE001
                     pass
                 return client, snapshot, vision
             except Exception as exc:                            # noqa: BLE001
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
                 try:
-                    db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
                 except Exception:                               # noqa: BLE001
                     pass
 
@@ -290,14 +292,14 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
             log.info("LLM overseer: provider=local model=%s base=%s vision=%s timeout=%.0fs",
                      model, base_url, vision, timeout_s)
             try:
-                db.set_setting(SETTING_LLM_ERROR, "")
+                await db.set_setting(SETTING_LLM_ERROR, "")
             except Exception:                                   # noqa: BLE001
                 pass
             return client, snapshot, vision
         except Exception as exc:                                # noqa: BLE001
             log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
             try:
-                db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
             except Exception:                                   # noqa: BLE001
                 pass
 
@@ -307,22 +309,22 @@ def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     return MockLLM(), snapshot, vision
 
 
-def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
+async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     """Return the operator-driven overseer config (soul, autonomy, paused, approval_mode).
 
     Defaults pull from `conf` (env vars) the very first time so nothing
     surprising happens on first boot. After that, C2 panel writes win.
     """
-    autonomy = (db.get_setting(SETTING_AUTONOMY)
+    autonomy = ((await db.get_setting(SETTING_AUTONOMY))
                 or conf.get("ai_autonomy") or "advisory").lower()
     if autonomy not in VALID_AUTONOMY:
         autonomy = "advisory"
-    soul = db.get_setting(SETTING_SOUL) or ""
-    paused = (db.get_setting(SETTING_PAUSED) or "false").lower() == "true"
-    approval_mode = (db.get_setting(SETTING_APPROVAL_MODE) or "true").lower() == "true"
+    soul = (await db.get_setting(SETTING_SOUL)) or ""
+    paused = ((await db.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
+    approval_mode = ((await db.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
     # Per-strategy enable flags — default to enabled for all known strategies.
     strategy_enabled = {
-        sid: (db.get_setting(_strategy_enabled_key(sid)) or "true").lower() != "false"
+        sid: ((await db.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
         for sid in STRATEGY_PRIORITIES
     }
     return {
@@ -394,6 +396,12 @@ def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
 def _build_broker(conf: Dict[str, Any], mode: str):
     """Build the broker for `mode`. Falls back to MockBroker only when
     *no* Tradier credentials of any kind are present in the environment."""
+    from hermes.config import settings
+    if settings.hermes_use_mcp_broker:
+        from hermes.broker.mcp_client import MCPBrokerClient
+        log.info("Initializing MCPBrokerClient mode=%s", mode)
+        return MCPBrokerClient(conf)
+
     has_any_tradier = any(
         os.environ.get(k) for k in (
             "TRADIER_ACCESS_TOKEN", "TRADIER_PAPER_TOKEN", "TRADIER_LIVE_TOKEN",
@@ -435,7 +443,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Apply schema migrations before anything else so fresh deployments are
     # never left running against a stale schema (e.g. missing expires_at).
     try:
-        await asyncio.to_thread(db.run_migrations)
+        await db.run_migrations()
     except Exception as exc:                                      # noqa: BLE001
         log.exception("run_migrations failed at startup: %s", exc)
     # Startup update check and soul syncing
@@ -449,16 +457,16 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Seed the strategies registry — required before any watchlist row can be
     # inserted (FK from strategy_watchlists.strategy_id). Idempotent.
     try:
-        await asyncio.to_thread(db.ensure_strategies, STRATEGY_PRIORITIES)
+        await db.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:                                      # noqa: BLE001
         log.exception("ensure_strategies failed at startup: %s", exc)
     # Initial mode comes from settings (so the operator's last toggle wins
     # across restarts) and falls back to env config on first ever boot.
-    initial_mode = (await asyncio.to_thread(db.get_setting, SETTING_MODE) or conf.get("mode") or "paper").lower()
+    initial_mode = (await db.get_setting(SETTING_MODE) or conf.get("mode") or "paper").lower()
     if initial_mode not in VALID_MODES:
         initial_mode = "paper"
-    await asyncio.to_thread(db.set_setting, SETTING_MODE, initial_mode)
-    await asyncio.to_thread(db.set_setting, SETTING_AGENT_STARTED_AT, _utcnow_iso())
+    await db.set_setting(SETTING_MODE, initial_mode)
+    await db.set_setting(SETTING_AGENT_STARTED_AT, _utcnow_iso())
 
     current_mode = initial_mode
     broker = _build_broker(conf, current_mode)
@@ -471,10 +479,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # snapshot also seeds defaults from env/conf when the watcher hasn't
     # written anything yet.
     current_overseer_cfg = _read_overseer_settings(db, conf)
-    await asyncio.to_thread(db.set_setting, SETTING_AUTONOMY, current_overseer_cfg["autonomy"])
-    await asyncio.to_thread(db.set_setting, SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
-    if await asyncio.to_thread(db.get_setting, SETTING_SOUL) is None:
-        await asyncio.to_thread(db.set_setting, SETTING_SOUL, "")
+    await db.set_setting(SETTING_AUTONOMY, current_overseer_cfg["autonomy"])
+    await db.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
+    if await db.get_setting(SETTING_SOUL) is None:
+        await db.set_setting(SETTING_SOUL, "")
 
     # Initialize Event Bus
     from hermes.events.bus import EventBus
@@ -500,7 +508,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Track watchlist symbols + active DB option legs
     watchlist_syms = set(conf.get("watchlist", []))
     try:
-        watchlist_syms.update(await asyncio.to_thread(db.tracked_option_symbols))
+        watchlist_syms.update(await db.tracked_option_symbols())
     except Exception:
         pass
 
@@ -537,13 +545,11 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     "calls for %ds", _cb_fail_count, _CB_COOLDOWN_S,
                 )
                 try:
-                    await asyncio.to_thread(
-                        db.set_setting,
+                    await db.set_setting(
                         SETTING_TRADIER_ERROR,
                         f"circuit breaker tripped after {_cb_fail_count} failures"
                     )
-                    await asyncio.to_thread(
-                        db.write_log,
+                    await db.write_log(
                         "ENGINE",
                         f"[CIRCUIT BREAKER] pausing {_CB_COOLDOWN_S}s after "
                         f"{_cb_fail_count} consecutive failures",
@@ -561,7 +567,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
         try:
             # 1) Mode reconciliation — pick up any toggle the watcher made.
-            desired_mode = (await asyncio.to_thread(db.get_setting, SETTING_MODE) or current_mode).lower()
+            desired_mode = (await db.get_setting(SETTING_MODE) or current_mode).lower()
             if desired_mode not in VALID_MODES:
                 desired_mode = current_mode
             if desired_mode != current_mode:
@@ -579,7 +585,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     
                     watchlist_syms = set(conf.get("watchlist", []))
                     try:
-                        watchlist_syms.update(await asyncio.to_thread(db.tracked_option_symbols))
+                        watchlist_syms.update(await db.tracked_option_symbols())
                     except Exception:
                         pass
                         
@@ -601,10 +607,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
                                    event_bus=event_bus)
                     current_mode = desired_mode
-                    await asyncio.to_thread(db.write_log, "ENGINE", f"mode switched to {current_mode}")
+                    await db.write_log("ENGINE", f"mode switched to {current_mode}")
                 except Exception as exc:                          # noqa: BLE001
                     log.exception("mode switch to %s failed: %s", desired_mode, exc)
-                    await asyncio.to_thread(db.set_setting, SETTING_TRADIER_ERROR, f"mode switch failed: {exc}")
+                    await db.set_setting(SETTING_TRADIER_ERROR, f"mode switch failed: {exc}")
 
             # 1b) LLM reconciliation
             new_llm, new_snapshot, new_vision = _build_llm(db)
@@ -643,14 +649,14 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     await engine.overseer.start()
                     
                 if llm_changed:
-                    await asyncio.to_thread(
-                        db.write_log, "ENGINE",
+                    await db.write_log(
+                        "ENGINE",
                         f"LLM swapped: provider={new_snapshot['provider']} "
                         f"model={new_snapshot['model'] or '-'}"
                     )
                 if overseer_changed:
-                    await asyncio.to_thread(
-                        db.write_log, "ENGINE",
+                    await db.write_log(
+                        "ENGINE",
                         f"Overseer reconfigured: autonomy={new_overseer_cfg['autonomy']} "
                         f"paused={new_overseer_cfg['paused']} "
                         f"soul={len(new_overseer_cfg['soul'])}B"
@@ -658,7 +664,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
             # 1d) Dynamic Watchlist Refresh
             try:
-                all_wls = await asyncio.to_thread(db.list_all_watchlists)
+                all_wls = await db.list_all_watchlists()
                 unique_syms = set()
                 for syms in all_wls.values():
                     unique_syms.update(syms)
@@ -673,14 +679,14 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             if not is_mock:
                 try:
                     wl_syms = set(current_watchlist)
-                    wl_syms.update(await asyncio.to_thread(db.tracked_option_symbols))
+                    wl_syms.update(await db.tracked_option_symbols())
                     stream_client.update_watchlist(list(wl_syms))
                 except Exception as exc:
                     log.warning("Failed to update WebSocket watchlist: %s", exc)
 
             # 1d) Hard pause check
             if current_overseer_cfg["paused"]:
-                await asyncio.to_thread(db.write_log, "ENGINE", f"heartbeat tick PAUSED mode={current_mode}")
+                await db.write_log("ENGINE", f"heartbeat tick PAUSED mode={current_mode}")
                 await asyncio.sleep(interval_s)
                 continue
 
@@ -699,7 +705,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             }
             try:
                 for _k in _LOT_KEYS:
-                    _raw = await asyncio.to_thread(db.get_setting, _k)
+                    _raw = await db.get_setting(_k)
                     if _raw is not None:
                         try:
                             conf[_k] = int(_raw)
@@ -712,25 +718,25 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
             # 1e) Stale pending-order cleanup
             try:
-                _ttl_raw = await asyncio.to_thread(db.get_setting, "pending_order_ttl_s")
+                _ttl_raw = await db.get_setting("pending_order_ttl_s")
                 _pending_ttl_s = int(_ttl_raw) if _ttl_raw else 3600
             except (TypeError, ValueError):
                 _pending_ttl_s = 3600
             try:
-                expired = await asyncio.to_thread(db.expire_stale_pending_orders, _pending_ttl_s)
+                expired = await db.expire_stale_pending_orders(_pending_ttl_s)
                 if expired:
                     log.info("Expired %d stale PENDING order(s)", expired)
-                    await asyncio.to_thread(db.write_log, "ENGINE", f"expired {expired} stale PENDING order(s)")
+                    await db.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
             except Exception as exc:                          # noqa: BLE001
                 log.warning("expire_stale_pending_orders failed: %s", exc)
 
             # 1e-ii) Stale approval cleanup
             try:
-                expired_approvals = await asyncio.to_thread(db.expire_stale_approvals)
+                expired_approvals = await db.expire_stale_approvals()
                 if expired_approvals:
                     log.info("Auto-expired %d stale approval(s)", expired_approvals)
-                    await asyncio.to_thread(
-                        db.write_log, "ENGINE",
+                    await db.write_log(
+                        "ENGINE",
                         f"auto-expired {expired_approvals} stale approval(s) past deadline"
                     )
             except Exception as exc:                          # noqa: BLE001
@@ -739,16 +745,16 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             # 1f) Execute C2-approved orders
             if current_overseer_cfg["approval_mode"]:
                 try:
-                    approved = await asyncio.to_thread(db.fetch_approved_actions)
+                    approved = await db.fetch_approved_actions()
                     for item in approved:
-                        await asyncio.to_thread(_execute_approved_action, item, broker=broker, db=db)
+                        await _execute_approved_action(item, broker=broker, db=db)
                 except Exception as exc:                       # noqa: BLE001
                     log.warning("fetch_approved_actions failed: %s", exc)
 
             # 2) Heartbeat
             mkt = market_session()
-            await asyncio.to_thread(
-                db.write_log, "ENGINE",
+            await db.write_log(
+                "ENGINE",
                 f"heartbeat tick start mode={current_mode} "
                 f"market={mkt['session']} open={mkt['is_open']}"
             )
@@ -756,8 +762,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             # 3) Market-hours gate
             if not mkt["trading_day"]:
                 nxt = next_open()
-                await asyncio.to_thread(
-                    db.write_log, "ENGINE",
+                await db.write_log(
+                    "ENGINE",
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} "
                     f"({mkt['et_date']} is not a trading day)"
                 )
@@ -766,10 +772,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
             if mkt["is_open"]:
                 # Full tick: management + entries
-                stats = await asyncio.to_thread(engine.tick, current_watchlist)
+                stats = await engine.tick(current_watchlist)
             else:
-                await asyncio.to_thread(engine.sync_positions)
-                await asyncio.to_thread(engine.reconcile_orphans)
+                await engine.sync_positions()
+                await engine.reconcile_orphans()
                 stats = {"managed": 0, "entries": 0,
                          "note": f"all submissions skipped ({mkt['session']})"}
 
@@ -780,8 +786,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 _should_run_charts = False
                 _age_days: float = 0.0
                 try:
-                    _recent_decisions = await asyncio.to_thread(
-                        db.recent_ai_decisions,
+                    _recent_decisions = await db.recent_ai_decisions(
                         strategy_id="CHART",
                         limit=max(len(db_watchlist) * 2, 20)
                     )
@@ -792,7 +797,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                         _should_run_charts = True
                         log.info("Forcing chart analysis: some symbols in watchlist are missing analysis.")
                     else:
-                        _last_chart_ts_raw = await asyncio.to_thread(db.get_setting, _CHART_ANALYSIS_KEY)
+                        _last_chart_ts_raw = await db.get_setting(_CHART_ANALYSIS_KEY)
                         if _last_chart_ts_raw:
                             _last_chart_dt = _parse_iso(_last_chart_ts_raw)
                             if _last_chart_dt is None:
@@ -810,10 +815,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 if _should_run_charts:
                     log.info("Running chart vision analysis for %d symbols", len(db_watchlist))
                     try:
-                        await asyncio.to_thread(engine.overseer.analyze_charts, db_watchlist)
-                        await asyncio.to_thread(db.set_setting, _CHART_ANALYSIS_KEY, _utcnow_iso())
-                        await asyncio.to_thread(
-                            db.write_log, "ENGINE",
+                        await engine.overseer.analyze_charts(db_watchlist)
+                        await db.set_setting(_CHART_ANALYSIS_KEY, _utcnow_iso())
+                        await db.write_log(
+                            "ENGINE",
                             f"chart vision: analysed {len(db_watchlist)} symbols "
                             f"(7-month daily bars, next run in 7 days)"
                         )
@@ -823,12 +828,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     _days_left = max(0.0, _CHART_ANALYSIS_INTERVAL_DAYS - _age_days)
                     log.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
 
-            await asyncio.to_thread(db.set_setting, SETTING_TRADIER_OK_TS, _utcnow_iso())
-            await asyncio.to_thread(db.set_setting, SETTING_TRADIER_ERROR, "")
-            await asyncio.to_thread(db.set_setting, "market_session", mkt["session"])
+            await db.set_setting(SETTING_TRADIER_OK_TS, _utcnow_iso())
+            await db.set_setting(SETTING_TRADIER_ERROR, "")
+            await db.set_setting("market_session", mkt["session"])
             log.info("tick complete: %s  [%s]", stats, session_label())
-            await asyncio.to_thread(
-                db.write_log, "ENGINE",
+            await db.write_log(
+                "ENGINE",
                 f"heartbeat tick complete: {stats} | {session_label()}"
             )
             _cb_fail_count = 0
@@ -841,10 +846,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                 "chat/completions", "llm", "unauthorized")
                 is_llm_err = any(kw.lower() in exc_str.lower() for kw in llm_keywords)
                 if is_llm_err:
-                    await asyncio.to_thread(db.set_setting, SETTING_LLM_ERROR, exc_str)
+                    await db.set_setting(SETTING_LLM_ERROR, exc_str)
                 else:
-                    await asyncio.to_thread(db.set_setting, SETTING_TRADIER_ERROR, exc_str)
-                await asyncio.to_thread(db.write_log, "ENGINE", f"tick failed: {exc}", level="ERROR")
+                    await db.set_setting(SETTING_TRADIER_ERROR, exc_str)
+                await db.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:                                     # noqa: BLE001
                 pass
 

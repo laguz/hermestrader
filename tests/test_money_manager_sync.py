@@ -29,16 +29,16 @@ class _StubBroker:
 
 
 class _StubDB:
-    def write_log(self, *_args, **_kwargs):
+    async def write_log(self, *_args, **_kwargs):
         pass
 
-    def upsert_positions(self, *_args, **_kwargs):
+    async def upsert_positions(self, *_args, **_kwargs):
         pass
 
-    def tracked_option_symbols(self):
+    async def tracked_option_symbols(self):
         return set()
 
-    def flag_orphans(self, *_args, **_kwargs):
+    async def flag_orphans(self, *_args, **_kwargs):
         pass
 import pytest
 from hermes.service1_agent.core import AsyncBrokerWrapper

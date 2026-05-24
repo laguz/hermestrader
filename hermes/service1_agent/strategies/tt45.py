@@ -39,9 +39,9 @@ class TastyTrade45(AbstractStrategy):
 
         # DTE window and delta target — live-tunable via system_settings.
         try:
-            entry_min_dte = int(self.db.get_setting("tt45_min_dte") or 30)
-            entry_max_dte = int(self.db.get_setting("tt45_max_dte") or 60)
-            entry_delta = float(self.db.get_setting("tt45_delta") or 0.16)
+            entry_min_dte = int(await self.db.get_setting("tt45_min_dte") or 30)
+            entry_max_dte = int(await self.db.get_setting("tt45_max_dte") or 60)
+            entry_delta = float(await self.db.get_setting("tt45_delta") or 0.16)
         except (TypeError, ValueError):
             entry_min_dte, entry_max_dte, entry_delta = 30, 60, 0.16
 
@@ -54,14 +54,14 @@ class TastyTrade45(AbstractStrategy):
         for symbol in symbols:
             try:
                 # Always prefer to complete an existing IC over opening a new one.
-                expiry = self.find_active_ic_expiry(symbol)
+                expiry = await self.find_active_ic_expiry(symbol)
                 if not expiry:
                     expiry = await self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
 
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no expiry in {entry_min_dte}-{entry_max_dte} DTE range; skip.")
                     continue
-                existing = {leg["side"] for leg in self.db.open_legs(self.strategy_id, symbol)
+                existing = {leg["side"] for leg in await self.db.open_legs(self.strategy_id, symbol)
                             if leg.get("expiry") == expiry}
                 dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                 self._log(f"→ {symbol}: expiry={expiry} {dte}DTE existing_sides={sorted(existing)}")
@@ -131,7 +131,7 @@ class TastyTrade45(AbstractStrategy):
     async def manage_positions(self) -> List[TradeAction]:
         """Hard exit at 21 DTE; neutralise challenged side (|Δ_short| > 0.30)."""
         actions: List[TradeAction] = []
-        trades = self.db.open_trades(self.strategy_id)
+        trades = await self.db.open_trades(self.strategy_id)
         if not trades:
             return []
 

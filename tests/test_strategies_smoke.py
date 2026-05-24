@@ -12,6 +12,7 @@ landing unnoticed.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import date, timedelta
 
 
@@ -101,6 +102,7 @@ async def test_cs7_skips_when_no_7_dte_available():
     )
     actions = await s.execute_entries(["AAPL"])
     assert actions == []
+    await asyncio.sleep(0.01)
     assert any("no exact 7 DTE expiry" in m for m in db.logs)
 
 
@@ -136,7 +138,7 @@ class _DBWithShares(StubDB):
         super().__init__()
         self._share_lots = share_lots
 
-    def equity_position(self, symbol: str) -> int:
+    async def equity_position(self, symbol: str) -> int:
         return self._share_lots * 100
 
 
