@@ -1,5 +1,29 @@
-# ── HermesTrader — single-stage production image ──────────────────────
-FROM python:3.11-slim
+# ── Stage 1: Build dependency wheels ──────────────────────────────────
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# System dependencies needed ONLY to compile/build python packages:
+#   libpq-dev + gcc + git  — required to compile psycopg binary wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        gcc \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements manifests
+COPY requirements.txt /build/
+COPY requirements-ml.txt /build/
+
+# Build wheel files for all production dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip wheel --no-cache-dir --wheel-dir=/build/wheels \
+        -r requirements.txt \
+        -r requirements-ml.txt
+
+
+# ── Stage 2: Final lightweight runtime container ─────────────────────
+FROM python:3.11-slim AS runner
 
 ARG HERMES_VERSION=dev
 LABEL hermes.version="${HERMES_VERSION}"
@@ -7,18 +31,15 @@ ENV HERMES_VERSION="${HERMES_VERSION}"
 
 WORKDIR /app
 
-# System deps:
-#   libpq-dev + gcc      — needed by psycopg binary build
-#   tzdata               — populates /usr/share/zoneinfo for Python's zoneinfo module
-#                          (market_hours.py uses ZoneInfo("America/New_York"))
-#   libfreetype6         — required by matplotlib's Agg renderer (chart vision layer)
-#   libpng-dev           — PNG encode/decode used by matplotlib savefig()
-#   fontconfig           — lets matplotlib discover system fonts for axis labels
-#   fonts-dejavu-core    — fallback font set; matplotlib warns and skips labels without it
+# Runtime system libraries:
+#   libpq5               — runtime postgres client library (no dev headers needed)
+#   tzdata               — populates /usr/share/zoneinfo for python zoneinfo fallback
+#   libfreetype6         — required by matplotlib's Agg renderer
+#   libpng-dev           — PNG encoder for matplotlib savefig()
+#   fontconfig           — matplotlib system font discoverer
+#   fonts-dejavu-core    — fallback font set
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libpq-dev \
-        gcc \
-        git \
+        libpq5 \
         tzdata \
         libfreetype6 \
         libpng-dev \
@@ -26,15 +47,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies first (layer-cache friendly).
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy pre-compiled wheels from builder stage
+COPY --from=builder /build/wheels /app/wheels
+
+# Install the wheels locally (without compilers or downloading)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --no-index --find-links=/app/wheels /app/wheels/*.whl && \
+    rm -rf /app/wheels
 
 # Verify the chart vision layer is importable at build time so a missing
 # dependency fails the build rather than silently degrading at runtime.
 RUN python -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot"
 
-# Copy application source.
+# Copy application source code
 COPY . /app
 
 # Runtime environment
