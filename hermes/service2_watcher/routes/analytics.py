@@ -240,15 +240,14 @@ def get_analytics() -> Response:
 
 
 def _build_broker_for_analysis():
-    """Construct a TradierBroker matching the operator's current mode.
+    """Construct a broker matching the operator's current mode.
 
     Inlined here (rather than re-using a global) so the analysis endpoints
     pick up mode toggles immediately without a watcher restart. The agent
     has its own broker instance — these are independent.
 
-    Falls back to MockBroker when no Tradier credentials are configured,
-    so the K-Means S/R panel still renders in dev/demo mode (matches what
-    the agent does for its own broker).
+    Returns an async TradierBroker when credentials are present, or a
+    sync MockBroker as a fallback for dev/demo mode.
     """
     from hermes.broker.tradier import TradierBroker
     mode = os.environ.get("HERMES_MODE", "paper").lower()
@@ -276,12 +275,27 @@ def _build_broker_for_analysis():
     })
 
 
+async def _analyze_one(broker, symbol: str, period: str) -> Dict[str, Any]:
+    """Await an async broker or run a sync broker in a thread, uniformly."""
+    import asyncio
+    import functools
+    import inspect
+    result = broker.analyze_symbol(symbol, period=period)
+    if inspect.isawaitable(result):
+        return await result
+    # MockBroker is synchronous — offload to a thread so we don't block the
+    # event loop while it generates its deterministic mock bars.
+    loop = asyncio.get_event_loop()
+    fn = functools.partial(broker.analyze_symbol, symbol, period=period)
+    return await loop.run_in_executor(None, fn)
+
+
 @router.get("/api/analysis/{symbol}")
-def get_symbol_analysis(symbol: str) -> Response:
+async def get_symbol_analysis(symbol: str) -> Response:
     """S/R clustering for one symbol, augmented with the latest XGB POP."""
     try:
         broker = _build_broker_for_analysis()
-        analysis = broker.analyze_symbol(symbol.upper())
+        analysis = await _analyze_one(broker, symbol.upper(), period="6m")
         if "error" in analysis:
             return _safe_json_response(analysis)
         local_db = HermesDB(DSN)
@@ -292,14 +306,13 @@ def get_symbol_analysis(symbol: str) -> Response:
 
 
 @router.get("/api/analysis")
-def get_watchlist_analysis(period: str = "6m") -> Response:
+async def get_watchlist_analysis(period: str = "6m") -> Response:
     """S/R clustering for every watchlist symbol, augmented with POP."""
+    import asyncio
     period = (period or "6m").lower()
     if period not in {"1m", "3m", "6m", "1y"}:
         period = "6m"
     try:
-        from concurrent.futures import ThreadPoolExecutor
-
         local_db = HermesDB(DSN)
         all_wl = local_db.list_all_watchlists()
         symbols = set()
@@ -313,19 +326,18 @@ def get_watchlist_analysis(period: str = "6m") -> Response:
         sorted_symbols = sorted(symbols)
         broker = _build_broker_for_analysis()
 
-        # 1. Fetch analysis in parallel (I/O bound REST calls)
+        # 1. Fetch analysis concurrently — gather drives async broker calls;
+        #    _analyze_one handles the sync MockBroker fallback via run_in_executor.
+        raw = await asyncio.gather(
+            *[_analyze_one(broker, sym, period) for sym in sorted_symbols],
+            return_exceptions=True,
+        )
         results: Dict[str, Any] = {}
-        with ThreadPoolExecutor(max_workers=min(len(sorted_symbols), 20)) as executor:
-            future_to_sym = {
-                executor.submit(broker.analyze_symbol, sym, period=period): sym
-                for sym in sorted_symbols
-            }
-            for future in future_to_sym:
-                sym = future_to_sym[future]
-                try:
-                    results[sym] = future.result()
-                except Exception as exc:                           # noqa: BLE001
-                    results[sym] = {"error": str(exc)}
+        for sym, res in zip(sorted_symbols, raw):
+            if isinstance(res, Exception):
+                results[sym] = {"error": str(res)}
+            else:
+                results[sym] = res
 
         # 2. Fetch all predictions in one batch (DB optimization)
         preds_map = local_db.latest_predictions_batch(sorted_symbols)
