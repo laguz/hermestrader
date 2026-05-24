@@ -299,7 +299,7 @@ async def get_symbol_analysis(symbol: str) -> Response:
         if "error" in analysis:
             return _safe_json_response(analysis)
         local_db = HermesDB(DSN)
-        xgb_pred = local_db.latest_prediction(symbol.upper()) or {}
+        xgb_pred = await local_db.latest_prediction(symbol.upper()) or {}
         return _safe_json_response(augment_levels_with_pop(analysis, xgb_pred))
     except Exception as exc:                                       # noqa: BLE001
         return _safe_json_response({"error": str(exc)})
@@ -314,7 +314,7 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
         period = "6m"
     try:
         local_db = HermesDB(DSN)
-        all_wl = local_db.list_all_watchlists()
+        all_wl = await local_db.list_all_watchlists()
         symbols = set()
         for wl in all_wl.values():
             symbols.update(wl)
@@ -340,7 +340,7 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
                 results[sym] = res
 
         # 2. Fetch all predictions in one batch (DB optimization)
-        preds_map = local_db.latest_predictions_batch(sorted_symbols)
+        preds_map = await local_db.latest_predictions_batch(sorted_symbols)
 
         # 3. Augment with POP
         for sym, ans in results.items():
