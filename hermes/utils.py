@@ -140,21 +140,20 @@ def check_for_updates() -> None:
         logger.warning("Failed to save update status to DB: %s", e)
 
 
-def sync_soul_file_to_db(db) -> None:
+async def sync_soul_file_to_db(db) -> None:
     """Read the content of the mounted soul.md file and sync it to the DB if different.
     
     This acts as the source-of-truth loader on container startup.
     """
-    import asyncio
     soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
     if os.path.exists(soul_path):
         try:
             with open(soul_path, "r", encoding="utf-8") as f:
                 file_soul = f.read()
-            db_soul = asyncio.run(db.get_setting("soul_md")) or ""
+            db_soul = (await db.get_setting("soul_md")) or ""
             if file_soul != db_soul:
                 logger.info("Syncing soul.md from file to database (length: %d)", len(file_soul))
-                asyncio.run(db.set_setting("soul_md", file_soul))
-                asyncio.run(db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)"))
+                await db.set_setting("soul_md", file_soul)
+                await db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
         except Exception as exc:
             logger.warning("Failed to sync soul.md to database: %s", exc)

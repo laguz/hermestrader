@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
     try:
         from hermes.utils import sync_soul_file_to_db, check_for_updates
         import threading
-        sync_soul_file_to_db(db)
+        await sync_soul_file_to_db(db)
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("lifespan startup update/soul sync failed: %s", exc)

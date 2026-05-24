@@ -194,3 +194,69 @@ def test_build_drops_inf_rows_from_halted_bars():
     numeric = df.select_dtypes(include=[np.number])
     assert np.isfinite(numeric.to_numpy()).all(), "build() must not emit +/-inf values to the model"
     assert halt_idx not in df.index, "the halted bar should be dropped, not kept with inf features"
+
+
+# ---------------------------------------------------------------------------
+# History sync non-list response handling
+# ---------------------------------------------------------------------------
+class _StubDB:
+    def __init__(self) -> None:
+        self.daily_bars_saved = {}
+        self.intraday_bars_saved = {}
+
+    def list_all_watchlists(self) -> dict:
+        return {"wl1": ["AAPL"]}
+
+    def save_daily_bars(self, symbol: str, df: pd.DataFrame) -> None:
+        self.daily_bars_saved[symbol] = df
+
+    def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
+        self.intraday_bars_saved[symbol] = df
+
+
+class _StubBroker:
+    def __init__(self, daily_response: Any, intra_response: Any) -> None:
+        self.daily_response = daily_response
+        self.intra_response = intra_response
+        self.calls = []
+
+    def get_history(self, symbol: str, interval: str = "daily", start: Optional[str] = None, end: Optional[str] = None) -> Any:
+        self.calls.append((symbol, interval, start, end))
+        if interval == "daily":
+            return self.daily_response
+        else:
+            return self.intra_response
+
+
+def test_sync_history_handles_non_list_broker_error():
+    db = _StubDB()
+    broker = _StubBroker(daily_response="401 Unauthorized", intra_response="Some Intraday Error")
+    pred = AsyncXGBPredictor(
+        db=db,
+        feat=FeatureEngineer(),
+        broker=broker,
+        watchlist=["AAPL"],
+    )
+    pred._sync_history()
+
+    assert not db.daily_bars_saved
+    assert not db.intraday_bars_saved
+
+
+def test_sync_history_saves_valid_list_responses():
+    db = _StubDB()
+    daily_bars = [{"date": "2024-01-02", "open": 100.0, "high": 105.0, "low": 99.0, "close": 101.0, "volume": 1000.0}]
+    intra_bars = [{"date": "2024-01-02T09:30:00Z", "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10.0}]
+    broker = _StubBroker(daily_response=daily_bars, intra_response=intra_bars)
+    pred = AsyncXGBPredictor(
+        db=db,
+        feat=FeatureEngineer(),
+        broker=broker,
+        watchlist=["AAPL"],
+    )
+    pred._sync_history()
+
+    assert "AAPL" in db.daily_bars_saved
+    assert "AAPL" in db.intraday_bars_saved
+    assert db.daily_bars_saved["AAPL"].iloc[0]["close"] == 101.0
+

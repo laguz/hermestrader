@@ -80,6 +80,11 @@ class TradierStreamClient:
                     await asyncio.sleep(5)
                     continue
 
+                if ws_url.startswith("https://"):
+                    ws_url = ws_url.replace("https://", "wss://", 1)
+                elif ws_url.startswith("http://"):
+                    ws_url = ws_url.replace("http://", "ws://", 1)
+
                 url_with_session = f"{ws_url}?sessionid={self.session_id}"
                 logger.info("Connecting to Tradier WebSocket at %s", ws_url)
                 async with websockets.connect(url_with_session) as ws:

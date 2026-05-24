@@ -450,7 +450,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     try:
         from hermes.utils import sync_soul_file_to_db, check_for_updates
         import threading
-        await asyncio.to_thread(sync_soul_file_to_db, db)
+        await sync_soul_file_to_db(db)
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:                                      # noqa: BLE001
         log.exception("Agent startup update/soul sync failed: %s", exc)
@@ -473,12 +473,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     # LLM client is built from settings rather than the hard-coded MockLLM
     # passed to run() — that lets the watcher swap providers at runtime.
-    current_llm, current_llm_snapshot, current_vision = _build_llm(db)
+    current_llm, current_llm_snapshot, current_vision = await _build_llm(db)
 
     # Operator doctrine + autonomy + pause are tracked together. The first
     # snapshot also seeds defaults from env/conf when the watcher hasn't
     # written anything yet.
-    current_overseer_cfg = _read_overseer_settings(db, conf)
+    current_overseer_cfg = await _read_overseer_settings(db, conf)
     await db.set_setting(SETTING_AUTONOMY, current_overseer_cfg["autonomy"])
     await db.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
     if await db.get_setting(SETTING_SOUL) is None:
@@ -613,11 +613,11 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     await db.set_setting(SETTING_TRADIER_ERROR, f"mode switch failed: {exc}")
 
             # 1b) LLM reconciliation
-            new_llm, new_snapshot, new_vision = _build_llm(db)
+            new_llm, new_snapshot, new_vision = await _build_llm(db)
             llm_changed = new_snapshot != current_llm_snapshot
 
             # 1c) Soul / autonomy / pause reconciliation
-            new_overseer_cfg = _read_overseer_settings(db, conf)
+            new_overseer_cfg = await _read_overseer_settings(db, conf)
             overseer_changed = new_overseer_cfg != current_overseer_cfg
 
             if llm_changed or overseer_changed:

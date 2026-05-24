@@ -11,11 +11,7 @@
 #   ./hermes.sh logs [service]   Tail container logs (default: all)
 #   ./hermes.sh status           Show running containers
 #   ./hermes.sh build            Build the image locally (dev workflow)
-#   ./hermes.sh push             Push locally-built image to Docker Hub
-# ──────────────────────────────────────────────────────────────────────
-set -euo pipefail
-
-# ── Config ────────────────────────────────────────────────────────────
+#   ./hermes.sh push   # ── Config ────────────────────────────────────────────────────────────
 HERMES_IMAGE="${HERMES_IMAGE:-laguz3/hermes}"
 HERMES_TAG="${HERMES_TAG:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,6 +19,57 @@ cd "$SCRIPT_DIR"
 
 IMAGE_FULL="${HERMES_IMAGE}:${HERMES_TAG}"
 HERMES_VERSION="$(cat VERSION 2>/dev/null || echo '0.0.0')"
+
+# Detect and load instances (both paper and live if config files exist)
+ENV_FILES=()
+PROJECT_NAMES=()
+
+# Check if we are in a two-folder setup
+TWO_FOLDER_SETUP=false
+if [ -d "../hermestrader-live" ] || [[ "$SCRIPT_DIR" == *"-live" ]]; then
+    TWO_FOLDER_SETUP=true
+fi
+
+if [ "$TWO_FOLDER_SETUP" = "true" ]; then
+    # In a two-folder setup, only manage the instance that matches the current folder context
+    if [[ "$SCRIPT_DIR" == *"-live" ]]; then
+        if [ -f .env.live ]; then
+            ENV_FILES+=(".env.live")
+            PROJECT_NAMES+=("hermes-live")
+        elif [ -f .env ]; then
+            ENV_FILES+=(".env")
+            PROJECT_NAMES+=("hermes-live")
+        fi
+    else
+        if [ -f .env.paper ]; then
+            ENV_FILES+=(".env.paper")
+            PROJECT_NAMES+=("hermes-paper")
+        elif [ -f .env ]; then
+            ENV_FILES+=(".env")
+            PROJECT_NAMES+=("hermes-paper")
+        fi
+    fi
+else
+    # Single-folder setup: manage both side-by-side if config files exist
+    if [ -f .env.paper ]; then
+        ENV_FILES+=(".env.paper")
+        PROJECT_NAMES+=("hermes-paper")
+    fi
+    if [ -f .env.live ]; then
+        ENV_FILES+=(".env.live")
+        PROJECT_NAMES+=("hermes-live")
+    fi
+    if [ ${#ENV_FILES[@]} -eq 0 ]; then
+        if [ -f .env ]; then
+            ENV_FILES+=(".env")
+            PROJECT_NAMES+=("hermes-paper")
+        else
+            ENV_FILES+=(".env.paper")
+            PROJECT_NAMES+=("hermes-paper")
+        fi
+    fi
+fi
+
 
 # ── Colours ───────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -46,33 +93,45 @@ _remote_digest() {
 }
 
 _current_version() {
+    local env_file="$1"
+    local proj_name="$2"
     docker inspect --format='{{index .Config.Labels "hermes.version"}}' \
-        "$(docker compose ps -q watcher 2>/dev/null | head -1)" 2>/dev/null || echo "unknown"
+        "$(docker compose --env-file "$env_file" -p "$proj_name" ps -q watcher 2>/dev/null | head -1)" 2>/dev/null || echo "unknown"
 }
 
 _pull() {
-    info "Pulling ${BOLD}${IMAGE_FULL}${NC} from Docker Hub…"
-    if docker compose pull 2>&1; then
-        ok "Pull complete"
-    else
-        warn "Pull failed — will use local image or build from source"
-    fi
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        info "Pulling images for ${BOLD}${proj_name}${NC} using ${env_file}…"
+        if docker compose --env-file "$env_file" -p "$proj_name" pull 2>&1; then
+            ok "Pull complete for ${proj_name}"
+        else
+            warn "Pull failed for ${proj_name} — will use local image or build from source"
+        fi
+    done
 }
 
 _up() {
-    info "Starting Hermes services…"
-    docker compose up -d
-    echo ""
-    ok "Hermes is running"
-    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
-    echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
-    echo -e "   ${CYAN}Version${NC}    → Hermes Agent v${HERMES_VERSION}"
-    _show_version
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        local api_port
+        api_port=$(grep -E "^HERMES_API_PORT=" "$env_file" | cut -d= -f2- | tr -d "'\"" || echo "8080")
+        info "Starting Hermes ${BOLD}${proj_name}${NC} services…"
+        docker compose --env-file "$env_file" -p "$proj_name" up -d
+        ok "Hermes ${proj_name} is running"
+        echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:${api_port}"
+        echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
+        _show_version "$env_file" "$proj_name"
+    done
 }
 
 _show_version() {
+    local env_file="$1"
+    local proj_name="$2"
     local ver
-    ver=$(_current_version)
+    ver=$(_current_version "$env_file" "$proj_name")
     if [ "$ver" != "" ] && [ "$ver" != "unknown" ]; then
         echo -e "   ${CYAN}Version${NC}    → ${ver}"
     fi
@@ -80,22 +139,30 @@ _show_version() {
 
 # ── Commands ──────────────────────────────────────────────────────────
 cmd_start() {
-    info "Hermes — starting with latest image"
+    info "Hermes — starting all detected instances (paper/live) with latest images"
     _pull
     _up
 }
 
 cmd_stop() {
-    info "Stopping Hermes services…"
-    docker compose down
-    ok "Stopped"
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        info "Stopping Hermes ${BOLD}${proj_name}${NC} services…"
+        docker compose --env-file "$env_file" -p "$proj_name" down
+        ok "Stopped ${proj_name}"
+    done
 }
 
 cmd_restart() {
-    info "Restarting agent + watcher…"
-    docker compose restart agent watcher
-    ok "Restarted"
-    _show_version
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        info "Restarting agent + watcher for ${BOLD}${proj_name}${NC}…"
+        docker compose --env-file "$env_file" -p "$proj_name" restart watcher
+        ok "Restarted ${proj_name}"
+        _show_version "$env_file" "$proj_name"
+    done
 }
 
 cmd_update() {
@@ -138,25 +205,54 @@ cmd_update_apply() {
     info "Updating Hermes…"
     _pull
 
-    info "Recreating containers with new image…"
-    docker compose up -d --force-recreate --no-build
-    echo ""
-    ok "Update complete — Hermes is running the latest image"
-    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
-    _show_version
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        local api_port
+        api_port=$(grep -E "^HERMES_API_PORT=" "$env_file" | cut -d= -f2- | tr -d "'\"" || echo "8080")
+        info "Recreating containers with new image for ${BOLD}${proj_name}${NC}…"
+        docker compose --env-file "$env_file" -p "$proj_name" up -d --force-recreate --no-build
+        ok "Update complete — Hermes ${proj_name} is running the latest image"
+        echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:${api_port}"
+        _show_version "$env_file" "$proj_name"
+    done
 }
 
 cmd_logs() {
-    local svc="${1:-}"
-    if [ -n "$svc" ]; then
-        docker compose logs -f "$svc"
+    local target="paper"
+    local svc=""
+    if [ "${1:-}" = "live" ]; then
+        target="live"
+        svc="${2:-}"
+    elif [ "${1:-}" = "paper" ]; then
+        target="paper"
+        svc="${2:-}"
     else
-        docker compose logs -f
+        svc="${1:-}"
+    fi
+
+    local env_file=".env.paper"
+    local proj_name="hermes-paper"
+    if [ "$target" = "live" ]; then
+        env_file=".env.live"
+        proj_name="hermes-live"
+    fi
+
+    info "Showing logs for ${proj_name}..."
+    if [ -n "$svc" ]; then
+        docker compose --env-file "$env_file" -p "$proj_name" logs -f "$svc"
+    else
+        docker compose --env-file "$env_file" -p "$proj_name" logs -f
     fi
 }
 
 cmd_status() {
-    docker compose ps
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        echo -e "\n${BOLD}=== ${proj_name} ===${NC}"
+        docker compose --env-file "$env_file" -p "$proj_name" ps
+    done
 }
 
 cmd_build() {
@@ -165,32 +261,27 @@ cmd_build() {
         --build-arg HERMES_VERSION="$HERMES_VERSION" \
         -t "$IMAGE_FULL" \
         -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
+        -t "${HERMES_IMAGE}:stable" \
         .
-    ok "Build complete: ${IMAGE_FULL}"
+    ok "Build complete: ${IMAGE_FULL} (also tagged as stable)"
 }
 
 cmd_rebuild() {
     info "Rebuilding Hermes from scratch (no cache)…"
     info "Stopping containers…"
-    docker compose down --remove-orphans
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        docker compose --env-file "$env_file" -p "$proj_name" down --remove-orphans
+    done
 
     info "Clearing corrupted Docker build cache to prevent I/O errors…"
     docker builder prune -a -f
 
-    info "Building image with --no-cache…"
-    docker build --no-cache \
-        --build-arg HERMES_VERSION="$HERMES_VERSION" \
-        -t "$IMAGE_FULL" \
-        -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
-        .
-    ok "Build complete"
+    cmd_build
 
     info "Starting services…"
-    docker compose up -d
-    echo ""
-    ok "Hermes is running on fresh containers"
-    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
-    echo -e "   ${CYAN}Version${NC}    → Hermes Agent v${HERMES_VERSION}"
+    _up
 }
 
 cmd_nuke() {
@@ -204,49 +295,45 @@ cmd_nuke() {
     fi
 
     info "Stopping and removing all containers + volumes…"
-    docker compose down --volumes --remove-orphans
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        docker compose --env-file "$env_file" -p "$proj_name" down --volumes --remove-orphans
+    done
     ok "Containers and volumes removed"
 
     info "Clearing Docker build cache…"
     docker builder prune -a -f
 
-    info "Building fresh image (no cache)…"
-    docker build --no-cache \
-        --build-arg HERMES_VERSION="$HERMES_VERSION" \
-        -t "$IMAGE_FULL" \
-        -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
-        .
-    ok "Build complete"
+    cmd_build
 
     info "Starting clean services…"
-    docker compose up -d
-    echo ""
-    ok "Nuclear reset complete — Hermes is running on a clean slate"
-    echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:8081"
+    _up
     warn "All previous settings, trades, and logs have been erased."
     warn "Re-enter your Tradier credentials and LLM config in the C2 panel."
 }
 
 cmd_check_deps() {
-    # Verify that the chart vision layer (matplotlib) is working inside the
-    # running watcher container.  Runs a one-liner import so any missing OS
-    # library (libfreetype6, fontconfig, etc.) surfaces immediately.
     info "Checking chart-vision dependencies inside the watcher container…"
-    local cid
-    cid=$(docker compose ps -q watcher 2>/dev/null | head -1)
-    if [ -z "$cid" ]; then
-        warn "Watcher container is not running — start Hermes first with: ./hermes.sh start"
-        return 1
-    fi
-    if docker exec "$cid" python -c \
-        "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; print('matplotlib', matplotlib.__version__)" \
-        2>&1; then
-        ok "matplotlib is available — chart vision is ready"
-    else
-        err "matplotlib import failed inside the container."
-        echo -e "   Rebuild the image with ${BOLD}./hermes.sh rebuild${NC} to pick up the updated Dockerfile."
-        return 1
-    fi
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        local cid
+        cid=$(docker compose --env-file "$env_file" -p "$proj_name" ps -q watcher 2>/dev/null | head -1)
+        if [ -z "$cid" ]; then
+            warn "Watcher container for ${proj_name} is not running — start Hermes first with: ./hermes.sh start"
+            continue
+        fi
+        if docker exec "$cid" python -c \
+            "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; print('matplotlib', matplotlib.__version__)" \
+            2>&1; then
+            ok "matplotlib is available in ${proj_name} — chart vision is ready"
+        else
+            err "matplotlib import failed inside the ${proj_name} container."
+            echo -e "   Rebuild the image with ${BOLD}./hermes.sh rebuild${NC} to pick up the updated Dockerfile."
+            return 1
+        fi
+    done
 }
 
 cmd_mcp() {
@@ -280,15 +367,20 @@ cmd_version() {
     echo ""
     echo -e "   ${CYAN}Image${NC}      → ${IMAGE_FULL}"
     # Show container image ID + creation time for each service
-    for svc in watcher agent; do
-        local cid
-        cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
-        if [ -n "$cid" ]; then
-            local img created
-            img=$(docker inspect --format='{{.Config.Image}}' "$cid" 2>/dev/null || echo "—")
-            created=$(docker inspect --format='{{.Created}}' "$cid" 2>/dev/null | cut -d'.' -f1 || echo "—")
-            echo -e "   ${CYAN}${svc}${NC}  → image=${img}  created=${created}"
-        fi
+    for i in "${!ENV_FILES[@]}"; do
+        local env_file="${ENV_FILES[$i]}"
+        local proj_name="${PROJECT_NAMES[$i]}"
+        echo -e "\n${BOLD}=== ${proj_name} ===${NC}"
+        for svc in watcher; do
+            local cid
+            cid=$(docker compose --env-file "$env_file" -p "$proj_name" ps -q "$svc" 2>/dev/null | head -1)
+            if [ -n "$cid" ]; then
+                local img created
+                img=$(docker inspect --format='{{.Config.Image}}' "$cid" 2>/dev/null || echo "—")
+                created=$(docker inspect --format='{{.Created}}' "$cid" 2>/dev/null | cut -d'.' -f1 || echo "—")
+                echo -e "   ${CYAN}${svc}${NC}  → image=${img}  created=${created}"
+            fi
+        done
     done
 }
 

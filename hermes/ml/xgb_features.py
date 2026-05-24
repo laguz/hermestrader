@@ -45,6 +45,21 @@ from hermes.ml import ledger as ledger_mod
 from hermes.ml import persistence
 from hermes.ml.calibration import load_calibrator
 
+
+def run_maybe_async(func, *args, **kwargs):
+    """Run an async or sync function from a synchronous context."""
+    import asyncio
+    import inspect
+
+    if inspect.iscoroutinefunction(func):
+        return asyncio.run(func(*args, **kwargs))
+
+    res = func(*args, **kwargs)
+    if inspect.iscoroutine(res):
+        return asyncio.run(res)
+    return res
+
+
 logger = logging.getLogger("hermes.ml.xgb")
 
 
@@ -217,18 +232,16 @@ class PredictorConfig:
         if db is None or not hasattr(db, "get_setting"):
             return cfg
 
-        import asyncio
-
         def _f(key: str, default: float) -> float:
             try:
-                v = asyncio.run(db.get_setting(key))
+                v = run_maybe_async(db.get_setting, key)
                 return float(v) if v not in (None, "") else default
             except (TypeError, ValueError):
                 return default
 
         def _s(key: str, default: str) -> str:
             try:
-                v = asyncio.run(db.get_setting(key))
+                v = run_maybe_async(db.get_setting, key)
                 return str(v) if v else default
             except Exception:                     # noqa: BLE001
                 return default
@@ -345,7 +358,7 @@ class AsyncXGBPredictor:
                 self._cfg = PredictorConfig.from_db(self.db)
                 now = time.time()
                 now_et = datetime.now(ET)
-                force_run = (self.db.get_setting("ml_force_run") == "true")
+                force_run = (run_maybe_async(self.db.get_setting, "ml_force_run") == "true")
 
                 should_predict = self._should_predict(now_et, force_run)
                 should_retrain = (
@@ -372,7 +385,7 @@ class AsyncXGBPredictor:
 
                 if force_run:
                     try:
-                        self.db.set_setting("ml_force_run", "false")
+                        run_maybe_async(self.db.set_setting, "ml_force_run", "false")
                     except Exception:               # noqa: BLE001
                         pass
 
@@ -380,7 +393,7 @@ class AsyncXGBPredictor:
             except Exception as exc:                # noqa: BLE001
                 logger.exception("xgb loop error: %s", exc)
                 try:
-                    self.db.set_setting("ml_last_error", str(exc)[:500])
+                    run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
                 except Exception:                   # noqa: BLE001
                     pass
 
@@ -400,13 +413,13 @@ class AsyncXGBPredictor:
 
     def _record_status(self, warnings: Sequence[str]) -> None:
         try:
-            self.db.set_setting("ml_last_ok_ts",
-                                datetime.now(timezone.utc).isoformat())
+            run_maybe_async(self.db.set_setting, "ml_last_ok_ts",
+                            datetime.now(timezone.utc).isoformat())
             if warnings:
-                self.db.set_setting("ml_last_error",
-                                    "; ".join(warnings)[:500])
+                run_maybe_async(self.db.set_setting, "ml_last_error",
+                                "; ".join(warnings)[:500])
             else:
-                self.db.set_setting("ml_last_error", "")
+                run_maybe_async(self.db.set_setting, "ml_last_error", "")
         except Exception:                           # noqa: BLE001
             pass
 
@@ -439,7 +452,8 @@ class AsyncXGBPredictor:
         active = set(self.symbols)
         active.add("SPY")
         try:
-            for syms in self.db.list_all_watchlists().values():
+            wls = run_maybe_async(self.db.list_all_watchlists)
+            for syms in wls.values():
                 active.update(syms)
         except Exception as exc:                    # noqa: BLE001
             logger.warning("Failed to fetch strategy watchlists: %s", exc)
@@ -456,32 +470,41 @@ class AsyncXGBPredictor:
 
         for sym in self._get_active_symbols():
             try:
-                daily_bars = self.broker.get_history(
+                daily_bars = run_maybe_async(
+                    self.broker.get_history,
                     sym, interval="daily",
                     start=start_date.isoformat(),
                     end=end_date.isoformat())
                 if daily_bars:
-                    df_daily = pd.DataFrame(daily_bars)
-                    if not df_daily.empty:
-                        if "date" in df_daily.columns:
-                            df_daily = df_daily.rename(columns={"date": "ts"})
-                        if ("vwap_close" not in df_daily.columns
-                                and "close" in df_daily.columns):
-                            df_daily["vwap_close"] = df_daily["close"]
-                        self.db.save_daily_bars(sym, df_daily)
+                    if isinstance(daily_bars, list):
+                        df_daily = pd.DataFrame(daily_bars)
+                        if not df_daily.empty:
+                            if "date" in df_daily.columns:
+                                df_daily = df_daily.rename(columns={"date": "ts"})
+                            if ("vwap_close" not in df_daily.columns
+                                    and "close" in df_daily.columns):
+                                df_daily["vwap_close"] = df_daily["close"]
+                            run_maybe_async(self.db.save_daily_bars, sym, df_daily)
+                    else:
+                        logger.error("history sync failed for %s: %s", sym, daily_bars)
+                        continue
 
                 try:
                     intra_start = end_date - timedelta(days=10)
-                    intra_bars = self.broker.get_history(
+                    intra_bars = run_maybe_async(
+                        self.broker.get_history,
                         sym, interval="1min",
                         start=intra_start.isoformat(),
                         end=end_date.isoformat())
                     if intra_bars:
-                        df_intra = pd.DataFrame(intra_bars)
-                        if not df_intra.empty:
-                            if "date" in df_intra.columns:
-                                df_intra = df_intra.rename(columns={"date": "ts"})
-                            self.db.save_intraday_bars(sym, df_intra)
+                        if isinstance(intra_bars, list):
+                            df_intra = pd.DataFrame(intra_bars)
+                            if not df_intra.empty:
+                                if "date" in df_intra.columns:
+                                    df_intra = df_intra.rename(columns={"date": "ts"})
+                                run_maybe_async(self.db.save_intraday_bars, sym, df_intra)
+                        else:
+                            logger.debug("intraday sync failed for %s: %s", sym, intra_bars)
                 except Exception as exc:            # noqa: BLE001
                     logger.debug("intraday sync failed for %s: %s", sym, exc)
             except Exception as exc:                # noqa: BLE001
@@ -594,7 +617,7 @@ class AsyncXGBPredictor:
 
         for sym in self._get_active_symbols():
             try:
-                payload = self.db.get_setting(f"ml_calibrator__{sym}")
+                payload = run_maybe_async(self.db.get_setting, f"ml_calibrator__{sym}")
             except Exception:                       # noqa: BLE001
                 payload = None
             if payload:
@@ -606,7 +629,7 @@ class AsyncXGBPredictor:
                     logger.debug("calibrator load failed for %s: %s", sym, exc)
 
             try:
-                meta_payload = self.db.get_setting(f"ml_meta_learner__{sym}")
+                meta_payload = run_maybe_async(self.db.get_setting, f"ml_meta_learner__{sym}")
             except Exception:                       # noqa: BLE001
                 meta_payload = None
             if meta_payload:
@@ -630,7 +653,7 @@ class AsyncXGBPredictor:
                 continue
 
             x_last = base_frame.iloc[[-1]]
-            spot = float(self.db.last_price(sym) or 0.0)
+            spot = float(run_maybe_async(self.db.last_price, sym) or 0.0)
 
             quantile_returns: Dict[float, float] = {}
             quantile_probs: Dict[float, float] = {}
@@ -674,7 +697,7 @@ class AsyncXGBPredictor:
                 "horizon_dte": self._cfg.horizons_dte[0],
             }
             try:
-                self.db.write_prediction(sym, yhat_med, predicted_price, spot)
+                run_maybe_async(self.db.write_prediction, sym, yhat_med, predicted_price, spot)
             except Exception:                       # noqa: BLE001
                 pass
 
@@ -691,7 +714,7 @@ class AsyncXGBPredictor:
         OTM, using the symbol's own current realised vol so vol regimes
         are respected (no more 0.5 + return*5)."""
         try:
-            vol = float(self.db.get_setting(f"ml_current_vol__{symbol}") or 0.30)
+            vol = float(run_maybe_async(self.db.get_setting, f"ml_current_vol__{symbol}") or 0.30)
         except Exception:                           # noqa: BLE001
             vol = 0.30
         sigma_horizon = max(0.005, vol * math.sqrt(horizon_dte / 365.0))
@@ -708,8 +731,7 @@ class AsyncXGBPredictor:
             meta = next(iter(heads.values()))[1] if heads else None
             feature_vec = (x_last.iloc[0].to_dict()
                            if not x_last.empty else {})
-            import asyncio
-            asyncio.run(ledger_mod.write_record(self.db, ledger_mod.LedgerRecord(
+            run_maybe_async(ledger_mod.write_record, self.db, ledger_mod.LedgerRecord(
                 symbol=symbol,
                 model_name=self._model_name(self._cfg.horizons_dte[0], 0.5),
                 horizon_dte=self._cfg.horizons_dte[0],
@@ -724,16 +746,16 @@ class AsyncXGBPredictor:
                 feature_vector={k: (float(v) if isinstance(v, (int, float)) else v)
                                 for k, v in feature_vec.items()
                                 if not isinstance(v, str)},
-            )))
+            ))
         except Exception as exc:                    # noqa: BLE001
             logger.debug("ledger write failed for %s: %s", symbol, exc)
 
     # -- helpers -------------------------------------------------------------
     def _feature_frame(self, symbol: str, drop_target: bool = False,
                        ) -> Optional[pd.DataFrame]:
-        bars_daily = self.db.daily_bars(symbol, lookback_days=400)
-        bars_intraday = self.db.intraday_bars(symbol, lookback_days=10)
-        spy_daily = self.db.daily_bars("SPY", lookback_days=400)
+        bars_daily = run_maybe_async(self.db.daily_bars, symbol, lookback_days=400)
+        bars_intraday = run_maybe_async(self.db.intraday_bars, symbol, lookback_days=10)
+        spy_daily = run_maybe_async(self.db.daily_bars, "SPY", lookback_days=400)
         if bars_daily is None or bars_daily.empty or spy_daily is None:
             return None
         feats = self.feat.build(symbol, bars_daily, bars_intraday, spy_daily)
@@ -748,7 +770,7 @@ class AsyncXGBPredictor:
                       horizon: int) -> Optional[pd.DataFrame]:
         """Replace the next-day target with a horizon-specific cumulative
         return so each head trains against its own forecast horizon."""
-        bars_daily = self.db.daily_bars(symbol, lookback_days=400)
+        bars_daily = run_maybe_async(self.db.daily_bars, symbol, lookback_days=400)
         if bars_daily is None or bars_daily.empty:
             return None
         if self._cfg.use_pnl_target:

@@ -41,7 +41,17 @@ class MCPBrokerClient:
             self._read_write = None
 
     async def _call_mcp(self, tool_name: str, **kwargs) -> Any:
+        current_loop = None
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        if self._session is not None and getattr(self, "_loop", None) != current_loop:
+            await self.close()
+
         if self._session is None:
+            self._loop = current_loop
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
             import sys
@@ -63,7 +73,23 @@ class MCPBrokerClient:
         result = await self._session.call_tool(tool_name, arguments=kwargs)
         text = "".join([c.text for c in result.content if hasattr(c, "text")])
         try:
-            return json.loads(text)
+            decoder = json.JSONDecoder()
+            pos = 0
+            res = []
+            text_stripped = text.strip()
+            while pos < len(text_stripped):
+                while pos < len(text_stripped) and text_stripped[pos].isspace():
+                    pos += 1
+                if pos >= len(text_stripped):
+                    break
+                obj, new_pos = decoder.raw_decode(text_stripped, pos)
+                res.append(obj)
+                pos = new_pos
+            if not res:
+                return text
+            if len(res) == 1:
+                return res[0]
+            return res
         except Exception:
             return text
 
