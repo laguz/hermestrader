@@ -53,11 +53,11 @@ async def lifespan(app: FastAPI):
     canonical strategies. The ``strategy_watchlists`` table FKs into this,
     so writes from the watcher would 500 without it on a fresh DB."""
     try:
-        db.ensure_strategies(STRATEGY_PRIORITIES)
+        await db.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("ensure_strategies failed: %s", exc)
     try:
-        db.run_migrations()
+        await db.run_migrations()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("run_migrations failed: %s", exc)
     try:
