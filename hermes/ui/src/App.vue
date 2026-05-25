@@ -1,14 +1,61 @@
 <script setup>
 import { onMounted, onUnmounted } from 'vue'
-import { state, connectSSE, disconnectSSE, togglePause } from './state'
+import {
+  state,
+  connectSSE,
+  disconnectSSE,
+  togglePause,
+  setCalmMode,
+  decideFirstPending,
+  startAnalyticsAutoLoad,
+  stopAnalyticsAutoLoad,
+} from './state'
 import StatusPill from './components/StatusPill.vue'
+import TraderBar from './components/TraderBar.vue'
+import ApprovalsDock from './components/ApprovalsDock.vue'
+
+function isTypingTarget(el) {
+  if (!el) return false
+  const tag = (el.tagName || '').toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable
+}
+
+function onKeyDown(e) {
+  // Don't hijack typing in inputs.
+  if (isTypingTarget(e.target)) return
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+
+  const k = e.key.toLowerCase()
+  if (k === 'a') {
+    e.preventDefault()
+    decideFirstPending('approve')
+  } else if (k === 'r') {
+    e.preventDefault()
+    decideFirstPending('reject')
+  } else if (k === ' ') {
+    e.preventDefault()
+    togglePause()
+  } else if (k === 'c') {
+    e.preventDefault()
+    setCalmMode(!state.calmMode)
+  } else if (k === '?' || (k === '/' && e.shiftKey)) {
+    e.preventDefault()
+    state.hotkeysHelpOpen = !state.hotkeysHelpOpen
+  } else if (k === 'escape') {
+    if (state.hotkeysHelpOpen) state.hotkeysHelpOpen = false
+  }
+}
 
 onMounted(() => {
   connectSSE()
+  startAnalyticsAutoLoad(60000)
+  window.addEventListener('keydown', onKeyDown)
 })
 
 onUnmounted(() => {
   disconnectSSE()
+  stopAnalyticsAutoLoad()
+  window.removeEventListener('keydown', onKeyDown)
 })
 </script>
 
@@ -63,7 +110,25 @@ onUnmounted(() => {
           <span class="lbl">Agent Loop</span>
           <StatusPill status="paused" type="paused" />
         </div>
+
+        <div class="status-item calm-row">
+          <span class="lbl">Calm Mode</span>
+          <button
+            class="calm-toggle"
+            :class="{ on: state.calmMode }"
+            @click="setCalmMode(!state.calmMode)"
+            :title="state.calmMode ? 'Calm Mode ON — tape and beeps hidden (press C)' : 'Turn on Calm Mode (press C)'"
+          >{{ state.calmMode ? 'ON' : 'OFF' }}</button>
+        </div>
+
+        <button
+          class="hotkey-hint"
+          @click="state.hotkeysHelpOpen = true"
+          title="Keyboard shortcuts"
+        >? Shortcuts</button>
       </div>
+
+      <ApprovalsDock />
     </div>
   </aside>
 
@@ -87,9 +152,34 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <TraderBar />
+
     <main class="content-container">
       <router-view />
     </main>
+  </div>
+
+  <!-- Hotkeys Help Modal -->
+  <div
+    v-if="state.hotkeysHelpOpen"
+    class="hotkeys-modal-backdrop"
+    @click.self="state.hotkeysHelpOpen = false"
+  >
+    <div class="hotkeys-modal">
+      <div class="hk-header">
+        <span>Keyboard shortcuts</span>
+        <button class="hk-close" @click="state.hotkeysHelpOpen = false">×</button>
+      </div>
+      <ul class="hk-list">
+        <li><kbd>A</kbd><span>Approve first pending trade</span></li>
+        <li><kbd>R</kbd><span>Reject first pending trade</span></li>
+        <li><kbd>Space</kbd><span>Pause / resume agent</span></li>
+        <li><kbd>C</kbd><span>Toggle Calm Mode (hide tape, mute alerts)</span></li>
+        <li><kbd>?</kbd><span>Show / hide this help</span></li>
+        <li><kbd>Esc</kbd><span>Close help</span></li>
+      </ul>
+      <div class="hk-note">Shortcuts ignore inputs and textareas.</div>
+    </div>
   </div>
 
   <!-- Global Toast Notification -->
@@ -261,6 +351,113 @@ onUnmounted(() => {
 .content-container {
   padding: 30px;
   flex-grow: 1;
+}
+
+.calm-row {
+  margin-top: 4px;
+}
+.calm-toggle {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  border-radius: 9999px;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.calm-toggle.on {
+  color: #060913;
+  background: var(--color-blue);
+  border-color: var(--color-blue);
+}
+
+.hotkey-hint {
+  margin-top: 8px;
+  width: 100%;
+  border: 1px dashed var(--border-color);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-md, 6px);
+  padding: 5px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.hotkey-hint:hover {
+  color: var(--text-primary, #ffffff);
+  border-color: var(--color-blue);
+}
+
+.hotkeys-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.hotkeys-modal {
+  background: rgba(12, 21, 39, 0.98);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 8px);
+  padding: 20px 22px;
+  width: 360px;
+  max-width: 92vw;
+  color: var(--text-primary, #ffffff);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.hk-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 12px;
+}
+.hk-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.hk-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hk-list li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.hk-list kbd {
+  min-width: 44px;
+  text-align: center;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #ffffff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.hk-note {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 @media (max-width: 900px) {
