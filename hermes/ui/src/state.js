@@ -1,4 +1,6 @@
-import { reactive } from 'vue'
+import { reactive, computed } from 'vue'
+
+const CALM_KEY = 'hermes.calmMode'
 
 export const state = reactive({
   status: {},
@@ -6,6 +8,8 @@ export const state = reactive({
     pending: [],
     all: []
   },
+  calmMode: (typeof localStorage !== 'undefined' && localStorage.getItem(CALM_KEY) === '1'),
+  hotkeysHelpOpen: false,
   logs: [],
   watchlistData: {
     per_strategy: {},
@@ -74,8 +78,64 @@ export async function api(method, path, body) {
   return r.json()
 }
 
+// Audible alert for new pending approvals (Web Audio, no asset needed)
+let audioCtx = null
+let lastPendingIds = new Set()
+
+function ensureAudio() {
+  if (audioCtx) return audioCtx
+  try {
+    const Ctor = window.AudioContext || window.webkitAudioContext
+    if (Ctor) audioCtx = new Ctor()
+  } catch (_) {
+    audioCtx = null
+  }
+  return audioCtx
+}
+
+export function beep(freq = 880, durationMs = 140) {
+  if (state.calmMode) return
+  const ctx = ensureAudio()
+  if (!ctx) return
+  try {
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'sine'
+    osc.frequency.value = freq
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000)
+    osc.connect(gain).connect(ctx.destination)
+    osc.start()
+    osc.stop(ctx.currentTime + durationMs / 1000 + 0.02)
+  } catch (_) {
+    // ignore — audio is best-effort
+  }
+}
+
+export function setCalmMode(on) {
+  state.calmMode = !!on
+  try {
+    localStorage.setItem(CALM_KEY, state.calmMode ? '1' : '0')
+  } catch (_) { /* ignore */ }
+}
+
+// First pending approval — what hotkeys A/R act on.
+export const firstPending = computed(() => state.approvals.pending[0] || null)
+
 // SSE Connection Management
 let eventSource = null
+
+function onPendingChanged(pending) {
+  const ids = new Set(pending.map(p => p.id))
+  // Detect newly arrived pending items (id present now, absent before).
+  let isNew = false
+  for (const id of ids) {
+    if (!lastPendingIds.has(id)) { isNew = true; break }
+  }
+  if (isNew && lastPendingIds.size > 0) beep(880, 160)
+  lastPendingIds = ids
+}
 
 export function connectSSE() {
   if (eventSource) return
@@ -90,18 +150,20 @@ export function connectSSE() {
     try {
       const data = JSON.parse(event.data)
       state.isConnected = true
-      
+
       // Update status
       if (data.status) {
         state.status = data.status
       }
-      
+
       // Update approvals
       if (data.approvals) {
-        state.approvals.pending = data.approvals.filter(r => r.status === 'PENDING')
+        const pending = data.approvals.filter(r => r.status === 'PENDING')
+        onPendingChanged(pending)
+        state.approvals.pending = pending
         state.approvals.all = data.approvals
       }
-      
+
       // Update logs
       if (data.logs) {
         state.logs = data.logs
@@ -382,6 +444,33 @@ export async function forceTriggerML() {
   } catch (e) {
     showToast('Failed to trigger ML: ' + e.message, true)
     throw e
+  }
+}
+
+export async function decideFirstPending(action) {
+  const first = state.approvals.pending[0]
+  if (!first) {
+    showToast('No pending trades', true)
+    return
+  }
+  await decide(first.id, action, '')
+}
+
+// Lightweight background loop to keep the trader cockpit's open positions /
+// today's P&L visible across views. The analytics endpoint is heavier than
+// /api/status, so we poll it on a longer cadence than the SSE status stream.
+let analyticsTimer = null
+export function startAnalyticsAutoLoad(intervalMs = 60000) {
+  if (analyticsTimer) return
+  loadAnalytics().catch(() => {})
+  analyticsTimer = setInterval(() => {
+    loadAnalytics().catch(() => {})
+  }, intervalMs)
+}
+export function stopAnalyticsAutoLoad() {
+  if (analyticsTimer) {
+    clearInterval(analyticsTimer)
+    analyticsTimer = null
   }
 }
 
