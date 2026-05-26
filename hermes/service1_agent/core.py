@@ -155,6 +155,9 @@ class MoneyManager:
         self._broker_order_counts = {}
         try:
             orders = await self.broker.get_orders() or []
+            if not isinstance(orders, list):
+                logger.warning("[MM] get_orders returned non-list: %r", orders)
+                orders = []
         except Exception:
             logger.exception("[MM] Failed to fetch broker orders for sync")
             return
@@ -630,6 +633,9 @@ class CascadingEngine:
     # 1
     async def sync_positions(self) -> None:
         positions = await self.broker.get_positions() or []
+        if not isinstance(positions, list):
+            logger.warning("[ENGINE] get_positions returned non-list: %r", positions)
+            positions = []
         # Resting/accepted orders haven't created positions yet; the
         # reconciler must treat their legs as still-alive coverage so
         # just-submitted spreads aren't flipped to CLOSED before fill.
@@ -637,7 +643,11 @@ class CascadingEngine:
         try:
             active_statuses = {"open", "partially_filled", "pending",
                                 "accepted", "calculated"}
-            for o in (await self.broker.get_orders() or []):
+            orders = await self.broker.get_orders() or []
+            if not isinstance(orders, list):
+                logger.warning("[ENGINE] get_orders returned non-list: %r", orders)
+                orders = []
+            for o in orders:
                 if str(o.get("status", "")).lower() not in active_statuses:
                     continue
                 legs = o.get("leg") or []

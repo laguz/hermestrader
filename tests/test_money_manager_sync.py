@@ -176,3 +176,23 @@ async def test_sync_extracts_strategy_id_robustly():
         mm.broker = AsyncBrokerWrapper(_StubBroker(orders))
         await mm.sync_broker_orders()
         assert mm._broker_order_counts == {(expected, "AAPL", "put", "2025-06-20"): 1}, f"Failed for tag {tag}"
+
+
+@pytest.mark.asyncio
+async def test_sync_handles_non_list_orders():
+    """Verify that sync_broker_orders doesn't crash when broker.get_orders returns a string."""
+    mm = MoneyManager(broker=_StubBroker("Error: Could not retrieve orders"), db=_StubDB(), config={})
+    await mm.sync_broker_orders()
+    assert mm._broker_order_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_engine_sync_positions_handles_non_list():
+    """Verify engine.sync_positions survives get_orders/get_positions returning strings."""
+    class BadBroker:
+        def get_orders(self):
+            return "Error string"
+        def get_positions(self):
+            return "Error string"
+    engine = CascadingEngine(broker=BadBroker(), db=_StubDB(), strategies=[], money_manager=None)
+    await engine.sync_positions()

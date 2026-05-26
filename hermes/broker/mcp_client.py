@@ -94,13 +94,16 @@ class MCPBrokerClient:
             return text
 
     async def get_account_balances(self) -> Dict[str, Any]:
-        return await self._call_mcp("get_account_balances")
+        res = await self._call_mcp("get_account_balances")
+        return res if isinstance(res, dict) else {}
 
     async def get_positions(self) -> List[Dict[str, Any]]:
-        return await self._call_mcp("get_positions")
+        res = await self._call_mcp("get_positions")
+        return res if isinstance(res, list) else []
 
     async def get_orders(self) -> List[Dict[str, Any]]:
-        return await self._call_mcp("get_orders")
+        res = await self._call_mcp("get_orders")
+        return res if isinstance(res, list) else []
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         return await self._call_mcp("cancel_order", order_id=order_id)
