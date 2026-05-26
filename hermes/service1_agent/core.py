@@ -476,10 +476,14 @@ class AbstractStrategy(ABC):
         today = self.today()
         candidates: List[date] = []
         for e in expirations:
-            d = e if isinstance(e, date) else datetime.strptime(str(e), "%Y-%m-%d").date()
-            dte = (d - today).days
-            if min_dte <= dte <= max_dte:
-                candidates.append(d)
+            try:
+                d = e if isinstance(e, date) else datetime.strptime(str(e), "%Y-%m-%d").date()
+                dte = (d - today).days
+                if min_dte <= dte <= max_dte:
+                    candidates.append(d)
+            except (ValueError, TypeError):
+                logger.warning("[STRATEGY] Skipping invalid expiration format: %r", e)
+                continue
         if not candidates:
             return None
         chosen = max(candidates) if prefer == "max" else min(candidates)
@@ -498,7 +502,12 @@ class AbstractStrategy(ABC):
         for leg in open_legs:
             exp = leg.get("expiry")
             if exp:
-                expiry_sides.setdefault(exp, set()).add(leg.get("side", "").lower())
+                try:
+                    datetime.strptime(str(exp), "%Y-%m-%d")
+                    expiry_sides.setdefault(str(exp), set()).add(leg.get("side", "").lower())
+                except (ValueError, TypeError):
+                    logger.warning("[ENGINE] Skipping invalid active IC expiry from DB: %r", exp)
+                    continue
 
         # Sort expiries chronologically; ISO YYYY-MM-DD strings sort
         # correctly without parsing.

@@ -869,7 +869,17 @@ class HermesDB:
         for t in trades:
             if t["symbol"] != symbol:
                 continue
-            expiry_iso = t.get("expiry").isoformat() if t.get("expiry") else None
+            expiry_val = t.get("expiry")
+            expiry_iso = None
+            if expiry_val:
+                if isinstance(expiry_val, date):
+                    expiry_iso = expiry_val.isoformat()
+                else:
+                    try:
+                        expiry_iso = datetime.strptime(str(expiry_val), "%Y-%m-%d").date().isoformat()
+                    except (ValueError, TypeError):
+                        logger.warning("[DB] Skipping invalid trade expiry: %r", expiry_val)
+                        continue
             side = t.get("side_type")
             for leg_key in ("short_leg", "long_leg"):
                 opt = t.get(leg_key)

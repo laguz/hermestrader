@@ -115,6 +115,17 @@ async def test_find_expiry_returns_none_when_window_empty():
     assert await s.find_expiry_in_dte_range("AAPL", 30, 60) is None
 
 
+@pytest.mark.asyncio
+async def test_find_expiry_skips_invalid_dates():
+    today = date.today()
+    expirations = ["2026", (today + timedelta(days=40)).isoformat(), "invalid-date"]
+    broker = StubBroker(expirations=expirations)
+    s = _make_strategy(broker=broker)
+    chosen = await s.find_expiry_in_dte_range("AAPL", 30, 60)
+    assert chosen == (today + timedelta(days=40)).isoformat()
+
+
+
 # ── find_strike_by_delta ─────────────────────────────────────────────────────
 def test_find_strike_by_delta_picks_closest_within_tolerance():
     chain = make_chain("AAPL", "2025-06-20", spot=100.0)
