@@ -4,7 +4,7 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import (
