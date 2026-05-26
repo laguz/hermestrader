@@ -52,7 +52,7 @@ def _get_chart_provider():
 
 
 @router.get("/api/chart/{symbol}/image")
-def chart_image(symbol: str) -> Response:
+async def chart_image(symbol: str) -> Response:
     """PNG candlestick chart for ``symbol``, cached for 5 min.
 
     503 when matplotlib is unavailable; 404 when bars are missing.
@@ -64,7 +64,7 @@ def chart_image(symbol: str) -> Response:
             status_code=503,
             detail="Chart rendering unavailable — install matplotlib in the watcher container",
         )
-    png = provider.snapshot(sym)
+    png = await provider.snapshot(sym)
     if png is None:
         raise HTTPException(
             status_code=404,
@@ -78,11 +78,11 @@ def chart_image(symbol: str) -> Response:
 
 
 @router.get("/api/chart/{symbol}/analysis")
-def chart_analysis(symbol: str) -> Dict[str, Any]:
+async def chart_analysis(symbol: str) -> Dict[str, Any]:
     """Most recent LLM chart analysis written by the agent for ``symbol``."""
     sym = symbol.upper().strip()
     try:
-        rows = db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+        rows = await db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
         return {"symbol": sym, "analysis": rows[0] if rows else None}
     except Exception as exc:                                     # noqa: BLE001
         logger.warning("chart_analysis query failed for %s: %s", sym, exc)
@@ -90,7 +90,7 @@ def chart_analysis(symbol: str) -> Dict[str, Any]:
 
 
 @router.get("/api/charts")
-def all_chart_analyses() -> Dict[str, Any]:
+async def all_chart_analyses() -> Dict[str, Any]:
     """Latest LLM analysis for every symbol in the DB watchlists.
 
     Sourced strictly from ``strategy_watchlists`` (union across all
@@ -98,7 +98,7 @@ def all_chart_analyses() -> Dict[str, Any]:
     tickers that aren't actually being tracked by an operator.
     """
     try:
-        all_wls = db.list_all_watchlists()
+        all_wls = await db.list_all_watchlists()
         symbols = sorted({s for syms in all_wls.values() for s in syms})
     except Exception as exc:                                     # noqa: BLE001
         logger.warning("Could not load DB watchlists for /api/charts: %s", exc)
@@ -107,7 +107,7 @@ def all_chart_analyses() -> Dict[str, Any]:
     results: Dict[str, Any] = {}
     for sym in symbols:
         try:
-            rows = db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+            rows = await db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
             results[sym] = rows[0] if rows else None
         except Exception:                                        # noqa: BLE001
             results[sym] = None
