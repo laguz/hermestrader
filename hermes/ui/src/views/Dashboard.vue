@@ -72,8 +72,14 @@ watch(() => state.lotsData, (val) => {
   }
 }, { immediate: true, deep: true })
 
-// Auto scroll logs
+// Auto scroll logs — only when the user is already at the bottom,
+// so scrolling up to read history isn't interrupted by new entries.
 watch(() => state.logs, () => {
+  const el = logFeedRef.value
+  if (!el) return
+  // Within 40px of the bottom counts as "pinned to bottom"
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  if (!atBottom) return
   nextTick(() => {
     if (logFeedRef.value) {
       logFeedRef.value.scrollTop = logFeedRef.value.scrollHeight
