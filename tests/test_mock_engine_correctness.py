@@ -1,9 +1,7 @@
-import pytest
 from datetime import datetime
 from hermes.service1_agent.core import TradeAction
 from hermes.broker.mock_engine import MockAsyncTradierBroker
 
-@pytest.mark.asyncio
 async def test_mock_engine_equity_orders():
     # 1. Setup Mock Broker
     broker = MockAsyncTradierBroker()
@@ -61,7 +59,6 @@ async def test_mock_engine_equity_orders():
     assert positions[0]["quantity"] == 5
 
 
-@pytest.mark.asyncio
 async def test_mock_engine_option_spread_fill_and_touch():
     broker = MockAsyncTradierBroker(config={
         "commission_per_contract": 0.0,
@@ -109,7 +106,6 @@ async def test_mock_engine_option_spread_fill_and_touch():
     assert balances["cash"] == 100000.0 + 150.0 - 500.0
 
 
-@pytest.mark.asyncio
 async def test_mock_engine_chains_and_expirations():
     broker = MockAsyncTradierBroker()
     broker.current_date = datetime(2026, 5, 23)

@@ -37,7 +37,6 @@ def test_db():
             pass
 
 
-@pytest.mark.asyncio
 async def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "TSLA"
@@ -80,7 +79,6 @@ async def test_save_and_load_daily_bars(tmp_ts_dir, test_db):
     assert loaded.iloc[-1]["close"] == 999.0
 
 
-@pytest.mark.asyncio
 async def test_last_price_and_price_on_date(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "AAPL"
@@ -113,7 +111,6 @@ async def test_last_price_and_price_on_date(tmp_ts_dir, test_db):
     assert await engine.get_price_on_date(symbol, target_dt_before) is None
 
 
-@pytest.mark.asyncio
 async def test_save_and_load_intraday_bars(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "MSFT"
@@ -135,7 +132,6 @@ async def test_save_and_load_intraday_bars(tmp_ts_dir, test_db):
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
 
 
-@pytest.mark.asyncio
 async def test_get_total_bars_count(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     
@@ -158,7 +154,6 @@ async def test_get_total_bars_count(tmp_ts_dir, test_db):
     assert intra == 3  # 1 symbol * 3 bars
 
 
-@pytest.mark.asyncio
 async def test_csv_migration_daily(tmp_ts_dir, test_db):
     engine = TimeSeriesEngine(test_db, root_path=tmp_ts_dir)
     symbol = "CSV1"
@@ -201,7 +196,6 @@ def lock_worker(db_path, lock_evt, release_evt):
     conn.close()
 
 
-@pytest.mark.asyncio
 async def test_concurrent_lock_retry(tmp_ts_dir, test_db):
     import multiprocessing
     import threading

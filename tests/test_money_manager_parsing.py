@@ -30,7 +30,6 @@ def test_init_handles_none_config():
     ("HERMES_WHEEL_v1", "WHEEL"),
     ("HERMES-CS7-2023-10-27", "CS7"),
 ])
-@pytest.mark.asyncio
 async def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
     """Verify strategy ID extraction from various tag shapes."""
     orders = [{
@@ -44,7 +43,6 @@ async def test_sync_extracts_strategy_id_correctly(tag, expected_strat):
     await mm.sync_broker_orders()
     assert mm._broker_order_counts == {(expected_strat, "AAPL", "put", "2025-06-20"): 1}
 
-@pytest.mark.asyncio
 async def test_sync_handles_missing_fields_gracefully():
     """Ensure sync doesn't crash on incomplete broker dictionaries."""
     malformed_orders = [
@@ -58,7 +56,6 @@ async def test_sync_handles_missing_fields_gracefully():
     await mm.sync_broker_orders()
     assert mm._broker_order_counts == {}
 
-@pytest.mark.asyncio
 async def test_sync_handles_malformed_occ_symbols():
     orders = [{
         "status": "open",
@@ -70,7 +67,6 @@ async def test_sync_handles_malformed_occ_symbols():
     await mm.sync_broker_orders()
     assert mm._broker_order_counts == {}
 
-@pytest.mark.asyncio
 async def test_sync_survives_broker_exception(caplog):
     broker = StubBroker()
     def raise_exc():
@@ -84,7 +80,6 @@ async def test_sync_survives_broker_exception(caplog):
     assert mm._broker_order_counts == {}
     assert "Failed to fetch broker orders for sync" in caplog.text
 
-@pytest.mark.asyncio
 async def test_sync_handles_leg_as_dict():
     """Tradier sometimes returns a single leg as a dict instead of a list of dicts."""
     orders = [{
@@ -98,7 +93,6 @@ async def test_sync_handles_leg_as_dict():
     await mm.sync_broker_orders()
     assert mm._broker_order_counts == {("CS75", "AAPL", "call", "2025-06-20"): 2}
 
-@pytest.mark.asyncio
 async def test_sync_skips_empty_strategy_id():
     orders = [{
         "status": "open",

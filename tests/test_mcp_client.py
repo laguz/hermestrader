@@ -1,4 +1,3 @@
-import pytest
 import os
 import asyncio
 import logging
@@ -9,7 +8,6 @@ from hermes.service1_agent.core import TradeAction
 logger = logging.getLogger("test_mcp_client")
 
 
-@pytest.mark.asyncio
 async def test_mcp_client_lazy_initialization():
     client = MCPBrokerClient()
     assert client._session is None
@@ -39,7 +37,6 @@ async def test_mcp_client_lazy_initialization():
         assert client._ctx is None
 
 
-@pytest.mark.asyncio
 async def test_mcp_client_place_multileg():
     client = MCPBrokerClient()
     mock_session = AsyncMock()
@@ -89,7 +86,6 @@ async def test_mcp_client_place_multileg():
         await client.close()
 
 
-@pytest.mark.asyncio
 async def test_mcp_client_subprocess_lifecycle():
     env_override = {
         "TRADIER_ACCESS_TOKEN": "mock-token",
@@ -106,7 +102,6 @@ async def test_mcp_client_subprocess_lifecycle():
             await client.close()
 
 
-@pytest.mark.asyncio
 async def test_mcp_client_concatenated_json_parsing():
     client = MCPBrokerClient()
     mock_session = AsyncMock()
@@ -135,7 +130,6 @@ async def test_mcp_client_concatenated_json_parsing():
         await client.close()
 
 
-@pytest.mark.asyncio
 async def test_mcp_client_recreates_session_on_loop_change():
     client = MCPBrokerClient()
     mock_session1 = AsyncMock()

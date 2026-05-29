@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock
 from hermes.config import HermesSettings
 
 
-@pytest.mark.asyncio
 async def test_reconcile_with_db():
     settings = HermesSettings()
     

@@ -30,7 +30,6 @@ class _StubDB:
         pass
 
 
-import pytest
 
 def test_mock_broker_get_orders_returns_empty_list():
     """Required by MoneyManager.sync_broker_orders — must not raise."""
@@ -45,7 +44,6 @@ def test_mock_broker_balances_include_account_type():
     assert balances.get("option_buying_power", 0) > 0
 
 
-@pytest.mark.asyncio
 async def test_engine_tick_against_mock_broker_does_not_raise():
     """End-to-end: with a real MockBroker, tick() should run cleanly."""
     broker = MockBroker({})

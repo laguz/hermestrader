@@ -28,7 +28,6 @@ def db():
             pass
 
 
-@pytest.mark.asyncio
 async def test_pnl_metrics_option_spreads(db):
     await db.ensure_strategies({
         "CS7": 1,
@@ -88,7 +87,6 @@ async def test_pnl_metrics_option_spreads(db):
     assert cs7["total_pnl"] == 60.0
 
 
-@pytest.mark.asyncio
 async def test_pnl_metrics_cs75_and_tt45(db):
     await db.ensure_strategies({
         "CS7": 1,
@@ -150,7 +148,6 @@ async def test_pnl_metrics_cs75_and_tt45(db):
     assert metrics["TT45"]["status"] == "FAIL"
 
 
-@pytest.mark.asyncio
 async def test_pnl_metrics_wheel(db):
     await db.ensure_strategies({
         "CS7": 1,

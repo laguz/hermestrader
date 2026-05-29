@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
 # Manually mock mcp and other missing dependencies before importing server
@@ -38,7 +37,6 @@ if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
 from hermes.utils import sync_soul_file_to_db, check_for_updates
 from hermes.mcp import server
 
-@pytest.mark.asyncio
 async def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     # Setup a mock database
     mock_db = AsyncMock()
@@ -56,7 +54,6 @@ async def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     mock_db.set_setting.assert_called_with("soul_md", "new soul content")
     mock_db.write_log.assert_called_once()
 
-@pytest.mark.asyncio
 async def test_sync_soul_file_to_db_no_change(tmp_path, monkeypatch):
     mock_db = AsyncMock()
     mock_db.get_setting.return_value = "same content"

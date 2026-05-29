@@ -25,14 +25,12 @@ _EXP = "2025-06-20"
 
 
 # ── true_available_bp ────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_true_available_bp_returns_full_option_buying_power():
     broker = StubBroker(option_buying_power=10_000.0)
     mm = MoneyManager(broker, StubDB(), config={})
     assert await mm.true_available_bp() == 10_000.0
 
 
-@pytest.mark.asyncio
 async def test_true_available_bp_floor_at_zero():
     """Negative broker-reported OBP should be clamped to 0."""
     broker = StubBroker(option_buying_power=-1_000.0)
@@ -41,7 +39,6 @@ async def test_true_available_bp_floor_at_zero():
 
 
 # ── max_affordable_contracts ─────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_max_affordable_floor_divides_bp_by_requirement():
     broker = StubBroker(option_buying_power=10_000.0)
     mm = MoneyManager(broker, StubDB(), config={})
@@ -49,7 +46,6 @@ async def test_max_affordable_floor_divides_bp_by_requirement():
     assert await mm.max_affordable_contracts(500.0) == 20
 
 
-@pytest.mark.asyncio
 async def test_max_affordable_returns_zero_for_nonpositive_requirement():
     broker = StubBroker(option_buying_power=10_000.0)
     mm = MoneyManager(broker, StubDB(), config={})
@@ -57,7 +53,6 @@ async def test_max_affordable_returns_zero_for_nonpositive_requirement():
     assert await mm.max_affordable_contracts(-100.0) == 0
 
 
-@pytest.mark.asyncio
 async def test_max_affordable_rounds_down():
     """$10k / $300/lot = 33.33; should yield 33, not 34."""
     broker = StubBroker(option_buying_power=10_000.0)
@@ -66,7 +61,6 @@ async def test_max_affordable_rounds_down():
 
 
 # ── side_aware_capacity ──────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_side_aware_capacity_subtracts_open_pending_and_broker():
     """Open trades + cached broker orders on the same chain reduce capacity."""
     db = StubDB()
@@ -81,7 +75,6 @@ async def test_side_aware_capacity_subtracts_open_pending_and_broker():
         "CS75", "AAPL", "put", max_lots=10, expiry=_EXP) == 7
 
 
-@pytest.mark.asyncio
 async def test_side_aware_capacity_floors_at_zero():
     db = StubDB()
     db.set_open_trades("CS75", [
@@ -94,7 +87,6 @@ async def test_side_aware_capacity_floors_at_zero():
         "CS75", "AAPL", "put", max_lots=5, expiry=_EXP) == 0
 
 
-@pytest.mark.asyncio
 async def test_side_aware_capacity_only_counts_matching_side():
     """Open call lots shouldn't reduce put capacity (or vice versa)."""
     db = StubDB()
@@ -106,7 +98,6 @@ async def test_side_aware_capacity_only_counts_matching_side():
         "CS75", "AAPL", "put", max_lots=5, expiry=_EXP) == 5
 
 
-@pytest.mark.asyncio
 async def test_side_aware_capacity_isolates_chains():
     """A full chain must NOT exhaust capacity on a different chain —
     max_lots is enforced per option chain, always."""
@@ -123,7 +114,6 @@ async def test_side_aware_capacity_isolates_chains():
         "CS75", "AAPL", "put", max_lots=12, expiry="2025-07-18") == 12
 
 
-@pytest.mark.asyncio
 async def test_side_aware_capacity_requires_expiry():
     """The global (symbol-wide) mode was removed. Calling without an
     expiry must raise so accidental mis-calls fail loudly instead of
@@ -136,7 +126,6 @@ async def test_side_aware_capacity_requires_expiry():
 
 
 # ── scale_quantity ───────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_scale_quantity_clamps_to_min_of_request_bp_and_side():
     db = StubDB()
     db.set_open_trades("CS75", [
@@ -155,7 +144,6 @@ async def test_scale_quantity_clamps_to_min_of_request_bp_and_side():
     ) == 3
 
 
-@pytest.mark.asyncio
 async def test_scale_quantity_writes_block_log_when_zero_due_to_side_cap():
     db = StubDB()
     db.set_open_trades("CS75", [
@@ -173,7 +161,6 @@ async def test_scale_quantity_writes_block_log_when_zero_due_to_side_cap():
     assert any("BLOCKED" in m for m in db.logs)
 
 
-@pytest.mark.asyncio
 async def test_scale_quantity_writes_block_log_when_zero_due_to_bp():
     db = StubDB()
     broker = StubBroker(option_buying_power=100.0)  # not enough for 1 lot
@@ -189,7 +176,6 @@ async def test_scale_quantity_writes_block_log_when_zero_due_to_bp():
     assert any("insufficient BP" in m for m in db.logs)
 
 
-@pytest.mark.asyncio
 async def test_scale_quantity_returns_request_when_caps_are_high_enough():
     db = StubDB()
     mm = MoneyManager(StubBroker(option_buying_power=50_000.0), db, config={})
@@ -203,7 +189,6 @@ async def test_scale_quantity_returns_request_when_caps_are_high_enough():
     assert result == 2
 
 
-@pytest.mark.asyncio
 async def test_scale_quantity_requires_expiry():
     """Same loud-failure contract as side_aware_capacity."""
     mm = MoneyManager(StubBroker(option_buying_power=50_000.0), StubDB(), config={})

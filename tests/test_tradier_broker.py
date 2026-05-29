@@ -1,9 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
 
 from hermes.broker.tradier import TradierBroker
 
-@pytest.mark.asyncio
 async def test_get_delta_broker_success():
     """Test TradierBroker.get_delta correctly extracts delta from quotes."""
     config = {
@@ -28,7 +26,6 @@ async def test_get_delta_broker_success():
         assert delta == 0.5234
     await broker.close()
 
-@pytest.mark.asyncio
 async def test_get_delta_broker_no_quotes():
     """Test TradierBroker.get_delta returns 0.0 when no quotes are found."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
@@ -39,7 +36,6 @@ async def test_get_delta_broker_no_quotes():
         assert delta == 0.0
     await broker.close()
 
-@pytest.mark.asyncio
 async def test_get_delta_broker_no_greeks():
     """Test TradierBroker.get_delta returns 0.0 when greeks are missing."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
@@ -51,7 +47,6 @@ async def test_get_delta_broker_no_greeks():
         assert delta == 0.0
     await broker.close()
 
-@pytest.mark.asyncio
 async def test_get_delta_broker_none_delta():
     """Test TradierBroker.get_delta returns 0.0 when delta is None."""
     broker = TradierBroker({"tradier_access_token": "t", "tradier_account_id": "a"})
