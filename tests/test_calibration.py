@@ -17,7 +17,6 @@ from hermes.ml.calibration import (
     PlattCalibrator,
     brier_score,
     load_calibrator,
-    log_loss,
     reliability_curve,
 )
 

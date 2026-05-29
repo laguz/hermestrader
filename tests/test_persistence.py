@@ -11,7 +11,6 @@ These tests validate the rules that motivated the rewrite:
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest

@@ -1,11 +1,10 @@
 import asyncio
 import pytest
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from hermes.service1_agent.core import TradeAction, CascadingEngine
 from hermes.service1_agent.overseer import HermesOverseer
-from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent
+from hermes.events.bus import EventBus
 from ._stubs import StubDB, StubBroker
 
 

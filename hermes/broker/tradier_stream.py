@@ -3,7 +3,6 @@ import json
 import logging
 import websockets
 import httpx
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger("hermes.broker.stream")

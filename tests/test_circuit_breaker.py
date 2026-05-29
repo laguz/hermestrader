@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 import pytest
-import time
 
 from hermes.broker.circuit_breaker import CircuitBreaker, CircuitBreakerError
 from hermes.service1_agent.core import AsyncBrokerWrapper, TradeAction
-from tests._stubs import StubBroker, StubDB
+from tests._stubs import StubBroker
 
 
 @pytest.mark.anyio

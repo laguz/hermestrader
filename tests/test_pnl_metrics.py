@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 import pytest
 import pandas as pd
 
-from hermes.db.models import HermesDB, Trade, Base, _compute_realized_pnl
+from hermes.db.models import HermesDB, Trade
 
 
 @pytest.fixture

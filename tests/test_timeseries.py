@@ -2,13 +2,10 @@ import os
 import shutil
 import pytest
 import duckdb
-import asyncio
-from pathlib import Path
-from datetime import datetime, date, timedelta, time, timezone
+from datetime import datetime, timedelta
 import pandas as pd
-import numpy as np
 
-from hermes.db.models import HermesDB, Base
+from hermes.db.models import HermesDB
 from hermes.db.timeseries import TimeSeriesEngine
 
 
@@ -196,7 +193,6 @@ async def test_csv_migration_daily(tmp_ts_dir, test_db):
 
 
 def lock_worker(db_path, lock_evt, release_evt):
-    import duckdb
     import time
     conn = duckdb.connect(db_path)
     lock_evt.set()

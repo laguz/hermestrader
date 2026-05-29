@@ -1,7 +1,6 @@
 import asyncio
 import pytest
-from datetime import datetime
-from hermes.events.bus import EventBus, Event, MarketDataEvent
+from hermes.events.bus import EventBus, MarketDataEvent
 
 @pytest.fixture
 def event_bus():

@@ -48,6 +48,7 @@ env/
 *~
 
 # ── Local scratch ──────────────────────────────────────────────────────
-scratch/local/
+scratch/
+hermes/scratch/
 .DS_Store
 hermes/.DS_Store

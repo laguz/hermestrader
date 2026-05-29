@@ -15,7 +15,6 @@ from hermes.ml import feature_catalog
 from hermes.ml.feature_catalog import (
     FeatureSpec,
     META_FEATURES,
-    OPTIONS_FEATURES,
     RAW_EQUITY_FEATURES,
     catalog_dict,
     feature_names,
