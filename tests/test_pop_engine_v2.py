@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from hermes.ml import pop_engine
@@ -69,7 +67,7 @@ def test_predict_pop_uses_meta_when_installed():
 
     fv = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
                         iv_rank=50, side="put", period="3M")
-    legacy = pop_engine._legacy_combiner(fv)
+    pop_engine._legacy_combiner(fv)
     pop = predict_pop(fv)
     # Meta path may differ from legacy; we just need a valid probability.
     assert 0.0 <= pop <= 1.0

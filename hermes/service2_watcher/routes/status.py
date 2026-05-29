@@ -16,10 +16,10 @@ from __future__ import annotations
 import os
 import json
 import asyncio
+import logging
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
-from fastapi.responses import FileResponse
 from sse_starlette.sse import EventSourceResponse
 
 from hermes.common import STRATEGIES, VALID_MODES
@@ -37,7 +37,6 @@ from .._app_state import (
     SETTING_TRADIER_ERROR,
     SETTING_TRADIER_OK_TS,
     STALE_AFTER_S,
-    STATIC_DIR,
     TICK_INTERVAL_S,
     db,
     parse_iso,
@@ -45,6 +44,8 @@ from .._app_state import (
     seconds_since,
     strategy_enabled_key,
 )
+
+logger = logging.getLogger("hermes.c2.api")
 
 router = APIRouter()
 

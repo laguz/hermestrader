@@ -4,7 +4,7 @@ import time
 import asyncio
 from pathlib import Path
 from datetime import datetime, date, timedelta, time as datetime_time, timezone
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
 import duckdb

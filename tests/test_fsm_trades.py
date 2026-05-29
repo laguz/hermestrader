@@ -1,5 +1,4 @@
 import pytest
-from datetime import datetime
 from transitions.core import MachineError
 from hermes.db.models import Trade
 

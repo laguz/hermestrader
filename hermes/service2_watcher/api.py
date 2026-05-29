@@ -87,7 +87,7 @@ async def lifespan(app: FastAPI):
     # Start the agent thread
     logger.info("Lifespan starting Hermes agent background thread...")
     from hermes.service1_agent.main import start_agent_thread, _SHUTDOWN_EVENT
-    agent_thread = start_agent_thread()
+    start_agent_thread()
 
     yield
 

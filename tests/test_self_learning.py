@@ -4,7 +4,6 @@ Tests doctrine string replacement, trade fetching, and chart integration.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 

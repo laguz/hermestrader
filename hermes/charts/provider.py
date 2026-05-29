@@ -110,7 +110,7 @@ def _render_chart_locked(df, symbol, lookback,
 
     # ── Figure layout: price | volume | RSI ─────────────────────────────────
     fig = Figure(figsize=(13, 7), facecolor="#0d1117")
-    canvas = FigureCanvasAgg(fig)
+    FigureCanvasAgg(fig)  # attach Agg backend so fig.savefig() works
     gs  = GridSpec(3, 1, height_ratios=[4, 1, 1.4], hspace=0.06, figure=fig)
     ax_price = fig.add_subplot(gs[0])
     ax_vol   = fig.add_subplot(gs[1], sharex=ax_price)

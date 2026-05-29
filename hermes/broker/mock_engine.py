@@ -1,9 +1,8 @@
 from __future__ import annotations
 import logging
-import re
 import math
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
 
 from hermes.common import OCC_RE
 

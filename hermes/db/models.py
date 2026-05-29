@@ -4,6 +4,7 @@ Both Service-1 (writes) and Service-2 (reads) import from this module.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, date
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,8 @@ from hermes.common import OCC_RE as _OCC_RE
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
 
 import pandas as pd
+
+logger = logging.getLogger("hermes.db")
 
 
 class Base(DeclarativeBase):
@@ -253,7 +256,6 @@ def _compute_realized_pnl(*, entry_credit, entry_debit,
 # ---------------------------------------------------------------------------
 # Repository — the only place SQL lives.
 # ---------------------------------------------------------------------------
-import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy import select, delete
 

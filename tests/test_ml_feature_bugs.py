@@ -12,7 +12,6 @@ the ``claude/fix-ml-feature-bugs`` PR:
 """
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 from types import SimpleNamespace
 

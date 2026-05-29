@@ -1,4 +1,3 @@
-import asyncio
 import pytest
 from datetime import datetime
 from hermes.service1_agent.core import TradeAction

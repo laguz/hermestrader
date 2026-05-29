@@ -2,7 +2,7 @@ import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock, patch
-from hermes.events.bus import EventBus, MarketDataEvent
+from hermes.events.bus import EventBus
 from hermes.broker.tradier_stream import TradierStreamClient
 from hermes.service1_agent.core import CascadingEngine, AbstractStrategy
 from ._stubs import StubDB, StubBroker
