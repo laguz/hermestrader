@@ -71,27 +71,40 @@ class MCPBrokerClient:
             await self._session.initialize()
 
         result = await self._session.call_tool(tool_name, arguments=kwargs)
-        text = "".join([c.text for c in result.content if hasattr(c, "text")])
-        try:
-            decoder = json.JSONDecoder()
-            pos = 0
-            res = []
-            text_stripped = text.strip()
-            while pos < len(text_stripped):
-                while pos < len(text_stripped) and text_stripped[pos].isspace():
-                    pos += 1
-                if pos >= len(text_stripped):
-                    break
-                obj, new_pos = decoder.raw_decode(text_stripped, pos)
-                res.append(obj)
-                pos = new_pos
-            if not res:
-                return text
-            if len(res) == 1:
-                return res[0]
-            return res
-        except Exception:
-            return text
+
+        # Prefer structured content: FastMCP serialises the tool's actual return
+        # value here losslessly. This server wraps every return — dicts, lists
+        # and scalars alike — under a single "result" key.
+        structured = getattr(result, "structuredContent", None)
+        if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+            return structured["result"]
+        if structured is not None:
+            return structured
+
+        # Fallback for transports/tools without structured content. Each content
+        # block is one complete value, so decode them individually. The previous
+        # implementation concatenated all blocks into one string before parsing,
+        # which corrupted list-of-string payloads: option expirations arrive as
+        # one block per date ("2026-06-05"), and joining them produced
+        # "2026-06-052026-06-08..." that re-parsed into bogus integers — making
+        # every expiry fail strptime and look like "no DTE match".
+        decoded: List[Any] = []
+        for c in result.content:
+            text = getattr(c, "text", None)
+            if not text:
+                continue
+            text = text.strip()
+            if not text:
+                continue
+            try:
+                decoded.append(json.loads(text))
+            except json.JSONDecodeError:
+                decoded.append(text)
+        if not decoded:
+            return None
+        if len(decoded) == 1:
+            return decoded[0]
+        return decoded
 
     async def get_account_balances(self) -> Dict[str, Any]:
         res = await self._call_mcp("get_account_balances")

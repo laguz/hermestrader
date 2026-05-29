@@ -16,6 +16,7 @@ async def test_mcp_client_lazy_initialization():
     mock_session.call_tool = AsyncMock()
     
     mock_response = MagicMock()
+    mock_response.structuredContent = None  # exercise the text-block fallback
     mock_content = MagicMock()
     mock_content.text = '{"status": "ok", "balances": {"option_buying_power": 50000.0}}'
     mock_response.content = [mock_content]
@@ -41,6 +42,7 @@ async def test_mcp_client_place_multileg():
     client = MCPBrokerClient()
     mock_session = AsyncMock()
     mock_response = MagicMock()
+    mock_response.structuredContent = None  # exercise the text-block fallback
     mock_content = MagicMock()
     mock_content.text = '{"order": {"id": "12345", "status": "ok"}}'
     mock_response.content = [mock_content]
@@ -102,11 +104,14 @@ async def test_mcp_client_subprocess_lifecycle():
             await client.close()
 
 
-async def test_mcp_client_concatenated_json_parsing():
+async def test_mcp_client_multiblock_object_fallback():
+    """When structured content is absent, each content block decodes
+    independently into its own object."""
     client = MCPBrokerClient()
     mock_session = AsyncMock()
     mock_response = MagicMock()
-    
+    mock_response.structuredContent = None
+
     block1 = MagicMock()
     block1.text = '{"date": "2025-04-21", "close": 193.16}'
     block2 = MagicMock()
@@ -116,17 +121,78 @@ async def test_mcp_client_concatenated_json_parsing():
 
     with patch("mcp.client.stdio.stdio_client") as mock_stdio, \
          patch("mcp.ClientSession") as mock_client_session_class:
-         
+
         mock_client_session_class.return_value = mock_session
         mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
-        
+
         res = await client.get_history("AAPL")
-        
+
         assert isinstance(res, list)
         assert len(res) == 2
         assert res[0] == {"date": "2025-04-21", "close": 193.16}
         assert res[1] == {"date": "2025-04-22", "close": 199.74}
-        
+
+        await client.close()
+
+
+async def test_mcp_client_prefers_structured_content():
+    """Structured content is the lossless payload and must be preferred over
+    the text blocks. This is what the live FastMCP server returns: the real
+    value wrapped under a single "result" key."""
+    client = MCPBrokerClient()
+    mock_session = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.structuredContent = {
+        "result": ["2026-05-29", "2026-06-01", "2026-06-05"]
+    }
+    # Text blocks intentionally hold the corrupting one-string-per-block form
+    # that the old concatenation logic mangled into integers.
+    mock_response.content = [
+        MagicMock(text="2026-05-29"),
+        MagicMock(text="2026-06-01"),
+        MagicMock(text="2026-06-05"),
+    ]
+    mock_session.call_tool.return_value = mock_response
+
+    with patch("mcp.client.stdio.stdio_client") as mock_stdio, \
+         patch("mcp.ClientSession") as mock_client_session_class:
+
+        mock_client_session_class.return_value = mock_session
+        mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
+
+        res = await client.get_option_expirations("IWM")
+
+        assert res == ["2026-05-29", "2026-06-01", "2026-06-05"]
+        assert all(isinstance(d, str) for d in res)
+        await client.close()
+
+
+async def test_mcp_client_expirations_string_blocks_fallback():
+    """Regression: option expirations arrive as one bare date string per
+    content block. Without structured content, they must still decode to a
+    list of date strings — not the integers the old concatenation produced
+    (which made every expiry fail strptime and look like 'no DTE match')."""
+    client = MCPBrokerClient()
+    mock_session = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.structuredContent = None
+    mock_response.content = [
+        MagicMock(text="2026-05-29"),
+        MagicMock(text="2026-06-01"),
+        MagicMock(text="2026-06-05"),
+    ]
+    mock_session.call_tool.return_value = mock_response
+
+    with patch("mcp.client.stdio.stdio_client") as mock_stdio, \
+         patch("mcp.ClientSession") as mock_client_session_class:
+
+        mock_client_session_class.return_value = mock_session
+        mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
+
+        res = await client.get_option_expirations("IWM")
+
+        assert res == ["2026-05-29", "2026-06-01", "2026-06-05"]
+        assert "2026-06-05" in res
         await client.close()
 
 
@@ -136,10 +202,11 @@ async def test_mcp_client_recreates_session_on_loop_change():
     mock_session2 = AsyncMock()
     
     mock_response = MagicMock()
+    mock_response.structuredContent = None  # exercise the text-block fallback
     mock_content = MagicMock()
     mock_content.text = '{"status": "ok"}'
     mock_response.content = [mock_content]
-    
+
     mock_session1.call_tool.return_value = mock_response
     mock_session2.call_tool.return_value = mock_response
 
