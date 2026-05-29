@@ -40,14 +40,12 @@ class _StubDB:
 
     async def flag_orphans(self, *_args, **_kwargs):
         pass
-import pytest
 from hermes.service1_agent.core import AsyncBrokerWrapper
 
 def _mm() -> MoneyManager:
     return MoneyManager(broker=_StubBroker([]), db=_StubDB(), config={})
 
 
-@pytest.mark.asyncio
 async def test_sync_accepts_sanitised_hyphen_tag():
     """Tradier rewrites HERMES_CS75 → HERMES-CS75 before persisting it."""
     orders = [{
@@ -65,7 +63,6 @@ async def test_sync_accepts_sanitised_hyphen_tag():
     assert mm._broker_order_counts == {("CS75", "AAPL", "put", "2025-06-20"): 2}
 
 
-@pytest.mark.asyncio
 async def test_sync_accepts_legacy_underscore_tag():
     """Pre-sanitisation tag form still matches (e.g. mock broker)."""
     orders = [{
@@ -83,7 +80,6 @@ async def test_sync_accepts_legacy_underscore_tag():
     assert mm._broker_order_counts == {("TT45", "SPY", "call", "2025-06-20"): 1}
 
 
-@pytest.mark.asyncio
 async def test_sync_handles_single_leg_option_order():
     """Wheel orders have no `leg` array — option_symbol is at the top level."""
     orders = [{
@@ -98,7 +94,6 @@ async def test_sync_handles_single_leg_option_order():
     assert mm._broker_order_counts == {("WHEEL", "MSFT", "put", "2025-06-20"): 3}
 
 
-@pytest.mark.asyncio
 async def test_sync_skips_non_hermes_orders():
     orders = [{"status": "open", "tag": "MANUAL", "symbol": "AAPL"}]
     mm = MoneyManager(broker=_StubBroker(orders), db=_StubDB(), config={})
@@ -106,7 +101,6 @@ async def test_sync_skips_non_hermes_orders():
     assert mm._broker_order_counts == {}
 
 
-@pytest.mark.asyncio
 async def test_sync_skips_inactive_statuses():
     orders = [{
         "status": "filled",
@@ -120,7 +114,6 @@ async def test_sync_skips_inactive_statuses():
     assert mm._broker_order_counts == {}
 
 
-@pytest.mark.asyncio
 async def test_engine_tick_survives_missing_money_manager():
     """Legacy callers that don't pass mm should still run without AttributeError."""
     engine = CascadingEngine(broker=_StubBroker([]), db=_StubDB(),
@@ -130,7 +123,6 @@ async def test_engine_tick_survives_missing_money_manager():
     assert "managed" in stats and "entries" in stats
 
 
-@pytest.mark.asyncio
 async def test_sync_handles_sanitised_closing_tag():
     """Tradier sanitises HERMES_CS75_CLOSE_TP-50 -> HERMES-CS75-CLOSE-TP-50."""
     orders = [{
@@ -145,7 +137,6 @@ async def test_sync_handles_sanitised_closing_tag():
     assert mm._broker_order_counts == {("CS75", "AAPL", "put", "2025-06-20"): 1}
 
 
-@pytest.mark.asyncio
 async def test_sync_extracts_strategy_id_robustly():
     """Verify strategy ID extraction from various tag shapes including multiples."""
     # This matches the current logic: tag.replace("_", "-")[7:].split('-', 1)[0]
@@ -178,7 +169,6 @@ async def test_sync_extracts_strategy_id_robustly():
         assert mm._broker_order_counts == {(expected, "AAPL", "put", "2025-06-20"): 1}, f"Failed for tag {tag}"
 
 
-@pytest.mark.asyncio
 async def test_sync_handles_non_list_orders():
     """Verify that sync_broker_orders doesn't crash when broker.get_orders returns a string."""
     mm = MoneyManager(broker=_StubBroker("Error: Could not retrieve orders"), db=_StubDB(), config={})
@@ -186,7 +176,6 @@ async def test_sync_handles_non_list_orders():
     assert mm._broker_order_counts == {}
 
 
-@pytest.mark.asyncio
 async def test_engine_sync_positions_handles_non_list():
     """Verify engine.sync_positions survives get_orders/get_positions returning strings."""
     class BadBroker:

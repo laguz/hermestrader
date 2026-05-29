@@ -12,7 +12,6 @@ def event_bus():
     if bus._task and not bus._task.done():
         bus._task.cancel()
 
-@pytest.mark.asyncio
 async def test_event_bus_subscription_and_dispatch():
     bus = EventBus()
     bus.start()
@@ -37,7 +36,6 @@ async def test_event_bus_subscription_and_dispatch():
     
     await bus.stop()
 
-@pytest.mark.asyncio
 async def test_event_bus_multiple_handlers():
     bus = EventBus()
     bus.start()
@@ -61,7 +59,6 @@ async def test_event_bus_multiple_handlers():
     
     await bus.stop()
 
-@pytest.mark.asyncio
 async def test_event_bus_handler_exception_isolation():
     bus = EventBus()
     bus.start()

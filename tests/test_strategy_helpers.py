@@ -80,10 +80,8 @@ def test_nearest_strike_returns_none_for_empty_chain():
     assert nearest_strike([], "put", 100.0) is None
 
 
-import pytest
 
 # ── find_expiry_in_dte_range ─────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_find_expiry_picks_max_in_window():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat()
@@ -95,7 +93,6 @@ async def test_find_expiry_picks_max_in_window():
     assert chosen == (today + timedelta(days=40)).isoformat()
 
 
-@pytest.mark.asyncio
 async def test_find_expiry_picks_min_when_requested():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat()
@@ -106,7 +103,6 @@ async def test_find_expiry_picks_min_when_requested():
     assert chosen == (today + timedelta(days=20)).isoformat()
 
 
-@pytest.mark.asyncio
 async def test_find_expiry_returns_none_when_window_empty():
     today = date.today()
     expirations = [(today + timedelta(days=d)).isoformat() for d in (10, 200)]
@@ -115,7 +111,6 @@ async def test_find_expiry_returns_none_when_window_empty():
     assert await s.find_expiry_in_dte_range("AAPL", 30, 60) is None
 
 
-@pytest.mark.asyncio
 async def test_find_expiry_skips_invalid_dates():
     today = date.today()
     expirations = ["2026", (today + timedelta(days=40)).isoformat(), "invalid-date"]
@@ -174,7 +169,6 @@ def test_short_credit_can_be_negative():
 
 
 # ── find_active_ic_expiry — determinism (issue #10 from review) ──────────────
-@pytest.mark.asyncio
 async def test_find_active_ic_picks_earliest_incomplete_expiry():
     db = StubDB()
     db.set_open_legs("TEST", "AAPL", [
@@ -186,7 +180,6 @@ async def test_find_active_ic_picks_earliest_incomplete_expiry():
     assert await s.find_active_ic_expiry("AAPL") == "2025-05-16"
 
 
-@pytest.mark.asyncio
 async def test_find_active_ic_skips_complete_ic():
     db = StubDB()
     db.set_open_legs("TEST", "AAPL", [
@@ -200,7 +193,6 @@ async def test_find_active_ic_skips_complete_ic():
     assert await s.find_active_ic_expiry("AAPL") == "2025-06-20"
 
 
-@pytest.mark.asyncio
 async def test_find_active_ic_returns_none_when_nothing_open():
     s = _make_strategy()  # default StubDB has no open legs
     assert await s.find_active_ic_expiry("AAPL") is None

@@ -40,7 +40,6 @@ def allow_offhours(monkeypatch):
 
 
 
-@pytest.mark.asyncio
 async def test_async_overseer_approval_flow():
     """Verify that an action goes through the EventBus, is approved by the AI Overseer,
     and then placed via the broker.
@@ -87,7 +86,6 @@ async def test_async_overseer_approval_flow():
     await bus.stop()
 
 
-@pytest.mark.asyncio
 async def test_async_overseer_veto_flow():
     """Verify that a VETO verdict stops the order placement and logs a veto."""
     bus = EventBus()
@@ -132,7 +130,6 @@ async def test_async_overseer_veto_flow():
     await bus.stop()
 
 
-@pytest.mark.asyncio
 async def test_async_overseer_modify_flow():
     """Verify that a MODIFY verdict updates attributes and places the modified action."""
     bus = EventBus()
@@ -178,7 +175,6 @@ async def test_async_overseer_modify_flow():
     await bus.stop()
 
 
-@pytest.mark.asyncio
 async def test_async_overseer_propose_flow():
     """Verify that a proposed trade from the overseer runs asynchronously without blocking."""
     bus = EventBus()

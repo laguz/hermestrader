@@ -27,7 +27,6 @@ from hermes.service1_agent.strategies import (
 from ._stubs import StubBroker, StubDB, make_trade
 
 
-import pytest
 
 def _expirations_for(*dte_values):
     today = date.today()
@@ -46,7 +45,6 @@ def _build(strategy_cls, *, broker_kwargs=None, db=None, config=None):
 
 
 # ── CS75 ─────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_cs75_execute_entries_emits_actions_for_empty_book():
     s, broker, db = _build(
         CreditSpreads75,
@@ -63,7 +61,6 @@ async def test_cs75_execute_entries_emits_actions_for_empty_book():
         assert a.strategy_params.get("side_type") in {"put", "call"}
 
 
-@pytest.mark.asyncio
 async def test_cs75_manage_positions_takes_profit_at_50pct_for_mid_dte():
     db = StubDB()
     db.set_open_trades("CS75", [
@@ -81,7 +78,6 @@ async def test_cs75_manage_positions_takes_profit_at_50pct_for_mid_dte():
 
 
 # ── CS7 ──────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_cs7_execute_entries_requires_exact_7_dte():
     """CS7 only opens new entries on the exact 7 DTE expiry."""
     s, _, _ = _build(
@@ -93,7 +89,6 @@ async def test_cs7_execute_entries_requires_exact_7_dte():
     assert all(a.tag == "HERMES_CS7" for a in actions)
 
 
-@pytest.mark.asyncio
 async def test_cs7_skips_when_no_7_dte_available():
     s, _, db = _build(
         CreditSpreads7,
@@ -107,7 +102,6 @@ async def test_cs7_skips_when_no_7_dte_available():
 
 
 # ── TT45 ─────────────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_tt45_execute_entries_uses_delta_selection():
     s, _, _ = _build(
         TastyTrade45,
@@ -119,7 +113,6 @@ async def test_tt45_execute_entries_uses_delta_selection():
     assert all(a.tag == "HERMES_TT45" for a in actions)
 
 
-@pytest.mark.asyncio
 async def test_tt45_manage_positions_hard_exits_at_21_dte():
     db = StubDB()
     db.set_open_trades("TT45", [
@@ -142,7 +135,6 @@ class _DBWithShares(StubDB):
         return self._share_lots * 100
 
 
-@pytest.mark.asyncio
 async def test_wheel_writes_calls_when_shares_present():
     db = _DBWithShares(share_lots=2)  # 200 shares = 2 callable lots
     s, _, _ = _build(
@@ -159,7 +151,6 @@ async def test_wheel_writes_calls_when_shares_present():
     assert all(a.tag == "HERMES_WHEEL" for a in call_actions)
 
 
-@pytest.mark.asyncio
 async def test_wheel_writes_puts_when_no_shares():
     db = _DBWithShares(share_lots=0)
     s, _, _ = _build(

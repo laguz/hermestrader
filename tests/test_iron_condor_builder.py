@@ -35,7 +35,6 @@ def test_margin_requirement_zero_lots():
     assert IronCondorBuilder.margin_requirement(5.0, 0) == 0.0
 
 
-import pytest
 
 # ── plan() — Mode A (no existing side) ───────────────────────────────────────
 def _make_action(symbol: str, expiry: str, lots: int, width: float, side: str) -> TradeAction:
@@ -52,7 +51,6 @@ def _make_action(symbol: str, expiry: str, lots: int, width: float, side: str) -
     )
 
 
-@pytest.mark.asyncio
 async def test_plan_mode_a_opens_both_sides():
     mm = MoneyManager(StubBroker(option_buying_power=100_000.0), StubDB(), config={})
     builder = IronCondorBuilder(mm)
@@ -67,7 +65,6 @@ async def test_plan_mode_a_opens_both_sides():
     assert sides == {"put", "call"}
 
 
-@pytest.mark.asyncio
 async def test_plan_mode_b_opens_only_missing_side():
     mm = MoneyManager(StubBroker(option_buying_power=100_000.0), StubDB(), config={})
     builder = IronCondorBuilder(mm)
@@ -81,7 +78,6 @@ async def test_plan_mode_b_opens_only_missing_side():
     assert actions[0].strategy_params["side_type"] == "call"
 
 
-@pytest.mark.asyncio
 async def test_plan_skips_when_both_sides_already_open():
     db = StubDB()
     mm = MoneyManager(StubBroker(), db, config={})
@@ -98,7 +94,6 @@ async def test_plan_skips_when_both_sides_already_open():
     assert any("full IC already open" in m for m in db.logs)
 
 
-@pytest.mark.asyncio
 async def test_plan_drops_side_when_capacity_exhausted():
     """Pre-load the put side at capacity on the SAME expiry; only the
     call side should plan. Capacity is now per option chain, so the
@@ -120,7 +115,6 @@ async def test_plan_drops_side_when_capacity_exhausted():
     assert actions[0].strategy_params["side_type"] == "call"
 
 
-@pytest.mark.asyncio
 async def test_plan_allows_full_lots_on_a_fresh_expiry():
     """Per-expiry cap: 5 lots open on expiry X must NOT block expiry Y."""
     db = StubDB()
@@ -142,7 +136,6 @@ async def test_plan_allows_full_lots_on_a_fresh_expiry():
     assert sides == {"put", "call"}
 
 
-@pytest.mark.asyncio
 async def test_plan_returns_empty_when_factory_returns_none():
     """A factory may decide the strike doesn't qualify and return None;
     the builder should swallow that without crashing."""
@@ -159,7 +152,6 @@ async def test_plan_returns_empty_when_factory_returns_none():
     assert actions[0].strategy_params["side_type"] == "call"
 
 
-@pytest.mark.asyncio
 async def test_plan_passes_micro_multiplier_to_capacity_calc():
     """Micro options need 1/10 the BP — verify the builder uses the
     multiplier in its requirement calculation."""

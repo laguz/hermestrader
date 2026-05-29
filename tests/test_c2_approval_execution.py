@@ -118,7 +118,6 @@ def _logged(db: _FakeDB) -> List[str]:
 
 
 # ── Happy path ───────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_execute_marks_executed_on_clean_broker_response():
     """Happy path: broker accepts → approval row flips to EXECUTED and
     the operator feed gets [C2 EXECUTED]."""
@@ -136,7 +135,6 @@ async def test_execute_marks_executed_on_clean_broker_response():
 
 
 # ── dry_run guard ────────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_dry_run_does_not_call_broker_and_does_not_mark_executed():
     """The original bug: dry_run=True skipped the broker call yet the row
     was marked EXECUTED. The fix must call no broker and write PREVIEW."""
@@ -156,7 +154,6 @@ async def test_dry_run_does_not_call_broker_and_does_not_mark_executed():
 
 
 # ── Rejection paths ──────────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_broker_errors_response_is_marked_failed_not_executed():
     """Tradier returned an ``errors`` payload → must NOT mark EXECUTED."""
     broker = _FakeBroker(response={"errors": {"error": "insufficient buying power"}})
@@ -174,7 +171,6 @@ async def test_broker_errors_response_is_marked_failed_not_executed():
 
 @pytest.mark.parametrize("status", ["rejected", "expired", "canceled",
                                      "cancelled", "error"])
-@pytest.mark.asyncio
 async def test_broker_rejected_order_status_is_marked_failed(status):
     """Tradier returned a terminal-failure status on the order itself."""
     broker = _FakeBroker(response={"order": {"status": status, "id": "X-9"}})
@@ -188,7 +184,6 @@ async def test_broker_rejected_order_status_is_marked_failed(status):
     assert not any("[C2 EXECUTED]" in m for m in _logged(db))
 
 
-@pytest.mark.asyncio
 async def test_broker_raised_exception_is_marked_failed_with_error_note():
     """Broker connection blew up before returning a response."""
     broker = _FakeBroker(raise_exc=RuntimeError("tradier 503"))
@@ -208,7 +203,6 @@ async def test_broker_raised_exception_is_marked_failed_with_error_note():
 
 
 # ── Ordering invariant ───────────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_pending_order_is_recorded_before_broker_call():
     """record_pending_order must happen before place_order_from_action so
     capacity is reserved before the broker round-trip. Otherwise two

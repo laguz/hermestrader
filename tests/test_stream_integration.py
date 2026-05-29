@@ -57,7 +57,6 @@ class MockWS:
 def allow_offhours(monkeypatch):
     monkeypatch.setenv("HERMES_ALLOW_OFFHOURS_TRADES", "true")
 
-@pytest.mark.asyncio
 async def test_stream_client_to_engine_flow():
     # 1. Setup Event Bus
     bus = EventBus()

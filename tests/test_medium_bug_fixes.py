@@ -100,7 +100,6 @@ def _make_strategy(legs):
     )
 
 
-@pytest.mark.asyncio
 async def test_find_active_ic_returns_earliest_incomplete_expiry():
     """Two incomplete ICs on different expiries → return the earlier one."""
     legs = [
@@ -111,7 +110,6 @@ async def test_find_active_ic_returns_earliest_incomplete_expiry():
     assert await s.find_active_ic_expiry("AAPL") == "2025-05-16"
 
 
-@pytest.mark.asyncio
 async def test_find_active_ic_skips_complete_ic():
     """An expiry with both put and call legs is skipped."""
     legs = [
@@ -125,7 +123,6 @@ async def test_find_active_ic_skips_complete_ic():
     assert await s.find_active_ic_expiry("AAPL") == "2025-06-20"
 
 
-@pytest.mark.asyncio
 async def test_find_active_ic_returns_none_when_all_complete():
     legs = [
         {"option_symbol": "AAPL250516P00150000", "side": "put", "expiry": "2025-05-16"},

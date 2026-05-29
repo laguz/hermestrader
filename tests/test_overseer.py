@@ -15,7 +15,6 @@ deterministic and offline.
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-import pytest
 
 from hermes.service1_agent.core import TradeAction
 from hermes.service1_agent.overseer import HermesOverseer
@@ -51,7 +50,6 @@ def _action(symbol: str = "AAPL") -> TradeAction:
 
 
 # ── advisory: never modifies ─────────────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_advisory_passes_action_through_unchanged():
     db = StubDB()
     o = HermesOverseer(_FakeLLM("{\"verdict\":\"VETO\",\"rationale\":\"bad\"}"),
@@ -64,7 +62,6 @@ async def test_advisory_passes_action_through_unchanged():
 
 
 # ── enforcing: VETO drops the action ─────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_enforcing_veto_drops_action():
     db = StubDB()
     o = HermesOverseer(_FakeLLM("{\"verdict\":\"VETO\",\"rationale\":\"too risky\"}"),
@@ -73,7 +70,6 @@ async def test_enforcing_veto_drops_action():
 
 
 # ── enforcing: APPROVE returns the action ────────────────────────────────────
-@pytest.mark.asyncio
 async def test_enforcing_approve_returns_action():
     db = StubDB()
     o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy="enforcing")
@@ -85,7 +81,6 @@ async def test_enforcing_approve_returns_action():
 
 
 # ── enforcing: MODIFY mutates the action and flags it AI-authored ────────────
-@pytest.mark.asyncio
 async def test_enforcing_modify_mutates_action_and_sets_flags():
     db = StubDB()
     o = HermesOverseer(
@@ -100,7 +95,6 @@ async def test_enforcing_modify_mutates_action_and_sets_flags():
     assert a.ai_rationale == "trim price"
 
 
-@pytest.mark.asyncio
 async def test_enforcing_modify_ignores_unknown_attrs():
     """MODIFY should only set attrs the dataclass actually has —
     setattr on an unknown attr would create surprises elsewhere."""
@@ -121,7 +115,6 @@ class _ExplodingLLM:
         raise RuntimeError("LLM unreachable")
 
 
-@pytest.mark.asyncio
 async def test_llm_failure_passes_action_through_in_enforcing_mode():
     """A network blip shouldn't block trades — the overseer's fail-safe
     is to APPROVE so the rules engine continues to function."""
@@ -135,7 +128,6 @@ async def test_llm_failure_passes_action_through_in_enforcing_mode():
 
 
 # ── autonomous: propose() runs only here ─────────────────────────────────────
-@pytest.mark.asyncio
 async def test_propose_returns_empty_unless_autonomous():
     db = StubDB()
     for autonomy in ("advisory", "enforcing"):
@@ -143,7 +135,6 @@ async def test_propose_returns_empty_unless_autonomous():
         assert await o.propose(["AAPL"]) == []
 
 
-@pytest.mark.asyncio
 async def test_propose_builds_trade_actions_from_llm_payload():
     db = StubDB()
     payload = {
@@ -191,7 +182,6 @@ def test_safe_json_extracts_markdown_code_block():
 
 
 # ── soul appended to system prompt ───────────────────────────────────────────
-@pytest.mark.asyncio
 async def test_soul_appended_to_system_prompt():
     db = StubDB()
     o = HermesOverseer(_FakeLLM(), db, vision_enabled=False,
@@ -200,7 +190,6 @@ async def test_soul_appended_to_system_prompt():
     assert "Avoid AAPL on FOMC days." in await o.get_system_prompt()
 
 
-@pytest.mark.asyncio
 async def test_soul_skipped_when_empty():
     db = StubDB()
     o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy="advisory")
