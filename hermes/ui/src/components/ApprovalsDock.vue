@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { state, decide, bulkDecide } from '../state'
+import Icon from './Icon.vue'
 
 const items = computed(() => state.approvals.pending || [])
 const visible = computed(() => items.value.slice(0, 5))
@@ -52,12 +53,12 @@ function priceTag(item) {
             class="dock-btn approve"
             @click="decide(item.id, 'approve')"
             :title="'Approve ' + item.symbol + ' (A acts on first)'"
-          >✓</button>
+          ><Icon name="check" :size="14" /></button>
           <button
             class="dock-btn reject"
             @click="decide(item.id, 'reject')"
             :title="'Reject ' + item.symbol + ' (R acts on first)'"
-          >✗</button>
+          ><Icon name="x" :size="14" /></button>
         </div>
       </li>
     </ul>

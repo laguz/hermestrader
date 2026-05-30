@@ -7,6 +7,7 @@ import {
   loadAnalysis,
   forceTriggerML
 } from '../state'
+import Icon from '../components/Icon.vue'
 
 // Local UI state
 const activeTab = ref('performance')
@@ -325,37 +326,37 @@ function getMaxStrength(sym) {
   <div class="analytics-tabs-container">
     <!-- Sub-tab Bar -->
     <div class="tab-bar-analytics">
-      <button 
-        class="tab-btn" 
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'performance' }"
         @click="switchTab('performance')"
-      >📈 Performance</button>
-      <button 
-        class="tab-btn" 
+      ><Icon name="chart-line" :size="15" /> Performance</button>
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'predictions' }"
         @click="switchTab('predictions')"
-      >🤖 ML Predictions</button>
-      <button 
-        class="tab-btn" 
+      ><Icon name="bot" :size="15" /> ML Predictions</button>
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'keylevels' }"
         @click="switchTab('keylevels')"
-      >🎚 Key Levels</button>
-      <button 
-        class="tab-btn" 
+      ><Icon name="sliders" :size="15" /> Key Levels</button>
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'logic' }"
         @click="switchTab('logic')"
-      >🧮 Strategy Logic</button>
-      <button 
-        class="tab-btn" 
+      ><Icon name="calculator" :size="15" /> Strategy Logic</button>
+      <button
+        class="tab-btn"
         :class="{ active: activeTab === 'trades' }"
         @click="switchTab('trades')"
-      >📋 Trade History</button>
-      
+      ><Icon name="clipboard" :size="15" /> Trade History</button>
+
       <div class="header-refresh-box">
         <span class="last-updated-text" v-if="state.lastUpdated">
           Updated {{ state.lastUpdated }}
         </span>
-        <button class="btn-ghost btn-sm" @click="loadData">Refresh ↻</button>
+        <button class="btn-ghost btn-sm" @click="loadData"><Icon name="refresh-cw" :size="13" /> Refresh</button>
       </div>
     </div>
 
@@ -555,7 +556,8 @@ function getMaxStrength(sym) {
             :disabled="isMLTriggering"
             @click="triggerMLRetrain"
           >
-            {{ isMLTriggering ? 'Triggering...' : '⚡ Force Retrain & Predict' }}
+            <Icon v-if="!isMLTriggering" name="bolt" :size="14" />
+            {{ isMLTriggering ? 'Triggering...' : 'Force Retrain & Predict' }}
           </button>
         </div>
         <div class="card-body">
@@ -590,7 +592,7 @@ function getMaxStrength(sym) {
               </div>
               <div class="pred-meta-info">
                 <span>Spot: <strong>${{ p.spot.toFixed(2) }}</strong></span>
-                <span>→ Target: <strong :style="{ color: p.predicted_return >= 0 ? 'var(--color-green)' : 'var(--color-red)' }">${{ p.predicted_price.toFixed(2) }}</strong></span>
+                <span><Icon name="arrow-right" :size="12" /> Target: <strong :style="{ color: p.predicted_return >= 0 ? 'var(--positive)' : 'var(--negative)' }">${{ p.predicted_price.toFixed(2) }}</strong></span>
                 <span class="pred-pct" :style="{ color: p.predicted_return >= 0 ? 'var(--color-green)' : 'var(--color-red)' }">
                   ({{ p.predicted_return >= 0 ? '+' : '' }}{{ (p.predicted_return * 100).toFixed(3) }}%)
                 </span>

@@ -13,6 +13,8 @@ import {
 import StatusPill from './components/StatusPill.vue'
 import TraderBar from './components/TraderBar.vue'
 import ApprovalsDock from './components/ApprovalsDock.vue'
+import BotOpsBar from './components/BotOpsBar.vue'
+import Icon from './components/Icon.vue'
 
 function isTypingTarget(el) {
   if (!el) return false
@@ -63,7 +65,7 @@ onUnmounted(() => {
   <!-- Sidebar Navigation -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo">⚡ HERMES C2</div>
+      <div class="logo"><Icon name="bolt" :size="18" /> HERMES C2</div>
       <div class="connection-status" :class="{ connected: state.isConnected }">
         {{ state.isConnected ? 'Connected' : 'Connecting...' }}
       </div>
@@ -71,10 +73,10 @@ onUnmounted(() => {
     
     <nav class="sidebar-nav">
       <router-link to="/" class="nav-item" exact-active-class="active">
-        <span class="icon">🎛</span> Dashboard
+        <span class="icon"><Icon name="dashboard" :size="17" /></span> Dashboard
       </router-link>
       <router-link to="/analytics" class="nav-item" exact-active-class="active">
-        <span class="icon">📊</span> Analytics
+        <span class="icon"><Icon name="chart-bar" :size="17" /></span> Analytics
       </router-link>
     </nav>
 
@@ -134,23 +136,28 @@ onUnmounted(() => {
 
   <!-- Main Viewport -->
   <div class="main-viewport">
-    <header class="main-header">
-      <h2 class="view-title">
-        {{ $route.name === 'Analytics' ? 'Hermes Analytics' : 'C2 Control Room' }}
-      </h2>
-      <div class="header-actions">
-        <span v-if="state.status.pending_approvals > 0" class="pending-badge animate-pulse">
-          {{ state.status.pending_approvals }} pending
-        </span>
-        <button 
-          v-if="state.status.hermes_running"
-          :class="state.status.paused ? 'btn-resume' : 'btn-pause'"
-          @click="togglePause"
-        >
-          {{ state.status.paused ? '▶ Resume Agent' : '⏸ Pause Agent' }}
-        </button>
-      </div>
-    </header>
+    <div class="sticky-top">
+      <header class="main-header">
+        <h2 class="view-title">
+          {{ $route.name === 'Analytics' ? 'Hermes Analytics' : 'C2 Control Room' }}
+        </h2>
+        <div class="header-actions">
+          <span v-if="state.status.pending_approvals > 0" class="pending-badge animate-pulse">
+            {{ state.status.pending_approvals }} pending
+          </span>
+          <button
+            v-if="state.status.hermes_running"
+            :class="state.status.paused ? 'btn-resume' : 'btn-pause'"
+            @click="togglePause"
+          >
+            <Icon :name="state.status.paused ? 'play' : 'pause'" :size="14" />
+            {{ state.status.paused ? 'Resume Agent' : 'Pause Agent' }}
+          </button>
+        </div>
+      </header>
+
+      <BotOpsBar />
+    </div>
 
     <TraderBar />
 
@@ -206,10 +213,13 @@ onUnmounted(() => {
 }
 
 .logo {
-  font-size: 18px;
-  font-weight: 800;
-  letter-spacing: 0.05em;
-  color: var(--color-blue);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-extrabold);
+  letter-spacing: var(--tracking-wide);
+  color: var(--accent);
   text-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
 }
 
@@ -228,11 +238,11 @@ onUnmounted(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--color-red);
+  background: var(--danger);
 }
 .connection-status.connected::before {
-  background: var(--color-green);
-  box-shadow: 0 0 6px var(--color-green);
+  background: var(--positive);
+  box-shadow: 0 0 6px var(--positive);
 }
 
 .sidebar-nav {
@@ -260,11 +270,12 @@ onUnmounted(() => {
 .nav-item.active {
   color: #ffffff;
   background: rgba(59, 130, 246, 0.15);
-  border-left: 3px solid var(--color-blue);
+  border-left: 3px solid var(--accent);
   padding-left: 13px;
 }
 .nav-item .icon {
-  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .sidebar-footer {
@@ -306,6 +317,12 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
+.sticky-top {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+}
+
 .main-header {
   display: flex;
   justify-content: space-between;
@@ -314,9 +331,6 @@ onUnmounted(() => {
   background: rgba(12, 21, 39, 0.7);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-color);
-  position: sticky;
-  top: 0;
-  z-index: 90;
 }
 
 .view-title {

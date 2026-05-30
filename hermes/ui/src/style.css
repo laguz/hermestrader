@@ -9,6 +9,8 @@
   --text-primary: #f8fafc;
   --text-muted: #94a3b8;
   
+  /* Raw palette — do not reference these directly in components; use the
+     semantic aliases below so color stays meaningful and scarce. */
   --color-blue: #3b82f6;
   --color-blue-glow: rgba(59, 130, 246, 0.25);
   --color-green: #10b981;
@@ -22,15 +24,63 @@
   --color-purple: #8b5cf6;
   --color-purple-glow: rgba(139, 92, 246, 0.15);
 
+  /* Semantic color roles. Blue is the one brand/interactive accent; green and
+     red are reserved for P&L / good-bad and danger; yellow for caution. Orange
+     means LIVE trading and nothing else; purple means AI/overseer only. */
+  --accent: var(--color-blue);
+  --accent-glow: var(--color-blue-glow);
+  --positive: var(--color-green);
+  --positive-glow: var(--color-green-glow);
+  --negative: var(--color-red);
+  --negative-glow: var(--color-red-glow);
+  --danger: var(--color-red);
+  --danger-glow: var(--color-red-glow);
+  --warning: var(--color-yellow);
+  --warning-glow: var(--color-yellow-glow);
+  --live: var(--color-orange);          /* LIVE trading mode only */
+  --live-glow: var(--color-orange-glow);
+  --ai: var(--color-purple);            /* AI / overseer surfaces only */
+  --ai-glow: var(--color-purple-glow);
+
   --radius-lg: 12px;
   --radius-md: 8px;
   --radius-sm: 4px;
-  
+
+  /* Spacing scale (4px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Type scale */
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-base: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 20px;
+  --fs-3xl: 24px;
+
+  /* Weight scale */
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-extrabold: 800;
+
+  /* Tracking */
+  --tracking-wide: 0.05em;
+  --tracking-wider: 0.08em;
+
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
-  
+
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-md);
   background-color: var(--bg-color);
   color: var(--text-primary);
   line-height: 1.5;
@@ -101,14 +151,14 @@ button {
   cursor: pointer;
   border: none;
   border-radius: var(--radius-md);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 16px;
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
+  padding: var(--space-2) var(--space-4);
   transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 button:disabled {
   opacity: 0.4;
@@ -116,12 +166,12 @@ button:disabled {
 }
 
 .btn-primary {
-  background-color: var(--color-blue);
+  background-color: var(--accent);
   color: #ffffff;
 }
 .btn-primary:hover:not(:disabled) {
   background-color: #2563eb;
-  box-shadow: 0 0 12px var(--color-blue-glow);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
 .btn-ghost {
@@ -135,25 +185,25 @@ button:disabled {
 }
 
 .btn-approve {
-  background-color: var(--color-green);
+  background-color: var(--positive);
   color: #060913;
 }
 .btn-approve:hover:not(:disabled) {
   background-color: #059669;
-  box-shadow: 0 0 10px var(--color-green-glow);
+  box-shadow: 0 0 10px var(--positive-glow);
 }
 
 .btn-reject {
-  background-color: var(--color-red);
+  background-color: var(--danger);
   color: #ffffff;
 }
 .btn-reject:hover:not(:disabled) {
   background-color: #dc2626;
-  box-shadow: 0 0 10px var(--color-red-glow);
+  box-shadow: 0 0 10px var(--danger-glow);
 }
 
 .btn-pause {
-  background-color: var(--color-yellow);
+  background-color: var(--warning);
   color: #060913;
 }
 .btn-pause:hover:not(:disabled) {
@@ -161,7 +211,7 @@ button:disabled {
 }
 
 .btn-resume {
-  background-color: var(--color-green);
+  background-color: var(--positive);
   color: #060913;
 }
 .btn-resume:hover:not(:disabled) {
@@ -186,26 +236,26 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 20px;
+  padding: var(--space-3) var(--space-5);
   border-bottom: 1px solid var(--border-color);
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-base);
   letter-spacing: 0.02em;
 }
 
 .card-body {
-  padding: 20px;
+  padding: var(--space-5);
 }
 
 /* Inputs & Form Elements */
 label {
   display: block;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   margin-bottom: 6px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-wide);
 }
 
 input, select, textarea {
@@ -214,14 +264,14 @@ input, select, textarea {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   padding: 10px 12px;
   outline: none;
   transition: all 0.15s ease;
 }
 input:focus, select:focus, textarea:focus {
-  border-color: var(--color-blue);
-  box-shadow: 0 0 0 2px var(--color-blue-glow);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 textarea {
@@ -248,8 +298,8 @@ textarea {
   gap: 6px;
   padding: 4px 12px;
   border-radius: 9999px;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
   border: 1px solid transparent;
   cursor: default;
   white-space: nowrap;
@@ -291,16 +341,16 @@ textarea {
 .tbl {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-align: left;
 }
 .tbl th {
   padding: 10px 14px;
   color: var(--text-muted);
-  font-weight: 600;
-  font-size: 10px;
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-wide);
   border-bottom: 1px solid var(--border-color);
   white-space: nowrap;
 }

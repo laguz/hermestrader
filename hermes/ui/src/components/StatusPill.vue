@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import Icon from './Icon.vue'
 
 const props = defineProps({
   status: {
@@ -39,6 +40,20 @@ const pillClass = computed(() => {
   return 'blue'
 })
 
+// Icon shown before the label, for states that previously used an emoji.
+// Agent/market keep their geometric ●/◑ dot in the text (no icon).
+const pillIcon = computed(() => {
+  const stat = String(props.status).toLowerCase().trim()
+  if (props.label) return ''
+  if (props.type === 'approval') {
+    return stat === 'true' || stat === 'required' || stat === 'on' ? 'lock' : 'bolt'
+  }
+  if (props.type === 'paused') {
+    return stat === 'true' || stat === 'paused' ? 'pause' : 'play'
+  }
+  return ''
+})
+
 const pillText = computed(() => {
   if (props.label) return props.label
   const stat = String(props.status).toUpperCase().trim()
@@ -47,10 +62,10 @@ const pillText = computed(() => {
     return stat === 'TRUE' || stat === 'ONLINE' ? '● ONLINE' : '● OFFLINE'
   }
   if (props.type === 'approval') {
-    return stat === 'TRUE' || stat === 'REQUIRED' || stat === 'ON' ? '🔒 APPROVAL ON' : '⚡ AUTO'
+    return stat === 'TRUE' || stat === 'REQUIRED' || stat === 'ON' ? 'APPROVAL ON' : 'AUTO'
   }
   if (props.type === 'paused') {
-    return stat === 'TRUE' || stat === 'PAUSED' ? '⏸ PAUSED' : '▶ RUNNING'
+    return stat === 'TRUE' || stat === 'PAUSED' ? 'PAUSED' : 'RUNNING'
   }
   if (props.type === 'market') {
     if (stat === 'REGULAR' || stat === 'OPEN') return '● OPEN'
@@ -64,6 +79,7 @@ const pillText = computed(() => {
 
 <template>
   <span class="pill" :class="pillClass">
+    <Icon v-if="pillIcon" :name="pillIcon" :size="12" />
     {{ pillText }}
   </span>
 </template>
