@@ -23,6 +23,7 @@ import {
   loadCharts
 } from '../state'
 import StatusPill from '../components/StatusPill.vue'
+import Icon from '../components/Icon.vue'
 
 // Local UI state
 const activeTab = ref('soul')
@@ -264,15 +265,15 @@ function triggerUpdateInfo() {
             </span>
           </div>
           <div class="actions">
-            <button class="btn-action-text btn-approve-text" @click="bulkDecide('approve')">✓ Approve All</button>
-            <button class="btn-action-text btn-reject-text" @click="bulkDecide('reject')">✗ Reject All</button>
-            <button class="btn-ghost btn-sm-square" title="Refresh approvals" @click="loadApprovals">↻</button>
-            <button class="btn-ghost btn-sm-square" title="Toggle approval mode" @click="setApprovalMode(!state.status.approval_mode)">🔒</button>
+            <button class="btn-action-text btn-approve-text" @click="bulkDecide('approve')"><Icon name="check" :size="14" /> Approve All</button>
+            <button class="btn-action-text btn-reject-text" @click="bulkDecide('reject')"><Icon name="x" :size="14" /> Reject All</button>
+            <button class="btn-ghost btn-sm-square" title="Refresh approvals" @click="loadApprovals"><Icon name="refresh-cw" :size="14" /></button>
+            <button class="btn-ghost btn-sm-square" title="Toggle approval mode" @click="setApprovalMode(!state.status.approval_mode)"><Icon name="lock" :size="14" /></button>
           </div>
         </div>
         <div class="card-body no-padding">
           <div v-if="state.approvals.pending.length === 0" class="empty-state">
-            <div class="empty-icon">✓</div>
+            <div class="empty-icon"><Icon name="check" :size="28" /></div>
             <p class="empty-text">No pending trades. The agent queues proposals here for review.</p>
           </div>
           <div v-else class="queue-list">
@@ -399,12 +400,12 @@ function triggerUpdateInfo() {
                   class="sym-tag editable-tag"
                 >
                   {{ sym }}
-                  <button 
+                  <button
                     v-if="state.watchlistData.per_strategy[sid]?.length"
-                    class="btn-remove-tag" 
+                    class="btn-remove-tag"
                     @click="removeSymbol(sid, sym)"
                     title="Remove symbol"
-                  >✕</button>
+                  ><Icon name="x" :size="11" /></button>
                 </span>
               </div>
 
@@ -418,12 +419,12 @@ function triggerUpdateInfo() {
                   @keyup.enter="onAddSymbol(sid)"
                 />
                 <button class="btn-ghost btn-sm" @click="onAddSymbol(sid)">+ Add</button>
-                <button 
+                <button
                   v-if="state.watchlistData.per_strategy[sid]?.length"
-                  class="btn-ghost btn-sm btn-icon" 
+                  class="btn-ghost btn-sm btn-icon"
                   @click="resetWatchlist(sid)"
                   title="Reset to global default"
-                >↺ Reset</button>
+                ><Icon name="rotate-ccw" :size="13" /> Reset</button>
               </div>
               <div class="divider"></div>
             </div>
@@ -489,7 +490,8 @@ function triggerUpdateInfo() {
           :class="{ active: activeTab === tab }"
           @click="activeTab = tab; if (tab === 'charts') loadCharts();"
         >
-          {{ tab === 'charts' ? '📈' : tab.toUpperCase() }}
+          <Icon v-if="tab === 'charts'" name="chart-line" :size="15" />
+          <template v-else>{{ tab.toUpperCase() }}</template>
         </button>
       </div>
 
@@ -633,11 +635,11 @@ function triggerUpdateInfo() {
               :class="{ 'btn-active-blue': state.status.mode === 'paper' }"
               @click="setMode('paper')"
             >Paper</button>
-            <button 
-              class="btn-ghost w-half" 
+            <button
+              class="btn-ghost w-half"
               :class="{ 'btn-active-orange': state.status.mode === 'live' }"
               @click="setMode('live')"
-            >⚠ Live</button>
+            ><Icon name="alert" :size="13" /> Live</button>
           </div>
         </div>
 
@@ -674,7 +676,7 @@ function triggerUpdateInfo() {
             <label>Provider Auth Token Key</label>
             <input type="password" v-model="llmApiKey" placeholder="••••••••••••••••" />
             <div v-if="state.llm?.has_api_key" class="llm-key-saved-hint">
-              <span>✓ Key Saved</span>
+              <span><Icon name="check" :size="12" /> Key Saved</span>
               <span v-if="state.llm.api_key_hint" class="text-muted"> (ends in {{ state.llm.api_key_hint }})</span>
             </div>
           </div>
@@ -685,7 +687,7 @@ function triggerUpdateInfo() {
         <div v-if="activeTab === 'charts'" class="tab-panel active">
           <div class="chart-tab-header">
             <div class="tab-sec-title">Chart Vision Analysis</div>
-            <button class="btn-ghost btn-xs" @click="loadCharts">↻ Refresh</button>
+            <button class="btn-ghost btn-xs" @click="loadCharts"><Icon name="refresh-cw" :size="12" /> Refresh</button>
           </div>
           <p class="tab-sec-desc">Candlestick images are annotated and scanned by the model overseer every tick. View latest updates below.</p>
           
@@ -729,7 +731,10 @@ function triggerUpdateInfo() {
                 <div class="detail-row"><span>RSI Regime</span> <strong>{{ state.chartsData.analyses[sym]?.decision?.rsi_regime || '—' }}</strong></div>
                 <div class="detail-row">
                   <span>BB Squeeze</span>
-                  <strong>{{ state.chartsData.analyses[sym]?.decision?.bb_squeeze === true || state.chartsData.analyses[sym]?.decision?.bb_squeeze === 'true' ? '⚡ Squeeze' : state.chartsData.analyses[sym]?.decision?.bb_squeeze || '—' }}</strong>
+                  <strong>
+                    <template v-if="state.chartsData.analyses[sym]?.decision?.bb_squeeze === true || state.chartsData.analyses[sym]?.decision?.bb_squeeze === 'true'"><Icon name="bolt" :size="13" /> Squeeze</template>
+                    <template v-else>{{ state.chartsData.analyses[sym]?.decision?.bb_squeeze || '—' }}</template>
+                  </strong>
                 </div>
                 <div class="detail-row"><span>Support</span> <strong>{{ formatPriceList(state.chartsData.analyses[sym]?.decision?.support) }}</strong></div>
                 <div class="detail-row"><span>Resistance</span> <strong>{{ formatPriceList(state.chartsData.analyses[sym]?.decision?.resistance) }}</strong></div>

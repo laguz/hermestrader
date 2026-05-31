@@ -368,7 +368,7 @@ export async function setApprovalMode(enabled) {
   try {
     await api('PUT', '/api/approval-mode', { enabled })
     await loadStatus()
-    showToast(enabled ? '🔒 Approval mode ON' : '⚡ Approval mode OFF — agent fires automatically')
+    showToast(enabled ? 'Approval mode ON' : 'Approval mode OFF — agent fires automatically')
   } catch (e) {
     showToast('Error: ' + e.message, true)
   }
