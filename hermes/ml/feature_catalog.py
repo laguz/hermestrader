@@ -114,16 +114,14 @@ OPTIONS_FEATURES: Tuple[FeatureSpec, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Macro / cross-asset features (macro source TBD; placeholders here)
+# Macro / cross-asset features
 # ---------------------------------------------------------------------------
-MACRO_FEATURES: Tuple[FeatureSpec, ...] = (
-    FeatureSpec("vix_level", "vol_pts", "MacroFeed.vix", "daily", nullable=True),
-    FeatureSpec("vix_vix9d_ratio", "ratio", "MacroFeed.vix_vix9d", "daily",
-                nullable=True,
-                description="VIX divided by VIX9D — contango vs backwardation"),
-    FeatureSpec("move_index", "bp", "MacroFeed.move", "daily", nullable=True),
-    FeatureSpec("dxy_pct_chg_5d", "ratio", "MacroFeed.dxy", "daily", nullable=True),
-)
+# Intentionally empty. The VIX / VIX9D / MOVE / DXY specs were placeholders
+# with no production data source (always null), which fed dead columns into the
+# model's feature vector. They are removed until a real macro feed is wired up;
+# re-add concrete FeatureSpec rows here once MacroFeed is implemented. The
+# symbol is kept (empty) so consumers and the "macro" stage stay valid.
+MACRO_FEATURES: Tuple[FeatureSpec, ...] = ()
 
 
 # ---------------------------------------------------------------------------

@@ -89,8 +89,42 @@ def resolve_max_daily_loss(setting_value: Optional[str]) -> float:
         return 0.0
 
 
-async def enforce_daily_loss_limit(db, max_daily_loss: float, *, currently_paused: bool) -> bool:
-    """Auto-pause the agent when today's realized P&L breaches the limit.
+async def _open_position_pnl(broker) -> Optional[float]:
+    """Best-effort unrealized P&L across all open positions, or None.
+
+    Sourced from Tradier's account balances (``open_pl``), which is the live
+    mark-to-market of every open position. Returns ``None`` (not 0.0) when no
+    broker is available or the read fails, so the caller can tell "flat" apart
+    from "unknown" and avoid relaxing the kill switch on a transient error.
+    """
+    if broker is None:
+        return None
+    try:
+        balances = await broker.get_account_balances() or {}
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("daily-loss check: get_account_balances failed: %s", exc)
+        return None
+    raw = balances.get("raw") or {}
+    val = raw.get("open_pl", balances.get("open_pl"))
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+async def enforce_daily_loss_limit(
+    db, max_daily_loss: float, *, currently_paused: bool, broker=None
+) -> bool:
+    """Auto-pause the agent when the day's drawdown breaches the limit.
+
+    The limit is compared against realized P&L for trades closed today **plus**
+    the unrealized mark-to-market of open positions (``open_pl`` from the
+    broker). Including the open leg closes the gap where a book of losing
+    spreads could bleed well past the limit without ever realizing a loss. When
+    the broker's open P&L can't be read the check degrades to realized-only
+    rather than failing open.
 
     Returns ``True`` if the limit was hit and the agent was paused on this
     call (caller should skip the rest of the tick). No-op returning ``False``
@@ -106,17 +140,33 @@ async def enforce_daily_loss_limit(db, max_daily_loss: float, *, currently_pause
     except Exception as exc:                                      # noqa: BLE001
         log.warning("daily-loss check: realized_pnl_today failed: %s", exc)
         return False
-    if realized_today <= -max_daily_loss:
+    unrealized = await _open_position_pnl(broker)
+    total_pnl = realized_today + (unrealized or 0.0)
+    if total_pnl <= -max_daily_loss:
         await db.set_setting(SETTING_PAUSED, "true")
+        unreal_str = "n/a" if unrealized is None else f"${unrealized:,.2f}"
         msg = (
-            f"[KILL SWITCH] daily loss limit hit: realized P&L "
-            f"${realized_today:,.2f} <= -${max_daily_loss:,.2f} — "
+            f"[KILL SWITCH] daily loss limit hit: total P&L "
+            f"${total_pnl:,.2f} (realized ${realized_today:,.2f} + "
+            f"unrealized {unreal_str}) <= -${max_daily_loss:,.2f} — "
             f"agent auto-paused for the session; operator must resume"
         )
         log.error(msg)
         await db.write_log("ENGINE", msg, level="ERROR")
         return True
     return False
+
+
+def _live_armed() -> bool:
+    """True when the operator has explicitly armed real-money live orders.
+
+    Going live is gated behind ``HERMES_LIVE_ARMED=true`` so that merely setting
+    the mode to "live" never routes real orders by accident. Without arming,
+    live mode runs preview-only (dry_run). Accepts the usual truthy spellings.
+    """
+    return os.environ.get("HERMES_LIVE_ARMED", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def _utcnow_iso() -> str:
@@ -469,16 +519,27 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     from hermes.broker.tradier import TradierBroker
     token, account, url = _resolve_mode_credentials(mode)
     cfg = dict(conf)
+    # Paper mode hits the sandbox, which is harmless, so preview is never needed.
+    # Live mode honors the operator's dry_run, but real orders additionally
+    # require an explicit arming flag (HERMES_LIVE_ARMED=true). Absent it, we
+    # force dry_run so flipping the mode to "live" can never silently route real
+    # money — going live must be a deliberate act, not a default.
+    dry_run = conf.get("dry_run", False) if mode == "live" else False
+    if mode == "live" and not dry_run and not _live_armed():
+        dry_run = True
+        log.warning(
+            "LIVE mode selected but HERMES_LIVE_ARMED is not set — forcing "
+            "dry_run (preview-only). Set HERMES_LIVE_ARMED=true to place real "
+            "orders."
+        )
     cfg.update({
         "tradier_access_token": token,
         "tradier_account_id": account,
         "tradier_base_url": url,
-        # In live mode we honor whatever dry_run the operator configured; in
-        # paper mode we never need preview mode because sandbox is harmless.
-        "dry_run": conf.get("dry_run", False) if mode == "live" else False,
+        "dry_run": dry_run,
     })
-    log.info("Initializing TradierBroker mode=%s base=%s dry_run=%s",
-             mode, url, cfg["dry_run"])
+    log.info("Initializing TradierBroker mode=%s base=%s dry_run=%s armed=%s",
+             mode, url, cfg["dry_run"], _live_armed())
     return TradierBroker(cfg)
 
 
@@ -737,12 +798,14 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 except Exception as exc:
                     log.warning("Failed to update WebSocket watchlist: %s", exc)
 
-            # 1c-kill) Daily-loss kill switch — auto-halt the tick if today's
-            # realized P&L breaches the configured limit. Re-evaluated every
-            # tick, so a same-day resume that is still under water trips again.
+            # 1c-kill) Daily-loss kill switch — auto-halt the tick if the day's
+            # drawdown (realized today + open-position unrealized) breaches the
+            # configured limit. Re-evaluated every tick, so a same-day resume
+            # that is still under water trips again.
             _max_daily_loss = resolve_max_daily_loss(await db.get_setting(SETTING_MAX_DAILY_LOSS))
             if await enforce_daily_loss_limit(
-                db, _max_daily_loss, currently_paused=current_overseer_cfg["paused"]
+                db, _max_daily_loss,
+                currently_paused=current_overseer_cfg["paused"], broker=broker,
             ):
                 current_overseer_cfg["paused"] = True
                 await asyncio.sleep(interval_s)
