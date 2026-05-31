@@ -1213,6 +1213,26 @@ class HermesDB:
             result = await conn.exec_driver_sql(sql, (days,))
             return [dict(r._mapping) for r in result.fetchall()]
 
+    async def realized_pnl_today(self) -> float:
+        """Sum of realized P&L for trades CLOSED today (US/Eastern trading day).
+
+        Used by the daily-loss kill switch. Returns a negative number on a
+        losing day. ``trades.pnl`` is ``NUMERIC(12,2)`` so the sum is exact to
+        the cent; we convert to ``float`` only at this read boundary.
+        """
+        sql = """
+          SELECT COALESCE(SUM(pnl), 0) AS realized
+          FROM trades
+          WHERE status = 'CLOSED'
+            AND closed_at IS NOT NULL
+            AND (closed_at AT TIME ZONE 'America/New_York')::date
+                = (now() AT TIME ZONE 'America/New_York')::date
+        """
+        async with self.async_engine.connect() as conn:
+            result = await conn.exec_driver_sql(sql)
+            row = result.fetchone()
+        return float(row[0]) if row and row[0] is not None else 0.0
+
     async def get_price_on_date(self, symbol: str, dt: date) -> Optional[float]:
         """Fetch close price of the symbol on or before the specified date."""
         return await self.ts_engine.get_price_on_date(symbol, dt)
