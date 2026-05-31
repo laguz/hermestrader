@@ -84,7 +84,8 @@ def test_feature_names_known_stages():
     meta = feature_names("meta")
     assert "overnight_gap" in eq
     assert "iv_atm_30d" in opt
-    assert "vix_level" in macro
+    # Macro features are intentionally empty until a real macro feed exists.
+    assert macro == []
     assert "xgb_prob" in meta
 
 
