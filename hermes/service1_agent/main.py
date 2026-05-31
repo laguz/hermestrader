@@ -56,6 +56,10 @@ SETTING_SOUL = "soul_md"
 SETTING_AUTONOMY = "agent_autonomy"
 SETTING_PAUSED = "agent_paused"
 SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
+# Daily-loss kill switch. Dollar amount of realized loss (positive number) that
+# auto-pauses the agent for the rest of the session. "" / "0" / unset disables.
+# Falls back to the HERMES_MAX_DAILY_LOSS env var when no setting is stored.
+SETTING_MAX_DAILY_LOSS = "max_daily_loss"
 
 # Per-strategy enable/disable flags — written by the C2 panel.
 # Key pattern: "strategy_{id}_enabled"  value: "true" | "false"
@@ -64,6 +68,55 @@ def _strategy_enabled_key(strategy_id: str) -> str:
 
 # VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
+
+
+def resolve_max_daily_loss(setting_value: Optional[str]) -> float:
+    """Resolve the daily-loss limit (a positive dollar amount).
+
+    Precedence: the stored ``max_daily_loss`` setting, then the
+    ``HERMES_MAX_DAILY_LOSS`` env var. Returns 0.0 (disabled) when neither is
+    set or the value can't be parsed. The sign is normalised to positive so a
+    limit of "500" and "-500" both mean "halt at $500 of realized loss".
+    """
+    raw = setting_value
+    if raw in (None, ""):
+        raw = os.environ.get("HERMES_MAX_DAILY_LOSS", "")
+    if raw in (None, ""):
+        return 0.0
+    try:
+        return abs(float(raw))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def enforce_daily_loss_limit(db, max_daily_loss: float, *, currently_paused: bool) -> bool:
+    """Auto-pause the agent when today's realized P&L breaches the limit.
+
+    Returns ``True`` if the limit was hit and the agent was paused on this
+    call (caller should skip the rest of the tick). No-op returning ``False``
+    when the switch is disabled, the agent is already paused, the P&L read
+    fails, or the day is still within the limit. Reuses the ``agent_paused``
+    flag so the halt is visible in the dashboard and persists until an
+    operator manually re-arms.
+    """
+    if currently_paused or max_daily_loss <= 0.0:
+        return False
+    try:
+        realized_today = await db.realized_pnl_today()
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("daily-loss check: realized_pnl_today failed: %s", exc)
+        return False
+    if realized_today <= -max_daily_loss:
+        await db.set_setting(SETTING_PAUSED, "true")
+        msg = (
+            f"[KILL SWITCH] daily loss limit hit: realized P&L "
+            f"${realized_today:,.2f} <= -${max_daily_loss:,.2f} — "
+            f"agent auto-paused for the session; operator must resume"
+        )
+        log.error(msg)
+        await db.write_log("ENGINE", msg, level="ERROR")
+        return True
+    return False
 
 
 def _utcnow_iso() -> str:
@@ -683,6 +736,17 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     stream_client.update_watchlist(list(wl_syms))
                 except Exception as exc:
                     log.warning("Failed to update WebSocket watchlist: %s", exc)
+
+            # 1c-kill) Daily-loss kill switch — auto-halt the tick if today's
+            # realized P&L breaches the configured limit. Re-evaluated every
+            # tick, so a same-day resume that is still under water trips again.
+            _max_daily_loss = resolve_max_daily_loss(await db.get_setting(SETTING_MAX_DAILY_LOSS))
+            if await enforce_daily_loss_limit(
+                db, _max_daily_loss, currently_paused=current_overseer_cfg["paused"]
+            ):
+                current_overseer_cfg["paused"] = True
+                await asyncio.sleep(interval_s)
+                continue
 
             # 1d) Hard pause check
             if current_overseer_cfg["paused"]:
