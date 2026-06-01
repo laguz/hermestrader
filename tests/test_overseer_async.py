@@ -349,9 +349,12 @@ async def test_async_overseer_propose_flow():
     await engine._async_propose(["AAPL"])
     await asyncio.sleep(0.1)
 
-    # Verify that the AI-authored proposal was placed
-    assert len(broker.placed) == 1
-    assert broker.placed[0]["symbol"] == "AAPL"
-    
+    # The proposal is a naked single-leg short put and this engine has no
+    # MoneyManager wired — the AI-entry gate fails closed on both counts, so
+    # nothing reaches the broker. (Before the gate existed, AI proposals
+    # bypassed every risk filter and this asserted a fill.)
+    assert len(broker.placed) == 0
+    assert any("AI-GATE" in log for log in db.logs)
+
     await overseer.stop()
     await bus.stop()

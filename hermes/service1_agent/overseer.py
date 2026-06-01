@@ -129,6 +129,120 @@ class HermesOverseer:
                 logger.warning("Overseer proposal malformed for %s: %s", symbol, exc)
         return proposed
 
+    # -- goal-aware parameter tuning -----------------------------------------
+    # Allow-list of live-tunable settings the overseer may adjust toward the
+    # operator's goal, each as (kind, lo, hi). This is a hard safety boundary:
+    # the LLM can nudge these knobs, but can neither invent new settings nor
+    # push a value outside its range. Gate-threshold bounds are sourced from
+    # entry_gate so the gate and the tuner never drift apart.
+    @staticmethod
+    def _tunable_params() -> Dict[str, tuple]:
+        from .entry_gate import BOUNDS as GATE_BOUNDS
+        params: Dict[str, tuple] = {
+            # DTE knobs the strategies already read live from system_settings.
+            "cs7_dte": ("int", 5, 10),
+            "cs75_min_dte": ("int", 30, 45),
+            "cs75_max_dte": ("int", 35, 60),
+        }
+        # AI-entry-gate stringency — "adjust your approval stringency" (soul.md).
+        for key, (lo, hi) in GATE_BOUNDS.items():
+            kind = "int" if key in ("ai_gate_min_dte", "ai_gate_max_dte") else "float"
+            params[key] = (kind, lo, hi)
+        return params
+
+    async def propose_parameter_adjustments(self) -> Dict[str, Any]:
+        """Let the overseer tune sanctioned knobs toward the operator's goal.
+
+        Rather than inventing arbitrary entry points, the overseer adjusts a
+        bounded set of live parameters (DTE windows + AI-gate stringency) in
+        response to recent strategy performance and the doctrine in soul.md.
+        Only ``enforcing`` / ``autonomous`` modes take effect — advisory never
+        mutates live settings.
+
+        Every proposed change is clamped to its allow-listed range and coerced
+        to its declared type before it is written; out-of-list keys are ignored.
+        Returns ``{"applied": {...}, "rationale": str, "skipped": [...]}``.
+        """
+        if self.autonomy not in ("enforcing", "autonomous"):
+            return {"applied": {}, "rationale": "advisory mode — no changes", "skipped": []}
+
+        tunables = self._tunable_params()
+        current: Dict[str, Any] = {}
+        for key, (kind, lo, _hi) in tunables.items():
+            raw = await self.db.get_setting(key)
+            if raw is None:
+                # Surface the in-effect default so the LLM sees a real baseline.
+                from .entry_gate import DEFAULTS as GATE_DEFAULTS
+                raw = GATE_DEFAULTS.get(key)
+            current[key] = raw
+
+        bounds_desc = {
+            k: f"{kind}[{lo}..{hi}]" for k, (kind, lo, hi) in tunables.items()
+        }
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "Review recent strategy performance against the operator doctrine "
+            "and propose adjustments to the TUNABLE PARAMETERS that move the "
+            "system toward the stated goal (capital preservation + consistent "
+            "positive returns). Tighten stringency (higher POP, lower delta "
+            "cap, higher min-credit) for strategies that recently FAILED; you "
+            "may relax modestly only for consistent PASSers.\n"
+            f"CURRENT VALUES: {json.dumps(current, default=str)}\n"
+            f"ALLOWED RANGES: {json.dumps(bounds_desc)}\n"
+            "Reply with strict JSON {adjustments: {key: number, ...}, rationale}. "
+            "Only include keys you want to change. Omit anything you'd leave as-is."
+        )
+        try:
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user", "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("Parameter-tuning LLM call failed: %s", exc)
+            return {"applied": {}, "rationale": f"LLM error: {exc}", "skipped": []}
+
+        decision = self._safe_json(msg)
+        adjustments = decision.get("adjustments") or {}
+        rationale = decision.get("rationale", "")
+        applied: Dict[str, Any] = {}
+        skipped: List[str] = []
+
+        for key, value in adjustments.items():
+            if key not in tunables:
+                skipped.append(f"{key} (not tunable)")
+                continue
+            kind, lo, hi = tunables[key]
+            try:
+                num = float(value)
+            except (TypeError, ValueError):
+                skipped.append(f"{key} (non-numeric {value!r})")
+                continue
+            num = max(float(lo), min(float(hi), num))   # clamp to allow-listed range
+            coerced: Any = int(round(num)) if kind == "int" else round(num, 4)
+            old = current.get(key)
+            if str(old) == str(coerced):
+                continue                                # no-op; don't log churn
+            await self.db.set_setting(key, str(coerced))
+            applied[key] = coerced
+            await self.db.write_log(
+                "OVERSEER",
+                f"[PARAM-TUNE] {key}: {old} → {coerced} (goal-aligned)",
+            )
+
+        if applied:
+            logger.info("[PARAM-TUNE] applied %s — %s", applied, rationale)
+        result = {"applied": applied, "rationale": rationale, "skipped": skipped}
+        try:
+            await self.db.write_ai_decision(
+                "OVERSEER", "PARAMS", self.autonomy,
+                {"type": "param_tuning", **result},
+            )
+        except Exception:                                          # noqa: BLE001
+            pass
+        return result
+
     # -- chart-only analysis (always runs when vision enabled) ---------------
     async def analyze_charts(self, watchlist: Iterable[str]) -> None:
         """Run a vision-only read on each symbol's chart and store the result.

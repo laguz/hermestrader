@@ -937,14 +937,43 @@ class CascadingEngine:
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
+            # Goal-aware parameter tuning — throttled, runs before proposals so
+            # any tightened gate thresholds take effect on this tick's AI ideas.
+            await self._maybe_tune_parameters()
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
                 asyncio.create_task(self._async_propose(watchlist))
             else:
-                ai_actions = await asyncio.to_thread(self.overseer.propose, watchlist)
+                ai_actions = await self.overseer.propose(watchlist)
+                ai_actions = await self._gate_ai_actions(ai_actions)
                 await self.submit(ai_actions, action_type="ai")
                 ai_count = len(ai_actions)
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
+
+    async def _maybe_tune_parameters(self) -> None:
+        """Run the overseer's goal-aware parameter tuning, throttled by interval.
+
+        Defaults to once per hour (``param_tuning_interval_s``); set the
+        interval to 0 to disable. Best-effort — a tuning failure must never
+        break the trading tick.
+        """
+        interval = int(self.config.get("param_tuning_interval_s", 3600))
+        if interval <= 0:
+            return
+        tuner = getattr(self.overseer, "propose_parameter_adjustments", None)
+        if tuner is None:
+            return
+        try:
+            import time
+            now = time.time()
+            last_raw = await self.db.get_setting("ai_last_param_tuning_ts")
+            last = float(last_raw) if last_raw else 0.0
+            if now - last < interval:
+                return
+            await self.db.set_setting("ai_last_param_tuning_ts", str(now))
+            await tuner()
+        except Exception as exc:                                   # noqa: BLE001
+            logger.exception("[PARAM-TUNE] tuning tick failed: %s", exc)
 
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""
@@ -1049,10 +1078,60 @@ class CascadingEngine:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""
         try:
             ai_actions = await self.overseer.propose(watchlist)
+            ai_actions = await self._gate_ai_actions(ai_actions)
             if ai_actions:
                 await self.submit(ai_actions, action_type="ai")
         except Exception as exc:
             logger.exception("Error in async propose: %s", exc)
+
+    async def _gate_ai_actions(
+        self, actions: Sequence[TradeAction]
+    ) -> List[TradeAction]:
+        """Run AI-originated proposals through the mechanical entry gate.
+
+        Overseer proposals carry no POP / delta / credit / capacity guarantees
+        of their own — the rule-based strategies enforce those on *their*
+        entries, but a vision-proposed action skips them. We re-derive every
+        gate against live market data here so an AI idea can only fill if it
+        clears the same bar a rules entry would. Rejections are logged with a
+        reason; passing actions come back normalised and capacity-scaled.
+
+        Fails closed: if the MoneyManager isn't wired (legacy callers) we have
+        no capacity check, so no AI entry may originate.
+        """
+        if not actions:
+            return []
+        if self.mm is None:
+            for a in actions:
+                await self.db.write_log(
+                    a.strategy_id,
+                    f"[AI-GATE] {a.symbol}: rejected — no MoneyManager wired; "
+                    f"cannot validate capacity (fail-closed)",
+                )
+            return []
+
+        from .entry_gate import gate_ai_action
+
+        gated: List[TradeAction] = []
+        for a in actions:
+            try:
+                validated, reason = await gate_ai_action(
+                    a, broker=self.broker, db=self.db, mm=self.mm)
+            except Exception as exc:                              # noqa: BLE001
+                logger.exception("[AI-GATE] error validating %s: %s", a.symbol, exc)
+                await self.db.write_log(
+                    a.strategy_id,
+                    f"[AI-GATE] {a.symbol}: rejected — validation error: {exc}",
+                )
+                continue
+            if validated is None:
+                logger.info("[AI-GATE] REJECTED %s", reason)
+                await self.db.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
+            else:
+                logger.info("[AI-GATE] %s", reason)
+                await self.db.write_log(a.strategy_id, f"[AI-GATE] {reason}")
+                gated.append(validated)
+        return gated
 
     async def handle_market_data(self, event: MarketDataEvent) -> None:
         """Evaluates strategies reactively when a new MarketDataEvent is received."""
