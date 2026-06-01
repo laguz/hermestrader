@@ -159,6 +159,39 @@ class PendingApproval(Base):
     expires_at = Column(DateTime(timezone=True))
 
 
+class VetoSuppression(Base):
+    """Short-lived record of an overseer VETO so the rules engine stops
+    brute-forcing the identical entry every tick.
+
+    A veto consumes no capacity (no Trade/PendingOrder row is written), so
+    without this table ``side_aware_capacity`` reports full headroom next
+    tick and the strategy re-proposes the same action — which the overseer
+    re-vetoes, burning an LLM call each cycle. ``submit`` consults
+    ``active_veto`` before emitting a review request and skips the
+    re-proposal while a suppression is unexpired.
+
+    Regular (non-hypertable) table: low volume, keyed random-access lookups.
+    """
+    __tablename__ = "veto_suppressions"
+    id = Column(BigInteger, Sequence("veto_suppressions_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    # NULL side_type/expiry = symbol-wide veto (matches any); otherwise the
+    # field must match the incoming action exactly.
+    side_type = Column(String)
+    expiry = Column(String)
+    rationale = Column(Text)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    # Repeat vetoes on the same key bump this and extend the window (backoff).
+    hits = Column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        Index("idx_veto_suppressions_lookup", "strategy_id", "symbol", "expires_at"),
+    )
+
+
 class BotLog(Base):
     __tablename__ = "bot_logs"
     ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
@@ -969,6 +1002,75 @@ class HermesDB:
                         continue
                 return True
         return False
+
+    async def record_veto(self, strategy_id: str, symbol: str,
+                          side_type: Optional[str], expiry: Optional[str],
+                          rationale: Optional[str], ttl_seconds: int) -> int:
+        """Record (or escalate) a veto suppression for this entry key.
+
+        If an unexpired suppression already exists for the exact
+        (strategy, symbol, side_type, expiry) key, bump its ``hits`` and
+        extend the window proportionally (linear backoff: window =
+        ttl × hits) so a setup that keeps getting re-proposed is muted for
+        longer. Returns the resulting ``hits`` count.
+        """
+        now = datetime.utcnow()
+        symbol = (symbol or "").upper()
+        side_type = side_type.lower() if side_type else None
+        async with self.AsyncSession() as s:
+            result = await s.execute(
+                select(VetoSuppression).filter(
+                    VetoSuppression.strategy_id == strategy_id,
+                    VetoSuppression.symbol == symbol,
+                    VetoSuppression.expires_at > now,
+                )
+            )
+            existing = None
+            for r in result.scalars().all():
+                if (r.side_type or None) == side_type and (r.expiry or None) == (expiry or None):
+                    existing = r
+                    break
+            if existing is not None:
+                existing.hits += 1
+                existing.expires_at = now + timedelta(seconds=ttl_seconds * existing.hits)
+                if rationale:
+                    existing.rationale = rationale
+                await s.commit()
+                return existing.hits
+            s.add(VetoSuppression(
+                strategy_id=strategy_id, symbol=symbol, side_type=side_type,
+                expiry=expiry, rationale=rationale,
+                expires_at=now + timedelta(seconds=ttl_seconds), hits=1,
+            ))
+            await s.commit()
+            return 1
+
+    async def active_veto(self, strategy_id: str, symbol: str,
+                          side_type: Optional[str],
+                          expiry: Optional[str]) -> Optional[str]:
+        """Return the rationale if an unexpired veto covers this entry, else None.
+
+        A stored suppression with NULL ``side_type``/``expiry`` is symbol-wide
+        and matches any side/expiry; a populated field must match exactly.
+        """
+        now = datetime.utcnow()
+        symbol = (symbol or "").upper()
+        side_type = side_type.lower() if side_type else None
+        async with self.AsyncSession() as s:
+            result = await s.execute(
+                select(VetoSuppression).filter(
+                    VetoSuppression.strategy_id == strategy_id,
+                    VetoSuppression.symbol == symbol,
+                    VetoSuppression.expires_at > now,
+                ).order_by(VetoSuppression.expires_at.desc())
+            )
+            for r in result.scalars().all():
+                if r.side_type and r.side_type != side_type:
+                    continue
+                if r.expiry and r.expiry != expiry:
+                    continue
+                return r.rationale or "previously vetoed"
+        return None
 
     async def expire_stale_pending_orders(self, older_than_seconds: int) -> int:
         cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)

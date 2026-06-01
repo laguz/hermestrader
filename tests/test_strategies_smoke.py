@@ -162,3 +162,65 @@ async def test_wheel_writes_puts_when_no_shares():
     # No shares → no calls; puts only.
     assert all((a.strategy_params or {}).get("side_type") == "put" for a in actions)
     assert len(actions) == 2
+    # POP overlay active (stub analyze_symbol provides data) → pop annotated.
+    assert all("pop" in (a.strategy_params or {}) for a in actions)
+
+
+def _analysis_with_support(support_price: float):
+    """analyze_symbol override placing a single support cluster at a price."""
+    def fn(symbol, period="6m"):
+        return {
+            "symbol": symbol, "current_price": 100.0,
+            "current_vol": 0.20, "avg_vol": 0.20,
+            "key_levels": [{"price": support_price, "type": "support", "strength": 8}],
+            "period": period,
+        }
+    return fn
+
+
+async def test_wheel_pop_tilt_prefers_protected_strike():
+    """The overlay tilts toward an S/R-protected in-band strike over the
+    strike merely closest to the 0.30Δ target."""
+    db = _DBWithShares(share_lots=0)
+    s, broker, _ = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={"expirations": _expirations_for(35, 40)},
+        config={"wheel_max_lots": 1},
+    )
+    # Support at 91.5 protects the 91 short put (91 < 91.5 < 100) but not the
+    # 92 strike that sits exactly at 0.30Δ. Tilt should pick 91.
+    broker.analyze_symbol = _analysis_with_support(91.5)
+    actions = await s.execute_entries(["AAPL"])
+    assert len(actions) == 1
+    short_leg = actions[0].strategy_params["short_leg"]
+    assert "00091000" in short_leg   # strike 91, protected
+    assert "00092000" not in short_leg
+
+
+async def test_wheel_pop_gate_skips_adverse_regime():
+    """A high wheel_min_pop floor blocks entries whose 6M POP is too low."""
+    db = _DBWithShares(share_lots=0)
+    s, _, _ = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={"expirations": _expirations_for(35, 40)},
+        config={"wheel_max_lots": 2, "wheel_min_pop": 0.99},
+    )
+    actions = await s.execute_entries(["AAPL"])
+    assert actions == []
+    # _log schedules write_log as a fire-and-forget task; let it flush.
+    await asyncio.sleep(0.05)
+    assert any("< floor" in log and "adverse regime" in log for log in db.logs)
+
+
+async def test_wheel_falls_back_to_delta_when_analysis_unavailable():
+    """No analysis → delta-only selection (no pop annotation), still trades."""
+    db = _DBWithShares(share_lots=0)
+    s, broker, _ = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={"expirations": _expirations_for(35, 40)},
+        config={"wheel_max_lots": 2, "wheel_min_pop": 0.99},  # gate can't fire w/o analysis
+    )
+    broker.analyze_symbol = lambda symbol, period="6m": {"error": "feed down"}
+    actions = await s.execute_entries(["AAPL"])
+    assert len(actions) == 2   # gate inert, delta-only pick proceeds
+    assert all("pop" not in (a.strategy_params or {}) for a in actions)

@@ -130,6 +130,53 @@ async def test_async_overseer_veto_flow():
     await bus.stop()
 
 
+async def test_veto_suppresses_repeat_entry():
+    """After a VETO, re-submitting the identical entry is suppressed without
+    a second review round-trip (no brute-forcing the same action each tick).
+    """
+    bus = EventBus()
+    bus.start()
+
+    db = StubDB()
+    broker = StubBroker()
+
+    engine = CascadingEngine(
+        broker=broker,
+        db=db,
+        strategies=[],
+        approval_mode=False,
+        event_bus=bus,
+        config={"veto_suppression_s": 1800},
+    )
+
+    llm = _FakeLLM('{"verdict": "VETO", "rationale": "Repeated brute-force entry for RIOT"}')
+    overseer = HermesOverseer(
+        llm_client=llm, db=db, vision_enabled=False,
+        autonomy="enforcing", event_bus=bus,
+    )
+    await overseer.start()
+    engine.overseer = overseer
+
+    # First submission: reviewed and vetoed → records a suppression.
+    await engine.submit([_action("RIOT")])
+    await asyncio.sleep(0.1)
+    assert len(broker.placed) == 0
+    assert len([l for l in db.logs if "[AI VETOED]" in l]) == 1
+
+    # Second identical submission: suppressed before review — no new veto log,
+    # and a [VETO-SUPPRESSED] entry instead.
+    llm.last_messages = None
+    await engine.submit([_action("RIOT")])
+    await asyncio.sleep(0.1)
+    assert len(broker.placed) == 0
+    assert len([l for l in db.logs if "[AI VETOED]" in l]) == 1   # still just one
+    assert len([l for l in db.logs if "[VETO-SUPPRESSED]" in l]) == 1
+    assert llm.last_messages is None   # overseer was never consulted again
+
+    await overseer.stop()
+    await bus.stop()
+
+
 async def test_async_overseer_modify_flow():
     """Verify that a MODIFY verdict updates attributes and places the modified action."""
     bus = EventBus()
@@ -173,6 +220,90 @@ async def test_async_overseer_modify_flow():
 
     await overseer.stop()
     await bus.stop()
+
+
+async def test_no_event_bus_veto_blocks_order():
+    """When event_bus is None, submit() must still honour an enforcing VETO.
+
+    This is the synchronous review path: ``submit`` awaits
+    ``overseer.review`` directly instead of going through the EventBus.
+    Regression guard for the missing ``await`` that turned the verdict
+    into an ignored coroutine and let vetoed orders reach the broker.
+    """
+    db = StubDB()
+    broker = StubBroker()
+
+    engine = CascadingEngine(
+        broker=broker,
+        db=db,
+        strategies=[],
+        approval_mode=False,
+        event_bus=None,
+    )
+
+    llm = _FakeLLM('{"verdict": "VETO", "rationale": "High risk pattern detected"}')
+    overseer = HermesOverseer(
+        llm_client=llm, db=db, vision_enabled=False, autonomy="enforcing",
+    )
+    engine.overseer = overseer
+
+    await engine.submit([_action("MSFT")])
+
+    # VETO must block the order from ever reaching the broker.
+    assert len(broker.placed) == 0
+    assert len(db.pending_orders) == 0
+
+
+async def test_no_event_bus_approve_places_order():
+    """The synchronous review path still places an APPROVED order."""
+    db = StubDB()
+    broker = StubBroker()
+
+    engine = CascadingEngine(
+        broker=broker,
+        db=db,
+        strategies=[],
+        approval_mode=False,
+        event_bus=None,
+    )
+
+    llm = _FakeLLM('{"verdict": "APPROVE", "rationale": "Looks good"}')
+    overseer = HermesOverseer(
+        llm_client=llm, db=db, vision_enabled=False, autonomy="enforcing",
+    )
+    engine.overseer = overseer
+
+    await engine.submit([_action("AAPL")])
+
+    assert len(broker.placed) == 1
+    assert broker.placed[0]["symbol"] == "AAPL"
+
+
+async def test_no_event_bus_modify_places_modified_order():
+    """The synchronous review path applies a MODIFY before placing the order."""
+    db = StubDB()
+    broker = StubBroker()
+
+    engine = CascadingEngine(
+        broker=broker,
+        db=db,
+        strategies=[],
+        approval_mode=False,
+        event_bus=None,
+    )
+
+    llm = _FakeLLM('{"verdict": "MODIFY", "rationale": "tighten fill", "modifications": {"price": 1.25}}')
+    overseer = HermesOverseer(
+        llm_client=llm, db=db, vision_enabled=False, autonomy="enforcing",
+    )
+    engine.overseer = overseer
+
+    action = _action("GOOG")
+    await engine.submit([action])
+
+    assert len(broker.placed) == 1
+    assert action.price == 1.25
+    assert action.ai_authored is True
 
 
 async def test_async_overseer_propose_flow():

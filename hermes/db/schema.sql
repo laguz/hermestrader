@@ -189,6 +189,27 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
     ON pending_approvals(status, created_at DESC);
 
+-- ---------------------------------------------------------------------
+-- Veto suppressions — short-lived memory of overseer VETO verdicts so the
+-- rules engine stops re-proposing (brute-forcing) the identical entry every
+-- tick. A veto consumes no capacity, so without this the strategy keeps
+-- re-pitching the same action and the overseer keeps re-vetoing it.
+-- Regular table (not hypertable): low volume, keyed random-access lookups.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS veto_suppressions (
+    id           BIGSERIAL PRIMARY KEY,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    strategy_id  TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    side_type    TEXT,                            -- 'put' | 'call' | NULL (all sides)
+    expiry       TEXT,                            -- ISO YYYY-MM-DD | NULL (all expiries)
+    rationale    TEXT,
+    expires_at   TIMESTAMPTZ NOT NULL,            -- TTL; row is inert once past
+    hits         INTEGER NOT NULL DEFAULT 1       -- repeat vetoes escalate the window
+);
+CREATE INDEX IF NOT EXISTS idx_veto_suppressions_lookup
+    ON veto_suppressions(strategy_id, symbol, expires_at DESC);
+
 -- Daily PnL roll-up for the C2 dashboard.
 -- This was originally a TimescaleDB continuous aggregate, but those require
 -- time_bucket() to reference the hypertable's primary time dimension. The
