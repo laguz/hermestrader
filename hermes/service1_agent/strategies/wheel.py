@@ -11,9 +11,32 @@ and cash-secured puts up to ``wheel_max_lots``:
 2. **Puts second** (deploy unused capacity). Fill remaining capacity
    toward ``max_lots`` total with cash-secured puts.
 
-Both legs target ``|Δ| ≈ 0.30`` (±0.05) on the latest expiry within
-30–45 DTE. Single-leg orders (``order_class='option'``); pricing is the
-mid of bid/ask (defensive against ``None`` from illiquid contracts).
+Both legs target ``|Δ| ≈ 0.30`` (±``wheel_delta_tol``, default 0.05) on the
+latest expiry within 30–45 DTE. Single-leg orders (``order_class='option'``);
+pricing is the mid of bid/ask (defensive against ``None`` from illiquid
+contracts).
+
+POP overlay (hybrid)
+--------------------
+Delta stays the anchor — the wheel monetizes assignment, so it needs the
+premium that ~0.30Δ provides, and pushing to the ≥0.75-POP strikes the
+credit-spread strategies use would gut the credit and conflict with the
+0.30Δ target. Instead we use the 6M POP surface (same engine as CS75) two
+ways, both no-ops unless ``analyze_symbol`` returns data:
+
+* **Tilt** — among the in-band candidate strikes, prefer the one with the
+  highest S/R *protection score* (a short strike sitting just behind a
+  support/resistance cluster), tie-broken by closeness to the target delta.
+  We tilt on protection, not raw POP, because POP rises monotonically as
+  delta falls — tilting on POP alone would just walk to the low-delta,
+  low-premium edge of the band.
+* **Gate** — skip the entry when the chosen strike's 6M POP falls below
+  ``wheel_min_pop`` (default 0.50), i.e. the directional/vol regime is
+  adverse enough that even the wheel shouldn't sell into it. Set 0 to
+  disable.
+
+When ``analyze_symbol`` is unavailable the selection degrades to the
+original delta-only pick.
 
 Management contract
 -------------------
@@ -25,6 +48,12 @@ from __future__ import annotations
 from typing import Iterable, List, Optional
 
 from ..core import AbstractStrategy, TradeAction
+from hermes.ml.pop_engine import (
+    FeatureVector,
+    calculate_strike_protection,
+    coerce_xgb_prob,
+    predict_pop,
+)
 
 from ._helpers import parse_occ
 
@@ -49,6 +78,11 @@ class WheelStrategy(AbstractStrategy):
             if not expiry:
                 self._log(f"✗ {symbol}: no expiry in 30-45 DTE range; skip.")
                 continue
+
+            # POP overlay inputs — fetched once per symbol (6M regime matches
+            # the wheel's 30-45 DTE). Both stay None/neutral when analysis is
+            # unavailable, in which case strike selection is delta-only.
+            analysis, xgb_prob = await self._pop_inputs(symbol)
 
             # side_aware_capacity already subtracts open + pending + broker
             # orders for this chain, so capacity here is the actual headroom
@@ -78,7 +112,8 @@ class WheelStrategy(AbstractStrategy):
 
             added_calls = 0
             for _ in range(wanted_calls):
-                a = await self._open_wheel_leg(symbol, "call", expiry)
+                a = await self._open_wheel_leg(symbol, "call", expiry,
+                                               analysis=analysis, xgb_prob=xgb_prob)
                 if a:
                     actions.append(a)
                     added_calls += 1
@@ -94,16 +129,37 @@ class WheelStrategy(AbstractStrategy):
                 )
 
             for _ in range(wanted_puts):
-                a = await self._open_wheel_leg(symbol, "put", expiry)
+                a = await self._open_wheel_leg(symbol, "put", expiry,
+                                               analysis=analysis, xgb_prob=xgb_prob)
                 if a:
                     actions.append(a)
         return actions
 
-    async def _open_wheel_leg(self, symbol: str, side: str, expiry: str) -> Optional[TradeAction]:
+    async def _pop_inputs(self, symbol: str):
+        """Return ``(analysis, xgb_prob)`` for the POP overlay, or ``(None, None)``.
+
+        ``analysis`` is the 6M ``analyze_symbol`` blob (current price/vol +
+        S/R key levels); ``xgb_prob`` is the calibrated directional
+        probability coerced from the latest stored prediction. Any failure
+        degrades gracefully to delta-only selection.
+        """
+        try:
+            analysis = await self.broker.analyze_symbol(symbol, period="6m")
+        except Exception as exc:                                   # noqa: BLE001
+            self._log(f"⚠️ {symbol}: 6M analysis failed ({exc}); delta-only strike selection.")
+            return None, None
+        if not analysis or "error" in analysis:
+            self._log(f"ℹ️ {symbol}: no 6M analysis; delta-only strike selection.")
+            return None, None
+        xgb_pred = await self.db.latest_prediction(symbol) or {}
+        current_vol = float(analysis.get("current_vol") or 0.30)
+        return analysis, coerce_xgb_prob(xgb_pred, current_vol)
+
+    async def _open_wheel_leg(self, symbol: str, side: str, expiry: str,
+                              *, analysis=None, xgb_prob=None) -> Optional[TradeAction]:
         chain = await self.broker.get_option_chains(symbol, expiry) or []
-        short = self.find_strike_by_delta(chain, side, 0.30, tolerance=0.05)
+        short, pop = self._select_short_strike(symbol, side, chain, analysis, xgb_prob)
         if not short:
-            self._log(f"✗ {symbol} {side}: no strike near 0.30Δ (±0.05) in chain for {expiry}; skip.")
             return None
         # Defensive: illiquid contracts can return None for bid/ask.
         bid = float(short.get("bid") or 0.0)
@@ -112,14 +168,87 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"✗ {symbol} {side}: no bid/ask on {short.get('symbol')}; skip.")
             return None
         mid = round((bid + ask) / 2, 2) if (bid > 0 and ask > 0) else round(max(bid, ask), 2)
+        params = {"side_type": side, "short_leg": short["symbol"]}
+        if pop is not None:
+            params["pop"] = round(pop, 4)
         return TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="option",
             legs=[{"option_symbol": short["symbol"], "side": "sell_to_open", "quantity": 1}],
             price=mid,
             side="sell", quantity=1, order_type="credit", tag="HERMES_WHEEL",
-            strategy_params={"side_type": side, "short_leg": short["symbol"]},
+            strategy_params=params,
             expiry=expiry,
         )
+
+    def _select_short_strike(self, symbol, side, chain, analysis, xgb_prob):
+        """Pick the short strike for one wheel leg. Returns ``(option, pop)``.
+
+        Delta is the anchor: gather chain strikes within ``wheel_delta_tol``
+        of ``wheel_delta``. With no analysis we keep the original behaviour —
+        the single strike nearest the target delta, ``pop=None``. With
+        analysis we tilt toward the most S/R-protected in-band strike and
+        gate on 6M POP (see the module docstring).
+        """
+        target = float(self.config.get("wheel_delta", 0.30))
+        tol = float(self.config.get("wheel_delta_tol", 0.05))
+
+        candidates = []
+        for o in chain:
+            if o.get("option_type") != side:
+                continue
+            greeks = o.get("greeks") or {}
+            raw = greeks.get("delta")
+            if raw is None:
+                continue
+            d = abs(float(raw))
+            if abs(d - target) <= tol:
+                candidates.append((o, d))
+
+        if not candidates:
+            self._log(f"✗ {symbol} {side}: no strike near {target:.2f}Δ (±{tol:.2f}) in chain; skip.")
+            return None, None
+
+        # Delta-only fallback — preserves legacy behaviour when the POP
+        # surface is unavailable.
+        if analysis is None:
+            opt, _ = min(candidates, key=lambda c: abs(c[1] - target))
+            return opt, None
+
+        current_price = float(analysis.get("current_price") or 0.0)
+        current_vol = float(analysis.get("current_vol") or 0.30)
+        avg_vol = float(analysis.get("avg_vol") or 0.25)
+        key_levels = analysis.get("key_levels") or []
+        spread_type = "put_credit" if side == "put" else "call_credit"
+        prob = 0.5 if xgb_prob is None else float(xgb_prob)
+
+        # Tilt on protection score; tie-break toward the target delta.
+        best_opt = best_delta = best_prot = None
+        for o, d in candidates:
+            prot = calculate_strike_protection(
+                key_levels, current_price, float(o.get("strike") or 0.0), spread_type)
+            if (best_opt is None
+                    or prot > best_prot + 1e-9
+                    or (abs(prot - best_prot) <= 1e-9 and abs(d - target) < abs(best_delta - target))):
+                best_opt, best_delta, best_prot = o, d, prot
+
+        pop = predict_pop(FeatureVector(
+            delta=best_delta, xgb_prob=prob, current_vol=current_vol,
+            avg_vol=avg_vol, protection_score=best_prot, side=side,
+            period="6M", symbol=symbol,
+        ))
+
+        min_pop = float(self.config.get("wheel_min_pop", 0.50))
+        if min_pop > 0 and pop < min_pop:
+            self._log(
+                f"✗ {symbol} {side}: 6M POP {pop:.1%} < floor {min_pop:.0%} "
+                f"(adverse regime, strike={best_opt.get('strike')}); skip."
+            )
+            return None, pop
+        self._log(
+            f"→ {symbol} {side}: strike={best_opt.get('strike')} Δ={best_delta:.2f} "
+            f"POP={pop:.1%} prot={best_prot:.2f}"
+        )
+        return best_opt, pop
 
     async def manage_positions(self) -> List[TradeAction]:
         """Roll ITM at <7 DTE; detect put assignments and open covered calls."""

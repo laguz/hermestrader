@@ -126,6 +126,7 @@ class StubDB:
         self._open_legs:   Dict[str, List[Dict[str, Any]]] = {}
         self._watchlists:  Dict[str, List[str]] = {}
         self._predictions: Dict[str, Dict[str, Any]] = {}
+        self._vetoes: List[Dict[str, Any]] = []
 
     # ── seeding helpers ─────────────────────────────────────────────────────
     def set_open_trades(self, strategy_id: str, trades: List[Dict[str, Any]]):
@@ -226,6 +227,44 @@ class StubDB:
 
     async def recent_logs(self, limit: int = 200) -> str:
         return "\n".join(self.logs[-limit:])
+
+    async def record_veto(self, strategy_id, symbol, side_type, expiry,
+                          rationale, ttl_seconds):
+        import time
+        symbol = (symbol or "").upper()
+        side_type = side_type.lower() if side_type else None
+        now = time.time()
+        for v in self._vetoes:
+            if (v["strategy_id"] == strategy_id and v["symbol"] == symbol
+                    and v["side_type"] == side_type and v["expiry"] == expiry
+                    and v["expires_at"] > now):
+                v["hits"] += 1
+                v["expires_at"] = now + ttl_seconds * v["hits"]
+                v["rationale"] = rationale or v["rationale"]
+                return v["hits"]
+        self._vetoes.append({
+            "strategy_id": strategy_id, "symbol": symbol, "side_type": side_type,
+            "expiry": expiry, "rationale": rationale,
+            "expires_at": now + ttl_seconds, "hits": 1,
+        })
+        return 1
+
+    async def active_veto(self, strategy_id, symbol, side_type, expiry):
+        import time
+        symbol = (symbol or "").upper()
+        side_type = side_type.lower() if side_type else None
+        now = time.time()
+        for v in sorted(self._vetoes, key=lambda x: x["expires_at"], reverse=True):
+            if v["strategy_id"] != strategy_id or v["symbol"] != symbol:
+                continue
+            if v["expires_at"] <= now:
+                continue
+            if v["side_type"] and v["side_type"] != side_type:
+                continue
+            if v["expiry"] and v["expiry"] != expiry:
+                continue
+            return v["rationale"] or "previously vetoed"
+        return None
 
 
 # ---------------------------------------------------------------------------

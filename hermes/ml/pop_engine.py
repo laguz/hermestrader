@@ -519,4 +519,12 @@ __all__ = [
     "predict_single_pop",
     "generate_regime_pops",
     "augment_levels_with_pop",
+    "coerce_xgb_prob",
 ]
+
+
+# Public alias — strategies that score individual chain strikes (not just the
+# dashboard's key levels) need the same honest return→probability coercion
+# ``augment_levels_with_pop`` uses internally. Exposed so the Wheel's POP
+# overlay shares one definition rather than re-deriving it.
+coerce_xgb_prob = _coerce_xgb_prob

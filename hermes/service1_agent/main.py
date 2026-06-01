@@ -1004,6 +1004,9 @@ if __name__ == "__main__":
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
         "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        # How long an overseer VETO suppresses re-proposal of the identical
+        # entry (seconds). 0 disables suppression. Repeat vetoes extend it.
+        "veto_suppression_s": int(os.environ.get("HERMES_VETO_SUPPRESSION_S", 1800)),
         "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
         # Initial mode if no setting is stored yet — paper is the safe default.
         "mode": os.environ.get("HERMES_MODE", "paper").lower(),
@@ -1048,6 +1051,9 @@ def start_agent_thread() -> threading.Thread:
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
         "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        # How long an overseer VETO suppresses re-proposal of the identical
+        # entry (seconds). 0 disables suppression. Repeat vetoes extend it.
+        "veto_suppression_s": int(os.environ.get("HERMES_VETO_SUPPRESSION_S", 1800)),
         "dry_run": os.environ.get("HERMES_DRY_RUN", "true").lower() == "true",
         "mode": os.environ.get("HERMES_MODE", "paper").lower(),
     }

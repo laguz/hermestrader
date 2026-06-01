@@ -792,6 +792,32 @@ class CascadingEngine:
                             len(actions), action_type, reason)
             return
         for a in actions:
+            # Veto-suppression: if the overseer already vetoed this exact
+            # entry within the TTL window, skip re-proposing it instead of
+            # brute-forcing the same action through review every tick. Only
+            # entries are suppressed — management closes/rolls must always be
+            # allowed through, and AI-authored actions bypass review anyway.
+            if self.overseer is not None and action_type == "entry":
+                veto_side = (a.strategy_params or {}).get("side_type")
+                if veto_side and str(veto_side).lower() in {"buy", "sell"}:
+                    veto_side = None
+                try:
+                    veto_reason = await self.db.active_veto(
+                        a.strategy_id, a.symbol, veto_side, a.expiry)
+                except Exception:                                  # noqa: BLE001
+                    logger.exception("[VETO] active_veto lookup failed for %s", a.symbol)
+                    veto_reason = None
+                if veto_reason:
+                    logger.info("[VETO-SUPPRESSED] %s %s side=%s expiry=%s",
+                                a.strategy_id, a.symbol, veto_side, a.expiry)
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[VETO-SUPPRESSED] {a.symbol} {veto_side or ''} "
+                        f"expiry={a.expiry} — skipped re-proposal "
+                        f"(active AI veto: {veto_reason})",
+                    )
+                    continue
+
             if self.event_bus is not None:
                 if self.overseer is not None and action_type != "ai":
                     # Yield to AI Overseer asynchronously
@@ -814,8 +840,10 @@ class CascadingEngine:
                 continue
 
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
+            # review() is async; without awaiting it `a` becomes a coroutine and
+            # VETO/MODIFY verdicts are silently dropped on this non-event-bus path.
             if self.overseer is not None:
-                a = self.overseer.review(a)
+                a = await self.overseer.review(a)
                 if a is None:
                     continue
 
@@ -931,6 +959,24 @@ class CascadingEngine:
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
+            # Record a short-lived suppression so the rules engine stops
+            # re-proposing this identical entry next tick (a veto consumes
+            # no capacity, so without this it would brute-force the same
+            # action and re-veto it every cycle). Best-effort: a failure
+            # here must never block the tick.
+            ttl = int(self.config.get("veto_suppression_s", 1800))
+            if ttl > 0:
+                veto_side = (a.strategy_params or {}).get("side_type")
+                if veto_side and str(veto_side).lower() in {"buy", "sell"}:
+                    veto_side = None
+                try:
+                    hits = await self.db.record_veto(
+                        event.strategy_id, event.symbol, veto_side,
+                        a.expiry, event.rationale, ttl)
+                    logger.info("[VETO] suppression recorded for %s (hits=%d, ttl=%ds)",
+                                event.symbol, hits, ttl * hits)
+                except Exception:                                  # noqa: BLE001
+                    logger.exception("[VETO] record_veto failed for %s", event.symbol)
             return
 
         if event.verdict == "MODIFY":
