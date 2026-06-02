@@ -33,17 +33,16 @@ class TastyTrade45(AbstractStrategy):
 
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
-        width = float(self.config.get("tt45_width", 5.0))
+        t = await self.load_tunables()
+        width = t.tt45_width
         max_lots = int(self.config.get("tt45_max_lots", 5))
         target_lots = int(self.config.get("tt45_target_lots", 5))
 
         # DTE window and delta target — live-tunable via system_settings.
-        try:
-            entry_min_dte = int(await self.db.get_setting("tt45_min_dte") or 30)
-            entry_max_dte = int(await self.db.get_setting("tt45_max_dte") or 60)
-            entry_delta = float(await self.db.get_setting("tt45_delta") or 0.16)
-        except (TypeError, ValueError):
-            entry_min_dte, entry_max_dte, entry_delta = 30, 60, 0.16
+        entry_min_dte = t.tt45_min_dte
+        entry_max_dte = t.tt45_max_dte
+        entry_delta = t.tt45_delta
+        delta_tol = t.tt45_delta_tol
 
         symbols = list(watchlist)
         self._log(
@@ -69,9 +68,9 @@ class TastyTrade45(AbstractStrategy):
                 def factory(side: str):
                     async def _b(symbol, expiry, lots, width):
                         chain = await self.broker.get_option_chains(symbol, expiry) or []
-                        short_leg = self.find_strike_by_delta(chain, side, entry_delta, tolerance=0.05)
+                        short_leg = self.find_strike_by_delta(chain, side, entry_delta, tolerance=delta_tol)
                         if not short_leg:
-                            self._log(f"✗ {symbol} {side}: no strike near {entry_delta:.2f}Δ (±0.05) in chain; skip.")
+                            self._log(f"✗ {symbol} {side}: no strike near {entry_delta:.2f}Δ (±{delta_tol:.2f}) in chain; skip.")
                             return None
                         long_strike = (float(short_leg["strike"]) - width
                                        if side == "put" else float(short_leg["strike"]) + width)
@@ -134,6 +133,7 @@ class TastyTrade45(AbstractStrategy):
         trades = await self.db.open_trades(self.strategy_id)
         if not trades:
             return []
+        t = await self.load_tunables()
 
         # Optimization: batch fetch quotes for all short legs to avoid N+1 API calls
         # in the loop. get_delta(sym) internally calls get_quote(sym); we can
@@ -157,9 +157,9 @@ class TastyTrade45(AbstractStrategy):
             short_delta = abs(deltas.get(trade["short_leg"], 0.0))
 
             close_reason = None
-            if dte <= 21:
+            if dte <= t.tt45_hard_exit_dte:
                 close_reason = "HARD-21DTE"
-            elif short_delta > 0.30:
+            elif short_delta > t.tt45_challenged_delta:
                 close_reason = "CHALLENGED-D30"
             if close_reason:
                 actions.append(TradeAction(

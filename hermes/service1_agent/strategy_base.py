@@ -56,6 +56,18 @@ class AbstractStrategy(ABC):
         self.execution_logs: List[str] = []
 
     # ---- shared helpers ----------------------------------------------------
+    async def load_tunables(self):
+        """Resolve this strategy's tunables (settings > env config > default).
+
+        Returns a :class:`~hermes.service1_agent.tunables.Tunables` carrying
+        only this strategy's group (keyed off ``NAME``). Call once at the top
+        of ``execute_entries`` / ``manage_positions`` and read parameters off
+        the result rather than hardcoding literals. Imported lazily to avoid
+        any import-cycle risk with the strategy package.
+        """
+        from .tunables import resolve
+        return await resolve(self.db, self.config, group=self.NAME)
+
     def now(self) -> datetime:
         if hasattr(self.broker, "current_date") and self.broker.current_date:
             return self.broker.current_date

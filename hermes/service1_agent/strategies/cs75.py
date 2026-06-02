@@ -46,16 +46,14 @@ class CreditSpreads75(AbstractStrategy):
 
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
-        width = float(self.config.get("cs75_width", 5.0))
+        t = await self.load_tunables()
+        width = t.cs75_width
         max_lots_global = int(self.config.get("cs75_max_lots", 1))
         target_lots_global = int(self.config.get("cs75_target_lots", 1))
 
         # DTE window — live-tunable via system_settings; fallback to spec defaults.
-        try:
-            entry_min_dte = int(await self.db.get_setting("cs75_min_dte") or 39)
-            entry_max_dte = int(await self.db.get_setting("cs75_max_dte") or 45)
-        except (TypeError, ValueError):
-            entry_min_dte, entry_max_dte = 39, 45
+        entry_min_dte = t.cs75_min_dte
+        entry_max_dte = t.cs75_max_dte
 
         # Per-symbol target overrides live in strategy_watchlists.target_lots.
         detailed_wl = await self.db.list_watchlist_detailed(self.strategy_id)
@@ -110,8 +108,8 @@ class CreditSpreads75(AbstractStrategy):
                     expiry = await self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
                 else:
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                    if dte < 14 or dte > entry_max_dte:
-                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside 14-{entry_max_dte} completion window; skip.")
+                    if dte < t.cs75_completion_min_dte or dte > entry_max_dte:
+                        self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside {t.cs75_completion_min_dte}-{entry_max_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
                                       for leg in await self.db.open_legs(self.strategy_id, symbol)
@@ -123,7 +121,8 @@ class CreditSpreads75(AbstractStrategy):
 
                 # Required credit varies with DTE band.
                 dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                min_credit_pct = 0.25 if 30 <= dte <= 45 else 0.20
+                min_credit_pct = (t.cs75_min_credit_pct_far if 30 <= dte <= 45
+                                  else t.cs75_min_credit_pct_near)
                 min_credit = round(width * min_credit_pct, 2)
                 mode_label = "A (new)" if mode_a else f"B (complete {sorted(existing_sides)})"
                 self._log(
@@ -136,7 +135,7 @@ class CreditSpreads75(AbstractStrategy):
                         return await self._build_spread_action(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,
                             width=width, min_credit=min_credit, analysis=analysis,
-                            current_price=price,
+                            current_price=price, t=t,
                         )
                     return _build
 
@@ -154,7 +153,7 @@ class CreditSpreads75(AbstractStrategy):
         return actions
 
     async def _build_spread_action(self, *, symbol, expiry, side, lots, width,
-                             min_credit, analysis, current_price) -> Optional[TradeAction]:
+                             min_credit, analysis, current_price, t) -> Optional[TradeAction]:
         chain = await self.broker.get_option_chains(symbol, expiry) or []
         if not chain:
             self._log(f"{symbol} {side}: empty chain for {expiry}; skip.")
@@ -176,8 +175,8 @@ class CreditSpreads75(AbstractStrategy):
             if lvl_pop > max_level_pop:
                 max_level_pop = lvl_pop
 
-            if lvl_pop >= 0.75:
-                diff = abs(lvl_pop - 0.75)
+            if lvl_pop >= t.cs75_pop_target:
+                diff = abs(lvl_pop - t.cs75_pop_target)
                 if diff < best_pop_diff:
                     strike_opt = nearest_strike(chain, opt_type, level["price"])
                     if not strike_opt:
@@ -187,14 +186,14 @@ class CreditSpreads75(AbstractStrategy):
                     # and near-the-money (too much assignment risk).
                     greeks = strike_opt.get("greeks") or {}
                     delta = abs(float(greeks.get("delta", 0.0)))
-                    if delta < 0.05 or delta > 0.40:
+                    if delta < t.cs75_short_delta_min or delta > t.cs75_short_delta_max:
                         continue
 
                     best_pop_diff = diff
                     best_strike = strike_opt
 
         if not best_strike:
-            self._log(f"✗ {symbol} {side}: no >75% POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
+            self._log(f"✗ {symbol} {side}: no ≥{t.cs75_pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
             return None
 
         short_leg = best_strike
@@ -249,23 +248,28 @@ class CreditSpreads75(AbstractStrategy):
         )
 
     async def manage_positions(self) -> List[TradeAction]:
-        """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE."""
+        """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE.
+
+        All four thresholds are live-tunable via system_settings; the
+        defaults match the docstring.
+        """
         actions: List[TradeAction] = []
         trades = await self.db.open_trades(self.strategy_id)
         if not trades:
             return actions
+        t = await self.load_tunables()
 
         # Batch fetch quotes for all legs to eliminate N+1 API calls.
         symbols = set()
-        for t in trades:
-            symbols.add(t["short_leg"])
-            symbols.add(t["long_leg"])
+        for tr in trades:
+            symbols.add(tr["short_leg"])
+            symbols.add(tr["long_leg"])
 
         raw_quotes = await self.broker.get_quote(",".join(symbols)) or []
         quotes = {q["symbol"]: q for q in raw_quotes if "symbol" in q}
 
         # Default width matches the strategy spec ($5.00 spreads).
-        cfg_width = float(self.config.get("cs75_width", 5.0))
+        cfg_width = t.cs75_width
         for trade in trades:
             short_leg, long_leg = trade["short_leg"], trade["long_leg"]
             entry_credit = float(trade["entry_credit"])
@@ -286,11 +290,11 @@ class CreditSpreads75(AbstractStrategy):
             # priced defensively. TP/SL evaluation is skipped because
             # those branches need a trustworthy debit reading.
             if blocked:
-                if dte <= 8:
+                if dte <= t.cs75_time_exit_dte:
                     self._log(
                         f"⚠️ {trade['symbol']}: close-debit blocked "
-                        f"({reason}) but DTE={dte} ≤ 8 — forcing TIME-EXIT "
-                        f"at width-priced debit"
+                        f"({reason}) but DTE={dte} ≤ {t.cs75_time_exit_dte} — forcing "
+                        f"TIME-EXIT at width-priced debit"
                     )
                     actions.append(self._close_action(trade, width, "TIME-EXIT"))
                 else:
@@ -301,13 +305,13 @@ class CreditSpreads75(AbstractStrategy):
                 continue
 
             close_reason = None
-            if 21 <= dte <= 45 and debit <= entry_credit * 0.50:
+            if 21 <= dte <= 45 and debit <= entry_credit * t.cs75_tp_pct_far:
                 close_reason = "TP-50"
-            elif dte < 21 and debit <= entry_credit * 0.25:
+            elif dte < 21 and debit <= entry_credit * t.cs75_tp_pct_near:
                 close_reason = "TP-75"
-            elif debit >= entry_credit * 2.5:
+            elif debit >= entry_credit * t.cs75_sl_mult:
                 close_reason = "SL-2.5x"
-            elif dte <= 8:
+            elif dte <= t.cs75_time_exit_dte:
                 close_reason = "TIME-EXIT"
 
             if close_reason:

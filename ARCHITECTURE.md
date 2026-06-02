@@ -166,11 +166,17 @@ matter:
 | `bars_intraday`    | Service-1   | both         | Hypertable; intraday OHLCV               |
 | `system_settings`  | both        | both         | KV store: mode, autonomy, soul.md, etc.  |
 
-`schema.sql` is the source of truth for TimescaleDB hypertables, indexes,
-compression policies, and continuous aggregates. `models.py` has a defensive
-`Base.metadata.create_all(checkfirst=True)` so plain SQLAlchemy CRUD works
-even if `schema.sql` was never applied — but the Timescale-specific bits
-(compression, retention, continuous aggregates) need `psql -f schema.sql`.
+`schema.sql` is the canonical DDL for TimescaleDB hypertables, indexes,
+compression policies, and the `pnl_daily` view. **Alembic owns the Postgres
+schema**: `alembic upgrade head` applies the baseline migration
+(`alembic/versions/0001_baseline.py`, which runs `schema.sql`); on an
+already-populated DB, `alembic stamp 0001` marks it migrated. Future schema
+changes are new migrations, not edits to `schema.sql`.
+
+`models.py` keeps a defensive `Base.metadata.create_all(checkfirst=True)` so
+plain SQLAlchemy CRUD works on **SQLite / dev / tests** without Timescale —
+the ORM models mirror `schema.sql` for that path. Alembic governs Postgres
+only; `create_all` is the SQLite bootstrap.
 
 ## Where to look for what
 

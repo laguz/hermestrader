@@ -9,6 +9,7 @@ watchfiles==1.2.0
 sqlalchemy==2.0.49
 psycopg[binary]==3.3.4
 duckdb==1.5.3
+alembic==1.13.3   # Postgres/Timescale schema migrations (see alembic/)
 
 # Security
 cryptography==48.0.0

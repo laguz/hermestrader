@@ -1232,6 +1232,22 @@ class HermesDB:
             row = result.scalars().first()
             return row.value if row else default
 
+    async def get_settings(self, keys) -> Dict[str, str]:
+        """Bulk read: ``{key: value}`` for the subset of ``keys`` that exist.
+
+        One ``WHERE key IN (...)`` query instead of N round-trips — used by
+        the strategy tunables loader, which resolves ~10 keys per tick.
+        Missing keys are simply absent from the result (callers supply
+        their own defaults).
+        """
+        keys = list(keys)
+        if not keys:
+            return {}
+        async with self.AsyncSession() as s:
+            result = await s.execute(
+                select(SystemSetting).where(SystemSetting.key.in_(keys)))
+            return {row.key: row.value for row in result.scalars().all()}
+
     async def set_setting(self, key: str, value: str) -> None:
         async with self.AsyncSession() as s:
             result = await s.execute(select(SystemSetting).filter_by(key=key).limit(1))
