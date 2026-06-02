@@ -12,7 +12,11 @@ Two-service options-trading ecosystem on a TimescaleDB backbone.
 ```
 hermes/
 ├── service1_agent/
-│   ├── core.py        # TradeAction, MoneyManager, IronCondorBuilder, AbstractStrategy, CascadingEngine
+│   ├── core.py          # CascadingEngine (orchestrator); re-exports the primitives below
+│   ├── trade_action.py  # TradeAction — canonical order envelope
+│   ├── broker_wrapper.py# AsyncBrokerWrapper — unified async broker + circuit breaker
+│   ├── money_manager.py # MoneyManager, IronCondorBuilder — capacity & sizing
+│   ├── strategy_base.py # AbstractStrategy — base class for the four strategies
 │   ├── strategies.py  # CS75 (P=1), CS7 (P=2), TT45 (P=3), Wheel (P=4)
 │   ├── overseer.py    # Hermes AI Overseer (Gemma 3 Flash / e4b)
 │   └── main.py        # entry point + tick loop

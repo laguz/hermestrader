@@ -178,8 +178,8 @@ even if `schema.sql` was never applied — but the Timescale-specific bits
 |-----------------------------------------------|--------------------------------------------------|
 | Change how a strategy enters a trade          | `hermes/service1_agent/strategies.py`            |
 | Change how a strategy exits a trade           | same — search `manage_positions`                 |
-| Add a new strategy                            | subclass `AbstractStrategy` in `core.py`, register in `main.py` |
-| Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/core.py`|
+| Add a new strategy                            | subclass `AbstractStrategy` in `strategy_base.py`, register in `main.py` |
+| Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
 | Change what the overseer asks the LLM         | `hermes/service1_agent/overseer.py`              |
