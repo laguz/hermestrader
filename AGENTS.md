@@ -98,8 +98,12 @@ require a live database — use the stub-broker / stub-DB pattern in
 
 ## Useful entry points for understanding the codebase
 
-- `hermes/service1_agent/core.py` — `CascadingEngine`, `MoneyManager`,
-  `IronCondorBuilder`, `AbstractStrategy`. Read this first.
+- `hermes/service1_agent/core.py` — `CascadingEngine` (the orchestrator).
+  Read this first. The primitives it composes are split into siblings:
+  `trade_action.py` (`TradeAction`), `broker_wrapper.py` (`AsyncBrokerWrapper`),
+  `money_manager.py` (`MoneyManager`, `IronCondorBuilder`), and
+  `strategy_base.py` (`AbstractStrategy`). All are still re-exported from
+  `core.py` for backwards compatibility.
 - `hermes/service1_agent/strategies.py` — the four concrete strategies.
 - `hermes/service1_agent/main.py` — tick loop + config reconciliation.
 - `hermes/service2_watcher/api.py` — operator API surface.
