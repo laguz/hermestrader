@@ -268,7 +268,8 @@ class CascadingEngine:
                     event = ReviewRequestEvent(
                         strategy_id=a.strategy_id,
                         symbol=a.symbol,
-                        trade_action=a
+                        trade_action=a,
+                        action_type=action_type,
                     )
                     self.event_bus.emit(event)
                 else:
@@ -278,7 +279,8 @@ class CascadingEngine:
                         symbol=a.symbol,
                         verdict="APPROVE",
                         rationale="Auto-approved (AI-authored or no overseer).",
-                        original_action=a
+                        original_action=a,
+                        action_type=action_type,
                     )
                     self.event_bus.emit(event)
                 continue
@@ -291,79 +293,95 @@ class CascadingEngine:
                 if a is None:
                     continue
 
-            if self.approval_mode:
-                # Dedup guard: never re-queue a trade that already has a PENDING
-                # approval for the same (strategy, symbol, side, expiry).
-                # Without this, every tick re-generates and re-queues the same
-                # spread because the approval hasn't been actioned yet.
-                side_type = (a.strategy_params or {}).get("side_type")
-                if await self.db.has_pending_approval(a.strategy_id, a.symbol,
-                                                side_type, a.expiry):
-                    logger.info(
-                        "[C2] Skipping duplicate — already PENDING: %s %s "
-                        "side=%s expiry=%s",
-                        a.strategy_id, a.symbol, side_type, a.expiry,
-                    )
-                    await self.db.write_log(
-                        a.strategy_id,
-                        f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
-                        f"already PENDING approval — skipped",
-                    )
-                    continue
+            await self._execute_or_queue(a, action_type)
 
-                # Queue for human review instead of firing directly.
-                action_dict = dataclasses.asdict(a)
-                await self.db.queue_for_approval(action_dict, action_type=action_type)
+    async def _execute_or_queue(self, a: TradeAction, action_type: str) -> None:
+        """Single order sink shared by both execution paths.
+
+        Called from the synchronous ``submit()`` loop *and* from the event-bus
+        ``handle_ai_approval()`` handler. Keeping both callers on one method is
+        the point: the dedup guard, the pure-close routing and the dry-run
+        guard can never drift between the two paths and let a money bug slip
+        into one but not the other.
+
+        In ``approval_mode`` the action is queued for human review (deduped on
+        strategy/symbol/side/expiry). Otherwise a PENDING order is recorded and
+        — unless the broker is in dry-run — sent to the broker, with pure
+        management closes routed to ``close_trade_from_action`` so they update
+        the original Trade row instead of inserting a ghost OPEN.
+        """
+        side_type = (a.strategy_params or {}).get("side_type")
+
+        if self.approval_mode:
+            # Dedup guard: never re-queue a trade that already has a PENDING
+            # approval for the same (strategy, symbol, side, expiry). Without
+            # this, every tick re-generates and re-queues the same spread
+            # because the approval hasn't been actioned yet.
+            if await self.db.has_pending_approval(a.strategy_id, a.symbol,
+                                                  side_type, a.expiry):
                 logger.info(
-                    "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
-                    a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
+                    "[C2] Skipping duplicate — already PENDING: %s %s "
+                    "side=%s expiry=%s",
+                    a.strategy_id, a.symbol, side_type, a.expiry,
                 )
                 await self.db.write_log(
                     a.strategy_id,
-                    f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
-                    f"side={side_type} expiry={a.expiry} "
-                    f"qty={a.quantity} — awaiting human approval",
+                    f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
+                    f"already PENDING approval — skipped",
                 )
+                return
+
+            # Queue for human review instead of firing directly.
+            action_dict = dataclasses.asdict(a)
+            await self.db.queue_for_approval(action_dict, action_type=action_type)
+            logger.info(
+                "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
+                a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
+            )
+            await self.db.write_log(
+                a.strategy_id,
+                f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
+                f"side={side_type} expiry={a.expiry} "
+                f"qty={a.quantity} — awaiting human approval",
+            )
+            return
+
+        await self.db.record_pending_order(a)
+        # Management actions whose legs are all *_to_close represent the close
+        # of an existing trade, not a new entry. Route them to
+        # ``close_trade_from_action`` which UPDATES the original Trade row
+        # (status→CLOSED, exit_price, pnl, close_tag, close_reason) instead of
+        # inserting a ghost OPEN row that the reconciler later flattens with a
+        # generic 'RECONCILED_BROKER_FLAT' and pnl=NULL.
+        #
+        # Any management action that opens a leg (e.g. WHEEL_ROLL, which
+        # buys-to-close + sells-to-open the same strike on the next month)
+        # keeps the legacy path so the new short still gets a Trade row.
+        is_pure_close = (
+            action_type == "management"
+            and bool(a.legs)
+            and all("to_open" not in (leg.get("side") or "").lower()
+                    for leg in a.legs)
+        )
+        close_method = getattr(self.db, "close_trade_from_action", None)
+        if getattr(self.broker, "dry_run", False):
+            return
+        try:
+            resp = await self.broker.place_order_from_action(a)
+        except Exception as exc:                           # noqa: BLE001
+            # Broker raised before we got an order id. Free the PENDING row so
+            # capacity recovers; a Trade row was never written, nothing to roll
+            # back.
+            if is_pure_close and close_method is not None:
+                await close_method(a, {"errors": str(exc)})
             else:
-                await self.db.record_pending_order(a)
-                # Management actions whose legs are all *_to_close represent
-                # the close of an existing trade, not a new entry. Route
-                # them to ``close_trade_from_action`` which UPDATES the
-                # original Trade row (status→CLOSED, exit_price, pnl,
-                # close_tag, close_reason) instead of inserting a ghost
-                # OPEN row that the reconciler later flattens with a
-                # generic 'RECONCILED_BROKER_FLAT' and pnl=NULL.
-                #
-                # Any management action that opens a leg (e.g. WHEEL_ROLL,
-                # which buys-to-close + sells-to-open the same strike on
-                # the next month) keeps the legacy path so the new short
-                # still gets a Trade row.
-                is_pure_close = (
-                    action_type == "management"
-                    and bool(a.legs)
-                    and all("to_open" not in (leg.get("side") or "").lower()
-                            for leg in a.legs)
-                )
-                close_method = getattr(self.db, "close_trade_from_action", None)
-                if not getattr(self.broker, "dry_run", False):
-                    try:
-                        resp = await self.broker.place_order_from_action(a)
-                    except Exception as exc:                       # noqa: BLE001
-                        # Broker raised before we got an order id. Free the
-                        # PENDING row so capacity recovers; a Trade row was
-                        # never written, nothing to roll back.
-                        if is_pure_close and close_method is not None:
-                            await close_method(a, {"errors": str(exc)})
-                        else:
-                            await self.db.record_order_response(
-                                a, {"errors": str(exc)})
-                        logger.exception("place_order failed for %s: %s",
-                                          a.symbol, exc)
-                    else:
-                        if is_pure_close and close_method is not None:
-                            await close_method(a, resp)
-                        else:
-                            await self.db.record_order_response(a, resp)
+                await self.db.record_order_response(a, {"errors": str(exc)})
+            logger.exception("place_order failed for %s: %s", a.symbol, exc)
+        else:
+            if is_pure_close and close_method is not None:
+                await close_method(a, resp)
+            else:
+                await self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
@@ -461,62 +479,11 @@ class CascadingEngine:
                 a.ai_authored = True
                 a.ai_rationale = event.rationale
 
-        # Now proceed to order placement / human approval queue (equivalent to the rest of submit)
-        if self.approval_mode:
-            # Dedup check
-            side_type = (a.strategy_params or {}).get("side_type")
-            has_pending = await self.db.has_pending_approval(
-                a.strategy_id, a.symbol, side_type, a.expiry
-            )
-            if has_pending:
-                logger.info(
-                    "[C2] Skipping duplicate — already PENDING: %s %s side=%s expiry=%s",
-                    a.strategy_id, a.symbol, side_type, a.expiry,
-                )
-                await self.db.write_log(
-                    a.strategy_id,
-                    f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} already PENDING approval — skipped"
-                )
-                return
-
-            # Queue for human review
-            action_dict = dataclasses.asdict(a)
-            await self.db.queue_for_approval(action_dict, action_type="entry")
-            logger.info(
-                "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
-                a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
-            )
-            await self.db.write_log(
-                a.strategy_id,
-                f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
-                f"side={side_type} expiry={a.expiry} "
-                f"qty={a.quantity} — awaiting human approval"
-            )
-        else:
-            await self.db.record_pending_order(a)
-            
-            # Determine if pure close
-            is_pure_close = (
-                bool(a.legs)
-                and all("to_open" not in (leg.get("side") or "").lower()
-                        for leg in a.legs)
-            )
-            
-            close_method = getattr(self.db, "close_trade_from_action", None)
-            
-            try:
-                resp = await self.broker.place_order_from_action(a)
-            except Exception as exc:
-                if is_pure_close and close_method is not None:
-                    await close_method(a, {"errors": str(exc)})
-                else:
-                    await self.db.record_order_response(a, {"errors": str(exc)})
-                logger.exception("place_order failed for %s: %s", a.symbol, exc)
-            else:
-                if is_pure_close and close_method is not None:
-                    await close_method(a, resp)
-                else:
-                    await self.db.record_order_response(a, resp)
+        # Proceed to the shared order sink — same dedup / pure-close routing /
+        # dry-run guard as the synchronous submit() path. ``action_type`` is
+        # carried through the event so a management close approved via the bus
+        # is routed as a close, not re-queued as a fresh entry.
+        await self._execute_or_queue(a, getattr(event, "action_type", "entry"))
 
     async def _async_propose(self, watchlist: Sequence[str]) -> None:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""

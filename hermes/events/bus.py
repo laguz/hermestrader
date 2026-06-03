@@ -41,6 +41,9 @@ class ReviewRequestEvent(Event):
     symbol: str
     trade_action: Any  # TradeAction
     context_data: Dict[str, Any] = field(default_factory=dict)
+    # 'entry' | 'management' | 'ai' — carried through review so the eventual
+    # execution routes pure closes correctly instead of defaulting to 'entry'.
+    action_type: str = "entry"
 
 @dataclass
 class AIApprovalEvent(Event):
@@ -51,6 +54,8 @@ class AIApprovalEvent(Event):
     rationale: str
     modifications: Dict[str, Any] = field(default_factory=dict)
     original_action: Any = None
+    # Preserved from the originating ReviewRequestEvent / submit() call.
+    action_type: str = "entry"
 
 
 E = TypeVar("E", bound=Event)
