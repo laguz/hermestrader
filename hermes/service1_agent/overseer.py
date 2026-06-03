@@ -471,7 +471,8 @@ class HermesOverseer:
                     verdict=verdict,
                     rationale=rationale,
                     modifications=modifications,
-                    original_action=action
+                    original_action=action,
+                    action_type=getattr(event, "action_type", "entry"),
                 )
                 if self.event_bus:
                     self.event_bus.emit(approval_event)
