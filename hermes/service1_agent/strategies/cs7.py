@@ -41,16 +41,14 @@ class CreditSpreads7(AbstractStrategy):
 
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
-        width = float(self.config.get("cs7_width", 1.0))
+        t = await self.load_tunables()
+        width = t.cs7_width
         max_lots_global = int(self.config.get("cs7_max_lots", 1))
         target_lots_global = int(self.config.get("cs7_target_lots", 1))
-        min_credit = round(width * 0.12, 2)
+        min_credit = round(width * t.cs7_min_credit_pct, 2)
 
         # DTE target — live-tunable via system_settings; fallback to 7.
-        try:
-            entry_dte = int(await self.db.get_setting("cs7_dte") or 7)
-        except (TypeError, ValueError):
-            entry_dte = 7
+        entry_dte = t.cs7_dte
 
         detailed_wl = await self.db.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
@@ -106,7 +104,7 @@ class CreditSpreads7(AbstractStrategy):
                 else:
                     # Completion (Mode B): only complete if within the lower half of the DTE window.
                     dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
-                    completion_min = max(1, entry_dte - 3)
+                    completion_min = max(1, entry_dte - t.cs7_completion_window)
                     if not (completion_min <= dte <= entry_dte):
                         self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside {completion_min}-{entry_dte} completion window; skip.")
                         continue
@@ -121,7 +119,7 @@ class CreditSpreads7(AbstractStrategy):
                         return await self._build_short_premium_spread(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,
                             width=width, min_credit=min_credit, analysis=analysis,
-                            current_price=price,
+                            current_price=price, t=t,
                         )
                     return _b
 
@@ -138,7 +136,7 @@ class CreditSpreads7(AbstractStrategy):
         return actions
 
     async def _build_short_premium_spread(self, *, symbol, expiry, side, lots,
-                                    width, min_credit, analysis, current_price) -> Optional[TradeAction]:
+                                    width, min_credit, analysis, current_price, t) -> Optional[TradeAction]:
         chain = await self.broker.get_option_chains(symbol, expiry) or []
         if not chain:
             return None
@@ -157,8 +155,8 @@ class CreditSpreads7(AbstractStrategy):
             if lvl_pop > max_level_pop:
                 max_level_pop = lvl_pop
 
-            if lvl_pop >= 0.75:
-                diff = abs(lvl_pop - 0.75)
+            if lvl_pop >= t.cs7_pop_target:
+                diff = abs(lvl_pop - t.cs7_pop_target)
                 if diff < best_pop_diff:
                     strike_opt = nearest_strike(chain, opt_type, level["price"])
                     if not strike_opt:
@@ -168,7 +166,7 @@ class CreditSpreads7(AbstractStrategy):
                     delta = abs(float(greeks.get("delta", 0.0)))
                     # 7-DTE allows a slightly higher delta cap than CS75
                     # because gamma decays the position out of trouble fast.
-                    if delta < 0.05 or delta > 0.45:
+                    if delta < t.cs7_short_delta_min or delta > t.cs7_short_delta_max:
                         continue
 
                     best_pop_diff = diff
@@ -217,10 +215,11 @@ class CreditSpreads7(AbstractStrategy):
     async def manage_positions(self) -> List[TradeAction]:
         """TP @ debit ≤ 2% of width; SL @ debit ≥ 3× entry credit."""
         actions: List[TradeAction] = []
+        t = await self.load_tunables()
         # Configured width is the right fallback when a Trade row
         # somehow lacks one — the previous default of 5.0 came from
         # CS75 and silently inflated CS7's TP threshold 5×.
-        cfg_width = float(self.config.get("cs7_width", 1.0))
+        cfg_width = t.cs7_width
         for trade in await self.db.open_trades(self.strategy_id):
             entry_credit = float(trade["entry_credit"])
             row_width = trade.get("width")
@@ -240,9 +239,9 @@ class CreditSpreads7(AbstractStrategy):
                 )
                 continue
             close_reason = None
-            if debit <= width * 0.02:
+            if debit <= width * t.cs7_tp_pct_width:
                 close_reason = "TP-2pctW"
-            elif debit >= entry_credit * 3.0:
+            elif debit >= entry_credit * t.cs7_sl_mult:
                 close_reason = "SL-3x"
             if close_reason:
                 actions.append(TradeAction(

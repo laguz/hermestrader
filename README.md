@@ -92,8 +92,10 @@ Claude Desktop / Cowork config snippet:
 ## Quick start
 
 ```bash
-# 1. Start TimescaleDB and create the schema
-psql "postgresql://hermes:hermes@localhost:5432/hermes" -f hermes/db/schema.sql
+# 1. Start TimescaleDB and create the schema (Alembic owns the Postgres schema)
+export HERMES_DSN="postgresql+psycopg://hermes:hermes@localhost:5432/hermes"
+alembic upgrade head          # fresh DB
+# alembic stamp 0001          # ...or mark an already-populated DB as migrated
 
 # 2. Install runtime deps
 pip install fastapi uvicorn sqlalchemy psycopg[binary] xgboost pandas numpy

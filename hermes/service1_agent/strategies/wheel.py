@@ -64,9 +64,10 @@ class WheelStrategy(AbstractStrategy):
 
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
+        t = await self.load_tunables()
         max_lots = int(self.config.get("wheel_max_lots", 5))
         symbols = list(watchlist)
-        self._log(f"↻ scanning {len(symbols)} symbol(s) — max_lots={max_lots} delta=0.30")
+        self._log(f"↻ scanning {len(symbols)} symbol(s) — max_lots={max_lots} delta={t.wheel_delta:.2f}")
 
         for symbol in symbols:
             shares = int(await self.db.equity_position(symbol) or 0)
@@ -74,9 +75,9 @@ class WheelStrategy(AbstractStrategy):
 
             # Pick the target expiry first so capacity is checked per
             # option chain (max_lots is per-expiry, not symbol-wide).
-            expiry = await self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+            expiry = await self.find_expiry_in_dte_range(symbol, t.wheel_min_dte, t.wheel_max_dte, prefer="max")
             if not expiry:
-                self._log(f"✗ {symbol}: no expiry in 30-45 DTE range; skip.")
+                self._log(f"✗ {symbol}: no expiry in {t.wheel_min_dte}-{t.wheel_max_dte} DTE range; skip.")
                 continue
 
             # POP overlay inputs — fetched once per symbol (6M regime matches
@@ -113,7 +114,7 @@ class WheelStrategy(AbstractStrategy):
             added_calls = 0
             for _ in range(wanted_calls):
                 a = await self._open_wheel_leg(symbol, "call", expiry,
-                                               analysis=analysis, xgb_prob=xgb_prob)
+                                               analysis=analysis, xgb_prob=xgb_prob, t=t)
                 if a:
                     actions.append(a)
                     added_calls += 1
@@ -130,7 +131,7 @@ class WheelStrategy(AbstractStrategy):
 
             for _ in range(wanted_puts):
                 a = await self._open_wheel_leg(symbol, "put", expiry,
-                                               analysis=analysis, xgb_prob=xgb_prob)
+                                               analysis=analysis, xgb_prob=xgb_prob, t=t)
                 if a:
                     actions.append(a)
         return actions
@@ -156,9 +157,11 @@ class WheelStrategy(AbstractStrategy):
         return analysis, coerce_xgb_prob(xgb_pred, current_vol)
 
     async def _open_wheel_leg(self, symbol: str, side: str, expiry: str,
-                              *, analysis=None, xgb_prob=None) -> Optional[TradeAction]:
+                              *, analysis=None, xgb_prob=None, t=None) -> Optional[TradeAction]:
+        if t is None:
+            t = await self.load_tunables()
         chain = await self.broker.get_option_chains(symbol, expiry) or []
-        short, pop = self._select_short_strike(symbol, side, chain, analysis, xgb_prob)
+        short, pop = self._select_short_strike(symbol, side, chain, analysis, xgb_prob, t)
         if not short:
             return None
         # Defensive: illiquid contracts can return None for bid/ask.
@@ -180,17 +183,18 @@ class WheelStrategy(AbstractStrategy):
             expiry=expiry,
         )
 
-    def _select_short_strike(self, symbol, side, chain, analysis, xgb_prob):
+    def _select_short_strike(self, symbol, side, chain, analysis, xgb_prob, t):
         """Pick the short strike for one wheel leg. Returns ``(option, pop)``.
 
         Delta is the anchor: gather chain strikes within ``wheel_delta_tol``
         of ``wheel_delta``. With no analysis we keep the original behaviour —
         the single strike nearest the target delta, ``pop=None``. With
         analysis we tilt toward the most S/R-protected in-band strike and
-        gate on 6M POP (see the module docstring).
+        gate on 6M POP (see the module docstring). ``t`` is the resolved
+        :class:`Tunables` for this strategy.
         """
-        target = float(self.config.get("wheel_delta", 0.30))
-        tol = float(self.config.get("wheel_delta_tol", 0.05))
+        target = t.wheel_delta
+        tol = t.wheel_delta_tol
 
         candidates = []
         for o in chain:
@@ -237,7 +241,7 @@ class WheelStrategy(AbstractStrategy):
             period="6M", symbol=symbol,
         ))
 
-        min_pop = float(self.config.get("wheel_min_pop", 0.50))
+        min_pop = t.wheel_min_pop
         if min_pop > 0 and pop < min_pop:
             self._log(
                 f"✗ {symbol} {side}: 6M POP {pop:.1%} < floor {min_pop:.0%} "
@@ -253,6 +257,7 @@ class WheelStrategy(AbstractStrategy):
     async def manage_positions(self) -> List[TradeAction]:
         """Roll ITM at <7 DTE; detect put assignments and open covered calls."""
         actions: List[TradeAction] = []
+        t = await self.load_tunables()
 
         # Fetch live broker positions once for assignment detection.
         try:
@@ -294,9 +299,9 @@ class WheelStrategy(AbstractStrategy):
                         f"✓ {symbol}: put {trade['short_leg']} assigned — "
                         f"{equity_qty} shares detected; opening {call_lots} covered call(s)"
                     )
-                    expiry = await self.find_expiry_in_dte_range(symbol, 30, 45, prefer="max")
+                    expiry = await self.find_expiry_in_dte_range(symbol, t.wheel_min_dte, t.wheel_max_dte, prefer="max")
                     if expiry:
-                        call_action = await self._open_wheel_leg(symbol, "call", expiry)
+                        call_action = await self._open_wheel_leg(symbol, "call", expiry, t=t)
                         if call_action:
                             call_action.quantity = call_lots
                             call_action.strategy_params = {
@@ -316,7 +321,7 @@ class WheelStrategy(AbstractStrategy):
             short_strike = float(trade.get("short_strike") or 0)
             itm = ((info["side"] == "put" and spot < short_strike) or
                    (info["side"] == "call" and spot > short_strike))
-            if dte < 7 and itm:
+            if dte < t.wheel_roll_dte and itm:
                 actions.append(TradeAction(
                     strategy_id=self.strategy_id, symbol=trade["symbol"],
                     order_class="multileg",
