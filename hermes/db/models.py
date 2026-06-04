@@ -898,6 +898,18 @@ class HermesDB:
             rows = result.scalars().all()
             return [self._trade_dict(r) for r in rows]
 
+    async def all_open_trades(self) -> List[Dict[str, Any]]:
+        """Every OPEN trade across all strategies.
+
+        ``open_trades`` is per-strategy; the overseer's autonomous close
+        path needs the whole book at once so it can decide which positions
+        — regardless of which strategy opened them — to close.
+        """
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(Trade).filter_by(status="OPEN"))
+            rows = result.scalars().all()
+            return [self._trade_dict(r) for r in rows]
+
     async def open_legs(self, strategy_id: str, symbol: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         trades = await self.open_trades(strategy_id)

@@ -158,6 +158,12 @@ class StubDB:
     async def open_trades(self, strategy_id: str):
         return list(self._open_trades.get(strategy_id, []))
 
+    async def all_open_trades(self):
+        out: List[Dict[str, Any]] = []
+        for trades in self._open_trades.values():
+            out.extend(trades)
+        return out
+
     async def open_legs(self, strategy_id: str, symbol: str):
         return list(self._open_legs.get((strategy_id, symbol), []))
 

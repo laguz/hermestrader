@@ -263,7 +263,8 @@ class CascadingEngine:
                     continue
 
             if self.event_bus is not None:
-                if self.overseer is not None and action_type != "ai":
+                if (self.overseer is not None and action_type != "ai"
+                        and not getattr(a, "ai_authored", False)):
                     # Yield to AI Overseer asynchronously
                     event = ReviewRequestEvent(
                         strategy_id=a.strategy_id,
@@ -288,7 +289,9 @@ class CascadingEngine:
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
             # review() is async; without awaiting it `a` becomes a coroutine and
             # VETO/MODIFY verdicts are silently dropped on this non-event-bus path.
-            if self.overseer is not None:
+            # AI-authored actions (e.g. overseer-proposed closes) skip review —
+            # the overseer must not re-review its own decision.
+            if self.overseer is not None and not getattr(a, "ai_authored", False):
                 a = await self.overseer.review(a)
                 if a is None:
                     continue
@@ -405,11 +408,17 @@ class CascadingEngine:
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
                 asyncio.create_task(self._async_propose(watchlist))
+                # Symmetric exit path: let the overseer unwind open positions
+                # too. Independent of the watchlist — closes act on the book.
+                asyncio.create_task(self._async_propose_closes())
             else:
                 ai_actions = await self.overseer.propose(watchlist)
                 ai_actions = await self._gate_ai_actions(ai_actions)
                 await self.submit(ai_actions, action_type="ai")
                 ai_count = len(ai_actions)
+                ai_closes = await self.overseer.propose_closes()
+                ai_closes = await self._price_ai_closes(ai_closes)
+                await self.submit(ai_closes, action_type="management")
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
 
     async def _maybe_tune_parameters(self) -> None:
@@ -494,6 +503,81 @@ class CascadingEngine:
                 await self.submit(ai_actions, action_type="ai")
         except Exception as exc:
             logger.exception("Error in async propose: %s", exc)
+
+    async def _async_propose_closes(self) -> None:
+        """Asynchronously let the overseer close positions without blocking the tick."""
+        try:
+            closes = await self.overseer.propose_closes()
+            closes = await self._price_ai_closes(closes)
+            if closes:
+                await self.submit(closes, action_type="management")
+        except Exception as exc:                                   # noqa: BLE001
+            logger.exception("Error in async propose_closes: %s", exc)
+
+    async def _price_ai_closes(
+        self, actions: Sequence[TradeAction]
+    ) -> List[TradeAction]:
+        """Price overseer-proposed closes against live quotes.
+
+        The overseer builds closes with ``price=None`` — it has no broker. We
+        fill the debit here the same way a strategy's ``manage_positions``
+        would: ``short_ask − long_bid`` for a spread (guarded by
+        ``compute_close_debit`` against stale/phantom quotes), or the ask for
+        a single short option. A leg whose quote is missing or whose debit
+        looks phantom is skipped this tick rather than priced blind — the
+        quote feed refreshes and we re-evaluate next tick.
+        """
+        if not actions:
+            return []
+        priced: List[TradeAction] = []
+        for a in actions:
+            try:
+                legs = a.legs or []
+                syms = [leg.get("option_symbol") for leg in legs if leg.get("option_symbol")]
+                if not syms:
+                    continue
+                quotes = await self.broker.get_quote(",".join(syms)) or []
+                qmap = {q.get("symbol"): q for q in quotes}
+                short_leg = next((l for l in legs if "buy_to_close" in (l.get("side") or "")), None)
+                long_leg = next((l for l in legs if "sell_to_close" in (l.get("side") or "")), None)
+                if short_leg is None:
+                    continue
+                sq = qmap.get(short_leg.get("option_symbol"))
+                if long_leg is not None:
+                    lq = qmap.get(long_leg.get("option_symbol"))
+                    debit, blocked, reason = AbstractStrategy.compute_close_debit(sq, lq, a.width)
+                    if blocked:
+                        await self.db.write_log(
+                            a.strategy_id,
+                            f"[AI-CLOSE] {a.symbol} trade_id="
+                            f"{(a.strategy_params or {}).get('trade_id')}: "
+                            f"close-debit blocked ({reason}); skip this tick",
+                        )
+                        continue
+                else:
+                    ask = float((sq or {}).get("ask") or 0)
+                    if ask <= 0:
+                        await self.db.write_log(
+                            a.strategy_id,
+                            f"[AI-CLOSE] {a.symbol}: stale ask on "
+                            f"{short_leg.get('option_symbol')}; skip this tick",
+                        )
+                        continue
+                    debit = ask
+                a.price = round(debit * 1.05, 2)
+                logger.info("[AI-CLOSE] %s trade_id=%s debit=$%.2f — %s",
+                            a.symbol, (a.strategy_params or {}).get("trade_id"),
+                            a.price, a.ai_rationale)
+                await self.db.write_log(
+                    a.strategy_id,
+                    f"[AI-CLOSE] {a.symbol} trade_id="
+                    f"{(a.strategy_params or {}).get('trade_id')} debit=${a.price:.2f} "
+                    f"— {a.ai_rationale}",
+                )
+                priced.append(a)
+            except Exception as exc:                              # noqa: BLE001
+                logger.exception("[AI-CLOSE] pricing failed for %s: %s", a.symbol, exc)
+        return priced
 
     async def _gate_ai_actions(
         self, actions: Sequence[TradeAction]
