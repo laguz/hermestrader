@@ -370,8 +370,13 @@ async def test_async_overseer_close_flow():
     bus.start()
 
     db = StubDB()
-    broker = StubBroker()
-    db.set_open_trades("CS75", [make_trade("CS75", "AAPL", trade_id=1, lots=1)])
+    trade = make_trade("CS75", "AAPL", trade_id=1, lots=1)
+    db.set_open_trades("CS75", [trade])
+    # Broker must actually hold the short for the close to be allowed through.
+    broker = StubBroker(positions=[
+        {"symbol": trade["short_leg"], "quantity": -1},
+        {"symbol": trade["long_leg"], "quantity": 1},
+    ])
 
     # Track the close routing to the real Trade row.
     closed: List[Any] = []
@@ -405,3 +410,59 @@ async def test_async_overseer_close_flow():
 
     await overseer.stop()
     await bus.stop()
+
+
+async def test_ai_close_skipped_when_broker_holds_no_short():
+    import json
+    """The exact TSLA bug: the DB thinks a spread is open (entry accepted but
+    not yet filled) so the overseer proposes a close — but the broker holds no
+    short to cover. The close must be skipped, not sent (Tradier would reject
+    it with 'Buy To Cover ... unless closing a short position')."""
+    from ._stubs import make_trade
+
+    db = StubDB()
+    trade = make_trade("CS75", "TSLA", trade_id=1, lots=3)
+    db.set_open_trades("CS75", [trade])
+    broker = StubBroker(positions=[])  # nothing held — entry hasn't filled
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[],
+                             approval_mode=False)
+    reply = json.dumps({"closes": [{"trade_id": 1, "rationale": "lock"}]})
+    engine.overseer = HermesOverseer(
+        llm_client=_FakeLLM(reply=reply), db=db, vision_enabled=False, autonomy="autonomous")
+
+    closes = await engine.overseer.propose_closes()
+    priced = await engine._price_ai_closes(closes)
+    assert priced == []
+    assert any("not (yet) held" in log for log in db.logs)
+
+
+async def test_ai_close_skipped_when_resting_order_works_position():
+    import json
+    """A close already resting at the broker must not be duplicated — Tradier
+    rejects the second cover with 'please check open orders'."""
+    from ._stubs import make_trade
+
+    db = StubDB()
+    trade = make_trade("CS75", "TSLA", trade_id=1, lots=3)
+    db.set_open_trades("CS75", [trade])
+    broker = StubBroker(
+        positions=[{"symbol": trade["short_leg"], "quantity": -3},
+                   {"symbol": trade["long_leg"], "quantity": 3}],
+        # A resting close order already works the short leg.
+        orders=[{"status": "open", "leg": [
+            {"option_symbol": trade["short_leg"], "side": "buy_to_close", "quantity": 3},
+            {"option_symbol": trade["long_leg"], "side": "sell_to_close", "quantity": 3},
+        ]}],
+    )
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[],
+                             approval_mode=False)
+    reply = json.dumps({"closes": [{"trade_id": 1, "rationale": "lock"}]})
+    engine.overseer = HermesOverseer(
+        llm_client=_FakeLLM(reply=reply), db=db, vision_enabled=False, autonomy="autonomous")
+
+    closes = await engine.overseer.propose_closes()
+    priced = await engine._price_ai_closes(closes)
+    assert priced == []
+    assert any("resting order already works" in log for log in db.logs)
