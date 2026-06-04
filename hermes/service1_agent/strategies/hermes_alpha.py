@@ -8,11 +8,14 @@ live chain, exactly the way the rule strategies do. The LLM never authors
 raw legs or prices; this strategy does, and it clamps every numeric the LLM
 returns to a hard safe range.
 
-Position cap
-------------
+Position cap & buying power
+---------------------------
 At most ``alpha_max_positions`` (default 10) open spreads at once. The
 strategy proposes at most one new entry per tick and stands down once the
-cap is reached.
+cap is reached. Each entry is additionally sized through the shared
+``MoneyManager`` (``scale_quantity``) so it can never exceed true available
+buying power or the per-chain side capacity — the same gate the rule
+strategies pass through.
 
 Exits
 -----
@@ -169,9 +172,23 @@ class HermesAlpha(AbstractStrategy):
             )
             return []
 
+        # Buying-power + per-chain capacity gate — the same MoneyManager
+        # contract the rule strategies use. Caps lots to what the account can
+        # actually margin (single-side requirement = width × 100 × lots) and
+        # to the per-(symbol, side, expiry) ceiling. 0 means stand down; the
+        # MoneyManager has already written a DB-visible BLOCKED reason.
+        requirement_per_lot = actual_width * 100.0
+        lots = await self.mm.scale_quantity(
+            requested_lots=lots, requirement_per_lot=requirement_per_lot,
+            symbol=symbol, side=side, strategy_id=self.strategy_id,
+            max_lots=max_lots, expiry=expiry,
+        )
+        if lots < 1:
+            return []
+
         self._log(
             f"✓ {symbol} {side}: short={sl_strike:.2f} long={ll_strike:.2f} "
-            f"credit=${credit:.2f} expiry={expiry}"
+            f"credit=${credit:.2f} expiry={expiry} lots={lots}"
         )
         return [TradeAction(
             strategy_id=self.strategy_id, symbol=symbol, order_class="multileg",

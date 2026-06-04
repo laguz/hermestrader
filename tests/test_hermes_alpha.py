@@ -137,6 +137,27 @@ async def test_low_credit_setup_rejected():
     assert any("< min" in log for log in strat.execution_logs)
 
 
+# ── entry: buying-power gate ──────────────────────────────────────────────────
+async def test_zero_buying_power_blocks_entry():
+    # A valid setup that the account cannot margin must not be sent — the
+    # MoneyManager scales it to 0 lots and logs the reason.
+    broker = StubBroker(option_buying_power=0.0)
+    strat, _b, db = _build(_intent(), broker=broker)
+    assert await strat.execute_entries(["AAPL"]) == []
+    assert any("BLOCKED" in log for log in db.logs)
+
+
+async def test_buying_power_caps_lots():
+    # Enough BP for exactly one 2-wide spread ($200 margin), but the LLM asks
+    # for 3 — the MoneyManager scales the order down rather than overcommit.
+    broker = StubBroker(option_buying_power=200.0)
+    strat, _b, _db = _build(_intent(width=2, lots=3),
+                            broker=broker, config={"alpha_max_lots": 3})
+    actions = await strat.execute_entries(["AAPL"])
+    assert len(actions) == 1
+    assert all(leg["quantity"] == 1 for leg in actions[0].legs)
+
+
 # ── manage_positions: bounded backstop ────────────────────────────────────────
 async def test_backstop_take_profit_closes_position():
     # Default stub quotes (bid 99.95 / ask 100.05) give a near-zero close
