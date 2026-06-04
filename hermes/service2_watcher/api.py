@@ -24,7 +24,10 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
+import os
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from hermes.common import STRATEGY_PRIORITIES
@@ -98,6 +101,30 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Hermes C2", lifespan=lifespan)
+
+# ── CORS configuration ───────────────────────────────────────────────────────
+# Given this is a C2 panel, we default to restrictive origins.
+# HERMES_CORS_ORIGINS can be a comma-separated list of allowed origins.
+_env_origins = [
+    o.strip()
+    for o in os.environ.get("HERMES_CORS_ORIGINS", "").split(",")
+    if o.strip()
+]
+origins = [
+    "http://localhost",
+    "http://localhost:8081",
+    "http://127.0.0.1",
+    "http://127.0.0.1:8081",
+] + _env_origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Ensure assets directory exists to prevent FastAPI crash before Vite compilation
