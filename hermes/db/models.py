@@ -118,6 +118,10 @@ class Trade(Base):
         self.machine.add_transition('fill', ['PENDING_BROKER', 'PARTIAL_FILL'], 'OPEN')
         self.machine.add_transition('begin_close', 'OPEN', 'CLOSING')
         self.machine.add_transition('finish_close', 'CLOSING', 'CLOSED')
+        # Re-arm a close that was submitted but never took (async reject /
+        # cancel): the broker still holds the position, so it must return to
+        # OPEN to be eligible for another close attempt.
+        self.machine.add_transition('reopen', 'CLOSING', 'OPEN')
         self.machine.add_transition('force_close', '*', 'CLOSED')
 
 
@@ -662,8 +666,9 @@ class HermesDB:
                 )
                 return
 
-            row.force_close()
-            row.closed_at = datetime.utcnow()
+            # Stash the close economics now, regardless of fill timing, so they
+            # survive into the final CLOSED row whether we finalize here (on a
+            # confirmed fill) or later via the position-sync reconciler.
             row.close_reason = close_reason
             row.close_tag = getattr(action, "tag", None)
             if exit_price is not None:
@@ -674,13 +679,28 @@ class HermesDB:
                 exit_price=exit_price,
                 lots=int(row.lots or 0),
             )
+
+            # Only finalize CLOSED when the broker confirms the fill. On mere
+            # acceptance the order may still rest unfilled or be rejected
+            # asynchronously — marking CLOSED here is what stranded such closes
+            # as orphans (DB said closed while the broker still held the legs).
+            # Move to CLOSING instead; ``upsert_positions`` finalizes CLOSED
+            # once the legs go flat, or reopens the trade if the close fails.
+            filled = order_status == "filled"
+            if filled:
+                row.force_close()
+                row.closed_at = datetime.utcnow()
+            else:
+                row.begin_close()
             await s.commit()
 
+        verb = "FILLED" if filled else "SUBMITTED"
         await self.write_log(
             action.strategy_id,
-            f"[CLOSE FILLED] {action.symbol} trade_id={trade_id} reason={close_reason} "
+            f"[CLOSE {verb}] {action.symbol} trade_id={trade_id} reason={close_reason} "
             f"exit={exit_price} pnl={float(row.pnl) if row.pnl is not None else None} "
-            f"order_id={broker_order_id} status={order_status or 'ok'}",
+            f"order_id={broker_order_id} status={order_status or 'ok'}"
+            + ("" if filled else " — awaiting broker fill"),
         )
 
     async def _consume_matching_pending(self, *, strategy_id: str, symbol: str,
@@ -739,29 +759,49 @@ class HermesDB:
             broker_qty[sym] = broker_qty.get(sym, 0) + abs(qty)
 
         active_legs: set = set(active_order_legs or [])
-        coverage: set = set(broker_qty.keys()) | active_legs
-
+        broker_legs: set = set(broker_qty.keys())
         async with self.AsyncSession() as s:
-            result = await s.execute(select(Trade).filter_by(status="OPEN"))
-            open_trades = result.scalars().all()
+            result = await s.execute(
+                select(Trade).filter(Trade.status.in_(["OPEN", "CLOSING"])))
+            rows = result.scalars().all()
             closed = 0
-            for t in open_trades:
+            reopened = 0
+            for t in rows:
                 legs = {leg for leg in (t.short_leg, t.long_leg) if leg}
-                if legs & coverage:
-                    continue
-                t.force_close()
-                t.closed_at = datetime.utcnow()
-                if not t.close_reason:
-                    t.close_reason = "RECONCILED_BROKER_FLAT"
-                closed += 1
-            if closed:
+                held = bool(legs & broker_legs)
+                resting = bool(legs & active_legs)
+                if t.status == "OPEN":
+                    # Broker-flat OPEN trade the bot never explicitly closed —
+                    # flatten it so the book matches broker truth.
+                    if held or resting:
+                        continue
+                    t.force_close()
+                    t.closed_at = datetime.utcnow()
+                    if not t.close_reason:
+                        t.close_reason = "RECONCILED_BROKER_FLAT"
+                    closed += 1
+                else:  # CLOSING — a close was submitted; confirm its fate.
+                    if not held:
+                        # Legs went flat → the close filled. Finalize, keeping
+                        # the close_reason / exit / pnl stashed at submit time.
+                        t.finish_close()
+                        t.closed_at = datetime.utcnow()
+                        closed += 1
+                    elif resting:
+                        continue            # close order still working
+                    else:
+                        # Still held with no resting order → the close didn't
+                        # take (rejected/canceled async). Re-arm for retry.
+                        t.reopen()
+                        reopened += 1
+            if closed or reopened:
                 await s.commit()
 
         await self.write_log(
             "ENGINE",
             f"reconciled {len(positions or [])} broker pos; "
-            f"closed_orphans={closed} positions_legs={len(broker_qty)} "
-            f"resting_legs={len(active_legs)}",
+            f"closed_orphans={closed} reopened={reopened} "
+            f"positions_legs={len(broker_qty)} resting_legs={len(active_legs)}",
         )
 
     # ------------------------------------------------------------------
@@ -1229,7 +1269,11 @@ class HermesDB:
 
     async def tracked_option_symbols(self) -> set:
         async with self.AsyncSession() as s:
-            result = await s.execute(select(Trade).filter_by(status="OPEN"))
+            # CLOSING trades still hold their legs at the broker until the close
+            # fills, so they must count as tracked — otherwise a position mid-close
+            # would be misflagged as an orphan.
+            result = await s.execute(
+                select(Trade).filter(Trade.status.in_(["OPEN", "CLOSING"])))
             rows = result.scalars().all()
             symbols = set()
             for r in rows:
