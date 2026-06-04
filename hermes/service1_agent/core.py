@@ -514,21 +514,71 @@ class CascadingEngine:
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("Error in async propose_closes: %s", exc)
 
+    async def _broker_position_state(self) -> tuple[Dict[str, float], set]:
+        """Live broker holdings + legs already worked by a resting order.
+
+        Returns ``(qty_by_option_symbol, active_order_legs)`` where the qty is
+        net and signed (shorts negative). Used to gate AI closes against the
+        actual book: a DB trade is marked OPEN the instant Tradier *accepts*
+        the entry — before it fills — so the short may not exist yet, and a
+        close already resting at the broker must not be re-submitted. Both
+        cases otherwise draw Tradier's "Buy To Cover ... unless closing a
+        short position, please check open orders" rejection and leave orphans.
+        """
+        qty: Dict[str, float] = {}
+        try:
+            for p in await self.broker.get_positions() or []:
+                sym = p.get("symbol")
+                if not sym:
+                    continue
+                try:
+                    qty[sym] = qty.get(sym, 0.0) + float(p.get("quantity") or 0)
+                except (TypeError, ValueError):
+                    continue
+        except Exception:                                          # noqa: BLE001
+            logger.exception("[AI-CLOSE] get_positions failed; treating book as empty")
+        active_legs: set = set()
+        try:
+            active_statuses = {"open", "partially_filled", "pending", "accepted", "calculated"}
+            for o in await self.broker.get_orders() or []:
+                if str(o.get("status", "")).lower() not in active_statuses:
+                    continue
+                legs = o.get("leg") or []
+                if isinstance(legs, dict):
+                    legs = [legs]
+                for leg in legs:
+                    s = leg.get("option_symbol")
+                    if s:
+                        active_legs.add(s)
+                top = o.get("option_symbol")
+                if top:
+                    active_legs.add(top)
+        except Exception:                                          # noqa: BLE001
+            logger.exception("[AI-CLOSE] get_orders failed; assuming no resting orders")
+        return qty, active_legs
+
     async def _price_ai_closes(
         self, actions: Sequence[TradeAction]
     ) -> List[TradeAction]:
-        """Price overseer-proposed closes against live quotes.
+        """Price overseer-proposed closes against live quotes, gated on holdings.
 
         The overseer builds closes with ``price=None`` — it has no broker. We
         fill the debit here the same way a strategy's ``manage_positions``
         would: ``short_ask − long_bid`` for a spread (guarded by
         ``compute_close_debit`` against stale/phantom quotes), or the ask for
         a single short option. A leg whose quote is missing or whose debit
-        looks phantom is skipped this tick rather than priced blind — the
-        quote feed refreshes and we re-evaluate next tick.
+        looks phantom is skipped this tick rather than priced blind.
+
+        Before pricing, every close is gated on the live broker book
+        (``_broker_position_state``): we only cover a short the broker is
+        actually holding, and never one a resting order already works. This is
+        the fix for AI closes being rejected with "Buy To Cover ... unless
+        closing a short position" when the DB believed a not-yet-filled entry
+        was open.
         """
         if not actions:
             return []
+        qty_map, active_legs = await self._broker_position_state()
         priced: List[TradeAction] = []
         for a in actions:
             try:
@@ -536,12 +586,37 @@ class CascadingEngine:
                 syms = [leg.get("option_symbol") for leg in legs if leg.get("option_symbol")]
                 if not syms:
                     continue
-                quotes = await self.broker.get_quote(",".join(syms)) or []
-                qmap = {q.get("symbol"): q for q in quotes}
                 short_leg = next((l for l in legs if "buy_to_close" in (l.get("side") or "")), None)
                 long_leg = next((l for l in legs if "sell_to_close" in (l.get("side") or "")), None)
                 if short_leg is None:
                     continue
+
+                # --- broker-holdings gate ---------------------------------
+                short_sym = short_leg.get("option_symbol")
+                lots = int(short_leg.get("quantity") or a.quantity or 1)
+                trade_id = (a.strategy_params or {}).get("trade_id")
+                held = qty_map.get(short_sym, 0.0)
+                if held > -lots:
+                    # Not short, or not short enough, to cover this close.
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: broker holds "
+                        f"{held:g} of {short_sym} (need short ≥ {lots}); skip — "
+                        f"position not (yet) held",
+                    )
+                    continue
+                long_sym = long_leg.get("option_symbol") if long_leg else None
+                if short_sym in active_legs or (long_sym and long_sym in active_legs):
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: a resting order "
+                        f"already works this position; skip — avoids duplicate cover",
+                    )
+                    continue
+                # ----------------------------------------------------------
+
+                quotes = await self.broker.get_quote(",".join(syms)) or []
+                qmap = {q.get("symbol"): q for q in quotes}
                 sq = qmap.get(short_leg.get("option_symbol"))
                 if long_leg is not None:
                     lq = qmap.get(long_leg.get("option_symbol"))
