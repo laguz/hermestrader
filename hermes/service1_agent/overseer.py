@@ -129,6 +129,213 @@ class HermesOverseer:
                 logger.warning("Overseer proposal malformed for %s: %s", symbol, exc)
         return proposed
 
+    # -- close existing positions (autonomous) -------------------------------
+    async def propose_closes(self) -> List[TradeAction]:
+        """Let the overseer decide which currently-OPEN positions to close.
+
+        The mirror image of :meth:`propose`: where ``propose`` originates new
+        entries, this originates exits. Only ``autonomous`` mode acts — the
+        overseer must already be trusted to author trades before it may
+        unwind them.
+
+        Division of labour matches the entry path: the LLM picks *which*
+        trades to close (by id, with a rationale); it never authors raw legs
+        or prices. We build the close legs from the real Trade rows and leave
+        ``price`` for the engine to fill from live quotes (see
+        ``CascadingEngine._price_ai_closes``). Equity positions are out of
+        scope here — closing shares needs an equity sell order, not a
+        debit-to-close — so only option positions (those carrying a short
+        leg) are offered as candidates.
+        """
+        if self.autonomy != "autonomous":
+            return []
+        try:
+            trades = await self.db.all_open_trades()
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("propose_closes: all_open_trades failed: %s", exc)
+            return []
+
+        candidates = [t for t in trades if t.get("short_leg")]
+        if not candidates:
+            return []
+
+        today = datetime.now(timezone.utc).date()
+        summary: List[Dict[str, Any]] = []
+        for t in candidates:
+            exp = t.get("expiry")
+            dte = None
+            if exp:
+                try:
+                    d = exp if hasattr(exp, "isoformat") else \
+                        datetime.strptime(str(exp), "%Y-%m-%d").date()
+                    dte = (d - today).days
+                except Exception:                                  # noqa: BLE001
+                    dte = None
+            summary.append({
+                "trade_id": t["id"], "strategy": t.get("strategy_id"),
+                "symbol": t.get("symbol"), "side": t.get("side_type"),
+                "lots": t.get("lots"), "entry_credit": t.get("entry_credit"),
+                "expiry": str(exp) if exp else None, "dte": dte,
+            })
+
+        recent_logs = await self.db.recent_logs(limit=200)
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "Review the currently OPEN option positions below against market "
+            "context and the recent execution log. Decide which, if any, to "
+            "CLOSE now — to lock in profit or to cut risk before it grows. "
+            "Closing is optional: return an empty list if every position "
+            "should be held.\n"
+            f"OPEN_POSITIONS:\n{json.dumps(summary, default=str)}\n"
+            f"RECENT_LOGS:\n{recent_logs}\n"
+            "Reply with strict JSON "
+            "{closes: [{trade_id: int, rationale: str}, ...]}."
+        )
+        try:
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user",   "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("propose_closes LLM call failed: %s", exc)
+            return []
+
+        decision = self._safe_json(msg)
+        closes = decision.get("closes")
+        if not isinstance(closes, list):
+            return []
+
+        by_id = {t["id"]: t for t in candidates}
+        actions: List[TradeAction] = []
+        for c in closes:
+            if not isinstance(c, dict):
+                continue
+            try:
+                tid = int(c.get("trade_id"))
+            except (TypeError, ValueError):
+                continue
+            trade = by_id.get(tid)
+            if trade is None:
+                logger.info("propose_closes: trade_id %s is not an open "
+                            "option position; skip", c.get("trade_id"))
+                continue
+            action = self._build_close_action(trade, c.get("rationale") or "AI close")
+            if action is not None:
+                actions.append(action)
+
+        if actions:
+            try:
+                await self.db.write_ai_decision(
+                    "OVERSEER", "CLOSES", self.autonomy,
+                    {"type": "propose_closes",
+                     "trade_ids": [a.strategy_params.get("trade_id") for a in actions]},
+                )
+            except Exception:                                      # noqa: BLE001
+                pass
+        return actions
+
+    @staticmethod
+    def _build_close_action(trade: Dict[str, Any], rationale: str) -> Optional[TradeAction]:
+        """Build a debit-to-close TradeAction from a real OPEN Trade row.
+
+        ``price`` is intentionally left ``None``: the engine fills it from
+        live quotes at submit time so the close is priced against the market,
+        not against a stale entry credit or an LLM guess. The action is
+        flagged ``ai_authored`` so the engine routes it as a management close
+        and skips re-reviewing the overseer's own decision.
+        """
+        short_leg = trade.get("short_leg")
+        if not short_leg:
+            return None
+        lots = int(trade.get("lots") or 1)
+        legs = [{"option_symbol": short_leg, "side": "buy_to_close", "quantity": lots}]
+        order_class = "option"
+        long_leg = trade.get("long_leg")
+        if long_leg:
+            legs.append({"option_symbol": long_leg, "side": "sell_to_close", "quantity": lots})
+            order_class = "multileg"
+        strat = trade.get("strategy_id")
+        exp = trade.get("expiry")
+        return TradeAction(
+            strategy_id=strat, symbol=trade["symbol"], order_class=order_class,
+            legs=legs, price=None, side="buy", quantity=1, order_type="debit",
+            tag=f"HERMES_{strat}_CLOSE_AI",
+            strategy_params={"trade_id": trade["id"], "close_reason": "AI_CLOSE",
+                             "side_type": trade.get("side_type")},
+            expiry=str(exp) if exp else None, width=trade.get("width"),
+            ai_authored=True, ai_rationale=rationale,
+        )
+
+    # -- self-directed setup selection (HermesAlpha) -------------------------
+    async def propose_alpha_setup(
+        self, universe: Iterable[str], open_positions: Iterable[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Pick ONE self-directed credit-spread setup from a bounded universe.
+
+        Drives the HermesAlpha strategy: the overseer expresses *intent*
+        (symbol, side, short-leg delta, DTE, width, lots) and the strategy
+        turns it into real legs, clamping every numeric to a safe range.
+        Like ``propose`` / ``propose_closes`` the LLM never authors raw legs
+        or prices — it only chooses the setup, from a symbol list it may not
+        leave. Returns the intent dict, or ``None`` to stand down this tick.
+
+        Unlike ``propose``/``propose_closes`` this is not gated on the
+        overseer's ``autonomy`` setting: enabling the HermesAlpha strategy is
+        itself the authorisation to let Hermes trade his own book.
+        """
+        universe = [str(s).upper().strip() for s in (universe or []) if str(s).strip()]
+        if not universe or self.llm is None:
+            return None
+
+        recent_logs = await self.db.recent_logs(limit=200)
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "You are running the HermesAlpha book — your own self-directed "
+            "options strategy. Choose ONE credit spread to SELL now, or stand "
+            "down if nothing is compelling.\n"
+            f"UNIVERSE (you may only pick a symbol from this list): {universe}\n"
+            f"ALREADY OPEN (do not duplicate these): {list(open_positions or [])}\n"
+            f"RECENT_LOGS:\n{recent_logs}\n"
+            "Decide: side ('put' = bull-put spread below support, 'call' = "
+            "bear-call spread above resistance); the short-leg target delta "
+            "(0.05-0.45, higher = more premium and more risk); days-to-expiry "
+            "(5-45); spread width in strike points (1-10); and lot count (>=1). "
+            "Reply with strict JSON {verdict: 'OPEN'|'PASS', symbol, side, "
+            "target_delta, dte, width, lots, rationale}. Use PASS to hold fire."
+        )
+        try:
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user",   "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("propose_alpha_setup LLM call failed: %s", exc)
+            return None
+
+        data = self._safe_json(msg)
+        if not isinstance(data, dict) or str(data.get("verdict", "")).upper() == "PASS":
+            return None
+        symbol = str(data.get("symbol", "")).upper().strip()
+        if symbol not in set(universe):
+            logger.info("propose_alpha_setup: %r not in universe; stand down", symbol)
+            return None
+        try:
+            await self.db.write_ai_decision("HermesAlpha", symbol, "autonomous",
+                                            {"type": "alpha_setup", **data})
+        except Exception:                                          # noqa: BLE001
+            pass
+        return data
+
     # -- goal-aware parameter tuning -----------------------------------------
     # Allow-list of live-tunable settings the overseer may adjust toward the
     # operator's goal, each as (kind, lo, hi). This is a hard safety boundary:

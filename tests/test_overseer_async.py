@@ -358,3 +358,50 @@ async def test_async_overseer_propose_flow():
 
     await overseer.stop()
     await bus.stop()
+
+
+async def test_async_overseer_close_flow():
+    """An overseer-proposed close is priced from live quotes and routed to the
+    broker as a management close — bypassing re-review of its own decision."""
+    import json
+    from ._stubs import make_trade
+
+    bus = EventBus()
+    bus.start()
+
+    db = StubDB()
+    broker = StubBroker()
+    db.set_open_trades("CS75", [make_trade("CS75", "AAPL", trade_id=1, lots=1)])
+
+    # Track the close routing to the real Trade row.
+    closed: List[Any] = []
+    orig_close = db.close_trade_from_action
+    async def _track_close(action, response):
+        closed.append(action)
+        await orig_close(action, response)
+    db.close_trade_from_action = _track_close
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[],
+                             approval_mode=False, event_bus=bus)
+
+    reply = json.dumps({"closes": [{"trade_id": 1, "rationale": "lock profit"}]})
+    overseer = HermesOverseer(llm_client=_FakeLLM(reply=reply), db=db,
+                              vision_enabled=False, autonomy="autonomous",
+                              event_bus=bus)
+    await overseer.start()
+    engine.overseer = overseer
+
+    await engine._async_propose_closes()
+    await asyncio.sleep(0.1)
+
+    # The close reached the broker and was routed as a Trade-row close, not a
+    # fresh entry — and it was never re-reviewed (no VETO log).
+    assert len(broker.placed) == 1
+    assert broker.placed[0]["symbol"] == "AAPL"
+    assert len(closed) == 1
+    assert closed[0].ai_authored is True
+    assert closed[0].price is not None        # engine priced it from quotes
+    assert not any("VETOED" in log for log in db.logs)
+
+    await overseer.stop()
+    await bus.stop()

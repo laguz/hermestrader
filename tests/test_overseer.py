@@ -157,6 +157,93 @@ async def test_propose_builds_trade_actions_from_llm_payload():
     assert proposals[0].ai_authored is True
 
 
+# ── autonomous: propose_closes() runs only here ──────────────────────────────
+async def test_propose_closes_returns_empty_unless_autonomous():
+    db = StubDB()
+    from tests._stubs import make_trade
+    db.set_open_trades("CS75", [make_trade("CS75", "AAPL", trade_id=1)])
+    for autonomy in ("advisory", "enforcing"):
+        o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy=autonomy)
+        assert await o.propose_closes() == []
+
+
+async def test_propose_closes_returns_empty_with_no_open_trades():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM('{"closes":[{"trade_id":1,"rationale":"x"}]}'),
+                       db, vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_closes() == []
+
+
+async def test_propose_closes_builds_close_actions_from_llm():
+    import json
+    from tests._stubs import make_trade
+    db = StubDB()
+    db.set_open_trades("CS75", [make_trade("CS75", "AAPL", trade_id=7, lots=2)])
+    reply = json.dumps({"closes": [{"trade_id": 7, "rationale": "lock profit"}]})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    actions = await o.propose_closes()
+    assert len(actions) == 1
+    a = actions[0]
+    assert a.symbol == "AAPL"
+    assert a.strategy_id == "CS75"          # routes the close to the owning strategy's row
+    assert a.ai_authored is True
+    assert a.price is None                  # engine prices it from live quotes
+    assert a.strategy_params["trade_id"] == 7
+    assert a.ai_rationale == "lock profit"
+    # Both legs are to-close, sized to the trade's lots.
+    sides = sorted(leg["side"] for leg in a.legs)
+    assert sides == ["buy_to_close", "sell_to_close"]
+    assert all(leg["quantity"] == 2 for leg in a.legs)
+
+
+async def test_propose_closes_ignores_unknown_trade_ids():
+    import json
+    from tests._stubs import make_trade
+    db = StubDB()
+    db.set_open_trades("CS7", [make_trade("CS7", "MSFT", trade_id=3)])
+    # LLM names a trade that isn't open — must be skipped, not fabricated.
+    reply = json.dumps({"closes": [{"trade_id": 999, "rationale": "?"}]})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_closes() == []
+
+
+# ── propose_alpha_setup: bounded self-directed setup picker ───────────────────
+async def test_propose_alpha_setup_returns_none_on_empty_universe():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_alpha_setup([], []) is None
+
+
+async def test_propose_alpha_setup_returns_none_on_pass():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM('{"verdict":"PASS"}'), db,
+                       vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_alpha_setup(["AAPL"], []) is None
+
+
+async def test_propose_alpha_setup_rejects_symbol_outside_universe():
+    import json
+    db = StubDB()
+    reply = json.dumps({"verdict": "OPEN", "symbol": "TSLA", "side": "put",
+                        "target_delta": 0.2, "dte": 30, "width": 1, "lots": 1})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    # TSLA isn't in the universe — the overseer must not pick it.
+    assert await o.propose_alpha_setup(["AAPL", "MSFT"], []) is None
+
+
+async def test_propose_alpha_setup_returns_intent_for_valid_pick():
+    import json
+    db = StubDB()
+    reply = json.dumps({"verdict": "OPEN", "symbol": "aapl", "side": "put",
+                        "target_delta": 0.2, "dte": 30, "width": 2, "lots": 1,
+                        "rationale": "support holds"})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    intent = await o.propose_alpha_setup(["AAPL"], [])
+    assert intent is not None
+    assert intent["symbol"] == "aapl"   # raw payload; the strategy normalises
+    assert intent["side"] == "put"
+
+
 # ── _safe_json: tolerates prose-wrapped JSON ─────────────────────────────────
 def test_safe_json_extracts_embedded_json_from_prose():
     text = "Sure, here's my answer:\n{\"verdict\":\"APPROVE\",\"rationale\":\"ok\"}\nLet me know!"

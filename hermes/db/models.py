@@ -832,6 +832,19 @@ class HermesDB:
                     out[r[0]] = {"target_lots": None}
         return out
 
+    async def all_watchlist_symbols(self) -> List[str]:
+        """Deduped union of every strategy's watchlist symbols.
+
+        HermesAlpha trades the whole desk's universe, not just its own list —
+        it may pick any symbol any strategy is watching.
+        """
+        from sqlalchemy import text as sa_text
+        async with self.AsyncSession() as s:
+            result = await s.execute(sa_text(
+                "SELECT DISTINCT symbol FROM strategy_watchlists ORDER BY symbol"
+            ))
+            return [r[0] for r in result.fetchall()]
+
     async def list_all_watchlists(self) -> Dict[str, List[str]]:
         from sqlalchemy import text as sa_text
         async with self.AsyncSession() as s:
@@ -895,6 +908,18 @@ class HermesDB:
     async def open_trades(self, strategy_id: str) -> List[Dict[str, Any]]:
         async with self.AsyncSession() as s:
             result = await s.execute(select(Trade).filter_by(strategy_id=strategy_id, status="OPEN"))
+            rows = result.scalars().all()
+            return [self._trade_dict(r) for r in rows]
+
+    async def all_open_trades(self) -> List[Dict[str, Any]]:
+        """Every OPEN trade across all strategies.
+
+        ``open_trades`` is per-strategy; the overseer's autonomous close
+        path needs the whole book at once so it can decide which positions
+        — regardless of which strategy opened them — to close.
+        """
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(Trade).filter_by(status="OPEN"))
             rows = result.scalars().all()
             return [self._trade_dict(r) for r in rows]
 
