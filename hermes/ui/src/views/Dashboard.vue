@@ -72,6 +72,18 @@ watch(() => state.lotsData, (val) => {
   }
 }, { immediate: true, deep: true })
 
+// The watchlist config renders a lots control for every strategy the API
+// reports, indexing lotInputs[sid] directly (v-model needs a real object).
+// A strategy present in the watchlist list but absent from /api/lots would
+// otherwise leave lotInputs[sid] undefined and throw mid-render, blanking
+// the whole view. Seed a default for any such strategy so the UI degrades
+// gracefully instead of crashing.
+watch(() => state.watchlistData?.strategies, (sids) => {
+  (sids || []).forEach(sid => {
+    if (!lotInputs.value[sid]) lotInputs.value[sid] = { target: 5, max: 5 }
+  })
+}, { immediate: true, deep: true })
+
 // Auto scroll logs — only when the user is already at the bottom,
 // so scrolling up to read history isn't interrupted by new entries.
 watch(() => state.logs, () => {
