@@ -1,0 +1,304 @@
+"""
+[TimescaleDB-Schema] — SQLAlchemy ORM mirror of schema.sql.
+
+This module holds the declarative ``Base``, every table class, and the pure
+(DB-free) helper functions. It deliberately imports nothing from
+``hermes.db.repositories`` or ``hermes.db.models`` so the repository mixins
+can import their ORM types from here without a circular import.
+
+``hermes.db.models`` re-exports every public name defined here, so existing
+``from hermes.db.models import Base, Trade, ...`` call-sites keep working.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import (
+    BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
+    Numeric, Sequence, String, Text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, reconstructor
+from transitions import Machine
+
+logger = logging.getLogger("hermes.db")
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Strategy(Base):
+    __tablename__ = "strategies"
+    strategy_id = Column(String, primary_key=True)
+    priority = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class StrategyWatchlist(Base):
+    __tablename__ = "strategy_watchlists"
+    strategy_id = Column(String, ForeignKey("strategies.strategy_id", ondelete="CASCADE"),
+                         primary_key=True)
+    symbol = Column(String, primary_key=True)
+    target_lots = Column(Integer)
+    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+    # `id` belongs to the schema's `BIGSERIAL` (sequence `trades_id_seq`).
+    # Both this column AND `opened_at` form the composite PK because the
+    # underlying TimescaleDB hypertable partitions by `opened_at`.
+    # Marking the Sequence here is what tells SQLAlchemy to fetch a value
+    # via RETURNING instead of inserting NULL.
+    id = Column(BigInteger, Sequence("trades_id_seq"), primary_key=True,
+                autoincrement=True)
+    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                       primary_key=True)
+    strategy_id = Column(String, ForeignKey("strategies.strategy_id"), nullable=False)
+    symbol = Column(String, nullable=False)
+    side_type = Column(String, nullable=False)
+    short_leg = Column(String)
+    long_leg = Column(String)
+    short_strike = Column(Numeric(10, 4))
+    long_strike = Column(Numeric(10, 4))
+    width = Column(Numeric(10, 4))
+    lots = Column(Integer, nullable=False)
+    entry_credit = Column(Numeric(10, 4))
+    entry_debit = Column(Numeric(10, 4))
+    expiry = Column(Date)
+    status = Column(String, nullable=False, default="PROPOSED")
+    pnl = Column(Numeric(12, 2))
+    closed_at = Column(DateTime(timezone=True))
+    close_reason = Column(String)
+    ai_authored = Column(Boolean, default=False)
+    ai_rationale = Column(Text)
+    broker_order_id = Column(String)
+    # Strategy-tag bookkeeping. ``tag`` is the entry-order tag
+    # (e.g. ``HERMES_CS75``); ``close_tag`` is the closing-order tag
+    # (e.g. ``HERMES_CS75_CLOSE_TP-50``). ``exit_price`` is the closing
+    # fill price; combined with ``entry_credit``/``entry_debit`` and
+    # ``lots`` it gives realized P&L (see ``_compute_realized_pnl``).
+    tag = Column(String)
+    close_tag = Column(String)
+    exit_price = Column(Numeric(10, 4))
+
+    __table_args__ = (
+        Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
+    )
+
+    STATES = ["PROPOSED", "PENDING_BROKER", "PARTIAL_FILL", "OPEN", "CLOSING", "CLOSED"]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._init_fsm()
+
+    @reconstructor
+    def _init_fsm(self):
+        # Prevent recreating machine if called multiple times
+        if hasattr(self, 'machine'):
+            return
+
+        # The FSM will bind directly to `self.status`
+        initial_state = getattr(self, 'status', None) or "PROPOSED"
+        self.machine = Machine(
+            model=self,
+            states=self.STATES,
+            initial=initial_state,
+            model_attribute='status',
+            send_event=True,
+            ignore_invalid_triggers=False
+        )
+
+        # Valid State Transitions
+        self.machine.add_transition('submit_to_broker', 'PROPOSED', 'PENDING_BROKER')
+        self.machine.add_transition('broker_reject', 'PENDING_BROKER', 'CLOSED')
+        self.machine.add_transition('partial_fill', 'PENDING_BROKER', 'PARTIAL_FILL')
+        self.machine.add_transition('fill', ['PENDING_BROKER', 'PARTIAL_FILL'], 'OPEN')
+        self.machine.add_transition('begin_close', 'OPEN', 'CLOSING')
+        self.machine.add_transition('finish_close', 'CLOSING', 'CLOSED')
+        # Re-arm a close that was submitted but never took (async reject /
+        # cancel): the broker still holds the position, so it must return to
+        # OPEN to be eligible for another close attempt.
+        self.machine.add_transition('reopen', 'CLOSING', 'OPEN')
+        self.machine.add_transition('force_close', '*', 'CLOSED')
+
+
+class PendingOrder(Base):
+    __tablename__ = "pending_orders"
+    # Same shape as Trade: composite PK over the BIGSERIAL id and the
+    # hypertable's partitioning column.
+    id = Column(BigInteger, Sequence("pending_orders_id_seq"), primary_key=True,
+                autoincrement=True)
+    submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                          primary_key=True)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    side = Column(String, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    payload = Column(JSONB, nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+
+
+class PendingApproval(Base):
+    """Human-approval queue for proposed agent trades.
+
+    The agent writes a row here (status=PENDING) instead of calling the broker
+    when approval_mode is enabled.  The C2 panel approves or rejects; the
+    agent's tick loop executes APPROVED rows and marks them EXECUTED.
+    """
+    __tablename__ = "pending_approvals"
+    id = Column(BigInteger, Sequence("pending_approvals_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    action_type = Column(String, nullable=False, default="entry")
+    action_json = Column(JSONB, nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+    notes = Column(Text)
+    decided_at = Column(DateTime(timezone=True))
+    executed_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
+
+
+class VetoSuppression(Base):
+    """Short-lived record of an overseer VETO so the rules engine stops
+    brute-forcing the identical entry every tick.
+
+    A veto consumes no capacity (no Trade/PendingOrder row is written), so
+    without this table ``side_aware_capacity`` reports full headroom next
+    tick and the strategy re-proposes the same action — which the overseer
+    re-vetoes, burning an LLM call each cycle. ``submit`` consults
+    ``active_veto`` before emitting a review request and skips the
+    re-proposal while a suppression is unexpired.
+
+    Regular (non-hypertable) table: low volume, keyed random-access lookups.
+    """
+    __tablename__ = "veto_suppressions"
+    id = Column(BigInteger, Sequence("veto_suppressions_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    # NULL side_type/expiry = symbol-wide veto (matches any); otherwise the
+    # field must match the incoming action exactly.
+    side_type = Column(String)
+    expiry = Column(String)
+    rationale = Column(Text)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    # Repeat vetoes on the same key bump this and extend the window (backoff).
+    hits = Column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        Index("idx_veto_suppressions_lookup", "strategy_id", "symbol", "expires_at"),
+    )
+
+
+class BotLog(Base):
+    __tablename__ = "bot_logs"
+    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    strategy_id = Column(String, nullable=False, primary_key=True)
+    level = Column(String, default="INFO")
+    message = Column(Text, nullable=False)
+
+
+class AIDecision(Base):
+    __tablename__ = "ai_decisions"
+    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    strategy_id = Column(String)
+    symbol = Column(String, primary_key=True)
+    autonomy = Column(String, nullable=False)
+    decision = Column(JSONB, nullable=False)
+
+
+class Prediction(Base):
+    __tablename__ = "predictions"
+    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    symbol = Column(String, nullable=False, primary_key=True)
+    predicted_return = Column(Numeric(12, 6))
+    predicted_price = Column(Numeric(12, 4))
+    spot = Column(Numeric(12, 4))
+    model_tag = Column(String, default="xgb-10feat-v1")
+
+
+class SystemSetting(Base):
+    """Small key/value table the agent and watcher both read.
+
+    Used for shared runtime state that the watcher must be able to flip
+    without restarting the agent, e.g. the live/paper trading mode and the
+    rolling Tradier API health timestamps the agent writes after each tick.
+    """
+    __tablename__ = "system_settings"
+    key = Column(String, primary_key=True)
+    value = Column(Text, nullable=False, default="")
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                        onupdate=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Realized-PnL + tag helpers (module-level so they're trivially testable
+# without a live DB).
+# ---------------------------------------------------------------------------
+def _close_reason_from_tag(tag: Optional[str]) -> Optional[str]:
+    """Recover the close reason that a strategy embedded in its order tag.
+
+    Strategies tag closing orders ``HERMES_<STRAT>_CLOSE_<REASON>`` (e.g.
+    ``HERMES_CS75_CLOSE_TP-50``). Tradier sanitises ``_`` to ``-`` on the
+    wire, so accept either separator on the round-trip.
+    """
+    if not tag:
+        return None
+    norm = str(tag).replace("-", "_")
+    marker = "_CLOSE_"
+    idx = norm.find(marker)
+    if idx == -1:
+        return None
+    suffix = norm[idx + len(marker):].strip()
+    return suffix or None
+
+
+def _compute_realized_pnl(*, entry_credit, entry_debit,
+                          exit_price, lots: int) -> Optional[float]:
+    """Realized P&L on an option spread, in dollars (1 contract = 100 sh).
+
+    For a credit spread: pnl = (entry_credit − exit_debit) × lots × 100.
+    For a debit  spread: pnl = (exit_credit − entry_debit) × lots × 100.
+
+    Returns ``None`` if the inputs are insufficient to compute (e.g. the
+    closing fill price wasn't supplied) — analytics already treats NULL
+    correctly, so we'd rather show "unknown" than a fabricated 0.
+    """
+    if exit_price is None or not lots:
+        return None
+    try:
+        lots_i = int(lots)
+        exit_f = float(exit_price)
+    except (TypeError, ValueError):
+        return None
+    if entry_credit is not None:
+        try:
+            ec = float(entry_credit)
+        except (TypeError, ValueError):
+            return None
+        return round((ec - exit_f) * lots_i * 100.0, 2)
+    if entry_debit is not None:
+        try:
+            ed = float(entry_debit)
+        except (TypeError, ValueError):
+            return None
+        return round((exit_f - ed) * lots_i * 100.0, 2)
+    return None
+
+
+def sync_to_async_dsn(dsn: str) -> str:
+    if dsn.startswith("sqlite:///"):
+        return dsn.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+    if dsn.startswith("sqlite://"):
+        return dsn.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    if dsn.startswith("postgresql://"):
+        return dsn.replace("postgresql://", "postgresql+psycopg://", 1)
+    return dsn
