@@ -66,7 +66,16 @@ _LOT_SPECS = {
     "CS7":   {"target": ("cs7_target_lots",  1), "max": ("cs7_max_lots",  1)},
     "TT45":  {"target": ("tt45_target_lots", 5), "max": ("tt45_max_lots", 5)},
     "WHEEL": {"target": ("wheel_max_lots",   5), "max": ("wheel_max_lots", 5)},
+    # HermesAlpha is max-only (no per-entry target) and self-sizes within
+    # alpha_max_lots. It MUST appear here: the C2 dashboard renders a lots
+    # control for every watchlisted strategy and indexes this payload, so an
+    # omission leaves the UI reading an undefined entry and blanks the view.
+    "HermesAlpha": {"target": ("alpha_max_lots", 1), "max": ("alpha_max_lots", 1)},
 }
+
+# Case-insensitive lookup: every other strategy id is upper-case, but
+# HermesAlpha is mixed-case, so PUT can't blindly upper() the incoming id.
+_LOT_SPECS_BY_UPPER = {k.upper(): k for k in _LOT_SPECS}
 
 
 async def _read_lots() -> Dict[str, Any]:
@@ -97,8 +106,8 @@ class LotBody(BaseModel):
 
 @router.put("/api/lots")
 async def set_lots(body: LotBody) -> Dict[str, Any]:
-    sid = body.strategy_id.upper()
-    if sid not in _LOT_SPECS:
+    sid = _LOT_SPECS_BY_UPPER.get(body.strategy_id.upper())
+    if sid is None:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown strategy. Valid: {list(_LOT_SPECS)}",
