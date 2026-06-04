@@ -271,6 +271,71 @@ class HermesOverseer:
             ai_authored=True, ai_rationale=rationale,
         )
 
+    # -- self-directed setup selection (HermesAlpha) -------------------------
+    async def propose_alpha_setup(
+        self, universe: Iterable[str], open_positions: Iterable[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Pick ONE self-directed credit-spread setup from a bounded universe.
+
+        Drives the HermesAlpha strategy: the overseer expresses *intent*
+        (symbol, side, short-leg delta, DTE, width, lots) and the strategy
+        turns it into real legs, clamping every numeric to a safe range.
+        Like ``propose`` / ``propose_closes`` the LLM never authors raw legs
+        or prices — it only chooses the setup, from a symbol list it may not
+        leave. Returns the intent dict, or ``None`` to stand down this tick.
+
+        Unlike ``propose``/``propose_closes`` this is not gated on the
+        overseer's ``autonomy`` setting: enabling the HermesAlpha strategy is
+        itself the authorisation to let Hermes trade his own book.
+        """
+        universe = [str(s).upper().strip() for s in (universe or []) if str(s).strip()]
+        if not universe or self.llm is None:
+            return None
+
+        recent_logs = await self.db.recent_logs(limit=200)
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "You are running the HermesAlpha book — your own self-directed "
+            "options strategy. Choose ONE credit spread to SELL now, or stand "
+            "down if nothing is compelling.\n"
+            f"UNIVERSE (you may only pick a symbol from this list): {universe}\n"
+            f"ALREADY OPEN (do not duplicate these): {list(open_positions or [])}\n"
+            f"RECENT_LOGS:\n{recent_logs}\n"
+            "Decide: side ('put' = bull-put spread below support, 'call' = "
+            "bear-call spread above resistance); the short-leg target delta "
+            "(0.05-0.45, higher = more premium and more risk); days-to-expiry "
+            "(5-45); spread width in strike points (1-10); and lot count (>=1). "
+            "Reply with strict JSON {verdict: 'OPEN'|'PASS', symbol, side, "
+            "target_delta, dte, width, lots, rationale}. Use PASS to hold fire."
+        )
+        try:
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user",   "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("propose_alpha_setup LLM call failed: %s", exc)
+            return None
+
+        data = self._safe_json(msg)
+        if not isinstance(data, dict) or str(data.get("verdict", "")).upper() == "PASS":
+            return None
+        symbol = str(data.get("symbol", "")).upper().strip()
+        if symbol not in set(universe):
+            logger.info("propose_alpha_setup: %r not in universe; stand down", symbol)
+            return None
+        try:
+            await self.db.write_ai_decision("HermesAlpha", symbol, "autonomous",
+                                            {"type": "alpha_setup", **data})
+        except Exception:                                          # noqa: BLE001
+            pass
+        return data
+
     # -- goal-aware parameter tuning -----------------------------------------
     # Allow-list of live-tunable settings the overseer may adjust toward the
     # operator's goal, each as (kind, lo, hi). This is a hard safety boundary:

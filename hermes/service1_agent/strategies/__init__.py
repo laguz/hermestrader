@@ -29,10 +29,12 @@ from .cs75 import CreditSpreads75
 from .cs7 import CreditSpreads7
 from .tt45 import TastyTrade45
 from .wheel import WheelStrategy
+from .hermes_alpha import HermesAlpha
 
 __all__ = [
     "CreditSpreads75",
     "CreditSpreads7",
     "TastyTrade45",
     "WheelStrategy",
+    "HermesAlpha",
 ]

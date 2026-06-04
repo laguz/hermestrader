@@ -207,6 +207,43 @@ async def test_propose_closes_ignores_unknown_trade_ids():
     assert await o.propose_closes() == []
 
 
+# ── propose_alpha_setup: bounded self-directed setup picker ───────────────────
+async def test_propose_alpha_setup_returns_none_on_empty_universe():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_alpha_setup([], []) is None
+
+
+async def test_propose_alpha_setup_returns_none_on_pass():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM('{"verdict":"PASS"}'), db,
+                       vision_enabled=False, autonomy="autonomous")
+    assert await o.propose_alpha_setup(["AAPL"], []) is None
+
+
+async def test_propose_alpha_setup_rejects_symbol_outside_universe():
+    import json
+    db = StubDB()
+    reply = json.dumps({"verdict": "OPEN", "symbol": "TSLA", "side": "put",
+                        "target_delta": 0.2, "dte": 30, "width": 1, "lots": 1})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    # TSLA isn't in the universe — the overseer must not pick it.
+    assert await o.propose_alpha_setup(["AAPL", "MSFT"], []) is None
+
+
+async def test_propose_alpha_setup_returns_intent_for_valid_pick():
+    import json
+    db = StubDB()
+    reply = json.dumps({"verdict": "OPEN", "symbol": "aapl", "side": "put",
+                        "target_delta": 0.2, "dte": 30, "width": 2, "lots": 1,
+                        "rationale": "support holds"})
+    o = HermesOverseer(_FakeLLM(reply), db, vision_enabled=False, autonomy="autonomous")
+    intent = await o.propose_alpha_setup(["AAPL"], [])
+    assert intent is not None
+    assert intent["symbol"] == "aapl"   # raw payload; the strategy normalises
+    assert intent["side"] == "put"
+
+
 # ── _safe_json: tolerates prose-wrapped JSON ─────────────────────────────────
 def test_safe_json_extracts_embedded_json_from_prose():
     text = "Sure, here's my answer:\n{\"verdict\":\"APPROVE\",\"rationale\":\"ok\"}\nLet me know!"

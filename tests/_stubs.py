@@ -171,6 +171,12 @@ class StubDB:
         return {sym: {"target_lots": None}
                 for sym in self._watchlists.get(strategy_id, [])}
 
+    async def all_watchlist_symbols(self):
+        syms: List[str] = []
+        for lst in self._watchlists.values():
+            syms.extend(lst)
+        return sorted(dict.fromkeys(syms))
+
     async def latest_prediction(self, symbol: str):
         return self._predictions.get(symbol)
 

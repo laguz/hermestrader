@@ -832,6 +832,19 @@ class HermesDB:
                     out[r[0]] = {"target_lots": None}
         return out
 
+    async def all_watchlist_symbols(self) -> List[str]:
+        """Deduped union of every strategy's watchlist symbols.
+
+        HermesAlpha trades the whole desk's universe, not just its own list —
+        it may pick any symbol any strategy is watching.
+        """
+        from sqlalchemy import text as sa_text
+        async with self.AsyncSession() as s:
+            result = await s.execute(sa_text(
+                "SELECT DISTINCT symbol FROM strategy_watchlists ORDER BY symbol"
+            ))
+            return [r[0] for r in result.fetchall()]
+
     async def list_all_watchlists(self) -> Dict[str, List[str]]:
         from sqlalchemy import text as sa_text
         async with self.AsyncSession() as s:

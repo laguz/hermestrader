@@ -25,7 +25,7 @@ from hermes.db.models import HermesDB
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.service1_agent.overseer import HermesOverseer
 from hermes.service1_agent.strategies import (
-    CreditSpreads7, CreditSpreads75, TastyTrade45, WheelStrategy,
+    CreditSpreads7, CreditSpreads75, HermesAlpha, TastyTrade45, WheelStrategy,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -468,6 +468,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
         CreditSpreads7(**common),
         TastyTrade45(**common),
         WheelStrategy(**common),
+        HermesAlpha(**common),
     ]
     # Filter out strategies the operator has disabled from the C2 panel.
     active_strategies = [s for s in all_strategies
