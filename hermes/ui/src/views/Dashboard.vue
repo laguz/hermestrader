@@ -11,6 +11,7 @@ import {
   setMode
 } from '../state'
 import Icon from '../components/Icon.vue'
+import TraderBar from '../components/TraderBar.vue'
 
 // Local UI state
 const approvalNotes = ref({})
@@ -90,6 +91,7 @@ const lastActionText = computed(() => {
 
 <template>
   <div class="cockpit-container">
+    <TraderBar />
 
     <!-- Top Row: Full Width Wide Cockpit Card -->
     <section class="card cockpit-card">
