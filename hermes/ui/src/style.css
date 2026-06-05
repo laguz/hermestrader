@@ -136,7 +136,7 @@ a:hover {
 /* Main App Layout */
 #app {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 70px 1fr;
   min-height: 100vh;
 }
 

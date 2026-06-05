@@ -10,9 +10,7 @@ import {
   startAnalyticsAutoLoad,
   stopAnalyticsAutoLoad,
 } from './state'
-import StatusPill from './components/StatusPill.vue'
 import TraderBar from './components/TraderBar.vue'
-import ApprovalsDock from './components/ApprovalsDock.vue'
 import BotOpsBar from './components/BotOpsBar.vue'
 import Icon from './components/Icon.vue'
 
@@ -23,7 +21,6 @@ function isTypingTarget(el) {
 }
 
 function onKeyDown(e) {
-  // Don't hijack typing in inputs.
   if (isTypingTarget(e.target)) return
   if (e.metaKey || e.ctrlKey || e.altKey) return
 
@@ -62,79 +59,25 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Sidebar Navigation -->
+  <!-- Sidebar Navigation (Slim Mockup Style) -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo"><Icon name="bolt" :size="18" /> HermesTrader</div>
-      <div class="connection-status" :class="{ connected: state.isConnected }">
-        {{ state.isConnected ? 'Connected' : 'Connecting...' }}
-      </div>
+      <div class="logo" title="HermesTrader"><Icon name="bolt" :size="20" /></div>
+      <div class="connection-status" :class="{ connected: state.isConnected }" :title="state.isConnected ? 'Connected' : 'Connecting...'"></div>
     </div>
     
     <nav class="sidebar-nav">
-      <router-link to="/" class="nav-item" exact-active-class="active">
-        <span class="icon"><Icon name="dashboard" :size="17" /></span> Dashboard
+      <router-link to="/" class="nav-item" exact-active-class="active" title="Dashboard">
+        <span class="icon"><Icon name="dashboard" :size="20" /></span>
+        <span v-if="state.status.pending_approvals > 0" class="nav-badge"></span>
       </router-link>
-      <router-link to="/charts" class="nav-item" exact-active-class="active">
-        <span class="icon"><Icon name="chart-line" :size="17" /></span> Markets
+      <router-link to="/charts" class="nav-item" exact-active-class="active" title="Markets">
+        <span class="icon"><Icon name="chart-line" :size="20" /></span>
       </router-link>
-      <router-link to="/analytics" class="nav-item" exact-active-class="active">
-        <span class="icon"><Icon name="bot" :size="17" /></span> Bots
+      <router-link to="/analytics" class="nav-item" exact-active-class="active" title="Bots">
+        <span class="icon"><Icon name="bot" :size="20" /></span>
       </router-link>
     </nav>
-
-    <div class="sidebar-footer">
-      <div class="status-summary">
-        <div class="status-title">System Status</div>
-        
-        <div class="status-item">
-          <span class="lbl">Agent</span>
-          <StatusPill :status="state.status.hermes_running" type="agent" />
-        </div>
-        
-        <div class="status-item">
-          <span class="lbl">Mode</span>
-          <StatusPill :status="state.status.mode" type="mode" />
-        </div>
-
-        <div class="status-item">
-          <span class="lbl">Approval</span>
-          <StatusPill :status="state.status.approval_mode" type="approval" />
-        </div>
-
-        <div class="status-item">
-          <span class="lbl">Market</span>
-          <StatusPill 
-            :status="state.status.market_session" 
-            type="market" 
-            :label="state.status.market_is_open ? '● OPEN' : undefined"
-          />
-        </div>
-
-        <div v-if="state.status.paused" class="status-item">
-          <span class="lbl">Agent Loop</span>
-          <StatusPill status="paused" type="paused" />
-        </div>
-
-        <div class="status-item calm-row">
-          <span class="lbl">Calm Mode</span>
-          <button
-            class="calm-toggle"
-            :class="{ on: state.calmMode }"
-            @click="setCalmMode(!state.calmMode)"
-            :title="state.calmMode ? 'Calm Mode ON — tape and beeps hidden (press C)' : 'Turn on Calm Mode (press C)'"
-          >{{ state.calmMode ? 'ON' : 'OFF' }}</button>
-        </div>
-
-        <button
-          class="hotkey-hint"
-          @click="state.hotkeysHelpOpen = true"
-          title="Keyboard shortcuts"
-        >? Shortcuts</button>
-      </div>
-
-      <ApprovalsDock />
-    </div>
   </aside>
 
   <!-- Main Viewport -->
@@ -211,106 +154,77 @@ onUnmounted(() => {
 }
 
 .sidebar-header {
-  padding: 24px;
+  padding: 24px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   border-bottom: 1px solid var(--border-color);
 }
 
 .logo {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-extrabold);
-  letter-spacing: var(--tracking-wide);
+  justify-content: center;
   color: var(--accent);
   text-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
 }
 
 .connection-status {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-top: 4px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.connection-status::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
+  margin-top: 8px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--danger);
+  position: relative;
 }
-.connection-status.connected::before {
+.connection-status.connected {
   background: var(--positive);
-  box-shadow: 0 0 6px var(--positive);
+  box-shadow: 0 0 8px var(--positive);
 }
 
 .sidebar-nav {
-  padding: 20px 12px;
+  padding: 24px 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 16px;
   flex-grow: 1;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
   color: var(--text-muted);
-  font-weight: 600;
   border-radius: var(--radius-md);
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
 }
 .nav-item:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.03);
+  background: rgba(255, 255, 255, 0.04);
 }
 .nav-item.active {
   color: #ffffff;
-  background: rgba(59, 130, 246, 0.15);
-  border-left: 3px solid var(--accent);
-  padding-left: 13px;
+  background: rgba(59, 130, 246, 0.18);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
 }
 .nav-item .icon {
   display: inline-flex;
   align-items: center;
 }
 
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid var(--border-color);
-  background: rgba(6, 9, 19, 0.4);
-}
-
-.status-summary {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.status-title {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  letter-spacing: 0.05em;
-  margin-bottom: 4px;
-}
-
-.status-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-}
-.status-item .lbl {
-  color: var(--text-muted);
-  font-weight: 500;
+.nav-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  background-color: var(--color-orange);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--color-orange);
 }
 
 .main-viewport {
@@ -368,44 +282,6 @@ onUnmounted(() => {
 .content-container {
   padding: 30px;
   flex-grow: 1;
-}
-
-.calm-row {
-  margin-top: 4px;
-}
-.calm-toggle {
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.03);
-  color: var(--text-muted);
-  border-radius: 9999px;
-  padding: 2px 10px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  cursor: pointer;
-}
-.calm-toggle.on {
-  color: #060913;
-  background: var(--color-blue);
-  border-color: var(--color-blue);
-}
-
-.hotkey-hint {
-  margin-top: 8px;
-  width: 100%;
-  border: 1px dashed var(--border-color);
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: var(--radius-md, 6px);
-  padding: 5px 8px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-}
-.hotkey-hint:hover {
-  color: var(--text-primary, #ffffff);
-  border-color: var(--color-blue);
 }
 
 .hotkeys-modal-backdrop {
@@ -483,6 +359,24 @@ onUnmounted(() => {
     position: relative;
     border-right: none;
     border-bottom: 1px solid var(--border-color);
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 0 20px;
+  }
+  .sidebar-header {
+    padding: 12px 0;
+    flex-direction: row;
+    gap: 12px;
+    border-bottom: none;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+    padding: 0;
+    gap: 8px;
+    flex-grow: 0;
+  }
+  .connection-status {
+    margin-top: 0;
   }
   .main-viewport {
     height: auto;

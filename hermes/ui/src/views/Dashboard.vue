@@ -19,7 +19,9 @@ import {
   saveLots,
   addSymbol,
   removeSymbol,
-  resetWatchlist
+  resetWatchlist,
+  togglePause,
+  setCalmMode
 } from '../state'
 import StatusPill from '../components/StatusPill.vue'
 import Icon from '../components/Icon.vue'
@@ -477,33 +479,84 @@ const lastActionText = computed(() => {
         <div class="card-body bot-content">
           <div class="bot-info-table">
             <div class="bot-info-row">
-              <span class="lbl">Status</span>
-              <span class="val text-green" v-if="state.status.hermes_running">RUNNING</span>
-              <span class="val text-red" v-else>OFFLINE</span>
+              <span class="lbl">Daemon Loop</span>
+              <div class="val-actions">
+                <span class="val" :class="state.status.hermes_running ? 'text-green' : 'text-red'">
+                  {{ state.status.hermes_running ? 'Online' : 'Offline' }}
+                </span>
+                <button 
+                  v-if="state.status.hermes_running" 
+                  class="btn-pause-inline" 
+                  :class="state.status.paused ? 'btn-inline-resume' : 'btn-inline-pause'" 
+                  @click="togglePause"
+                >
+                  {{ state.status.paused ? 'Resume' : 'Pause' }}
+                </button>
+              </div>
             </div>
             
             <div class="bot-info-row">
-              <span class="lbl">Active Strategy</span>
-              <span class="val">Iron Condor</span>
+              <span class="lbl">Trading Route</span>
+              <div class="mode-toggles-inline">
+                <button 
+                  class="btn-inline-toggle" 
+                  :class="{ active: state.status.mode === 'paper' }"
+                  @click="setMode('paper')"
+                >Paper</button>
+                <button
+                  class="btn-inline-toggle btn-live-inline"
+                  :class="{ active: state.status.mode === 'live' }"
+                  @click="setMode('live')"
+                >Live</button>
+              </div>
             </div>
             
             <div class="bot-info-row">
-              <span class="lbl">Pair</span>
-              <span class="val">{{ selectedSymbol }} Options</span>
+              <span class="lbl">Auto-Pilot Mode</span>
+              <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
+            </div>
+
+            <div class="bot-info-row">
+              <span class="lbl">Market Session</span>
+              <span class="val" :class="state.status.market_is_open ? 'text-green' : 'text-muted'">
+                {{ state.status.market_is_open ? '● OPEN' : '● CLOSED' }}
+              </span>
+            </div>
+
+            <div class="bot-info-row">
+              <span class="lbl">Calm Mode</span>
+              <button
+                class="calm-btn-inline"
+                :class="{ active: state.calmMode }"
+                @click="setCalmMode(!state.calmMode)"
+              >
+                {{ state.calmMode ? 'ON' : 'OFF' }}
+              </button>
             </div>
             
+            <div class="bot-info-row">
+              <span class="lbl">Diagnostics</span>
+              <span class="val diag-indicators">
+                <span :class="state.status.tradier_ok ? 'text-green' : 'text-red'" title="Tradier API Status">TRADIER</span>
+                <span class="separator">·</span>
+                <span :class="state.status.ml_ok ? 'text-green' : 'text-red'" title="XGBoost ML Status">ML</span>
+                <span class="separator">·</span>
+                <span :class="state.status.llm_ok ? 'text-green' : 'text-red'" title="LLM Overseer Status">LLM</span>
+              </span>
+            </div>
+
             <div class="bot-info-row">
               <span class="lbl">Profit/Loss</span>
-              <span class="val text-green" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
+              <span class="val text-green font-bold" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
             </div>
             
             <div class="bot-info-row">
               <span class="lbl">Open Positions</span>
-              <span class="val">{{ state.analyticsData?.open_trades?.length || '4 Trades' }}</span>
+              <span class="val">{{ state.analyticsData?.open_trades?.length || '4' }} Trades</span>
             </div>
             
             <div class="bot-info-row last-action-row">
-              <span class="lbl">Last Action</span>
+              <span class="lbl">Last Agent Log</span>
               <span class="val action-text" :title="lastActionText">{{ lastActionText }}</span>
             </div>
           </div>
@@ -976,6 +1029,7 @@ const lastActionText = computed(() => {
 .bot-info-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   padding: 8px 0;
   font-size: var(--fs-sm);
@@ -989,9 +1043,119 @@ const lastActionText = computed(() => {
   font-weight: var(--fw-semibold);
 }
 
+.val-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-pause-inline {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-pause-inline:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.btn-inline-resume {
+  color: var(--color-green);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.btn-inline-pause {
+  color: var(--color-yellow);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.mode-toggles-inline {
+  display: inline-flex;
+  background: rgba(0,0,0,0.3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+}
+.btn-inline-toggle {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  font-size: 10px;
+  padding: 2px 8px;
+  font-weight: var(--fw-semibold);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-inline-toggle:hover {
+  color: var(--text-primary);
+}
+.btn-inline-toggle.active {
+  background: var(--color-blue);
+  color: #ffffff;
+}
+.btn-inline-toggle.btn-live-inline.active {
+  background: var(--color-orange);
+  color: #ffffff;
+}
+
+.mode-badge {
+  font-size: 9px;
+  font-weight: 800;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.mode-badge.advisory {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--color-blue);
+}
+.mode-badge.enforcing {
+  background: rgba(245, 158, 11, 0.1);
+  color: var(--color-yellow);
+}
+.mode-badge.autonomous {
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--color-purple);
+}
+
+.calm-btn-inline {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: all 0.15s ease;
+}
+.calm-btn-inline:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+.calm-btn-inline.active {
+  background: var(--color-blue);
+  color: #ffffff;
+  border-color: var(--color-blue);
+}
+
+.diag-indicators {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.diag-indicators .separator {
+  color: rgba(255, 255, 255, 0.15);
+}
+
 .last-action-row {
   flex-direction: column;
   gap: 6px;
+  align-items: stretch;
   border-bottom: none;
 }
 
@@ -1023,9 +1187,13 @@ const lastActionText = computed(() => {
   box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
 }
 
+.font-bold {
+  font-weight: 700;
+}
+
 /* Approvals Card Styling */
 .approvals-card {
-  max-height: 480px;
+  max-height: 520px;
   display: flex;
   flex-direction: column;
   background: var(--surface-glass);
@@ -1294,7 +1462,7 @@ const lastActionText = computed(() => {
   flex-grow: 1;
 }
 
-/* Logs and watchlist elements inside settings drawer */
+/* Lots box settings inside drawer */
 .lots-box {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-color);
