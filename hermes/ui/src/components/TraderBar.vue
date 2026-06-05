@@ -87,16 +87,22 @@ function tradeBadge(t) {
 <style scoped>
 .trader-bar {
   display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 18px 30px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 20px;
+  padding: 20px 30px;
   background: rgba(8, 14, 28, 0.85);
-  border-bottom: 1px solid var(--border-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg, 12px);
+  margin: 15px auto 0 auto;
   font-size: 15px;
   position: sticky;
   top: 0;
   z-index: 85;
   backdrop-filter: blur(10px);
+  width: 1235px;
+  height: 300px;
+  box-sizing: border-box;
 }
 
 .tb-stats {
@@ -133,12 +139,16 @@ function tradeBadge(t) {
 
 .tb-tape {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  align-content: flex-start;
+  flex-wrap: wrap;
   gap: 8px;
-  overflow-x: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   flex-grow: 1;
   scrollbar-width: thin;
   min-width: 0;
+  padding-bottom: 10px;
 }
 .tb-tape-empty {
   color: var(--text-muted);
