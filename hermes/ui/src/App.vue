@@ -9,7 +9,6 @@ import {
   startAnalyticsAutoLoad,
   stopAnalyticsAutoLoad,
 } from './state'
-import TraderBar from './components/TraderBar.vue'
 import BotOpsBar from './components/BotOpsBar.vue'
 import Icon from './components/Icon.vue'
 
@@ -103,8 +102,6 @@ onUnmounted(() => {
 
       <BotOpsBar />
     </div>
-
-    <TraderBar />
 
     <main class="content-container">
       <router-view />
@@ -232,6 +229,7 @@ onUnmounted(() => {
   height: 100vh;
   overflow-y: auto;
   min-width: 0;
+  max-width: 100%;
 }
 
 .sticky-top {
