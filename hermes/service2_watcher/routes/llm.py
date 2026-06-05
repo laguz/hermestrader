@@ -17,7 +17,11 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from hermes.common import DEFAULT_LLM_TIMEOUT_S, VALID_LLM_PROVIDERS
+from hermes.common import (
+    DEFAULT_LLM_TIMEOUT_S,
+    LLM_PROVIDER_BASE_URLS,
+    VALID_LLM_PROVIDERS,
+)
 from hermes.utils import decrypt_value, encrypt_value
 
 from .._app_state import (
@@ -100,11 +104,11 @@ async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
                 detail=f"provider must be one of {list(VALID_LLM_PROVIDERS)}",
             )
         await db.set_setting(SETTING_LLM_PROVIDER, p)
-        # Pre-fill the canonical cloud URL when switching to ollama_cloud so
-        # the agent can connect even if the operator didn't explicitly set
-        # base_url.
-        if p == "ollama_cloud" and not (body.base_url or "").strip():
-            await db.set_setting(SETTING_LLM_BASE_URL, "https://api.ollama.com/v1")
+        # Pre-fill the canonical endpoint when switching to a hosted provider
+        # (ollama_cloud / gemini / claude) so the agent can connect even if the
+        # operator didn't explicitly set base_url.
+        if p in LLM_PROVIDER_BASE_URLS and not (body.base_url or "").strip():
+            await db.set_setting(SETTING_LLM_BASE_URL, LLM_PROVIDER_BASE_URLS[p])
     if body.base_url is not None:
         url = body.base_url.strip()
         if url and not (url.startswith("http://") or url.startswith("https://")):

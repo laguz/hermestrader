@@ -23,8 +23,21 @@ STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 
 # ---------------------------------------------------------------------------
 # LLM / Overseer
 # ---------------------------------------------------------------------------
-VALID_LLM_PROVIDERS: tuple[str, ...] = ("mock", "local", "ollama_cloud")
+VALID_LLM_PROVIDERS: tuple[str, ...] = (
+    "mock", "local", "ollama_cloud", "gemini", "claude",
+)
 VALID_AUTONOMY: tuple[str, ...] = ("advisory", "enforcing", "autonomous")
+
+# Default OpenAI-compatible base URLs for hosted providers. Ollama Cloud,
+# Gemini and Claude all expose an OpenAI `/chat/completions` shim, so the
+# agent reuses the OpenAICompatibleLLM client by pointing it at these
+# endpoints. The operator only supplies an API key and picks a model — the
+# URL is pre-filled so they can't get it subtly wrong.
+LLM_PROVIDER_BASE_URLS: dict[str, str] = {
+    "ollama_cloud": "https://api.ollama.com/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "claude": "https://api.anthropic.com/v1",
+}
 
 # Default LLM call timeout — generous for local models cold-loading multi-GB
 # GGUF weights (LM Studio / Ollama on consumer hardware).
