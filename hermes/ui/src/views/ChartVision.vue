@@ -110,7 +110,7 @@ function getOutlookColor(outlook) {
 
 <style scoped>
 .chart-vision-container {
-  max-width: 720px;
+  max-width: 1200px;
 }
 
 .tab-sec-title {

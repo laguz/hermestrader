@@ -109,8 +109,9 @@ def _render_chart_locked(df, symbol, lookback,
     rsi_vals = _rsi(df["close"]).values
 
     # ── Figure layout: price | volume | RSI ─────────────────────────────────
-    fig = Figure(figsize=(13, 7), facecolor="#0d1117")
+    fig = Figure(figsize=(12, 8), facecolor="#0d1117")
     FigureCanvasAgg(fig)  # attach Agg backend so fig.savefig() works
+    fig.subplots_adjust(left=0.07, right=0.94, top=0.92, bottom=0.07)
     gs  = GridSpec(3, 1, height_ratios=[4, 1, 1.4], hspace=0.06, figure=fig)
     ax_price = fig.add_subplot(gs[0])
     ax_vol   = fig.add_subplot(gs[1], sharex=ax_price)
@@ -202,8 +203,8 @@ def _render_chart_locked(df, symbol, lookback,
              ha="right", va="bottom", color="#30363d", fontsize=7)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight",
-                facecolor=fig.get_facecolor(), dpi=120)
+    fig.savefig(buf, format="png",
+                facecolor=fig.get_facecolor(), dpi=100)
     buf.seek(0)
     return buf.read()
 
