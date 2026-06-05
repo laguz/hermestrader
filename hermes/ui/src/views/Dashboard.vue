@@ -92,6 +92,25 @@ const lastActionText = computed(() => {
 <template>
   <div class="cockpit-container">
 
+    <!-- Top Bar Dashboard Control Banner -->
+    <div class="dashboard-top-bar">
+      <div class="top-bar-info">
+        <Icon name="bolt" :size="16" style="color: var(--color-blue);" />
+        <span class="top-bar-title">HermesTrader Cockpit</span>
+      </div>
+      <div class="top-bar-actions">
+        <div class="calm-toggle-wrapper">
+          <span class="calm-label">Calm Mode</span>
+          <button
+            class="btn-calm-toggle"
+            :class="{ active: state.calmMode }"
+            @click="setCalmMode(!state.calmMode)"
+          >
+            {{ state.calmMode ? 'ENABLED' : 'DISABLED' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Bottom Row Layout -->
     <div class="primary-layout">
@@ -150,17 +169,6 @@ const lastActionText = computed(() => {
               <span class="val" :class="state.status.market_is_open ? 'text-green' : 'text-muted'">
                 {{ state.status.market_is_open ? '● OPEN' : '● CLOSED' }}
               </span>
-            </div>
-
-            <div class="bot-info-row">
-              <span class="lbl">Calm Mode</span>
-              <button
-                class="calm-btn-inline"
-                :class="{ active: state.calmMode }"
-                @click="setCalmMode(!state.calmMode)"
-              >
-                {{ state.calmMode ? 'ON' : 'OFF' }}
-              </button>
             </div>
             
             <div class="bot-info-row">
@@ -425,25 +433,71 @@ const lastActionText = computed(() => {
   color: var(--color-purple);
 }
 
-.calm-btn-inline {
-  background: rgba(255, 255, 255, 0.05);
+.dashboard-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface-glass);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px 20px;
+  width: 100%;
+}
+
+.top-bar-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.top-bar-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.02em;
+}
+
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+}
+
+.calm-toggle-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.calm-label {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.btn-calm-toggle {
+  background: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border-color);
   color: var(--text-muted);
   font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
   font-weight: 700;
-  transition: all 0.15s ease;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  letter-spacing: 0.05em;
 }
-.calm-btn-inline:hover {
+
+.btn-calm-toggle:hover {
+  border-color: var(--color-blue);
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.08);
 }
-.calm-btn-inline.active {
+
+.btn-calm-toggle.active {
   background: var(--color-blue);
   color: #ffffff;
   border-color: var(--color-blue);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
 }
 
 .diag-indicators {
