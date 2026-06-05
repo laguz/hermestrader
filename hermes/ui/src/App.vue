@@ -65,7 +65,7 @@ onUnmounted(() => {
   <!-- Sidebar Navigation -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo"><Icon name="bolt" :size="18" /> HERMES C2</div>
+      <div class="logo"><Icon name="bolt" :size="18" /> HermesTrader</div>
       <div class="connection-status" :class="{ connected: state.isConnected }">
         {{ state.isConnected ? 'Connected' : 'Connecting...' }}
       </div>
@@ -75,11 +75,11 @@ onUnmounted(() => {
       <router-link to="/" class="nav-item" exact-active-class="active">
         <span class="icon"><Icon name="dashboard" :size="17" /></span> Dashboard
       </router-link>
-      <router-link to="/analytics" class="nav-item" exact-active-class="active">
-        <span class="icon"><Icon name="chart-bar" :size="17" /></span> Analytics
-      </router-link>
       <router-link to="/charts" class="nav-item" exact-active-class="active">
-        <span class="icon"><Icon name="chart-line" :size="17" /></span> Chart Vision
+        <span class="icon"><Icon name="chart-line" :size="17" /></span> Markets
+      </router-link>
+      <router-link to="/analytics" class="nav-item" exact-active-class="active">
+        <span class="icon"><Icon name="bot" :size="17" /></span> Bots
       </router-link>
     </nav>
 
