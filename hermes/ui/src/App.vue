@@ -77,6 +77,9 @@ onUnmounted(() => {
       <router-link to="/analytics" class="nav-item" exact-active-class="active" title="Bots">
         <span class="icon"><Icon name="bot" :size="20" /></span>
       </router-link>
+      <router-link to="/settings" class="nav-item" exact-active-class="active" title="Settings">
+        <span class="icon"><Icon name="settings" :size="20" /></span>
+      </router-link>
     </nav>
   </aside>
 
@@ -85,7 +88,7 @@ onUnmounted(() => {
     <div class="sticky-top">
       <header class="main-header">
         <h2 class="view-title">
-          {{ $route.name === 'Analytics' ? 'Hermes Analytics' : $route.name === 'ChartVision' ? 'Chart Vision Analysis' : 'C2 Control Room' }}
+          {{ $route.name === 'Analytics' ? 'Hermes Analytics' : $route.name === 'ChartVision' ? 'Chart Vision Analysis' : $route.name === 'Settings' ? 'System Settings' : 'C2 Control Room' }}
         </h2>
         <div class="header-actions">
           <span v-if="state.status.pending_approvals > 0" class="pending-badge animate-pulse">
