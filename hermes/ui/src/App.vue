@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted, onUnmounted } from 'vue'
+import { useRoute } from 'vue-router'
 import {
   state,
   connectSSE,
@@ -10,7 +11,10 @@ import {
   stopAnalyticsAutoLoad,
 } from './state'
 import BotOpsBar from './components/BotOpsBar.vue'
+import TraderBar from './components/TraderBar.vue'
 import Icon from './components/Icon.vue'
+
+const route = useRoute()
 
 function isTypingTarget(el) {
   if (!el) return false
@@ -102,6 +106,8 @@ onUnmounted(() => {
 
       <BotOpsBar />
     </div>
+
+    <TraderBar v-if="route.name === 'Dashboard'" />
 
     <main class="content-container">
       <router-view />
