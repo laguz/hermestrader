@@ -8,8 +8,7 @@ import {
   decide,
   bulkDecide,
   togglePause,
-  setMode,
-  setCalmMode
+  setMode
 } from '../state'
 import Icon from '../components/Icon.vue'
 
@@ -92,25 +91,78 @@ const lastActionText = computed(() => {
 <template>
   <div class="cockpit-container">
 
-    <!-- Top Bar Dashboard Control Banner -->
-    <div class="dashboard-top-bar">
-      <div class="top-bar-info">
-        <Icon name="bolt" :size="16" style="color: var(--color-blue);" />
-        <span class="top-bar-title">HermesTrader Cockpit</span>
-      </div>
-      <div class="top-bar-actions">
-        <div class="calm-toggle-wrapper">
-          <span class="calm-label">Calm Mode</span>
-          <button
-            class="btn-calm-toggle"
-            :class="{ active: state.calmMode }"
-            @click="setCalmMode(!state.calmMode)"
-          >
-            {{ state.calmMode ? 'ENABLED' : 'DISABLED' }}
-          </button>
+    <!-- Top Row: Full Width Wide Cockpit Card -->
+    <section class="card cockpit-card">
+      <div class="card-header">
+        <div class="cockpit-title-group">
+          <Icon name="bolt" :size="18" style="color: var(--color-blue);" />
+          <span class="header-title">HermesTrader Cockpit</span>
+        </div>
+        <div class="status-summary-header">
+          <div class="pulse-dot" :class="{ running: state.status.hermes_running }"></div>
+          <span class="status-txt">{{ state.status.hermes_running ? 'SYSTEM ONLINE' : 'SYSTEM OFFLINE' }}</span>
         </div>
       </div>
-    </div>
+      <div class="card-body cockpit-body">
+        <div class="cockpit-grid">
+          <div class="grid-item">
+            <span class="lbl">Daemon Loop</span>
+            <div class="val-actions">
+              <span class="val" :class="state.status.hermes_running ? 'text-green' : 'text-red'">
+                {{ state.status.hermes_running ? 'Online' : 'Offline' }}
+              </span>
+              <button 
+                v-if="state.status.hermes_running" 
+                class="btn-pause-inline" 
+                :class="state.status.paused ? 'btn-inline-resume' : 'btn-inline-pause'" 
+                @click="togglePause"
+              >
+                {{ state.status.paused ? 'Resume' : 'Pause' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="grid-item">
+            <span class="lbl">Trading Route</span>
+            <div class="mode-toggles-inline">
+              <button 
+                class="btn-inline-toggle" 
+                :class="{ active: state.status.mode === 'paper' }"
+                @click="setMode('paper')"
+              >Paper</button>
+              <button
+                class="btn-inline-toggle btn-live-inline"
+                :class="{ active: state.status.mode === 'live' }"
+                @click="setMode('live')"
+              >Live</button>
+            </div>
+          </div>
+
+          <div class="grid-item">
+            <span class="lbl">Auto-Pilot Autonomy</span>
+            <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
+          </div>
+
+          <div class="grid-item">
+            <span class="lbl">Market Session</span>
+            <span class="val" :class="state.status.market_is_open ? 'text-green' : 'text-muted'">
+              {{ state.status.market_is_open ? '● OPEN' : '● CLOSED' }}
+            </span>
+          </div>
+
+          <div class="grid-item">
+            <span class="lbl">System Health</span>
+            <span class="val diag-indicators">
+              <span :class="state.status.tradier_ok ? 'text-green' : 'text-red'" title="Tradier API Status">TRADIER</span>
+              <span class="separator">·</span>
+              <span :class="state.status.ml_ok ? 'text-green' : 'text-red'" title="XGBoost ML Status">ML</span>
+              <span class="separator">·</span>
+              <span :class="state.status.llm_ok ? 'text-green' : 'text-red'" title="LLM Overseer Status">LLM</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <!-- Bottom Row Layout -->
     <div class="primary-layout">
@@ -126,62 +178,6 @@ const lastActionText = computed(() => {
         </div>
         <div class="card-body bot-content">
           <div class="bot-info-table">
-            <div class="bot-info-row">
-              <span class="lbl">Daemon Loop</span>
-              <div class="val-actions">
-                <span class="val" :class="state.status.hermes_running ? 'text-green' : 'text-red'">
-                  {{ state.status.hermes_running ? 'Online' : 'Offline' }}
-                </span>
-                <button 
-                  v-if="state.status.hermes_running" 
-                  class="btn-pause-inline" 
-                  :class="state.status.paused ? 'btn-inline-resume' : 'btn-inline-pause'" 
-                  @click="togglePause"
-                >
-                  {{ state.status.paused ? 'Resume' : 'Pause' }}
-                </button>
-              </div>
-            </div>
-            
-            <div class="bot-info-row">
-              <span class="lbl">Trading Route</span>
-              <div class="mode-toggles-inline">
-                <button 
-                  class="btn-inline-toggle" 
-                  :class="{ active: state.status.mode === 'paper' }"
-                  @click="setMode('paper')"
-                >Paper</button>
-                <button
-                  class="btn-inline-toggle btn-live-inline"
-                  :class="{ active: state.status.mode === 'live' }"
-                  @click="setMode('live')"
-                >Live</button>
-              </div>
-            </div>
-            
-            <div class="bot-info-row">
-              <span class="lbl">Auto-Pilot Mode</span>
-              <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
-            </div>
-
-            <div class="bot-info-row">
-              <span class="lbl">Market Session</span>
-              <span class="val" :class="state.status.market_is_open ? 'text-green' : 'text-muted'">
-                {{ state.status.market_is_open ? '● OPEN' : '● CLOSED' }}
-              </span>
-            </div>
-            
-            <div class="bot-info-row">
-              <span class="lbl">Diagnostics</span>
-              <span class="val diag-indicators">
-                <span :class="state.status.tradier_ok ? 'text-green' : 'text-red'" title="Tradier API Status">TRADIER</span>
-                <span class="separator">·</span>
-                <span :class="state.status.ml_ok ? 'text-green' : 'text-red'" title="XGBoost ML Status">ML</span>
-                <span class="separator">·</span>
-                <span :class="state.status.llm_ok ? 'text-green' : 'text-red'" title="LLM Overseer Status">LLM</span>
-              </span>
-            </div>
-
             <div class="bot-info-row">
               <span class="lbl">Profit/Loss</span>
               <span class="val text-green font-bold" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
@@ -433,71 +429,49 @@ const lastActionText = computed(() => {
   color: var(--color-purple);
 }
 
-.dashboard-top-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: var(--surface-glass);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 12px 20px;
+.cockpit-card {
+  margin-bottom: 20px;
   width: 100%;
 }
 
-.top-bar-info {
+.cockpit-title-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
-.top-bar-title {
-  font-size: var(--fs-md);
-  font-weight: var(--fw-bold);
-  letter-spacing: 0.02em;
+.cockpit-body {
+  padding: 18px 20px;
 }
 
-.top-bar-actions {
+.cockpit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.grid-item {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.02);
 }
 
-.calm-toggle-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.calm-label {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  font-weight: var(--fw-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.btn-calm-toggle {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border-color);
-  color: var(--text-muted);
+.grid-item .lbl {
   font-size: 10px;
   font-weight: 700;
-  padding: 6px 14px;
-  border-radius: 9999px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
 }
 
-.btn-calm-toggle:hover {
-  border-color: var(--color-blue);
-  color: var(--text-primary);
-}
-
-.btn-calm-toggle.active {
-  background: var(--color-blue);
-  color: #ffffff;
-  border-color: var(--color-blue);
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
+.grid-item .val {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
 }
 
 .diag-indicators {
