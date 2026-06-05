@@ -231,6 +231,7 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100vh;
   overflow-y: auto;
+  min-width: 0;
 }
 
 .sticky-top {

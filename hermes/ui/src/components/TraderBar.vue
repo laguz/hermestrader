@@ -139,6 +139,7 @@ function tradeBadge(t) {
   overflow-x: auto;
   flex-grow: 1;
   scrollbar-width: thin;
+  min-width: 0;
 }
 .tb-tape-empty {
   color: var(--text-muted);
