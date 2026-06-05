@@ -100,7 +100,7 @@ const chartDataPoints = computed(() => {
 
 const svgPathAndCandles = computed(() => {
   const data = chartDataPoints.value
-  if (!data.length) return { linePath: '', areaPath: '', candles: [], gridLines: [] }
+  if (!data.length) return { linePath: '', areaPath: '', candles: [], gridLines: [], ma1Path: '', ma2Path: '', volumeBars: [] }
   
   const width = 940
   const height = 260
@@ -151,8 +151,56 @@ const svgPathAndCandles = computed(() => {
     const y = getY(val)
     gridLines.push({ y, label: val.toFixed(selectedSymbol.value.toUpperCase() === 'BTC' ? 0 : 2) })
   }
+
+  // Calculate MA1 (e.g., 7-period SMA)
+  const ma1Values = []
+  for (let i = 0; i < data.length; i++) {
+    let sum = 0
+    let count = 0
+    for (let j = Math.max(0, i - 6); j <= i; j++) {
+      sum += data[j].close
+      count++
+    }
+    ma1Values.push(sum / count)
+  }
+
+  // Calculate MA2 (e.g., 15-period SMA)
+  const ma2Values = []
+  for (let i = 0; i < data.length; i++) {
+    let sum = 0
+    let count = 0
+    for (let j = Math.max(0, i - 14); j <= i; j++) {
+      sum += data[j].close
+      count++
+    }
+    ma2Values.push(sum / count)
+  }
+
+  let ma1Path = `M ${getX(0)} ${getY(ma1Values[0])}`
+  let ma2Path = `M ${getX(0)} ${getY(ma2Values[0])}`
+  for (let i = 1; i < data.length; i++) {
+    ma1Path += ` L ${getX(i)} ${getY(ma1Values[i])}`
+    ma2Path += ` L ${getX(i)} ${getY(ma2Values[i])}`
+  }
+
+  const seed = selectedSymbol.value.toUpperCase().charCodeAt(0) || 100
+  const volumeValues = data.map((d, i) => Math.abs(d.close - d.open) * 1.5 + Math.abs(Math.sin(i * 0.8 + seed)) * 5.0 + 2.0)
+  const maxVol = Math.max(...volumeValues) || 1
+
+  const volumeBars = data.map((d, i) => {
+    const cx = getX(i)
+    const cWidth = Math.max(4, chartWidth / data.length - 6)
+    const volHeight = (volumeValues[i] / maxVol) * 45
+    return {
+      x: cx - cWidth / 2,
+      y: height - padding - volHeight,
+      width: cWidth,
+      height: volHeight,
+      isGreen: d.close >= d.open
+    }
+  })
   
-  return { linePath, areaPath, candles, gridLines }
+  return { linePath, areaPath, candles, gridLines, ma1Path, ma2Path, volumeBars }
 })
 
 const portfolioValue = computed(() => {
@@ -235,6 +283,18 @@ const lastActionText = computed(() => {
             <!-- Grids -->
             <line v-for="(g, idx) in svgPathAndCandles.gridLines" :key="idx" x1="0" :y1="g.y" x2="940" :y2="g.y" class="grid-line" />
             
+            <!-- Volume Bars (background) -->
+            <rect v-for="(v, idx) in svgPathAndCandles.volumeBars" :key="'vol' + idx"
+              :x="v.x" :y="v.y" :width="v.width" :height="v.height"
+              :fill="v.isGreen ? 'var(--color-green)' : 'var(--color-red)'"
+              opacity="0.15" rx="1" />
+
+            <!-- Moving Average 1 (Neon Cyan/Blue) -->
+            <path :d="svgPathAndCandles.ma1Path" fill="none" stroke="#00f3ff" stroke-width="1.5" class="ma1-stroke" />
+            
+            <!-- Moving Average 2 (Purple) -->
+            <path :d="svgPathAndCandles.ma2Path" fill="none" stroke="#d946ef" stroke-width="1.5" class="ma2-stroke" />
+
             <!-- Close Price Gradient Area -->
             <defs>
               <linearGradient id="chartGlow" x1="0" y1="0" x2="0" y2="1">
@@ -963,5 +1023,15 @@ const lastActionText = computed(() => {
 }
 .btn-reject-text:hover {
   background: rgba(239, 68, 68, 0.1);
+}
+
+.ma1-stroke {
+  filter: drop-shadow(0px 0px 4px rgba(0, 243, 255, 0.5));
+  opacity: 0.85;
+}
+
+.ma2-stroke {
+  filter: drop-shadow(0px 0px 4px rgba(217, 70, 239, 0.5));
+  opacity: 0.85;
 }
 </style>
