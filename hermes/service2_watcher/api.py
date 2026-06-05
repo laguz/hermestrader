@@ -153,6 +153,13 @@ app.include_router(ml_diagnostics.router)
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import HTTPException
 
+@app.get("/favicon.svg")
+def favicon_svg():
+    path = STATIC_DIR / "favicon.svg"
+    if path.exists():
+        return FileResponse(path, media_type="image/svg+xml")
+    raise HTTPException(status_code=404, detail="Favicon not found")
+
 @app.get("/{fallback_path:path}")
 def spa_fallback(fallback_path: str):
     if (
