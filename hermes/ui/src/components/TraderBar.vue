@@ -45,7 +45,7 @@ function tradeBadge(t) {
 </script>
 
 <template>
-  <div v-if="!state.calmMode" class="trader-bar">
+  <div class="trader-bar">
     <div class="tb-stats">
       <div class="tb-stat">
         <span class="tb-label">Open</span>

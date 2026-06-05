@@ -5,7 +5,6 @@ import {
   connectSSE,
   disconnectSSE,
   togglePause,
-  setCalmMode,
   decideFirstPending,
   startAnalyticsAutoLoad,
   stopAnalyticsAutoLoad,
@@ -34,9 +33,6 @@ function onKeyDown(e) {
   } else if (k === ' ') {
     e.preventDefault()
     togglePause()
-  } else if (k === 'c') {
-    e.preventDefault()
-    setCalmMode(!state.calmMode)
   } else if (k === '?' || (k === '/' && e.shiftKey)) {
     e.preventDefault()
     state.hotkeysHelpOpen = !state.hotkeysHelpOpen
@@ -130,7 +126,7 @@ onUnmounted(() => {
         <li><kbd>A</kbd><span>Approve first pending trade</span></li>
         <li><kbd>R</kbd><span>Reject first pending trade</span></li>
         <li><kbd>Space</kbd><span>Pause / resume agent</span></li>
-        <li><kbd>C</kbd><span>Toggle Calm Mode (hide tape, mute alerts)</span></li>
+
         <li><kbd>?</kbd><span>Show / hide this help</span></li>
         <li><kbd>Esc</kbd><span>Close help</span></li>
       </ul>

@@ -1,14 +1,11 @@
 import { reactive, computed } from 'vue'
 
-const CALM_KEY = 'hermes.calmMode'
-
 export const state = reactive({
   status: {},
   approvals: {
     pending: [],
     all: []
   },
-  calmMode: (typeof localStorage !== 'undefined' && localStorage.getItem(CALM_KEY) === '1'),
   hotkeysHelpOpen: false,
   logs: [],
   watchlistData: {
@@ -94,7 +91,6 @@ function ensureAudio() {
 }
 
 export function beep(freq = 880, durationMs = 140) {
-  if (state.calmMode) return
   const ctx = ensureAudio()
   if (!ctx) return
   try {
@@ -111,13 +107,6 @@ export function beep(freq = 880, durationMs = 140) {
   } catch (_) {
     // ignore — audio is best-effort
   }
-}
-
-export function setCalmMode(on) {
-  state.calmMode = !!on
-  try {
-    localStorage.setItem(CALM_KEY, state.calmMode ? '1' : '0')
-  } catch (_) { /* ignore */ }
 }
 
 // First pending approval — what hotkeys A/R act on.

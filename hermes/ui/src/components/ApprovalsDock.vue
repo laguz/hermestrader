@@ -24,7 +24,7 @@ function priceTag(item) {
 </script>
 
 <template>
-  <div v-if="!state.calmMode" class="approvals-dock">
+  <div class="approvals-dock">
     <div class="dock-header">
       <span class="dock-title">Pending</span>
       <span v-if="items.length" class="dock-count">{{ items.length }}</span>
