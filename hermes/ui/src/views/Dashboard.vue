@@ -177,16 +177,46 @@ async function onAddSymbol(sid) {
 }
 
 // LLM provider fields toggling
-const isLlmCloud = computed(() => llmProvider.value === 'ollama_cloud')
 const isLlmLocal = computed(() => llmProvider.value === 'local')
 
+// Hosted providers expose a fixed OpenAI-compatible endpoint: the operator
+// supplies an API key and picks a model, but never edits the URL.
+const HOSTED_BASE_URLS = {
+  ollama_cloud: 'https://api.ollama.com/v1',
+  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+  claude: 'https://api.anthropic.com/v1',
+}
+const isLlmHosted = computed(() => llmProvider.value in HOSTED_BASE_URLS)
+
+// Curated model menus so the operator can pick a known model id from a
+// dropdown instead of typing it. Local/Ollama keep the free-text field.
+const MODEL_OPTIONS = {
+  gemini: [
+    'gemini-3.5-flash',
+    'gemini-3.1-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+  ],
+  claude: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+}
+const modelOptions = computed(() => MODEL_OPTIONS[llmProvider.value] || [])
+
 function handleProviderChange() {
-  if (isLlmCloud.value) {
-    llmBaseUrl.value = 'https://api.ollama.com/v1'
+  const hosted = HOSTED_BASE_URLS[llmProvider.value]
+  if (hosted) {
+    llmBaseUrl.value = hosted
   } else if (isLlmLocal.value) {
-    if (!llmBaseUrl.value || llmBaseUrl.value === 'https://api.ollama.com/v1') {
+    if (!llmBaseUrl.value || Object.values(HOSTED_BASE_URLS).includes(llmBaseUrl.value)) {
       llmBaseUrl.value = 'http://host.docker.internal:1234/v1'
     }
+  }
+  // Seed a sensible default model when the provider offers a curated menu and
+  // the current value isn't part of it, so the dropdown is never blank.
+  const opts = MODEL_OPTIONS[llmProvider.value]
+  if (opts && opts.length && !opts.includes(llmModel.value)) {
+    llmModel.value = opts[0]
   }
 }
 
@@ -647,15 +677,20 @@ function triggerUpdateInfo() {
               <option value="mock">Mock Overseer (No LLM)</option>
               <option value="local">Local Client (LM Studio / Ollama)</option>
               <option value="ollama_cloud">Ollama Cloud REST</option>
+              <option value="gemini">Google Gemini API</option>
+              <option value="claude">Anthropic Claude API</option>
             </select>
           </div>
-          <div class="form-group" v-if="!isLlmCloud">
+          <div class="form-group" v-if="!isLlmHosted">
             <label>Base URL Endpoint</label>
             <input type="text" v-model="llmBaseUrl" placeholder="http://localhost:1234/v1" />
           </div>
           <div class="form-group">
             <label>AI Model Identifier</label>
-            <input type="text" v-model="llmModel" placeholder="hermes-3-llama-3.1-8b" />
+            <select v-if="modelOptions.length" v-model="llmModel">
+              <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+            </select>
+            <input v-else type="text" v-model="llmModel" placeholder="hermes-3-llama-3.1-8b" />
           </div>
           <div class="form-row">
             <div class="form-group">

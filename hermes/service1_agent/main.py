@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from hermes.common import (
     DEFAULT_LLM_TIMEOUT_S,
+    LLM_PROVIDER_BASE_URLS,
     STRATEGY_PRIORITIES,
     VALID_AUTONOMY,
     VALID_MODES,
@@ -384,27 +385,39 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 except Exception:                               # noqa: BLE001
                     pass
 
-    elif provider == "local" and base_url and model:
-        try:
-            from hermes.llm import OpenAICompatibleLLM
-            client = OpenAICompatibleLLM(
-                base_url=base_url, model=model,
-                api_key=api_key, temperature=temperature,
-                timeout_s=timeout_s,
-            )
-            log.info("LLM overseer: provider=local model=%s base=%s vision=%s timeout=%.0fs",
-                     model, base_url, vision, timeout_s)
+    elif provider in ("local", "gemini", "claude") and model:
+        # All three speak the OpenAI /chat/completions protocol, so a single
+        # client covers them. `local` points at a self-hosted server; gemini
+        # and claude use the vendor's OpenAI-compatible endpoint (URL filled in
+        # from LLM_PROVIDER_BASE_URLS when the operator didn't override it) and
+        # require an api_key.
+        effective_base = base_url or LLM_PROVIDER_BASE_URLS.get(provider, "")
+        needs_key = provider in ("gemini", "claude")
+        if not effective_base:
+            log.warning("%s requires a base_url — falling back to MockLLM", provider)
+        elif needs_key and not api_key:
+            log.warning("%s requires an api_key — falling back to MockLLM", provider)
+        else:
             try:
-                await db.set_setting(SETTING_LLM_ERROR, "")
-            except Exception:                                   # noqa: BLE001
-                pass
-            return client, snapshot, vision
-        except Exception as exc:                                # noqa: BLE001
-            log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
-            try:
-                await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
-            except Exception:                                   # noqa: BLE001
-                pass
+                from hermes.llm import OpenAICompatibleLLM
+                client = OpenAICompatibleLLM(
+                    base_url=effective_base, model=model,
+                    api_key=api_key, temperature=temperature,
+                    timeout_s=timeout_s,
+                )
+                log.info("LLM overseer: provider=%s model=%s base=%s vision=%s timeout=%.0fs",
+                         provider, model, effective_base, vision, timeout_s)
+                try:
+                    await db.set_setting(SETTING_LLM_ERROR, "")
+                except Exception:                               # noqa: BLE001
+                    pass
+                return client, snapshot, vision
+            except Exception as exc:                            # noqa: BLE001
+                log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
+                try:
+                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                except Exception:                               # noqa: BLE001
+                    pass
 
     # Fallback — mock LLM keeps the overseer operational without a backend.
     from hermes.service1_agent.mock_broker import MockLLM
