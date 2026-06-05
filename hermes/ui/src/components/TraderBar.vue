@@ -156,6 +156,7 @@ function tradeBadge(t) {
   border-radius: var(--radius-md, 6px);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 .chip-sym {
   font-weight: 700;
