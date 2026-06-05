@@ -94,14 +94,14 @@ function tradeBadge(t) {
   background: rgba(8, 14, 28, 0.85);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg, 12px);
-  margin: 15px auto 0 auto;
+  margin: 15px 30px 0 30px;
   font-size: 15px;
   position: sticky;
   top: 0;
   z-index: 85;
   backdrop-filter: blur(10px);
-  width: 1235px;
-  height: 300px;
+  width: auto;
+  height: auto;
   box-sizing: border-box;
 }
 
@@ -143,10 +143,8 @@ function tradeBadge(t) {
   align-content: flex-start;
   flex-wrap: wrap;
   gap: 8px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: visible;
   flex-grow: 1;
-  scrollbar-width: thin;
   min-width: 0;
   padding-bottom: 10px;
 }
