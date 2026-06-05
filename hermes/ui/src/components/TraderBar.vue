@@ -70,7 +70,7 @@ function tradeBadge(t) {
 
     <div class="tb-tape" v-if="openTrades.length">
       <div
-        v-for="t in openTrades.slice(0, 18)"
+        v-for="t in openTrades"
         :key="t.id"
         class="tape-chip"
         :title="`${t.strategy_id} · ${tradeBadge(t)} · entry ${fmtMoney(t.entry_credit * 100)}`"
@@ -79,7 +79,6 @@ function tradeBadge(t) {
         <span class="chip-strat">{{ t.strategy_id }}</span>
         <span class="chip-meta">{{ tradeBadge(t) }}</span>
       </div>
-      <span v-if="openTrades.length > 18" class="tape-more">+{{ openTrades.length - 18 }}</span>
     </div>
     <div v-else class="tb-tape tb-tape-empty">No open positions</div>
   </div>
@@ -89,11 +88,11 @@ function tradeBadge(t) {
 .trader-bar {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 10px 30px;
+  gap: 24px;
+  padding: 18px 30px;
   background: rgba(8, 14, 28, 0.85);
   border-bottom: 1px solid var(--border-color);
-  font-size: 12px;
+  font-size: 15px;
   position: sticky;
   top: 0;
   z-index: 85;
@@ -103,19 +102,19 @@ function tradeBadge(t) {
 .tb-stats {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 28px;
   flex-shrink: 0;
 }
 
 .tb-stat {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  min-width: 64px;
+  gap: 4px;
+  min-width: 90px;
 }
 
 .tb-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -123,7 +122,7 @@ function tradeBadge(t) {
 }
 
 .tb-value {
-  font-size: 15px;
+  font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary, #ffffff);
@@ -135,7 +134,7 @@ function tradeBadge(t) {
 .tb-tape {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   overflow-x: auto;
   flex-grow: 1;
   scrollbar-width: thin;
@@ -144,38 +143,34 @@ function tradeBadge(t) {
 .tb-tape-empty {
   color: var(--text-muted);
   font-style: italic;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .tape-chip {
   display: inline-flex;
   align-items: baseline;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: 8px;
+  padding: 8px 14px;
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.18);
-  border-radius: var(--radius-md, 6px);
+  border-radius: var(--radius-md, 8px);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 .chip-sym {
   font-weight: 700;
+  font-size: 14px;
   color: var(--text-primary, #ffffff);
 }
 .chip-strat {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--color-blue);
   letter-spacing: 0.04em;
 }
 .chip-meta {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-muted);
-}
-.tape-more {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 0 6px;
 }
 </style>
