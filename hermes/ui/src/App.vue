@@ -62,7 +62,7 @@ onUnmounted(() => {
   <!-- Sidebar Navigation (Slim Mockup Style) -->
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo" title="HermesTrader"><Icon name="bolt" :size="20" /></div>
+      <div class="logo" title="HermesTrader"><Icon name="logo" :size="22" /></div>
       <div class="connection-status" :class="{ connected: state.isConnected }" :title="state.isConnected ? 'Connected' : 'Connecting...'"></div>
     </div>
     
