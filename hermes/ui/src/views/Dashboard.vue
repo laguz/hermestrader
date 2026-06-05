@@ -35,9 +35,8 @@ const lotInputs = ref({})
 const showSettingsDrawer = ref(false)
 const settingsActiveTab = ref('soul')
 
-// Option Chain & Chart state
+// Chart state
 const selectedSymbol = ref('SPY')
-const selectedOptionType = ref('calls')
 const chartPeriod = ref('30d')
 
 // Soul inputs
@@ -269,7 +268,7 @@ function triggerUpdateInfo() {
 }
 
 // -----------------------------------------------------------------
-// Mock Dynamic Option Chain and High-Fidelity SVG Charts
+// Mock Dynamic / Real Data Integration
 // -----------------------------------------------------------------
 
 const activeSymbolPrice = computed(() => {
@@ -281,7 +280,7 @@ const activeSymbolPrice = computed(() => {
   return { value: '$150.00', change: '+0.50%', isPositive: true }
 })
 
-// Computes 30 data points for SVG Chart rendering
+// Computes 30 data points for SVG Chart rendering (Wide layout)
 const chartDataPoints = computed(() => {
   const sym = selectedSymbol.value.toUpperCase()
   const seed = sym.charCodeAt(0) || 100
@@ -305,8 +304,8 @@ const svgPathAndCandles = computed(() => {
   const data = chartDataPoints.value
   if (!data.length) return { linePath: '', areaPath: '', candles: [], gridLines: [] }
   
-  const width = 680
-  const height = 240
+  const width = 940
+  const height = 260
   const padding = 20
   const chartWidth = width - padding * 2
   const chartHeight = height - padding * 2
@@ -335,7 +334,7 @@ const svgPathAndCandles = computed(() => {
       yClose: Math.max(yOpen, yClose),
       height: Math.max(2, Math.abs(yOpen - yClose)),
       isGreen,
-      width: Math.max(3, chartWidth / data.length - 4)
+      width: Math.max(4, chartWidth / data.length - 6)
     }
   })
   
@@ -358,39 +357,6 @@ const svgPathAndCandles = computed(() => {
   return { linePath, areaPath, candles, gridLines }
 })
 
-// Option chain generation around active symbol price
-const optionChainData = computed(() => {
-  const sym = selectedSymbol.value.toUpperCase()
-  const isBtc = sym === 'BTC'
-  const centerStrike = isBtc ? 68000 : sym === 'SPY' ? 438 : sym === 'QQQ' ? 382 : 198
-  const strikeStep = isBtc ? 1000 : sym === 'SPY' ? 2 : sym === 'QQQ' ? 2 : 1
-  
-  const strikes = []
-  for (let i = -4; i <= 4; i++) {
-    strikes.push(centerStrike + i * strikeStep)
-  }
-  
-  return strikes.map(strike => {
-    const isCall = selectedOptionType.value === 'calls'
-    const distanceFromCenter = Math.abs(strike - centerStrike)
-    const iv = (30 + distanceFromCenter * (isBtc ? 0.05 : 1.2)).toFixed(1)
-    
-    // Bid / Ask calculations
-    let price = isBtc 
-      ? Math.max(100, 3200 - distanceFromCenter * 1.8) 
-      : Math.max(0.15, 8.50 - distanceFromCenter * 1.6)
-    if (!isCall && strike > centerStrike) price = price * 0.4
-    if (isCall && strike < centerStrike) price = price * 0.4
-    
-    const bid = price.toFixed(2)
-    const ask = (price + (isBtc ? 20 : 0.15)).toFixed(2)
-    const vol = Math.round(150 + Math.random() * 800 - distanceFromCenter * (isBtc ? 0.02 : 10))
-    const oi = ((10 + Math.random() * 40 - distanceFromCenter * 0.1) / 10).toFixed(1) + 'M'
-    
-    return { strike, bid, ask, iv, vol, oi }
-  })
-})
-
 const portfolioValue = computed(() => {
   const val = state.analyticsData?.performance?.total_value
   return val ? '$' + val.toLocaleString() : '$148,650'
@@ -404,7 +370,7 @@ const totalPnl = computed(() => {
     const formattedPct = pct != null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)` : ''
     return `${sign}$${pnl.toLocaleString()}${formattedPct}`
   }
-  return '+$1,420.50 (9.4%)'
+  return '+$3,450.78 (+12.5%)'
 })
 
 const isPnlPositive = computed(() => {
@@ -412,242 +378,199 @@ const isPnlPositive = computed(() => {
   return pnl != null ? pnl >= 0 : true
 })
 
-const marginUsed = computed(() => {
-  return '28%'
+const lastActionText = computed(() => {
+  const list = state.logs || []
+  const tradingLogs = list.filter(l => l.text && !l.text.includes('Heartbeat') && !l.text.includes('tick'))
+  return tradingLogs.length > 0 ? tradingLogs[tradingLogs.length - 1].text : 'Initialized agent loop'
 })
 </script>
 
 <template>
   <div class="cockpit-container">
     
-    <!-- Top Row: Metrics Cards -->
-    <div class="metrics-row">
-      <div class="metric-card card">
-        <span class="m-lbl">Portfolio Value</span>
-        <div class="m-val">{{ portfolioValue }}</div>
-        <span class="m-sub pnl-green">{{ totalPnl }}</span>
-      </div>
-      
-      <div class="metric-card card">
-        <span class="m-lbl">Margin Used</span>
-        <div class="m-val">{{ marginUsed }}</div>
-        <span class="m-sub">Capacity Limit: 80%</span>
-      </div>
-      
-      <div class="metric-card card">
-        <span class="m-lbl">VIX Index</span>
-        <div class="m-val">14.85</div>
-        <span class="m-sub text-green">● Calm Regime</span>
-      </div>
-      
-      <div class="metric-card card actions-card">
-        <span class="m-lbl">System Oversight</span>
-        <div class="sys-actions">
-          <button class="btn-ghost btn-config" @click="showSettingsDrawer = true" title="Configure System Parameters">
-            <Icon name="settings" :size="15" /> Configure Bot
-          </button>
+    <!-- Top Row: Full Width Wide-Screen Chart Card -->
+    <section class="card chart-card">
+      <div class="card-header">
+        <div class="chart-title-group">
+          <div class="symbol-title-row">
+            <span class="symbol-title">{{ selectedSymbol }} Index</span>
+            <select v-model="selectedSymbol" class="symbol-select">
+              <option v-for="sym in (state.watchlistData?.global_default || ['SPY', 'QQQ', 'BTC'])" :key="sym" :value="sym">
+                {{ sym }}
+              </option>
+            </select>
+          </div>
+          
+          <div class="chart-stats-row">
+            <div class="c-stat">
+              <span class="lbl">Current Price</span>
+              <span class="val" :class="{ 'text-green': activeSymbolPrice.isPositive, 'text-red': !activeSymbolPrice.isPositive }">
+                {{ activeSymbolPrice.value }}
+              </span>
+            </div>
+            <div class="c-stat">
+              <span class="lbl">24h Change</span>
+              <span class="val" :class="{ 'text-green': activeSymbolPrice.isPositive, 'text-red': !activeSymbolPrice.isPositive }">
+                {{ activeSymbolPrice.change }}
+              </span>
+            </div>
+            <div class="c-stat">
+              <span class="lbl">Volume</span>
+              <span class="val text-muted">$327.7M</span>
+            </div>
+            <div class="c-stat">
+              <span class="lbl">Volatility</span>
+              <span class="val text-green">+12.5%</span>
+            </div>
+          </div>
+        </div>
+        
+        <div class="btn-toggle-group">
+          <button class="btn-toggle-option" :class="{ active: chartPeriod === '30d' }" @click="chartPeriod = '30d'">30D</button>
+          <button class="btn-toggle-option" :class="{ active: chartPeriod === '60d' }" @click="chartPeriod = '60d'">60D</button>
         </div>
       </div>
-    </div>
+      
+      <div class="card-body chart-body">
+        <div class="svg-container">
+          <svg viewBox="0 0 940 260" class="neon-svg">
+            <!-- Grids -->
+            <line v-for="(g, idx) in svgPathAndCandles.gridLines" :key="idx" x1="0" :y1="g.y" x2="940" :y2="g.y" class="grid-line" />
+            
+            <!-- Close Price Gradient Area -->
+            <defs>
+              <linearGradient id="chartGlow" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--color-blue)" stop-opacity="0.25" />
+                <stop offset="100%" stop-color="var(--color-blue)" stop-opacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path :d="svgPathAndCandles.areaPath" fill="url(#chartGlow)" />
+            
+            <!-- Close Price Glowing Stroke -->
+            <path :d="svgPathAndCandles.linePath" fill="none" stroke="var(--color-blue)" stroke-width="2.5" class="glowing-line" />
+            
+            <!-- Candlestick Shadows & Bodies -->
+            <g v-for="(c, idx) in svgPathAndCandles.candles" :key="idx" class="candle-g">
+              <line :x1="c.cx" :y1="c.yHigh" :x2="c.cx" :y2="c.yLow" :stroke="c.isGreen ? 'var(--color-green)' : 'var(--color-red)'" stroke-width="1.2" />
+              <rect :x="c.cx - c.width/2" :y="c.yOpen" :width="c.width" :height="c.height" :fill="c.isGreen ? 'var(--color-green)' : 'var(--color-red)'" rx="1" />
+            </g>
+            
+            <!-- Price Labels -->
+            <text v-for="(g, idx) in svgPathAndCandles.gridLines" :key="'txt' + idx" x="895" :y="g.y - 4" class="grid-label">{{ g.label }}</text>
+          </svg>
+        </div>
+      </div>
+    </section>
 
-    <!-- Main Grid Layout -->
+    <!-- Bottom Row Layout -->
     <div class="primary-layout">
       
-      <!-- Left Column: Chart & Active Bot Status -->
-      <div class="left-column">
-        
-        <!-- Candlestick / Line Chart Card -->
-        <section class="card chart-card">
-          <div class="card-header">
-            <div class="chart-title-group">
-              <span class="symbol-title">{{ selectedSymbol }} Options</span>
-              <span class="symbol-price" :class="{ 'text-green': activeSymbolPrice.isPositive, 'text-red': !activeSymbolPrice.isPositive }">
-                {{ activeSymbolPrice.value }} ({{ activeSymbolPrice.change }})
-              </span>
+      <!-- Left Column: Active Bot Status -->
+      <section class="card bot-status-card">
+        <div class="card-header">
+          <span class="header-title">Active Bot Status</span>
+          <div class="status-summary-header">
+            <div class="pulse-dot" :class="{ running: state.status.hermes_running }"></div>
+            <span class="status-txt">{{ state.status.hermes_running ? 'RUNNING' : 'STOPPED' }}</span>
+          </div>
+        </div>
+        <div class="card-body bot-content">
+          <div class="bot-info-table">
+            <div class="bot-info-row">
+              <span class="lbl">Status</span>
+              <span class="val text-green" v-if="state.status.hermes_running">RUNNING</span>
+              <span class="val text-red" v-else>OFFLINE</span>
             </div>
             
-            <div class="chart-controls">
-              <select v-model="selectedSymbol" class="symbol-select">
-                <option v-for="sym in (state.watchlistData?.global_default || ['SPY', 'QQQ', 'BTC'])" :key="sym" :value="sym">
-                  {{ sym }}
-                </option>
-              </select>
-              <div class="btn-toggle-group">
-                <button class="btn-toggle-option" :class="{ active: chartPeriod === '30d' }" @click="chartPeriod = '30d'">30D</button>
-                <button class="btn-toggle-option" :class="{ active: chartPeriod === '60d' }" @click="chartPeriod = '60d'">60D</button>
-              </div>
+            <div class="bot-info-row">
+              <span class="lbl">Active Strategy</span>
+              <span class="val">Iron Condor</span>
+            </div>
+            
+            <div class="bot-info-row">
+              <span class="lbl">Pair</span>
+              <span class="val">{{ selectedSymbol }} Options</span>
+            </div>
+            
+            <div class="bot-info-row">
+              <span class="lbl">Profit/Loss</span>
+              <span class="val text-green" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
+            </div>
+            
+            <div class="bot-info-row">
+              <span class="lbl">Open Positions</span>
+              <span class="val">{{ state.analyticsData?.open_trades?.length || '4 Trades' }}</span>
+            </div>
+            
+            <div class="bot-info-row last-action-row">
+              <span class="lbl">Last Action</span>
+              <span class="val action-text" :title="lastActionText">{{ lastActionText }}</span>
             </div>
           </div>
           
-          <div class="card-body chart-body">
-            <div class="svg-container">
-              <svg viewBox="0 0 680 240" class="neon-svg">
-                <!-- Grids -->
-                <line v-for="(g, idx) in svgPathAndCandles.gridLines" :key="idx" x1="0" :y1="g.y" x2="680" :y2="g.y" class="grid-line" />
-                
-                <!-- Close Price Gradient Area -->
-                <defs>
-                  <linearGradient id="chartGlow" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stop-color="var(--color-blue)" stop-opacity="0.25" />
-                    <stop offset="100%" stop-color="var(--color-blue)" stop-opacity="0.0" />
-                  </linearGradient>
-                </defs>
-                <path :d="svgPathAndCandles.areaPath" fill="url(#chartGlow)" />
-                
-                <!-- Close Price Glowing Stroke -->
-                <path :d="svgPathAndCandles.linePath" fill="none" stroke="var(--color-blue)" stroke-width="2.5" class="glowing-line" />
-                
-                <!-- Candlestick Shadows & Bodies -->
-                <g v-for="(c, idx) in svgPathAndCandles.candles" :key="idx" class="candle-g">
-                  <line :x1="c.cx" :y1="c.yHigh" :x2="c.cx" :y2="c.yLow" :stroke="c.isGreen ? 'var(--color-green)' : 'var(--color-red)'" stroke-width="1" />
-                  <rect :x="c.cx - c.width/2" :y="c.yOpen" :width="c.width" :height="c.height" :fill="c.isGreen ? 'var(--color-green)' : 'var(--color-red)'" rx="1" />
-                </g>
-                
-                <!-- Price Labels -->
-                <text v-for="(g, idx) in svgPathAndCandles.gridLines" :key="'txt' + idx" x="635" :y="g.y - 4" class="grid-label">{{ g.label }}</text>
-              </svg>
-            </div>
-          </div>
-        </section>
-        
-        <!-- Active Bot Status Card -->
-        <section class="card bot-status-card">
-          <div class="card-header">
-            <span class="header-title">Active Bot Status</span>
-            <div class="status-summary-header">
-              <div class="pulse-dot" :class="{ running: state.status.hermes_running }"></div>
-              <span class="status-txt">{{ state.status.hermes_running ? 'RUNNING' : 'STOPPED' }}</span>
-            </div>
-          </div>
-          <div class="card-body bot-body-grid">
-            <div class="bot-info-details">
-              <div class="bot-title">QUANT-BOT v3.1</div>
-              <div class="bot-stat-row">
-                <span class="lbl">Current P/L</span>
-                <span class="val text-green" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
-              </div>
-              <div class="bot-stat-row">
-                <span class="lbl">Trades Executed</span>
-                <span class="val">45/60</span>
-              </div>
-              <div class="bot-stat-row">
-                <span class="lbl">Loop Heartbeat</span>
-                <span class="val">{{ state.status.hermes_last_seen_age_s != null ? Math.round(state.status.hermes_last_seen_age_s) + 's' : '—' }}</span>
-              </div>
-            </div>
-            
-            <div class="bot-sparklines">
-              <span class="spark-lbl">Recent Performance Log</span>
-              <div class="spark-container">
-                <svg viewBox="0 0 240 50" class="spark-svg">
-                  <!-- Simulated sparkline -->
-                  <path d="M 0 40 L 30 35 L 60 42 L 90 28 L 120 38 L 150 18 L 180 22 L 210 10 L 240 5" fill="none" stroke="var(--color-green)" stroke-width="2" />
-                  <path d="M 0 40 L 30 42 L 60 45 L 90 41 L 120 32 L 150 35 L 180 30 L 210 33 L 240 28" fill="none" stroke="var(--color-purple)" stroke-width="1.5" />
-                </svg>
-              </div>
-            </div>
-          </div>
-        </section>
-        
-      </div>
+          <button class="btn-primary w-full btn-configure-bot" @click="showSettingsDrawer = true">
+            <Icon name="settings" :size="14" /> CONFIGURE BOT
+          </button>
+        </div>
+      </section>
 
-      <!-- Right Column: Option Chain & Trade Queue -->
-      <div class="right-column">
+      <!-- Right Column: Pending Approvals Queue -->
+      <section class="card approvals-card">
+        <div class="card-header">
+          <div class="header-title">
+            <span>Pending Trade Approvals</span>
+            <span class="count-badge" v-if="state.approvals.pending.length">
+              {{ state.approvals.pending.length }}
+            </span>
+          </div>
+          <div class="actions">
+            <button class="btn-action-text btn-approve-text" @click="bulkDecide('approve')">Approve All</button>
+            <button class="btn-action-text btn-reject-text" @click="bulkDecide('reject')">Reject All</button>
+          </div>
+        </div>
         
-        <!-- Option Chain Card -->
-        <section class="card options-card">
-          <div class="card-header">
-            <span class="header-title">Option Chain ({{ selectedSymbol }})</span>
-            <div class="btn-toggle-group">
-              <button class="btn-toggle-option" :class="{ active: selectedOptionType === 'calls' }" @click="selectedOptionType = 'calls'">Calls</button>
-              <button class="btn-toggle-option" :class="{ active: selectedOptionType === 'puts' }" @click="selectedOptionType = 'puts'">Puts</button>
-            </div>
+        <div class="card-body no-padding queue-body">
+          <div v-if="state.approvals.pending.length === 0" class="empty-state">
+            <div class="empty-icon text-muted"><Icon name="check" :size="24" /></div>
+            <p class="empty-text">No pending trade entries.</p>
           </div>
-          <div class="card-body no-padding overflow-y">
-            <table class="tbl option-tbl">
-              <thead>
-                <tr>
-                  <th>Strike</th>
-                  <th>Bid</th>
-                  <th>Ask</th>
-                  <th>IV</th>
-                  <th>Vol</th>
-                  <th>OI</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="row in optionChainData" :key="row.strike" class="option-row">
-                  <td class="strike-col"><strong>{{ row.strike }}</strong></td>
-                  <td class="bid-col text-green">{{ row.bid }}</td>
-                  <td class="ask-col text-green">{{ row.ask }}</td>
-                  <td>{{ row.iv }}%</td>
-                  <td>{{ row.vol }}</td>
-                  <td>{{ row.oi }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-        
-        <!-- Pending Approvals Queue -->
-        <section class="card approvals-card">
-          <div class="card-header">
-            <div class="header-title">
-              <span>Pending Trade Approvals</span>
-              <span class="count-badge" v-if="state.approvals.pending.length">
-                {{ state.approvals.pending.length }}
-              </span>
-            </div>
-            <div class="actions">
-              <button class="btn-action-text btn-approve-text" @click="bulkDecide('approve')">Approve All</button>
-              <button class="btn-action-text btn-reject-text" @click="bulkDecide('reject')">Reject All</button>
-            </div>
-          </div>
-          
-          <div class="card-body no-padding queue-body">
-            <div v-if="state.approvals.pending.length === 0" class="empty-state">
-              <div class="empty-icon text-muted"><Icon name="check" :size="24" /></div>
-              <p class="empty-text">No pending trade entries.</p>
-            </div>
-            <div v-else class="dashboard-queue-list">
-              <div v-for="item in state.approvals.pending" :key="item.id" class="mini-trade-card">
-                <div class="mini-card-header">
-                  <span class="m-symbol">{{ item.symbol }}</span>
-                  <span class="m-strategy">{{ item.strategy_id }}</span>
-                  <span class="m-type" :class="item.action_type || 'entry'">
-                    {{ (item.action_type || 'entry').toUpperCase() }}
+          <div v-else class="dashboard-queue-list">
+            <div v-for="item in state.approvals.pending" :key="item.id" class="mini-trade-card">
+              <div class="mini-card-header">
+                <span class="m-symbol">{{ item.symbol }}</span>
+                <span class="m-strategy">{{ item.strategy_id }}</span>
+                <span class="m-type" :class="item.action_type || 'entry'">
+                  {{ (item.action_type || 'entry').toUpperCase() }}
+                </span>
+                <span class="m-age">{{ getRelativeTime(item.created_at) }}</span>
+              </div>
+              
+              <div class="mini-card-legs">
+                <div v-for="(leg, idx) in getLegsList(item.action_json)" :key="idx" class="mini-leg-row">
+                  <span class="mini-side" :class="{ buy: isBuyLeg(leg), sell: !isBuyLeg(leg) }">
+                    {{ (leg.side || leg.action || '').replace(/_/g, ' ').toUpperCase() }}
                   </span>
-                  <span class="m-age">{{ getRelativeTime(item.created_at) }}</span>
+                  <span class="mini-option">{{ leg.option_symbol || leg.symbol || '—' }}</span>
+                  <span class="mini-qty">×{{ leg.quantity || 1 }}</span>
                 </div>
-                
-                <div class="mini-card-legs">
-                  <div v-for="(leg, idx) in getLegsList(item.action_json)" :key="idx" class="mini-leg-row">
-                    <span class="mini-side" :class="{ buy: isBuyLeg(leg), sell: !isBuyLeg(leg) }">
-                      {{ (leg.side || leg.action || '').replace(/_/g, ' ').toUpperCase() }}
-                    </span>
-                    <span class="mini-option">{{ leg.option_symbol || leg.symbol || '—' }}</span>
-                    <span class="mini-qty">×{{ leg.quantity || 1 }}</span>
-                  </div>
-                </div>
-                
-                <div class="mini-card-meta">
-                  <span v-if="item.action_json?.price != null" class="m-price pnl-green">
-                    ${{ Math.abs(item.action_json.price).toFixed(2) }} {{ item.action_json.price >= 0 ? 'Cr' : 'Dr' }}
-                  </span>
-                  <span v-if="item.action_json?.dte != null" class="m-dte">{{ item.action_json.dte }} DTE</span>
-                </div>
-                
-                <div class="mini-card-actions">
-                  <input type="text" v-model="approvalNotes[item.id]" placeholder="Review notes..." class="mini-notes-input" />
-                  <button class="btn-approve btn-action-xs" @click="decide(item.id, 'approve', approvalNotes[item.id])">Approve</button>
-                  <button class="btn-reject btn-action-xs" @click="decide(item.id, 'reject', approvalNotes[item.id])">Reject</button>
-                </div>
+              </div>
+              
+              <div class="mini-card-meta">
+                <span v-if="item.action_json?.price != null" class="m-price pnl-green">
+                  ${{ Math.abs(item.action_json.price).toFixed(2) }} {{ item.action_json.price >= 0 ? 'Cr' : 'Dr' }}
+                </span>
+                <span v-if="item.action_json?.dte != null" class="m-dte">{{ item.action_json.dte }} DTE</span>
+              </div>
+              
+              <div class="mini-card-actions">
+                <input type="text" v-model="approvalNotes[item.id]" placeholder="Review notes..." class="mini-notes-input" />
+                <button class="btn-approve btn-action-xs" @click="decide(item.id, 'approve', approvalNotes[item.id])">Approve</button>
+                <button class="btn-reject btn-action-xs" @click="decide(item.id, 'reject', approvalNotes[item.id])">Reject</button>
               </div>
             </div>
           </div>
-        </section>
-        
-      </div>
+        </div>
+      </section>
       
     </div>
 
@@ -866,109 +789,28 @@ const marginUsed = computed(() => {
   width: 100%;
 }
 
-/* Metrics Row styling */
-.metrics-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
-}
-
-.metric-card {
-  padding: 18px 24px;
-  background: var(--surface-glass);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.m-lbl {
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-bold);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-}
-
-.m-val {
-  font-size: var(--fs-3xl);
-  font-weight: var(--fw-extrabold);
-  color: var(--text-primary);
-  line-height: 1.2;
-}
-
-.m-sub {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-}
-
-.actions-card {
-  justify-content: space-between;
-}
-
-.sys-actions {
-  margin-top: 8px;
-}
-
-.btn-config {
-  width: 100%;
-  justify-content: center;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.2);
-  color: var(--color-blue);
-  padding: 8px 12px;
-}
-.btn-config:hover {
-  background: rgba(59, 130, 246, 0.15);
-  box-shadow: 0 0 10px rgba(59, 130, 246, 0.1);
-}
-
-/* Primary Grid Layout */
-.primary-layout {
-  display: grid;
-  grid-template-columns: 1.8fr 1.2fr;
-  gap: 20px;
-  align-items: start;
-}
-
-@media (max-width: 1100px) {
-  .primary-layout {
-    grid-template-columns: 1fr;
-  }
-}
-
-.left-column, .right-column {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-/* Chart Card Styling */
+/* Primary Layout: Chart Card dominates top */
 .chart-card {
   background: var(--surface-glass);
+  width: 100%;
 }
 
 .chart-title-group {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  width: 80%;
+}
+
+.symbol-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .symbol-title {
   font-weight: var(--fw-bold);
   font-size: var(--fs-lg);
-}
-
-.symbol-price {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  margin-top: 2px;
-}
-
-.chart-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .symbol-select {
@@ -979,6 +821,31 @@ const marginUsed = computed(() => {
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   width: 90px;
+}
+
+.chart-stats-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.c-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.c-stat .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.03em;
+}
+
+.c-stat .val {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
 }
 
 .btn-toggle-group {
@@ -1015,7 +882,7 @@ const marginUsed = computed(() => {
 
 .svg-container {
   width: 100%;
-  max-width: 680px;
+  max-width: 940px;
   background: rgba(0, 0, 0, 0.2);
   border-radius: var(--radius-md);
   padding: 10px;
@@ -1034,7 +901,7 @@ const marginUsed = computed(() => {
 }
 
 .glowing-line {
-  filter: drop-shadow(0px 0px 5px rgba(59, 130, 246, 0.5));
+  filter: drop-shadow(0px 0px 5px rgba(59, 130, 246, 0.4));
 }
 
 .grid-label {
@@ -1042,6 +909,20 @@ const marginUsed = computed(() => {
   font-family: var(--font-mono);
   font-size: 10px;
   text-anchor: end;
+}
+
+/* Bottom Grid Layout */
+.primary-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .primary-layout {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* Bot Status Card Styling */
@@ -1080,109 +961,111 @@ const marginUsed = computed(() => {
   letter-spacing: var(--tracking-wide);
 }
 
-.bot-body-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+.bot-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
-@media (max-width: 600px) {
-  .bot-body-grid {
-    grid-template-columns: 1fr;
-  }
+.bot-info-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.bot-title {
-  font-size: var(--fs-lg);
-  font-weight: var(--fw-bold);
-  margin-bottom: 12px;
-  letter-spacing: -0.01em;
-}
-
-.bot-stat-row {
+.bot-info-row {
   display: flex;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  padding: 6px 0;
+  padding: 8px 0;
   font-size: var(--fs-sm);
 }
 
-.bot-stat-row:last-child {
-  border-bottom: none;
-}
-
-.bot-stat-row .lbl {
+.bot-info-row .lbl {
   color: var(--text-muted);
 }
 
-.bot-stat-row .val {
+.bot-info-row .val {
   font-weight: var(--fw-semibold);
 }
 
-.bot-sparklines {
-  display: flex;
+.last-action-row {
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  border-bottom: none;
 }
 
-.spark-lbl {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  font-weight: 600;
-}
-
-.spark-container {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: var(--radius-md);
-  padding: 8px;
-  border: 1px solid var(--border-color);
-  height: 60px;
-}
-
-.spark-svg {
-  width: 100%;
-  height: 100%;
-}
-
-/* Option Chain Card */
-.options-card {
-  height: 310px;
-  display: flex;
-  flex-direction: column;
-}
-
-.overflow-y {
-  overflow-y: auto;
-  flex-grow: 1;
-}
-
-.option-tbl th {
-  position: sticky;
-  top: 0;
-  background: #060913;
-  z-index: 5;
-}
-
-.option-row:hover td {
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.strike-col {
-  color: var(--text-primary);
+.action-text {
   font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  background: rgba(0,0,0,0.15);
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+.btn-configure-bot {
+  background: linear-gradient(135deg, var(--color-blue), var(--color-purple));
+  color: #ffffff;
+  border: none;
+  font-weight: 700;
+  padding: 10px;
+  letter-spacing: 0.05em;
+  box-shadow: 0 4px 15px rgba(139, 92, 246, 0.2);
+  transition: all 0.2s ease;
+}
+
+.btn-configure-bot:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.35);
 }
 
 /* Approvals Card Styling */
 .approvals-card {
-  flex-grow: 1;
+  max-height: 480px;
   display: flex;
   flex-direction: column;
-  max-height: 480px;
+  background: var(--surface-glass);
+}
+
+.count-badge {
+  background: var(--color-orange-glow);
+  color: var(--color-orange);
+  border: 1px solid rgba(249, 115, 22, 0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.no-padding {
+  padding: 0;
 }
 
 .queue-body {
   overflow-y: auto;
   flex-grow: 1;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  text-align: center;
+}
+
+.empty-icon {
+  margin-bottom: 8px;
+}
+
+.empty-text {
+  color: var(--text-muted);
+  font-size: 13px;
 }
 
 .dashboard-queue-list {
@@ -1296,6 +1179,28 @@ const marginUsed = computed(() => {
   border-radius: var(--radius-sm);
 }
 
+.btn-action-text {
+  background: transparent;
+  border: none;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.btn-approve-text {
+  color: var(--color-green);
+}
+.btn-approve-text:hover {
+  background: rgba(16, 185, 129, 0.1);
+}
+.btn-reject-text {
+  color: var(--color-red);
+}
+.btn-reject-text:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
 /* Sliding Settings Drawer */
 .settings-drawer-backdrop {
   position: fixed;
@@ -1389,8 +1294,299 @@ const marginUsed = computed(() => {
   flex-grow: 1;
 }
 
-/* Reuse existing log feed block */
+/* Logs and watchlist elements inside settings drawer */
+.lots-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+}
+
+.lots-box-title {
+  display: block;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.lots-box-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.lot-ctrl-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ctrl-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.num-adjuster {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: rgba(0,0,0,0.2);
+}
+
+.num-adjuster button {
+  background: transparent;
+  color: var(--text-primary);
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
+  padding: 0;
+  border: none;
+}
+
+.num-adjuster button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.num-adjuster input {
+  width: 36px;
+  height: 24px;
+  border: none;
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  background: transparent;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+  color: var(--text-primary);
+}
+
+.symbol-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sym-tag {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.editable-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.btn-remove-tag {
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  font-size: 9px;
+  padding: 2px;
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.btn-remove-tag:hover {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--color-red);
+}
+
+.add-symbol-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.add-symbol-input {
+  width: 180px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.btn-icon {
+  color: var(--text-muted);
+}
+
+.strategies-config {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.strategy-watchlist-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.strategy-sec-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.strategy-sec-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.strategy-sec-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.strategy-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.strategy-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.strat-info-toggle {
+  display: flex;
+  flex-direction: column;
+}
+.strat-name-toggle {
+  font-weight: 700;
+  font-size: 13px;
+}
+.strat-desc-toggle {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.status-grid-diag {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.diag-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+  padding-bottom: 6px;
+}
+.diag-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.diag-row span:first-child {
+  color: var(--text-muted);
+}
+.diag-row span:last-child {
+  font-weight: 600;
+}
+
 .log-feed {
-  max-height: 300px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.log-line {
+  margin-bottom: 2px;
+}
+.log-error {
+  color: var(--color-red);
+}
+.log-c2 {
+  color: var(--color-blue);
+}
+
+.tab-sec-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  border-left: 2px solid var(--color-blue);
+  padding-left: 8px;
+}
+
+.tab-sec-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.textarea-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.byte-count {
+  font-size: 10px;
+  font-weight: 400;
+  text-transform: none;
+}
+
+textarea {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.border-error {
+  border-color: var(--color-red) !important;
+}
+
+.text-red {
+  color: var(--color-red) !important;
+}
+.text-green {
+  color: var(--color-green) !important;
+}
+.text-orange {
+  color: var(--color-orange) !important;
+}
+
+.w-full {
+  width: 100%;
+}
+.w-half {
+  width: calc(50% - 6px);
 }
 </style>
