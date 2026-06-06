@@ -41,9 +41,10 @@ class WatchlistBody(BaseModel):
 
 @router.put("/api/watchlist/{strategy_id}")
 async def set_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]:
-    sid = strategy_id.upper()
-    if sid not in STRATEGY_PRIORITIES:
-        raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
+    _STRAT_PRIO_BY_UPPER = {k.upper(): k for k in STRATEGY_PRIORITIES}
+    sid = _STRAT_PRIO_BY_UPPER.get(strategy_id.upper())
+    if sid is None:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy_id}")
     cleaned = [s.strip().upper() for s in body.symbols if s.strip()]
     saved = await db.set_watchlist(sid, cleaned)
     await db.write_log("ENGINE", f"[C2] Watchlist updated for {sid}: {saved}")
@@ -53,9 +54,10 @@ async def set_watchlist(strategy_id: str, body: WatchlistBody) -> Dict[str, Any]
 @router.delete("/api/watchlist/{strategy_id}")
 async def reset_watchlist(strategy_id: str) -> Dict[str, Any]:
     """Clear per-strategy watchlist so it falls back to the global default."""
-    sid = strategy_id.upper()
-    if sid not in STRATEGY_PRIORITIES:
-        raise HTTPException(status_code=400, detail=f"Unknown strategy: {sid}")
+    _STRAT_PRIO_BY_UPPER = {k.upper(): k for k in STRATEGY_PRIORITIES}
+    sid = _STRAT_PRIO_BY_UPPER.get(strategy_id.upper())
+    if sid is None:
+        raise HTTPException(status_code=400, detail=f"Unknown strategy: {strategy_id}")
     await db.set_watchlist(sid, [])
     await db.write_log("ENGINE", f"[C2] Watchlist reset for {sid} — using global default")
     return {"strategy_id": sid, "symbols": [], "using_default": True}

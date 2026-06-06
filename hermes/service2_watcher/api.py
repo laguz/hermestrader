@@ -26,6 +26,7 @@ from contextlib import asynccontextmanager
 
 import os
 
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +50,7 @@ from .routes import (
 )
 
 logger = logging.getLogger("hermes.c2.api")
+
 
 
 @asynccontextmanager
@@ -128,8 +130,8 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Ensure assets directory exists to prevent FastAPI crash before Vite compilation
-(STATIC_DIR / "assets").mkdir(parents=True, exist_ok=True)
-app.mount("/assets", StaticFiles(directory=str(STATIC_DIR / "assets")), name="assets")
+(Path(STATIC_DIR) / "assets").mkdir(parents=True, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=str(Path(STATIC_DIR) / "assets")), name="assets")
 
 from hermes.mcp.server import mcp
 app.mount("/mcp", mcp.sse_app())

@@ -168,7 +168,8 @@ const STRAT_COLORS = {
   CS75: 'var(--color-blue)',
   CS7:  'var(--color-yellow)',
   TT45: 'var(--color-orange)',
-  WHEEL: 'var(--color-purple)'
+  WHEEL: 'var(--color-purple)',
+  HermesAlpha: 'var(--color-green)'
 }
 
 // Win rate circles parameters
@@ -301,7 +302,8 @@ const strategyLotMeta = computed(() => {
     CS75: { target: d.CS75?.target, max: d.CS75?.max },
     CS7:  { target: d.CS7?.target, max: d.CS7?.max },
     TT45: { target: d.TT45?.target, max: d.TT45?.max },
-    WHEEL: { max: d.WHEEL?.max }
+    WHEEL: { max: d.WHEEL?.max },
+    HermesAlpha: { max: d.HermesAlpha?.max }
   }
 })
 
@@ -925,6 +927,36 @@ function getMaxStrength(sym) {
           <div class="formula">Wanted Calls = min(shares/100, max_lots) − open_calls. Wanted Puts = max_lots − (open_calls + open_puts). Roll ITM if DTE &lt; 7.</div>
         </div>
       </div>
+
+      <!-- HermesAlpha Card -->
+      <div class="card logic-card">
+        <h3 class="logic-title">
+          <span class="p-pill pill-green">P5</span> HermesAlpha — Autonomous LLM Book
+        </h3>
+        <div class="logic-summary-row">
+          <div class="logic-summary-box">
+            <span class="l-lbl">Strategy Type</span>
+            <span class="l-val">Self-Directed LLM-Driven Setups</span>
+          </div>
+          <div class="logic-summary-box">
+            <span class="l-lbl">DTE Target Window</span>
+            <span class="l-val">Overseer Defined</span>
+          </div>
+          <div class="logic-summary-box">
+            <span class="l-lbl">Strike Selection</span>
+            <span class="l-val">LLM Discretionary</span>
+          </div>
+          <div class="logic-summary-box">
+            <span class="l-lbl">Max Lots</span>
+            <span class="l-val">{{ strategyLotMeta.HermesAlpha?.max ?? '—' }}</span>
+          </div>
+        </div>
+        <div class="logic-steps">
+          <div class="logic-step"><span class="step-num">1</span><span>Evaluates market structure, technical indicators, and option chain details through the LLM Overseer.</span></div>
+          <div class="logic-step"><span class="step-num">2</span><span>Selects custom credit spread or option structures based on the LLM's high-conviction ideas.</span></div>
+          <div class="formula">Runs autonomously when Autonomy is set to Autonomous. Sized within the alpha max lots threshold.</div>
+        </div>
+      </div>
     </div>
 
     <!-- TRADE HISTORY PANEL -->
@@ -1449,6 +1481,7 @@ function getMaxStrength(sym) {
 .pill-yellow { background: var(--color-yellow); }
 .pill-orange { background: var(--color-orange); }
 .pill-purple { background: var(--color-purple); }
+.pill-green { background: var(--color-green); }
 
 .logic-summary-row {
   display: flex;

@@ -45,8 +45,9 @@ class StrategyToggleBody(BaseModel):
 
 @router.put("/api/strategies/{strategy_id}")
 async def toggle_strategy(strategy_id: str, body: StrategyToggleBody) -> Dict[str, Any]:
-    sid = strategy_id.upper()
-    if sid not in STRATEGIES:
+    _STRATEGIES_BY_UPPER = {k.upper(): k for k in STRATEGIES}
+    sid = _STRATEGIES_BY_UPPER.get(strategy_id.upper())
+    if sid is None:
         raise HTTPException(
             status_code=404,
             detail=f"Unknown strategy {strategy_id!r}; valid: {list(STRATEGIES)}",
