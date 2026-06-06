@@ -1,6 +1,7 @@
 import unittest
 import sys
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 # Note: We must mock BEFORE the app is imported in the test methods
@@ -12,13 +13,14 @@ class TestSecurityCORS(unittest.TestCase):
         # Mock dependencies
         sys.modules["fastapi"] = MagicMock()
         sys.modules["fastapi.staticfiles"] = MagicMock()
+        sys.modules["fastapi.responses"] = MagicMock()
         cls.mock_cors = MagicMock()
         sys.modules["fastapi.middleware.cors"] = MagicMock()
         sys.modules["fastapi.middleware.cors"].CORSMiddleware = cls.mock_cors
 
         # Mock internal components
         mock_app_state = MagicMock()
-        mock_app_state.STATIC_DIR = "/tmp/static"
+        mock_app_state.STATIC_DIR = Path("/tmp/static")
         mock_app_state.db = MagicMock()
         sys.modules["hermes.service2_watcher._app_state"] = mock_app_state
 

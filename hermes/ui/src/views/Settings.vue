@@ -124,7 +124,8 @@ const LOT_META = {
   CS75: { hasTarget: true, targetDefault: 10, maxDefault: 10 },
   CS7:  { hasTarget: true, targetDefault: 10, maxDefault: 10 },
   TT45: { hasTarget: true, targetDefault: 5,  maxDefault: 5 },
-  WHEEL: { hasTarget: false, targetDefault: 5,  maxDefault: 5 }
+  WHEEL: { hasTarget: false, targetDefault: 5,  maxDefault: 5 },
+  HermesAlpha: { hasTarget: false, targetDefault: 1, maxDefault: 1 }
 }
 
 function adjustLotsLocal(sid, field, delta) {
@@ -202,7 +203,8 @@ const STRAT_DETAILS = {
   CS75: { name: 'CS75', prio: 1, desc: 'Credit Spreads 75 DTE' },
   CS7:  { name: 'CS7', prio: 2, desc: 'Credit Spreads 7 DTE' },
   TT45: { name: 'TT45', prio: 3, desc: 'TastyTrade 45 DTE' },
-  WHEEL: { name: 'WHEEL', prio: 4, desc: 'Wheel Strategy' }
+  WHEEL: { name: 'WHEEL', prio: 4, desc: 'Wheel Strategy' },
+  HermesAlpha: { name: 'HermesAlpha', prio: 5, desc: 'Self-Directed Strategy' }
 }
 
 function triggerUpdateInfo() {
@@ -269,10 +271,10 @@ function triggerUpdateInfo() {
           <p class="tab-sec-desc">Active pipelines tick on schedule. Disabled lines are bypassed.</p>
           
           <div class="strategy-toggles">
-            <div v-for="sid in ['CS75', 'CS7', 'TT45', 'WHEEL']" :key="sid" class="strategy-toggle-row">
+            <div v-for="sid in (state.watchlistData?.strategies || ['CS75', 'CS7', 'TT45', 'WHEEL', 'HermesAlpha'])" :key="sid" class="strategy-toggle-row">
               <div class="strat-info-toggle">
                 <span class="strat-name-toggle">{{ sid }}</span>
-                <span class="strat-desc-toggle">P{{ STRAT_DETAILS[sid].prio }} · {{ STRAT_DETAILS[sid].desc }}</span>
+                <span class="strat-desc-toggle">P{{ STRAT_DETAILS[sid]?.prio }} · {{ STRAT_DETAILS[sid]?.desc }}</span>
               </div>
               <label class="toggle">
                 <input type="checkbox" :checked="state.status.strategy_enabled?.[sid] !== false" @change="toggleStrategy(sid, $event.target.checked)" />
