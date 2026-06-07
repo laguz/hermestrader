@@ -125,10 +125,9 @@ async def test_stream_client_to_engine_flow():
             assert engine._quote_cache["AAPL"]["bid"] == "150.00"
             assert engine._quote_cache["AAPL"]["ask"] == "150.10"
 
-            # Verify strategy callbacks triggered
+            # Verify strategy callbacks triggered (exits are real-time, entries are periodic/not triggered)
             assert strategy.manage_positions_called is True
-            assert strategy.execute_entries_called is True
-            assert strategy.last_watchlist == ["AAPL"]
+            assert strategy.execute_entries_called is False
         finally:
             # Clean up
             await stream_client.stop()
