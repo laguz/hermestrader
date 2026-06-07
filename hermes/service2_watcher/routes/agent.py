@@ -29,6 +29,11 @@ router = APIRouter()
 async def pause_agent() -> Dict[str, Any]:
     await db.set_setting(SETTING_PAUSED, "true")
     await db.write_log("ENGINE", "[C2] Agent PAUSED by operator")
+    try:
+        from hermes.ipc import ipc
+        await ipc.publish("agent_commands", {"action": "sync_settings"})
+    except Exception:
+        pass
     return {"paused": True}
 
 
@@ -36,6 +41,11 @@ async def pause_agent() -> Dict[str, Any]:
 async def resume_agent() -> Dict[str, Any]:
     await db.set_setting(SETTING_PAUSED, "false")
     await db.write_log("ENGINE", "[C2] Agent RESUMED by operator")
+    try:
+        from hermes.ipc import ipc
+        await ipc.publish("agent_commands", {"action": "sync_settings"})
+    except Exception:
+        pass
     return {"paused": False}
 
 
@@ -44,6 +54,11 @@ async def trigger_ml_predictor() -> Dict[str, Any]:
     """Force the XGBoost background thread to retrain and predict immediately."""
     await db.set_setting("ml_force_run", "true")
     await db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
+    try:
+        from hermes.ipc import ipc
+        await ipc.publish("agent_commands", {"action": "trigger_ml"})
+    except Exception:
+        pass
     return {"status": "triggered"}
 
 
@@ -61,4 +76,9 @@ async def set_mode(body: ModeBody) -> Dict[str, Any]:
         )
     await db.set_setting(SETTING_MODE, m)
     await db.write_log("ENGINE", f"[C2] Mode switched to {m}")
+    try:
+        from hermes.ipc import ipc
+        await ipc.publish("agent_commands", {"action": "sync_settings"})
+    except Exception:
+        pass
     return {"mode": m}

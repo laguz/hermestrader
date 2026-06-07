@@ -273,3 +273,76 @@ class AsyncBrokerWrapper:
             if not isinstance(e, CircuitBreakerError):
                 await cb.record_failure(self.db, f"Order placement exception: {e}")
             raise
+
+    async def get_normalized_active_orders(self) -> List[Dict[str, Any]]:
+        """Fetch active orders and return them normalized for MoneyManager capacity checks.
+        Returns a list of dicts:
+            {
+                "strategy_id": str,
+                "symbol": str,
+                "side_type": "put" | "call" | "unknown",
+                "expiry_iso": "YYYY-MM-DD",
+                "lots": int
+            }
+        """
+        orders = await self.get_orders() or []
+        if not isinstance(orders, list):
+            logger.warning("[WRAPPER] get_orders returned non-list: %r", orders)
+            return []
+            
+        normalized = []
+        active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
+        from hermes.common import OCC_RE
+        
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            status = str(o.get("status", "")).lower()
+            if status not in active_statuses:
+                continue
+
+            tag = str(o.get("tag", "") or "")
+            # Tradier's tag sanitiser converts '_' to '-' so 'HERMES_CS75'
+            # arrives back as 'HERMES-CS75'. Normalise to hyphens/underscores for matching.
+            normalised_tag = tag.replace("_", "-")
+            if not normalised_tag.startswith("HERMES-"):
+                continue
+            strategy_id = normalised_tag[len("HERMES-"):].split("-", 1)[0]
+            if not strategy_id:
+                continue
+            symbol = str(o.get("symbol", "")).upper()
+
+            # Multileg orders return their legs under "leg"; single-leg option
+            # orders carry option_symbol at the top level (no "leg" array).
+            legs = o.get("leg") or []
+            if isinstance(legs, dict):
+                legs = [legs]
+            if not legs:
+                top_opt = o.get("option_symbol")
+                if top_opt:
+                    legs = [{"option_symbol": top_opt,
+                             "quantity": o.get("quantity", 1)}]
+
+            lots = int(o.get("quantity", 1) or 1)
+            side_type = "unknown"
+            expiry_iso = ""
+            for leg in legs:
+                occ_sym = str(leg.get("option_symbol", "") or "")
+                m = OCC_RE.match(occ_sym)
+                if not m:
+                    continue
+                side_type = "put" if m.group(3) == "P" else "call"
+                # OCC expiry is YYMMDD in group 2 → normalise to YYYY-MM-DD
+                yymmdd = m.group(2)
+                expiry_iso = f"20{yymmdd[0:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+                break
+
+            if side_type != "unknown":
+                normalized.append({
+                    "strategy_id": strategy_id,
+                    "symbol": symbol,
+                    "side_type": side_type,
+                    "expiry_iso": expiry_iso,
+                    "lots": lots
+                })
+        return normalized
