@@ -179,6 +179,12 @@ class ApprovalsRepositoryMixin:
             row.decided_at = datetime.utcnow()
             if notes:
                 row.notes = notes
+
+            # Zero-Latency Control Signaling: notify agent process of approval
+            if decision == "APPROVED" and hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
+                from sqlalchemy import text as sa_text
+                await s.execute(sa_text("NOTIFY hermes_approvals, 'trigger_approvals'"))
+
             await s.commit()
             return True
 

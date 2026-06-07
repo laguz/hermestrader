@@ -662,6 +662,35 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     return TradierBroker(cfg)
 
 
+async def _pg_listen_loop(db: HermesDB, trigger_event: threading.Event) -> None:
+    """Background listener task that awaits PostgreSQL LISTEN/NOTIFY events."""
+    if "postgresql" not in db.async_engine.dialect.name:
+        log.info("[PG-LISTEN] SQLite/Mock environment detected; skipping LISTEN channel.")
+        return
+
+    from sqlalchemy import text as sa_text
+    log.info("[PG-LISTEN] Starting PostgreSQL LISTEN loop on channel 'hermes_approvals'")
+    while True:
+        try:
+            async with db.async_engine.connect() as conn:
+                fairy = await conn.get_raw_connection()
+                driver_conn = fairy.driver_connection
+                
+                await conn.execute(sa_text("LISTEN hermes_approvals"))
+                await conn.commit()
+                
+                async for notify in driver_conn.notifies():
+                    log.info("[PG-LISTEN] Received notification: channel=%s, payload=%s", 
+                             notify.channel, notify.payload)
+                    trigger_event.set()
+        except asyncio.CancelledError:
+            log.info("[PG-LISTEN] Listener cancelled. Stopping.")
+            break
+        except Exception as exc:
+            log.error("[PG-LISTEN] Connection error: %s. Reconnecting in 5s...", exc)
+            await asyncio.sleep(5.0)
+
+
 # ---------------------------------------------------------------------------
 # Tick loop — re-reads the desired mode each iteration so the watcher's
 # toggle takes effect within one tick interval.
@@ -770,6 +799,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             _TRIGGER_EVENT.set()
 
     await ipc.subscribe("agent_commands", _ipc_callback)
+
+    # Start PostgreSQL LISTEN background loop
+    pg_listener_task = asyncio.create_task(_pg_listen_loop(db, _TRIGGER_EVENT))
 
     # Start Tradier WebSocket Stream Client
     from hermes.broker.tradier_stream import TradierStreamClient
@@ -1193,7 +1225,13 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             log.info("Agent loop detected shutdown signal. Exiting.")
             break
 
-    # Clean up stream client, overseer, event bus on exit
+    # Clean up stream client, pg listener, overseer, event bus on exit
+    if pg_listener_task:
+        pg_listener_task.cancel()
+        try:
+            await pg_listener_task
+        except asyncio.CancelledError:
+            pass
     if not is_mock:
         await stream_client.stop()
     if engine.overseer is not None:
