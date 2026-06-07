@@ -33,8 +33,42 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("hermes.agent.main")
 
-_SHUTDOWN_EVENT = threading.Event()
-_TRIGGER_EVENT = threading.Event()
+class ShutdownEvent(threading.Event):
+    def set(self) -> None:
+        super().set()
+        global _ASYNC_TRIGGER_EVENT
+        if _ASYNC_TRIGGER_EVENT is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(_ASYNC_TRIGGER_EVENT.set)
+            except RuntimeError:
+                pass
+
+
+class TriggerEvent(threading.Event):
+    def set(self) -> None:
+        super().set()
+        global _ASYNC_TRIGGER_EVENT
+        if _ASYNC_TRIGGER_EVENT is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(_ASYNC_TRIGGER_EVENT.set)
+            except RuntimeError:
+                pass
+
+
+_SHUTDOWN_EVENT = ShutdownEvent()
+_TRIGGER_EVENT = TriggerEvent()
+_ASYNC_TRIGGER_EVENT: Optional[asyncio.Event] = None
+
+
+def set_trigger() -> None:
+    """Trigger the agent loop to wake up immediately.
+    Sets both threading and asyncio events.
+    """
+    _TRIGGER_EVENT.set()
 
 # Settings keys shared with the watcher (see hermes/service2_watcher/api.py).
 SETTING_MODE = "hermes_mode"               # "paper" | "live"
@@ -662,7 +696,7 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     return TradierBroker(cfg)
 
 
-async def _pg_listen_loop(db: HermesDB, trigger_event: threading.Event) -> None:
+async def _pg_listen_loop(db: HermesDB, trigger_event) -> None:
     """Background listener task that awaits PostgreSQL LISTEN/NOTIFY events."""
     if "postgresql" not in db.async_engine.dialect.name:
         log.info("[PG-LISTEN] SQLite/Mock environment detected; skipping LISTEN channel.")
@@ -682,7 +716,10 @@ async def _pg_listen_loop(db: HermesDB, trigger_event: threading.Event) -> None:
                 async for notify in driver_conn.notifies():
                     log.info("[PG-LISTEN] Received notification: channel=%s, payload=%s", 
                              notify.channel, notify.payload)
-                    trigger_event.set()
+                    if callable(trigger_event):
+                        trigger_event()
+                    else:
+                        trigger_event.set()
         except asyncio.CancelledError:
             log.info("[PG-LISTEN] Listener cancelled. Stopping.")
             break
@@ -700,11 +737,14 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
 
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
+    global _ASYNC_TRIGGER_EVENT
+    _ASYNC_TRIGGER_EVENT = asyncio.Event()
+
     import signal
     def handle_signal(sig, frame):
         log.info("Received signal %s, setting shutdown event...", sig)
         _SHUTDOWN_EVENT.set()
-        _TRIGGER_EVENT.set()
+        set_trigger()
 
     try:
         signal.signal(signal.SIGINT, handle_signal)
@@ -786,22 +826,22 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         action = data.get("action")
         if action == "trigger_approvals":
             log.info("[IPC] Received trigger approvals signal")
-            _TRIGGER_EVENT.set()
+            set_trigger()
         elif action == "sync_settings":
             log.info("[IPC] Received sync settings signal")
-            _TRIGGER_EVENT.set()
+            set_trigger()
         elif action == "trigger_ml":
             log.info("[IPC] Received trigger ML signal")
             try:
                 await db.set_setting("ml_force_run", "true")
             except Exception:
                 pass
-            _TRIGGER_EVENT.set()
+            set_trigger()
 
     await ipc.subscribe("agent_commands", _ipc_callback)
 
     # Start PostgreSQL LISTEN background loop
-    pg_listener_task = asyncio.create_task(_pg_listen_loop(db, _TRIGGER_EVENT))
+    pg_listener_task = asyncio.create_task(_pg_listen_loop(db, set_trigger))
 
     # Start Tradier WebSocket Stream Client
     from hermes.broker.tradier_stream import TradierStreamClient
@@ -909,7 +949,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     log.exception("[C2-TRIGGER] Failed to process triggered approvals: %s", exc)
 
                 triggered = False
-                await _interruptible_sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 if _SHUTDOWN_EVENT.is_set():
                     log.info("Agent loop detected shutdown signal during trigger sleep. Exiting.")
                     break
@@ -1048,13 +1093,23 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 currently_paused=current_overseer_cfg["paused"], broker=broker,
             ):
                 current_overseer_cfg["paused"] = True
-                await _interruptible_sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             # 1d) Hard pause check
             if current_overseer_cfg["paused"]:
                 await db.write_log("ENGINE", f"heartbeat tick PAUSED mode={current_mode}")
-                await _interruptible_sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             # 1d-lot) Refresh per-strategy lot settings
@@ -1134,7 +1189,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} "
                     f"({mkt['et_date']} is not a trading day)"
                 )
-                await _interruptible_sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             if mkt["is_open"]:
@@ -1220,7 +1280,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             except Exception:                                     # noqa: BLE001
                 pass
 
-        await _interruptible_sleep(interval_s)
+        try:
+            await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            _ASYNC_TRIGGER_EVENT.clear()
         if _SHUTDOWN_EVENT.is_set():
             log.info("Agent loop detected shutdown signal. Exiting.")
             break
