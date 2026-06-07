@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, live ]
+  pull_request:
+    branches: [ main, live ]
+
+jobs:
+  test:
+    name: Run Linter and Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-ml.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-ml.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run Ruff Lint Check
+        run: |
+          ruff check --select E9,F63,F7,F82 hermes tests
+
+      - name: Run Pytest
+        run: |
+          pytest tests -q

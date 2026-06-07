@@ -13,6 +13,7 @@ the ``claude/fix-ml-feature-bugs`` PR:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Optional
 from types import SimpleNamespace
 
 import numpy as np

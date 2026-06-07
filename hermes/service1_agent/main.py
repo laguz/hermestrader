@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger("hermes.agent.main")
 
 _SHUTDOWN_EVENT = threading.Event()
+_TRIGGER_EVENT = threading.Event()
 
 # Settings keys shared with the watcher (see hermes/service2_watcher/api.py).
 SETTING_MODE = "hermes_mode"               # "paper" | "live"
@@ -66,6 +67,15 @@ SETTING_MAX_DAILY_LOSS = "max_daily_loss"
 # Key pattern: "strategy_{id}_enabled"  value: "true" | "false"
 def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
+
+
+async def _interruptible_sleep(seconds: float) -> None:
+    """Sleep that wakes up immediately on shutdown or trigger signals."""
+    steps = int(seconds * 10)
+    for _ in range(steps):
+        if _SHUTDOWN_EVENT.is_set() or _TRIGGER_EVENT.is_set():
+            break
+        await asyncio.sleep(0.1)
 
 
 async def _cache_prewarm_loop(broker_getter, db, conf):
@@ -755,8 +765,13 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     _CB_COOLDOWN_S = 300       # seconds to wait before re-attempting
     _cb_fail_count = 0
     _cb_tripped_at: float = 0.0
+    triggered = False
 
     while True:
+        if _TRIGGER_EVENT.is_set():
+            triggered = True
+            _TRIGGER_EVENT.clear()
+
         # Circuit breaker
         if _cb_fail_count >= _CB_THRESHOLD:
             if _cb_tripped_at == 0.0:
@@ -787,6 +802,44 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             log.info("[CIRCUIT BREAKER] cooldown elapsed — resuming tick loop")
 
         try:
+            if triggered:
+                log.info("[C2-TRIGGER] Waking up early to execute manual approvals")
+                try:
+                    desired_mode = (await db.get_setting(SETTING_MODE) or current_mode).lower()
+                    if desired_mode not in VALID_MODES:
+                        desired_mode = current_mode
+                    if desired_mode != current_mode:
+                        log.warning("mode change requested during trigger: %s → %s", current_mode, desired_mode)
+                        broker = _build_broker(conf, desired_mode)
+                        from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+                        AsyncBrokerWrapper.clear_cache()
+                        engine = build(broker, current_llm, chart_provider, conf,
+                                       vision_enabled=current_vision,
+                                       autonomy=current_overseer_cfg["autonomy"],
+                                       soul=current_overseer_cfg["soul"],
+                                       approval_mode=current_overseer_cfg["approval_mode"],
+                                       strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                                       event_bus=event_bus)
+                        current_mode = desired_mode
+                        await db.write_log("ENGINE", f"mode switched to {current_mode}")
+
+                    approved = await db.fetch_approved_actions()
+                    if approved:
+                        log.info("[C2-TRIGGER] Executing %d approved action(s)", len(approved))
+                        for item in approved:
+                            await _execute_approved_action(item, broker=broker, db=db)
+                    else:
+                        log.info("[C2-TRIGGER] No approved actions found in queue")
+                except Exception as exc:
+                    log.exception("[C2-TRIGGER] Failed to process triggered approvals: %s", exc)
+
+                triggered = False
+                await _interruptible_sleep(interval_s)
+                if _SHUTDOWN_EVENT.is_set():
+                    log.info("Agent loop detected shutdown signal during trigger sleep. Exiting.")
+                    break
+                continue
+
             # 1) Mode reconciliation — pick up any toggle the watcher made.
             desired_mode = (await db.get_setting(SETTING_MODE) or current_mode).lower()
             if desired_mode not in VALID_MODES:
@@ -918,13 +971,13 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 currently_paused=current_overseer_cfg["paused"], broker=broker,
             ):
                 current_overseer_cfg["paused"] = True
-                await asyncio.sleep(interval_s)
+                await _interruptible_sleep(interval_s)
                 continue
 
             # 1d) Hard pause check
             if current_overseer_cfg["paused"]:
                 await db.write_log("ENGINE", f"heartbeat tick PAUSED mode={current_mode}")
-                await asyncio.sleep(interval_s)
+                await _interruptible_sleep(interval_s)
                 continue
 
             # 1d-lot) Refresh per-strategy lot settings
@@ -1004,7 +1057,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} "
                     f"({mkt['et_date']} is not a trading day)"
                 )
-                await asyncio.sleep(interval_s)
+                await _interruptible_sleep(interval_s)
                 continue
 
             if mkt["is_open"]:
@@ -1090,13 +1143,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             except Exception:                                     # noqa: BLE001
                 pass
 
-        # Incremental sleep to check for shutdown signals
-        slept = 0
-        while slept < interval_s:
-            if _SHUTDOWN_EVENT.is_set():
-                break
-            await asyncio.sleep(1)
-            slept += 1
+        await _interruptible_sleep(interval_s)
         if _SHUTDOWN_EVENT.is_set():
             log.info("Agent loop detected shutdown signal. Exiting.")
             break
