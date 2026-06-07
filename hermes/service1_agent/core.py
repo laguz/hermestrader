@@ -19,7 +19,7 @@ import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence
 
-from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent, MarketDataEvent
+from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent, MarketDataEvent, OrderFillEvent
 
 # Re-exported for backwards compatibility. These classes were split out of
 # this module into focused siblings; importing them here keeps the public
@@ -84,6 +84,7 @@ class CascadingEngine:
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
+            self.event_bus.subscribe(OrderFillEvent, self.handle_order_fill)
 
     # 1
     async def sync_positions(self) -> None:
@@ -167,6 +168,40 @@ class CascadingEngine:
         total_entries = 0
         max_per_tick = int(self.config.get("max_orders_per_tick", 5))
         tick_submitted = 0
+
+        if self.config.get("portfolio_optimization"):
+            # Gather proposed actions across all strategies first
+            all_proposed_actions = []
+            for s in self.strategies:
+                try:
+                    wl = await self._watchlist_for(s.strategy_id, unique_watchlist)
+                    actions = await s.execute_entries(wl)
+                    all_proposed_actions.extend(actions)
+                except Exception as exc:
+                    logger.exception("Entry proposal failure in %s: %s", s.NAME, exc)
+
+            if not all_proposed_actions:
+                return 0
+
+            avail_bp = await self.mm.true_available_bp()
+            optimized_actions = await self.mm.optimize_allocation(all_proposed_actions, avail_bp)
+
+            if len(optimized_actions) > max_per_tick:
+                logger.warning(
+                    "[ENGINE] Optimized entries generated %d actions; trimming to %d (max_orders_per_tick=%d)",
+                    len(optimized_actions), max_per_tick, max_per_tick,
+                )
+                for a in optimized_actions[max_per_tick:]:
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[GUARD] {a.symbol} entry trimmed due to max_orders_per_tick={max_per_tick}"
+                    )
+                optimized_actions = optimized_actions[:max_per_tick]
+
+            await self.submit(optimized_actions, action_type="entry")
+            if optimized_actions:
+                await self.mm.sync_broker_orders()
+            return len(optimized_actions)
 
         for s in self.strategies:
             try:
@@ -744,6 +779,11 @@ class CascadingEngine:
         """Evaluates strategies reactively when a new MarketDataEvent is received."""
         symbol = event.symbol
         
+        # Get old price from cache if it exists
+        old_price = None
+        if symbol in self._quote_cache:
+            old_price = self._quote_cache[symbol].get("price")
+
         # Update quote cache
         self._quote_cache[symbol] = {
             "price": event.price,
@@ -772,5 +812,122 @@ class CascadingEngine:
         if mgmt_actions:
             await self.submit(mgmt_actions, action_type="management")
 
-        # Note: Phase 3 decoupling: entries do not run on real-time market data events.
-        # They are processed periodically in the cascading tick loop to avoid broker spam.
+        # Check support/resistance crossing for entries
+        if old_price is not None and old_price != event.price:
+            try:
+                analysis = await self.broker.analyze_symbol(symbol)
+                key_levels = analysis.get("key_levels", [])
+            except Exception as exc:
+                logger.exception("Failed to analyze symbol %s on market data event: %s", symbol, exc)
+                key_levels = []
+
+            crossed = False
+            new_price = event.price
+            for lvl in key_levels:
+                price_level = lvl.get("price")
+                if price_level is not None:
+                    if (old_price < price_level <= new_price) or (old_price > price_level >= new_price):
+                        crossed = True
+                        logger.info(
+                            "[ENGINE] Price crossed support/resistance level %f for %s (old: %f, new: %f)",
+                            price_level, symbol, old_price, new_price,
+                        )
+                        break
+
+            if crossed:
+                try:
+                    await self.process_reactive_entries(symbol)
+                except Exception as exc:
+                    logger.exception("Failed to process reactive entries for %s: %s", symbol, exc)
+
+    async def handle_order_fill(self, event: OrderFillEvent) -> None:
+        """Reactively handles order fills by syncing positions and orders immediately."""
+        logger.info(
+            "[ENGINE] Order fill event received for order %s (%s %d shares/contracts of %s)",
+            event.broker_order_id, event.side, event.quantity, event.symbol,
+        )
+        try:
+            await self.sync_positions()
+        except Exception as exc:
+            logger.exception("[ENGINE] Failed to sync positions on order fill event: %s", exc)
+
+        try:
+            if self.mm is not None:
+                await self.mm.sync_broker_orders()
+        except Exception as exc:
+            logger.exception("[ENGINE] Failed to sync broker orders on order fill event: %s", exc)
+
+        try:
+            await self.reconcile_orphans()
+        except Exception as exc:
+            logger.exception("[ENGINE] Failed to reconcile orphans on order fill event: %s", exc)
+
+    async def process_reactive_entries(self, symbol: str) -> None:
+        """Executes entries reactively for a single symbol that crossed support/resistance.
+        Ensures the symbol is in each strategy's watchlist before executing.
+        """
+        strategies_to_run = []
+        for s in self.strategies:
+            wl = await self._watchlist_for(s.strategy_id, [symbol])
+            if symbol in wl:
+                strategies_to_run.append(s)
+
+        if not strategies_to_run:
+            return
+
+        max_per_tick = int(self.config.get("max_orders_per_tick", 5))
+
+        if self.config.get("portfolio_optimization"):
+            # Gather proposed actions across matching strategies
+            all_proposed_actions = []
+            for s in strategies_to_run:
+                try:
+                    actions = await s.execute_entries([symbol])
+                    all_proposed_actions.extend(actions)
+                except Exception as exc:
+                    logger.exception("Reactive entry proposal failure in %s for %s: %s", s.NAME, symbol, exc)
+
+            if not all_proposed_actions:
+                return
+
+            avail_bp = await self.mm.true_available_bp()
+            optimized_actions = await self.mm.optimize_allocation(all_proposed_actions, avail_bp)
+
+            if len(optimized_actions) > max_per_tick:
+                logger.warning(
+                    "[ENGINE] Reactive optimized entries generated %d actions; trimming to %d (max_orders_per_tick=%d)",
+                    len(optimized_actions), max_per_tick, max_per_tick,
+                )
+                for a in optimized_actions[max_per_tick:]:
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[GUARD] {a.symbol} reactive entry trimmed due to max_orders_per_tick={max_per_tick}"
+                    )
+                optimized_actions = optimized_actions[:max_per_tick]
+
+            await self.submit(optimized_actions, action_type="entry")
+            if optimized_actions:
+                await self.mm.sync_broker_orders()
+        else:
+            tick_submitted = 0
+            for s in strategies_to_run:
+                try:
+                    if tick_submitted >= max_per_tick:
+                        logger.warning(
+                            "[ENGINE] max_orders_per_tick=%d reached during reactive entries; skipping %s",
+                            max_per_tick, s.NAME,
+                        )
+                        break
+
+                    actions = await s.execute_entries([symbol])
+                    remaining = max_per_tick - tick_submitted
+                    if len(actions) > remaining:
+                        actions = actions[:remaining]
+
+                    await self.submit(actions, action_type="entry")
+                    tick_submitted += len(actions)
+
+                    if actions:
+                        await self.mm.sync_broker_orders()
+                except Exception as exc:
+                    logger.exception("Reactive entry failure in %s for %s: %s", s.NAME, symbol, exc)

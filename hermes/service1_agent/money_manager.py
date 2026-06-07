@@ -22,6 +22,15 @@ from .trade_action import TradeAction
 logger = logging.getLogger("hermes.agent.money_manager")
 
 
+def parse_occ_strike(symbol: str) -> Optional[float]:
+    """Parse the strike price from an OCC option symbol."""
+    m = OCC_RE.match(symbol or "")
+    if not m:
+        return None
+    _, _, _, strike_str = m.groups()
+    return float(strike_str) / 1000.0
+
+
 # ---------------------------------------------------------------------------
 # MoneyManager — true available BP, dynamic scaling, side-aware sizing
 # ---------------------------------------------------------------------------
@@ -147,7 +156,9 @@ class MoneyManager:
                 "scale_quantity requires an expiry (YYYY-MM-DD); capacity "
                 "is always enforced per option chain."
             )
-        if requirement_per_lot <= 0.0:
+        if self.config.get("portfolio_optimization"):
+            bp_cap = 999_999
+        elif requirement_per_lot <= 0.0:
             bp_cap = 999_999
         else:
             bp_cap = await self.max_affordable_contracts(requirement_per_lot)
@@ -183,6 +194,173 @@ class MoneyManager:
                 f"(bp_cap={bp_cap} side_cap={side_cap})",
             )
         return max(0, scaled)
+
+    async def optimize_allocation(self, actions: List[TradeAction], avail_bp: float) -> List[TradeAction]:
+        """Globally allocate lots across all proposed entries using fractional Kelly allocation.
+
+        Formula:
+          Score_i = max(0.01, 1.0 - (1.0 - POP_i) * (width_i / credit_i))
+        """
+        if not actions:
+            return []
+
+        kelly_fraction = self.config.get("kelly_fraction", 0.5)
+        
+        # 1. Calculate parameters and scores for all actions
+        actions_with_info = []
+        free_actions = []
+
+        for action in actions:
+            # Determine requested lots
+            requested_lots = action.quantity
+            if action.order_class == "multileg" and action.legs:
+                requested_lots = action.legs[0].get("quantity", 1)
+
+            if requested_lots <= 0:
+                continue
+
+            # POP
+            pop = action.strategy_params.get("pop")
+            if pop is None:
+                delta = action.strategy_params.get("delta") or action.strategy_params.get("short_delta")
+                if delta is not None:
+                    pop = 1.0 - abs(float(delta))
+                else:
+                    strat = (action.strategy_id or "").upper()
+                    if "CS75" in strat:
+                        pop = 0.75
+                    elif "CS7" in strat:
+                        pop = 0.75
+                    elif "TT45" in strat:
+                        pop = 0.84
+                    elif "WHEEL" in strat:
+                        pop = 0.60
+                    else:
+                        pop = 0.70
+            pop = float(pop)
+
+            # Credit (price per lot)
+            credit = float(action.price or 0.01)
+
+            # Width & Margin per lot
+            width = action.width
+            margin_per_lot = 0.0
+
+            if action.order_class == "multileg":
+                if width is None:
+                    # Parse width from legs if missing
+                    strikes = []
+                    for leg in action.legs:
+                        opt_sym = leg.get("option_symbol")
+                        if opt_sym:
+                            strike = parse_occ_strike(opt_sym)
+                            if strike is not None:
+                                strikes.append(strike)
+                    if len(strikes) >= 2:
+                        width = abs(strikes[0] - strikes[1])
+                    else:
+                        # Fallback default width
+                        strat = (action.strategy_id or "").upper()
+                        if "CS7" in strat:
+                            width = 1.0
+                        else:
+                            width = 5.0
+                margin_per_lot = width * 100.0
+            elif action.order_class == "option":
+                # Single option. Determine if PUT or CALL from legs or OCC
+                is_put = False
+                strike = None
+                if action.legs:
+                    opt_sym = action.legs[0].get("option_symbol")
+                    if opt_sym:
+                        strike = parse_occ_strike(opt_sym)
+                        m = OCC_RE.match(opt_sym)
+                        if m:
+                            _, _, pc, _ = m.groups()
+                            is_put = (pc == "P")
+                if not is_put:
+                    side_type = action.strategy_params.get("side_type")
+                    if side_type:
+                        is_put = (side_type.lower() == "put")
+                
+                if is_put:
+                    if strike is None:
+                        strike = 100.0
+                    width = strike
+                    margin_per_lot = strike * 100.0
+                else:
+                    width = 0.0
+                    margin_per_lot = 0.0
+            elif action.order_class == "equity":
+                margin_per_lot = credit * 100.0
+                width = credit
+
+            # If margin per lot is 0, it doesn't consume BP. Allocate full requested.
+            if margin_per_lot <= 0.0:
+                free_actions.append((action, requested_lots))
+                continue
+
+            # Compute Kelly Score
+            if credit <= 0:
+                score = 0.01
+            else:
+                score = max(0.01, 1.0 - (1.0 - pop) * (width / credit))
+
+            actions_with_info.append((action, score, margin_per_lot, pop, credit, requested_lots))
+
+        # 2. Sort actions by score, credit, pop (descending)
+        sorted_actions = sorted(actions_with_info, key=lambda item: (-item[1], -item[4], -item[3]))
+
+        # 3. Sequentially allocate lots based on remaining BP and Kelly targets
+        remaining_bp = avail_bp
+        allocated_actions = []
+
+        # Add all free actions first
+        for action, requested_lots in free_actions:
+            action.quantity = requested_lots
+            for leg in action.legs:
+                leg["quantity"] = requested_lots
+            allocated_actions.append(action)
+
+        for action, score, margin_per_lot, pop, credit, requested_lots in sorted_actions:
+            # Fractional Kelly target margin = kelly_fraction * score * avail_bp
+            target_margin = kelly_fraction * score * avail_bp
+            target_lots = int(round(target_margin, 2) // margin_per_lot)
+
+            # Clamp by requested_lots and remaining BP
+            allocated_lots = min(requested_lots, target_lots)
+            max_affordable = int(round(remaining_bp, 2) // margin_per_lot)
+            allocated_lots = min(allocated_lots, max_affordable)
+
+            if allocated_lots > 0:
+                action.quantity = allocated_lots
+                for leg in action.legs:
+                    leg["quantity"] = allocated_lots
+                allocated_actions.append(action)
+                remaining_bp -= allocated_lots * margin_per_lot
+                logger.info(
+                    "[MM-OPT] Allocated %d lots to %s (%s) — score=%.4f margin/lot=%.2f credit=%.2f remaining_bp=%.2f",
+                    allocated_lots, action.symbol, action.strategy_id, score, margin_per_lot, credit, remaining_bp
+                )
+                await self.db.write_log(
+                    action.strategy_id,
+                    f"[MM-OPT] Allocated {allocated_lots} lots to {action.symbol} (requested {requested_lots}) "
+                    f"via Kelly Optimizer (score={score:.2f}, margin/lot=${margin_per_lot:,.0f})"
+                )
+            else:
+                reason = "insufficient remaining BP" if max_affordable == 0 else f"Kelly score sizing target lots was 0 (target_margin={target_margin:.2f})"
+                logger.info(
+                    "[MM-OPT] Skipped %s (%s) — %s (score=%.4f target_lots=%d requested=%d remaining_bp=%.2f)",
+                    action.symbol, action.strategy_id, reason, score, target_lots, requested_lots, remaining_bp
+                )
+                await self.db.write_log(
+                    action.strategy_id,
+                    f"[MM-OPT] BLOCKED {action.symbol} entry: {reason} — 0 lots allocated"
+                )
+
+        return allocated_actions
+
+
 
 
 # ---------------------------------------------------------------------------

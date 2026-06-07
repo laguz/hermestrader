@@ -133,8 +133,8 @@ class AbstractStrategy(ABC):
                 return exp
         return None
 
-    def find_strike_by_delta(self, chain, option_type: str, target_delta: float,
-                             tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
+    async def find_strike_by_delta(self, chain, option_type: str, target_delta: float,
+                                   tolerance: float = 0.05) -> Optional[Dict[str, Any]]:
         best, best_diff = None, math.inf
         for o in chain:
             if o.get("option_type") != option_type:
@@ -143,6 +143,39 @@ class AbstractStrategy(ABC):
             # guard with `or {}` so we treat missing greeks as delta=0.0
             greeks = o.get("greeks") or {}
             raw_delta = greeks.get("delta")
+            
+            # Fallback to local Greeks calculation if broker delta is missing
+            if raw_delta is None:
+                from hermes.service1_agent.strategies._helpers import parse_occ
+                from hermes.greeks import implied_volatility, black_scholes_greeks
+                
+                occ_info = parse_occ(o.get("symbol", ""))
+                if occ_info:
+                    symbol = occ_info["underlying"]
+                    expiry_date = occ_info["expiry"]
+                    strike = float(o.get("strike") or 0)
+                    
+                    try:
+                        quotes = await self.broker.get_quote(symbol)
+                        if quotes:
+                            spot = float(quotes[0].get("last") or quotes[0].get("close") or 0)
+                            if spot > 0:
+                                today = self.today()
+                                dte = (expiry_date - today).days
+                                T = dte / 365.0
+                                if T > 0:
+                                    bid = float(o.get("bid") or 0)
+                                    ask = float(o.get("ask") or 0)
+                                    if bid > 0 and ask > 0:
+                                        mid = (bid + ask) / 2.0
+                                        # Solve for implied volatility, then compute delta
+                                        sigma = implied_volatility(mid, spot, strike, T, 0.05, option_type)
+                                        if sigma > 0:
+                                            local_greeks = black_scholes_greeks(spot, strike, T, 0.05, sigma, option_type)
+                                            raw_delta = local_greeks.get("delta")
+                    except Exception:
+                        pass
+
             if raw_delta is None:
                 continue          # skip options with no greek data at all
             d = abs(float(raw_delta))
