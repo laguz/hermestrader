@@ -772,17 +772,5 @@ class CascadingEngine:
         if mgmt_actions:
             await self.submit(mgmt_actions, action_type="management")
 
-        # Run entries for this symbol across strategies in priority order
-        for s in self.strategies:
-            try:
-                wl = await self._watchlist_for(s.strategy_id, [symbol])
-                if symbol not in wl:
-                    continue
-                
-                actions = await s.execute_entries([symbol])
-                if actions:
-                    await self.submit(actions, action_type="entry")
-                    if self.mm is not None:
-                        await self.mm.sync_broker_orders()
-            except Exception as exc:
-                logger.exception("Entry failure in %s for %s: %s", s.NAME, symbol, exc)
+        # Note: Phase 3 decoupling: entries do not run on real-time market data events.
+        # They are processed periodically in the cascading tick loop to avoid broker spam.
