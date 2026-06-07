@@ -122,33 +122,55 @@ async def test_find_expiry_skips_invalid_dates():
 
 
 # ── find_strike_by_delta ─────────────────────────────────────────────────────
-def test_find_strike_by_delta_picks_closest_within_tolerance():
+async def test_find_strike_by_delta_picks_closest_within_tolerance():
     chain = make_chain("AAPL", "2025-06-20", spot=100.0)
     s = _make_strategy()
     # Target 0.16 delta puts. Synthetic chain has linear delta, so a strike
     # near $87 should produce |Δ| ~ 0.16.
-    pick = s.find_strike_by_delta(chain, "put", target_delta=0.16, tolerance=0.05)
+    pick = await s.find_strike_by_delta(chain, "put", target_delta=0.16, tolerance=0.05)
     assert pick is not None
     actual_delta = abs(float(pick["greeks"]["delta"]))
     assert abs(actual_delta - 0.16) <= 0.05
 
 
-def test_find_strike_by_delta_skips_options_with_no_greeks():
+async def test_find_strike_by_delta_skips_options_with_no_greeks():
     """Tradier returns greeks=None for deep OTM / illiquid options."""
     chain = [
         {"option_type": "put", "strike": 90.0, "greeks": None},
         {"option_type": "put", "strike": 91.0, "greeks": {"delta": -0.16}},
     ]
     s = _make_strategy()
-    pick = s.find_strike_by_delta(chain, "put", target_delta=0.16, tolerance=0.05)
+    pick = await s.find_strike_by_delta(chain, "put", target_delta=0.16, tolerance=0.05)
     assert pick is not None
     assert pick["strike"] == 91.0
 
 
-def test_find_strike_by_delta_returns_none_when_outside_tolerance():
+async def test_find_strike_by_delta_returns_none_when_outside_tolerance():
     chain = [{"option_type": "put", "strike": 90.0, "greeks": {"delta": -0.50}}]
     s = _make_strategy()
-    assert s.find_strike_by_delta(chain, "put", 0.16, tolerance=0.05) is None
+    assert await s.find_strike_by_delta(chain, "put", 0.16, tolerance=0.05) is None
+
+
+async def test_find_strike_by_delta_local_fallback():
+    expiry_date = date.today() + timedelta(days=30)
+    yymmdd = expiry_date.strftime("%y%m%d")
+    occ = f"AAPL{yymmdd}P00090000"
+    
+    chain = [
+        {
+            "symbol": occ,
+            "option_type": "put",
+            "strike": 90.0,
+            "bid": 1.10,
+            "ask": 1.20,
+            "greeks": None,
+        }
+    ]
+    s = _make_strategy()
+    pick = await s.find_strike_by_delta(chain, "put", target_delta=0.20, tolerance=0.15)
+    assert pick is not None
+    assert pick["strike"] == 90.0
+
 
 
 # ── short_credit ─────────────────────────────────────────────────────────────

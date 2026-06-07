@@ -55,6 +55,20 @@ class HermesOverseer:
         self._queue: Optional[asyncio.Queue[ReviewRequestEvent]] = None
         self._worker_task: Optional[asyncio.Task] = None
 
+    async def _chat_with_timeout(self, messages: List[Dict[str, str]], images: List[Any] = None) -> str:
+        """Call the LLM with a strict timeout gate to prevent hanging."""
+        timeout_val = getattr(self.llm, "timeout_s", 15.0)
+        # Safeguard: if self.llm is a MagicMock, getattr returns a mock object, which is not a float/int
+        if not isinstance(timeout_val, (int, float)):
+            timeout_s = 15.0
+        else:
+            timeout_s = timeout_val or 15.0
+
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.llm.chat, messages, images=images or []),
+            timeout=timeout_s
+        )
+
     async def get_system_prompt(self) -> str:
         """Base instructions + market session context + operator doctrine + strategy metrics."""
         try:
@@ -195,8 +209,7 @@ class HermesOverseer:
             "{closes: [{trade_id: int, rationale: str}, ...]}."
         )
         try:
-            msg = await asyncio.to_thread(
-                self.llm.chat,
+            msg = await self._chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[],
@@ -312,8 +325,7 @@ class HermesOverseer:
             "target_delta, dte, width, lots, rationale}. Use PASS to hold fire."
         )
         try:
-            msg = await asyncio.to_thread(
-                self.llm.chat,
+            msg = await self._chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[],
@@ -400,8 +412,7 @@ class HermesOverseer:
             "Only include keys you want to change. Omit anything you'd leave as-is."
         )
         try:
-            msg = await asyncio.to_thread(
-                self.llm.chat,
+            msg = await self._chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user", "content": prompt}],
                 images=[],
@@ -450,6 +461,82 @@ class HermesOverseer:
             pass
         return result
 
+    async def propose_risk_restrictions(self) -> Dict[str, Any]:
+        """Let the overseer decide which symbols from the active watchlist should be temporarily banned due to risk.
+
+        Only runs in 'enforcing' or 'autonomous' modes — advisory never mutates settings.
+        """
+        if self.autonomy not in ("enforcing", "autonomous"):
+            return {"banned_symbols": [], "rationale": "advisory mode — no changes"}
+
+        watchlist_syms = set()
+        try:
+            if self.db is not None:
+                all_wls = await self.db.list_all_watchlists()
+                for syms in all_wls.values():
+                    watchlist_syms.update(syms)
+        except Exception as exc:
+            logger.warning("Failed to fetch watchlist symbols for risk restrictions: %s", exc)
+
+        if not watchlist_syms:
+            return {"banned_symbols": [], "rationale": "watchlist is empty"}
+
+        recent_logs = await self.db.recent_logs(limit=200)
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "Review recent strategy performance, operator doctrine, and the active watchlist.\n"
+            f"ACTIVE WATCHLIST: {list(watchlist_syms)}\n"
+            f"RECENT_LOGS:\n{recent_logs}\n"
+            "Identify any symbols on the watchlist that pose excessive short-term risk right now "
+            "(e.g., due to imminent earnings, technical breakouts/breakdowns, extreme volatility, macro factors) "
+            "and should be temporarily banned from rules-based strategy entries. Banned symbols will be completely "
+            "skipped for new entries until the next check.\n"
+            "Reply with strict JSON: {banned_symbols: [string, ...], rationale}."
+        )
+        try:
+            msg = await self._chat_with_timeout(
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user",   "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("Risk-restrictions LLM call failed: %s", exc)
+            return {"banned_symbols": [], "rationale": f"LLM error: {exc}"}
+
+        decision = self._safe_json(msg)
+        banned = decision.get("banned_symbols") or []
+        rationale = decision.get("rationale", "")
+        if not isinstance(banned, list):
+            banned = []
+
+        # Intersect with active watchlist to prevent arbitrary symbols being injected
+        banned_set = {str(s).upper().strip() for s in banned} & {s.upper() for s in watchlist_syms}
+        banned_list = sorted(list(banned_set))
+
+        old_banned = await self.db.get_setting("banned_symbols") or ""
+        new_banned_str = ",".join(banned_list)
+
+        if old_banned != new_banned_str:
+            await self.db.set_setting("banned_symbols", new_banned_str)
+            await self.db.write_log(
+                "OVERSEER",
+                f"[RISK-RESTRICT] Banned symbols list updated: {old_banned or '-'} -> {new_banned_str or '-'} — {rationale}",
+            )
+            logger.info("[RISK-RESTRICT] updated banned symbols to %s — %s", banned_list, rationale)
+
+        result = {"banned_symbols": banned_list, "rationale": rationale}
+        try:
+            await self.db.write_ai_decision(
+                "OVERSEER", "RISK", self.autonomy,
+                {"type": "risk_restrictions", **result},
+            )
+        except Exception:                                          # noqa: BLE001
+            pass
+        return result
+
     # -- chart-only analysis (always runs when vision enabled) ---------------
     async def analyze_charts(self, watchlist: Iterable[str]) -> None:
         """Run a vision-only read on each symbol's chart and store the result.
@@ -476,8 +563,7 @@ class HermesOverseer:
                 "outlook, rationale} — all string values."
             )
             try:
-                msg = await asyncio.to_thread(
-                    self.llm.chat,
+                msg = await self._chat_with_timeout(
                     [{"role": "system", "content": system_prompt},
                      {"role": "user",   "content": prompt}],
                     images=[chart],
@@ -528,7 +614,7 @@ class HermesOverseer:
         last_exc: Exception = RuntimeError("no attempts made")
         for attempt in range(self._LLM_MAX_RETRIES):
             try:
-                msg = await asyncio.to_thread(self.llm.chat, messages, images=images)
+                msg = await self._chat_with_timeout(messages, images=images)
                 # Clear any stored LLM error on success.
                 try:
                     await self.db.set_setting("llm_last_error", "")
@@ -539,12 +625,12 @@ class HermesOverseer:
                 except Exception:                                      # noqa: BLE001
                     pass
                 return self._safe_json(msg)
-            except Exception as exc:                                   # noqa: BLE001
+            except (asyncio.TimeoutError, Exception) as exc:           # noqa: BLE001
                 last_exc = exc
                 if attempt < self._LLM_MAX_RETRIES - 1:
                     wait_s = 2 ** attempt          # 1 s, 2 s
                     logger.warning(
-                        "LLM attempt %d/%d failed for %s; retrying in %ds: %s",
+                        "LLM attempt %d/%d failed/timed out for %s; retrying in %ds: %s",
                         attempt + 1, self._LLM_MAX_RETRIES,
                         action.symbol, wait_s, exc,
                     )
@@ -553,13 +639,13 @@ class HermesOverseer:
         logger.warning("LLM call failed after %d attempts — passing action through: %s",
                        self._LLM_MAX_RETRIES, last_exc)
         try:
-            await self.db.set_setting("llm_last_error", str(last_exc)[:500])
+            await self.db.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])
         except Exception:                                              # noqa: BLE001
             pass
         # Fail-safe: pass action through but flag so the operator can see it.
         return {
             "verdict": "APPROVE",
-            "rationale": f"LLM unavailable after {self._LLM_MAX_RETRIES} attempts ({last_exc}); defaulting to APPROVE.",
+            "rationale": f"LLM unavailable after {self._LLM_MAX_RETRIES} attempts ({last_exc or repr(last_exc)}); defaulting to APPROVE.",
             "llm_error_fallback": True,
         }
 
@@ -570,8 +656,7 @@ class HermesOverseer:
             "Use only fields from the dataclass schema. JSON only."
         )
         try:
-            msg = await asyncio.to_thread(
-                self.llm.chat,
+            msg = await self._chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[chart] if chart is not None else [],

@@ -166,6 +166,7 @@ class CreditSpreads75(AbstractStrategy):
         best_strike = None
         best_pop_diff = 999.0
         max_level_pop = 0.0
+        best_pop_val = None
 
         target_type = "support" if side == "put" else "resistance"
         levels = [lvl for lvl in analysis.get("key_levels", []) if lvl.get("type") == target_type]
@@ -191,6 +192,7 @@ class CreditSpreads75(AbstractStrategy):
 
                     best_pop_diff = diff
                     best_strike = strike_opt
+                    best_pop_val = lvl_pop
 
         if not best_strike:
             self._log(f"✗ {symbol} {side}: no ≥{t.cs75_pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
@@ -232,6 +234,11 @@ class CreditSpreads75(AbstractStrategy):
             )
             return None
 
+        if best_pop_val is None and short_leg:
+            greeks = short_leg.get("greeks") or {}
+            delta = abs(float(greeks.get("delta") or 0.0))
+            best_pop_val = 1.0 - delta if delta > 0.0 else 0.75
+
         return TradeAction(
             strategy_id=self.strategy_id,
             symbol=symbol, order_class="multileg",
@@ -242,7 +249,8 @@ class CreditSpreads75(AbstractStrategy):
             price=credit, side="sell", quantity=1, order_type="credit",
             tag="HERMES_CS75",
             strategy_params={"short_leg": short_leg["symbol"], "long_leg": long_leg["symbol"],
-                             "side_type": side},
+                             "side_type": side, "pop": best_pop_val,
+                             "short_delta": abs(float((short_leg.get("greeks") or {}).get("delta") or 0.0))},
             dte=(datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days,
             expiry=expiry, width=width,
         )

@@ -48,6 +48,12 @@ async def approve_trade(approval_id: int,
         "ENGINE",
         f"[C2] Trade approval_id={approval_id} APPROVED by operator",
     )
+    # Signal agent process to execute the approved trade immediately via IPC
+    try:
+        from hermes.ipc import ipc
+        await ipc.publish("agent_commands", {"action": "trigger_approvals"})
+    except Exception:
+        pass
     return {"status": "approved", "id": approval_id}
 
 
@@ -93,6 +99,13 @@ async def bulk_decide(body: BulkDecisionBody) -> Dict[str, Any]:
         f"[C2] Bulk {status} — {count} trades by operator"
         + (f": {body.notes}" if body.notes else ""),
     )
+    if status == "APPROVED" and count > 0:
+        # Signal agent process to execute approved trades immediately via IPC
+        try:
+            from hermes.ipc import ipc
+            await ipc.publish("agent_commands", {"action": "trigger_approvals"})
+        except Exception:
+            pass
     return {"status": status.lower(), "count": count}
 
 

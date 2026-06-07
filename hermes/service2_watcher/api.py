@@ -90,16 +90,14 @@ async def lifespan(app: FastAPI):
         pop_engine.set_regime_weight_lookup(_regime.make_lookup_fn(db))
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("regime_weight lookup wire-up failed: %s", exc)
-    # Start the agent thread
-    logger.info("Lifespan starting Hermes agent background thread...")
-    from hermes.service1_agent.main import start_agent_thread, _SHUTDOWN_EVENT
-    start_agent_thread()
+    # Connect to Inter-Process Communication (IPC) broker
+    from hermes.ipc import ipc
+    await ipc.connect()
 
     yield
 
-    # Shutdown the agent thread on exit
-    logger.info("Lifespan shutting down Hermes agent background thread...")
-    _SHUTDOWN_EVENT.set()
+    # Clean up IPC connection on shutdown
+    await ipc.disconnect()
 
 
 app = FastAPI(title="Hermes C2", lifespan=lifespan)

@@ -33,7 +33,42 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("hermes.agent.main")
 
-_SHUTDOWN_EVENT = threading.Event()
+class ShutdownEvent(threading.Event):
+    def set(self) -> None:
+        super().set()
+        global _ASYNC_TRIGGER_EVENT
+        if _ASYNC_TRIGGER_EVENT is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(_ASYNC_TRIGGER_EVENT.set)
+            except RuntimeError:
+                pass
+
+
+class TriggerEvent(threading.Event):
+    def set(self) -> None:
+        super().set()
+        global _ASYNC_TRIGGER_EVENT
+        if _ASYNC_TRIGGER_EVENT is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_running():
+                    loop.call_soon_threadsafe(_ASYNC_TRIGGER_EVENT.set)
+            except RuntimeError:
+                pass
+
+
+_SHUTDOWN_EVENT = ShutdownEvent()
+_TRIGGER_EVENT = TriggerEvent()
+_ASYNC_TRIGGER_EVENT: Optional[asyncio.Event] = None
+
+
+def set_trigger() -> None:
+    """Trigger the agent loop to wake up immediately.
+    Sets both threading and asyncio events.
+    """
+    _TRIGGER_EVENT.set()
 
 # Settings keys shared with the watcher (see hermes/service2_watcher/api.py).
 SETTING_MODE = "hermes_mode"               # "paper" | "live"
@@ -57,6 +92,7 @@ SETTING_SOUL = "soul_md"
 SETTING_AUTONOMY = "agent_autonomy"
 SETTING_PAUSED = "agent_paused"
 SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
+SETTING_LLM_OUT_OF_LOOP = "llm_out_of_loop" # "true" | "false"
 # Daily-loss kill switch. Dollar amount of realized loss (positive number) that
 # auto-pauses the agent for the rest of the session. "" / "0" / unset disables.
 # Falls back to the HERMES_MAX_DAILY_LOSS env var when no setting is stored.
@@ -66,6 +102,105 @@ SETTING_MAX_DAILY_LOSS = "max_daily_loss"
 # Key pattern: "strategy_{id}_enabled"  value: "true" | "false"
 def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
+
+
+async def _interruptible_sleep(seconds: float) -> None:
+    """Sleep that wakes up immediately on shutdown or trigger signals."""
+    steps = int(seconds * 10)
+    for _ in range(steps):
+        if _SHUTDOWN_EVENT.is_set() or _TRIGGER_EVENT.is_set():
+            break
+        await asyncio.sleep(0.1)
+
+
+async def _cache_prewarm_loop(broker_getter, db, conf):
+    """Background loop to periodically pre-warm the broker data cache for watchlist symbols."""
+    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+    
+    # Wait a few seconds after startup before the first run to let other tasks initialize
+    await asyncio.sleep(5)
+    
+    while True:
+        if _SHUTDOWN_EVENT.is_set():
+            break
+        try:
+            current_broker = broker_getter()
+            wrapper = AsyncBrokerWrapper(current_broker, db)
+            cache = wrapper._shared_cache
+            
+            # Get watchlist symbols
+            watchlist_syms = set(conf.get("watchlist", []))
+            try:
+                all_wls = await db.list_all_watchlists()
+                for syms in all_wls.values():
+                    watchlist_syms.update(syms)
+            except Exception:
+                pass
+                
+            symbols = sorted(list(watchlist_syms))
+            if symbols:
+                now_ts = wrapper._get_current_timestamp()
+                log.info("[PRE-WARM] Refreshing quote/chain cache for watchlist: %s", symbols)
+                
+                # 1. Fetch & cache quotes directly to bypass wrapper cache check
+                try:
+                    quotes = await wrapper.broker.get_quote(",".join(symbols))
+                    if quotes and isinstance(quotes, list):
+                        for q in quotes:
+                            sym = q.get("symbol")
+                            if sym:
+                                cache.set_quote(sym, q, now_ts)
+                except Exception as q_exc:
+                    log.debug("[PRE-WARM] Quote fetch failed: %s", q_exc)
+                    
+                # 2. Fetch & cache expirations & chains (for nearest expirations)
+                for sym in symbols:
+                    if _SHUTDOWN_EVENT.is_set():
+                        break
+                    try:
+                        expirations = await wrapper.broker.get_option_expirations(sym)
+                        if expirations:
+                            cache.set_expirations(sym, expirations, now_ts)
+                            
+                            # Determine simulated or real 'today' for DTE calculations
+                            today = datetime.utcnow().date()
+                            if hasattr(wrapper.broker, "current_date") and wrapper.broker.current_date:
+                                today = wrapper.broker.current_date.date()
+                                
+                            valid_expiries = []
+                            for e in expirations:
+                                try:
+                                    d = datetime.strptime(str(e), "%Y-%m-%d").date()
+                                    dte = (d - today).days
+                                    # Cache option chains between 5 and 50 DTE
+                                    if 5 <= dte <= 50:
+                                        valid_expiries.append((dte, e))
+                                except Exception:
+                                    continue
+                                    
+                            valid_expiries.sort()
+                            # Warm up option chains for the 2 nearest relevant expirations
+                            for _, exp in valid_expiries[:2]:
+                                if _SHUTDOWN_EVENT.is_set():
+                                    break
+                                try:
+                                    chain = await wrapper.broker.get_option_chains(sym, exp)
+                                    if chain:
+                                        cache.set_chain(sym, exp, chain, now_ts)
+                                except Exception as c_exc:
+                                    log.debug("[PRE-WARM] Chain fetch failed for %s %s: %s", sym, exp, c_exc)
+                    except Exception as exp_exc:
+                        log.debug("[PRE-WARM] Expirations fetch failed for %s: %s", sym, exp_exc)
+                        
+        except Exception as exc:
+            log.warning("[PRE-WARM] General cache pre-warm tick failed: %s", exc)
+            
+        # Sleep for 120 seconds, checking shutdown status periodically (every 5 seconds)
+        for _ in range(24):
+            if _SHUTDOWN_EVENT.is_set():
+                break
+            await asyncio.sleep(5)
+
 
 # VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
@@ -438,6 +573,7 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     soul = (await db.get_setting(SETTING_SOUL)) or ""
     paused = ((await db.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
     approval_mode = ((await db.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
+    llm_out_of_loop = ((await db.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
     # Per-strategy enable flags — default to enabled for all known strategies.
     strategy_enabled = {
         sid: ((await db.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
@@ -448,6 +584,7 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
         "soul": soul,
         "paused": paused,
         "approval_mode": approval_mode,
+        "llm_out_of_loop": llm_out_of_loop,
         "strategy_enabled": strategy_enabled,
     }
 
@@ -458,6 +595,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           soul: Optional[str] = None,
           approval_mode: bool = True,
           strategy_enabled: Optional[Dict[str, bool]] = None,
+          llm_out_of_loop: bool = False,
           event_bus = None) -> CascadingEngine:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
@@ -492,7 +630,8 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
 
     return CascadingEngine(broker, db, active_strategies, overseer=overseer,
                            approval_mode=approval_mode, money_manager=mm,
-                           config=config, event_bus=event_bus)
+                           config=config, event_bus=event_bus,
+                           llm_out_of_loop=llm_out_of_loop)
 
 
 # ---------------------------------------------------------------------------
@@ -557,6 +696,38 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     return TradierBroker(cfg)
 
 
+async def _pg_listen_loop(db: HermesDB, trigger_event) -> None:
+    """Background listener task that awaits PostgreSQL LISTEN/NOTIFY events."""
+    if "postgresql" not in db.async_engine.dialect.name:
+        log.info("[PG-LISTEN] SQLite/Mock environment detected; skipping LISTEN channel.")
+        return
+
+    from sqlalchemy import text as sa_text
+    log.info("[PG-LISTEN] Starting PostgreSQL LISTEN loop on channel 'hermes_approvals'")
+    while True:
+        try:
+            async with db.async_engine.connect() as conn:
+                fairy = await conn.get_raw_connection()
+                driver_conn = fairy.driver_connection
+                
+                await conn.execute(sa_text("LISTEN hermes_approvals"))
+                await conn.commit()
+                
+                async for notify in driver_conn.notifies():
+                    log.info("[PG-LISTEN] Received notification: channel=%s, payload=%s", 
+                             notify.channel, notify.payload)
+                    if callable(trigger_event):
+                        trigger_event()
+                    else:
+                        trigger_event.set()
+        except asyncio.CancelledError:
+            log.info("[PG-LISTEN] Listener cancelled. Stopping.")
+            break
+        except Exception as exc:
+            log.error("[PG-LISTEN] Connection error: %s. Reconnecting in 5s...", exc)
+            await asyncio.sleep(5.0)
+
+
 # ---------------------------------------------------------------------------
 # Tick loop — re-reads the desired mode each iteration so the watcher's
 # toggle takes effect within one tick interval.
@@ -566,6 +737,22 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
 
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
+    global _ASYNC_TRIGGER_EVENT
+    _ASYNC_TRIGGER_EVENT = asyncio.Event()
+
+    import signal
+    def handle_signal(sig, frame):
+        log.info("Received signal %s, setting shutdown event...", sig)
+        _SHUTDOWN_EVENT.set()
+        set_trigger()
+
+    try:
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+    except ValueError:
+        # signal only works in main thread, ignore if running under testing
+        pass
+
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
     # Apply schema migrations before anything else so fresh deployments are
@@ -611,6 +798,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     await db.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
     if await db.get_setting(SETTING_SOUL) is None:
         await db.set_setting(SETTING_SOUL, "")
+    if await db.get_setting(SETTING_LLM_OUT_OF_LOOP) is None:
+        await db.set_setting(SETTING_LLM_OUT_OF_LOOP, "true")
 
     # Initialize Event Bus
     from hermes.events.bus import EventBus
@@ -623,11 +812,36 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                    soul=current_overseer_cfg["soul"],
                    approval_mode=current_overseer_cfg["approval_mode"],
                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                   llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                    event_bus=event_bus)
 
     # Start the async Overseer background task if present
     if engine.overseer is not None:
         await engine.overseer.start()
+
+    from hermes.ipc import ipc
+    await ipc.connect()
+
+    async def _ipc_callback(data: dict):
+        action = data.get("action")
+        if action == "trigger_approvals":
+            log.info("[IPC] Received trigger approvals signal")
+            set_trigger()
+        elif action == "sync_settings":
+            log.info("[IPC] Received sync settings signal")
+            set_trigger()
+        elif action == "trigger_ml":
+            log.info("[IPC] Received trigger ML signal")
+            try:
+                await db.set_setting("ml_force_run", "true")
+            except Exception:
+                pass
+            set_trigger()
+
+    await ipc.subscribe("agent_commands", _ipc_callback)
+
+    # Start PostgreSQL LISTEN background loop
+    pg_listener_task = asyncio.create_task(_pg_listen_loop(db, set_trigger))
 
     # Start Tradier WebSocket Stream Client
     from hermes.broker.tradier_stream import TradierStreamClient
@@ -652,6 +866,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     if not is_mock:
         await stream_client.start()
     
+    # Spawn background pre-warming task for the option chain and quote cache
+    prewarm_task = asyncio.create_task(_cache_prewarm_loop(lambda: broker, db, conf))
+    
     interval_s = int(conf.get("tick_interval_s", 300))
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",
              current_mode, current_overseer_cfg["autonomy"],
@@ -662,8 +879,13 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     _CB_COOLDOWN_S = 300       # seconds to wait before re-attempting
     _cb_fail_count = 0
     _cb_tripped_at: float = 0.0
+    triggered = False
 
     while True:
+        if _TRIGGER_EVENT.is_set():
+            triggered = True
+            _TRIGGER_EVENT.clear()
+
         # Circuit breaker
         if _cb_fail_count >= _CB_THRESHOLD:
             if _cb_tripped_at == 0.0:
@@ -694,6 +916,50 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             log.info("[CIRCUIT BREAKER] cooldown elapsed — resuming tick loop")
 
         try:
+            if triggered:
+                log.info("[C2-TRIGGER] Waking up early to execute manual approvals")
+                try:
+                    desired_mode = (await db.get_setting(SETTING_MODE) or current_mode).lower()
+                    if desired_mode not in VALID_MODES:
+                        desired_mode = current_mode
+                    if desired_mode != current_mode:
+                        log.warning("mode change requested during trigger: %s → %s", current_mode, desired_mode)
+                        broker = _build_broker(conf, desired_mode)
+                        from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+                        AsyncBrokerWrapper.clear_cache()
+                        engine = build(broker, current_llm, chart_provider, conf,
+                                       vision_enabled=current_vision,
+                                       autonomy=current_overseer_cfg["autonomy"],
+                                       soul=current_overseer_cfg["soul"],
+                                       approval_mode=current_overseer_cfg["approval_mode"],
+                                       strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                                       llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
+                                       event_bus=event_bus)
+                        current_mode = desired_mode
+                        await db.write_log("ENGINE", f"mode switched to {current_mode}")
+
+                    approved = await db.fetch_approved_actions()
+                    if approved:
+                        log.info("[C2-TRIGGER] Executing %d approved action(s)", len(approved))
+                        for item in approved:
+                            await _execute_approved_action(item, broker=broker, db=db)
+                    else:
+                        log.info("[C2-TRIGGER] No approved actions found in queue")
+                except Exception as exc:
+                    log.exception("[C2-TRIGGER] Failed to process triggered approvals: %s", exc)
+
+                triggered = False
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
+                if _SHUTDOWN_EVENT.is_set():
+                    log.info("Agent loop detected shutdown signal during trigger sleep. Exiting.")
+                    break
+                continue
+
             # 1) Mode reconciliation — pick up any toggle the watcher made.
             desired_mode = (await db.get_setting(SETTING_MODE) or current_mode).lower()
             if desired_mode not in VALID_MODES:
@@ -733,7 +999,11 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                    soul=current_overseer_cfg["soul"],
                                    approval_mode=current_overseer_cfg["approval_mode"],
                                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                                   llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                                    event_bus=event_bus)
+                    # Clear options/quotes cache on mode switch to prevent stale paper data in live mode
+                    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+                    AsyncBrokerWrapper.clear_cache()
                     current_mode = desired_mode
                     await db.write_log("ENGINE", f"mode switched to {current_mode}")
                 except Exception as exc:                          # noqa: BLE001
@@ -771,6 +1041,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                soul=current_overseer_cfg["soul"],
                                approval_mode=current_overseer_cfg["approval_mode"],
                                strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                               llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                                event_bus=event_bus)
                                
                 if engine.overseer is not None:
@@ -822,13 +1093,23 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 currently_paused=current_overseer_cfg["paused"], broker=broker,
             ):
                 current_overseer_cfg["paused"] = True
-                await asyncio.sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             # 1d) Hard pause check
             if current_overseer_cfg["paused"]:
                 await db.write_log("ENGINE", f"heartbeat tick PAUSED mode={current_mode}")
-                await asyncio.sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             # 1d-lot) Refresh per-strategy lot settings
@@ -908,7 +1189,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} "
                     f"({mkt['et_date']} is not a trading day)"
                 )
-                await asyncio.sleep(interval_s)
+                try:
+                    await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    _ASYNC_TRIGGER_EVENT.clear()
                 continue
 
             if mkt["is_open"]:
@@ -994,23 +1280,34 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             except Exception:                                     # noqa: BLE001
                 pass
 
-        # Incremental sleep to check for shutdown signals
-        slept = 0
-        while slept < interval_s:
-            if _SHUTDOWN_EVENT.is_set():
-                break
-            await asyncio.sleep(1)
-            slept += 1
+        try:
+            await asyncio.wait_for(_ASYNC_TRIGGER_EVENT.wait(), timeout=interval_s)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            _ASYNC_TRIGGER_EVENT.clear()
         if _SHUTDOWN_EVENT.is_set():
             log.info("Agent loop detected shutdown signal. Exiting.")
             break
 
-    # Clean up stream client, overseer, event bus on exit
+    # Clean up stream client, pg listener, overseer, event bus on exit
+    if pg_listener_task:
+        pg_listener_task.cancel()
+        try:
+            await pg_listener_task
+        except asyncio.CancelledError:
+            pass
     if not is_mock:
         await stream_client.stop()
     if engine.overseer is not None:
         await engine.overseer.stop()
     await event_bus.stop()
+
+    try:
+        await ipc.unsubscribe("agent_commands", _ipc_callback)
+        await ipc.disconnect()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

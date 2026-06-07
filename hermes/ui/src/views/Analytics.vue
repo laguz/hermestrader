@@ -858,9 +858,11 @@ function getMaxStrength(sym) {
           </div>
         </div>
         <div class="logic-steps">
-          <div class="logic-step"><span class="step-num">1</span><span>Find expiry at exactly 7 DTE. Fallback to completions scan between 4-7 DTE if needed.</span></div>
-          <div class="logic-step"><span class="step-num">2</span><span>Calculate POP based on 3-month lookback. Require &gt; 75% POP on strikes.</span></div>
-          <div class="formula">min_credit = width × 0.12  →  $1 × 0.12 = $0.12 minimum. TP: credit &lt;= $0.02. SL: 3× credit debit.</div>
+          <div class="logic-step"><span class="step-num">1</span><span><strong>Mode A (Initial Entry):</strong> Find expiry at exactly 7 DTE.</span></div>
+          <div class="logic-step"><span class="step-num">2</span><span><strong>Mode B (Completions):</strong> Re-scans the options chain for missing sides on partially-filled condors (4-7 DTE).</span></div>
+          <div class="logic-step"><span class="step-num">3</span><span><strong>K-Means Clustering:</strong> Feeds pivot walls to model. Calculates POP based on 3-month lookback. Require &gt; 75% POP on strikes.</span></div>
+          <div class="logic-step"><span class="step-num">4</span><span><strong>Premium:</strong> Verifies min_credit = width × 0.12 → $1 × 0.12 = $0.12 minimum.</span></div>
+          <div class="formula">TP: credit &lt;= $0.02. SL: 3× credit debit.</div>
         </div>
       </div>
 
