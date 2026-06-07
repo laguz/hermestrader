@@ -67,6 +67,96 @@ SETTING_MAX_DAILY_LOSS = "max_daily_loss"
 def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
 
+
+async def _cache_prewarm_loop(broker_getter, db, conf):
+    """Background loop to periodically pre-warm the broker data cache for watchlist symbols."""
+    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+    
+    # Wait a few seconds after startup before the first run to let other tasks initialize
+    await asyncio.sleep(5)
+    
+    while True:
+        if _SHUTDOWN_EVENT.is_set():
+            break
+        try:
+            current_broker = broker_getter()
+            wrapper = AsyncBrokerWrapper(current_broker, db)
+            cache = wrapper._shared_cache
+            
+            # Get watchlist symbols
+            watchlist_syms = set(conf.get("watchlist", []))
+            try:
+                all_wls = await db.list_all_watchlists()
+                for syms in all_wls.values():
+                    watchlist_syms.update(syms)
+            except Exception:
+                pass
+                
+            symbols = sorted(list(watchlist_syms))
+            if symbols:
+                now_ts = wrapper._get_current_timestamp()
+                log.info("[PRE-WARM] Refreshing quote/chain cache for watchlist: %s", symbols)
+                
+                # 1. Fetch & cache quotes directly to bypass wrapper cache check
+                try:
+                    quotes = await wrapper.broker.get_quote(",".join(symbols))
+                    if quotes and isinstance(quotes, list):
+                        for q in quotes:
+                            sym = q.get("symbol")
+                            if sym:
+                                cache.set_quote(sym, q, now_ts)
+                except Exception as q_exc:
+                    log.debug("[PRE-WARM] Quote fetch failed: %s", q_exc)
+                    
+                # 2. Fetch & cache expirations & chains (for nearest expirations)
+                for sym in symbols:
+                    if _SHUTDOWN_EVENT.is_set():
+                        break
+                    try:
+                        expirations = await wrapper.broker.get_option_expirations(sym)
+                        if expirations:
+                            cache.set_expirations(sym, expirations, now_ts)
+                            
+                            # Determine simulated or real 'today' for DTE calculations
+                            today = datetime.utcnow().date()
+                            if hasattr(wrapper.broker, "current_date") and wrapper.broker.current_date:
+                                today = wrapper.broker.current_date.date()
+                                
+                            valid_expiries = []
+                            for e in expirations:
+                                try:
+                                    d = datetime.strptime(str(e), "%Y-%m-%d").date()
+                                    dte = (d - today).days
+                                    # Cache option chains between 5 and 50 DTE
+                                    if 5 <= dte <= 50:
+                                        valid_expiries.append((dte, e))
+                                except Exception:
+                                    continue
+                                    
+                            valid_expiries.sort()
+                            # Warm up option chains for the 2 nearest relevant expirations
+                            for _, exp in valid_expiries[:2]:
+                                if _SHUTDOWN_EVENT.is_set():
+                                    break
+                                try:
+                                    chain = await wrapper.broker.get_option_chains(sym, exp)
+                                    if chain:
+                                        cache.set_chain(sym, exp, chain, now_ts)
+                                except Exception as c_exc:
+                                    log.debug("[PRE-WARM] Chain fetch failed for %s %s: %s", sym, exp, c_exc)
+                    except Exception as exp_exc:
+                        log.debug("[PRE-WARM] Expirations fetch failed for %s: %s", sym, exp_exc)
+                        
+        except Exception as exc:
+            log.warning("[PRE-WARM] General cache pre-warm tick failed: %s", exc)
+            
+        # Sleep for 120 seconds, checking shutdown status periodically (every 5 seconds)
+        for _ in range(24):
+            if _SHUTDOWN_EVENT.is_set():
+                break
+            await asyncio.sleep(5)
+
+
 # VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
@@ -652,6 +742,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     if not is_mock:
         await stream_client.start()
     
+    # Spawn background pre-warming task for the option chain and quote cache
+    prewarm_task = asyncio.create_task(_cache_prewarm_loop(lambda: broker, db, conf))
+    
     interval_s = int(conf.get("tick_interval_s", 300))
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",
              current_mode, current_overseer_cfg["autonomy"],
@@ -734,6 +827,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                    approval_mode=current_overseer_cfg["approval_mode"],
                                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
                                    event_bus=event_bus)
+                    # Clear options/quotes cache on mode switch to prevent stale paper data in live mode
+                    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+                    AsyncBrokerWrapper.clear_cache()
                     current_mode = desired_mode
                     await db.write_log("ENGINE", f"mode switched to {current_mode}")
                 except Exception as exc:                          # noqa: BLE001
