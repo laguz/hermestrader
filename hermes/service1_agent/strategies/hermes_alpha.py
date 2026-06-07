@@ -139,7 +139,7 @@ class HermesAlpha(AbstractStrategy):
             self._log(f"✗ {symbol}: empty chain for {expiry}; skip.")
             return []
 
-        short_leg = self.find_strike_by_delta(chain, side, target_delta, tolerance=delta_tol)
+        short_leg = await self.find_strike_by_delta(chain, side, target_delta, tolerance=delta_tol)
         if not short_leg:
             self._log(f"✗ {symbol} {side}: no strike near {target_delta:.2f}Δ "
                       f"(±{delta_tol:.2f}); skip.")

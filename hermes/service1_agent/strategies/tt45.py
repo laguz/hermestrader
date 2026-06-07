@@ -68,7 +68,7 @@ class TastyTrade45(AbstractStrategy):
                 def factory(side: str):
                     async def _b(symbol, expiry, lots, width):
                         chain = await self.broker.get_option_chains(symbol, expiry) or []
-                        short_leg = self.find_strike_by_delta(chain, side, entry_delta, tolerance=delta_tol)
+                        short_leg = await self.find_strike_by_delta(chain, side, entry_delta, tolerance=delta_tol)
                         if not short_leg:
                             self._log(f"✗ {symbol} {side}: no strike near {entry_delta:.2f}Δ (±{delta_tol:.2f}) in chain; skip.")
                             return None
@@ -101,6 +101,10 @@ class TastyTrade45(AbstractStrategy):
                                 f"(short={sl_s:.0f} long={ll_s:.0f}); skip."
                             )
                             return None
+                        greeks = short_leg.get("greeks") or {}
+                        delta_val = abs(float(greeks.get("delta") or entry_delta))
+                        pop_val = 1.0 - delta_val
+
                         return TradeAction(
                             strategy_id=self.strategy_id, symbol=symbol, order_class="multileg",
                             legs=[
@@ -110,7 +114,8 @@ class TastyTrade45(AbstractStrategy):
                             price=credit, side="sell", quantity=1, order_type="credit",
                             tag="HERMES_TT45",
                             strategy_params={"short_leg": short_leg["symbol"],
-                                             "long_leg": long_leg["symbol"], "side_type": side},
+                                             "long_leg": long_leg["symbol"], "side_type": side,
+                                             "pop": pop_val, "short_delta": delta_val},
                             expiry=expiry, width=width,
                         )
                     return _b

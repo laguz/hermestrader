@@ -168,6 +168,40 @@ class CascadingEngine:
         max_per_tick = int(self.config.get("max_orders_per_tick", 5))
         tick_submitted = 0
 
+        if self.config.get("portfolio_optimization"):
+            # Gather proposed actions across all strategies first
+            all_proposed_actions = []
+            for s in self.strategies:
+                try:
+                    wl = await self._watchlist_for(s.strategy_id, unique_watchlist)
+                    actions = await s.execute_entries(wl)
+                    all_proposed_actions.extend(actions)
+                except Exception as exc:
+                    logger.exception("Entry proposal failure in %s: %s", s.NAME, exc)
+
+            if not all_proposed_actions:
+                return 0
+
+            avail_bp = await self.mm.true_available_bp()
+            optimized_actions = await self.mm.optimize_allocation(all_proposed_actions, avail_bp)
+
+            if len(optimized_actions) > max_per_tick:
+                logger.warning(
+                    "[ENGINE] Optimized entries generated %d actions; trimming to %d (max_orders_per_tick=%d)",
+                    len(optimized_actions), max_per_tick, max_per_tick,
+                )
+                for a in optimized_actions[max_per_tick:]:
+                    await self.db.write_log(
+                        a.strategy_id,
+                        f"[GUARD] {a.symbol} entry trimmed due to max_orders_per_tick={max_per_tick}"
+                    )
+                optimized_actions = optimized_actions[:max_per_tick]
+
+            await self.submit(optimized_actions, action_type="entry")
+            if optimized_actions:
+                await self.mm.sync_broker_orders()
+            return len(optimized_actions)
+
         for s in self.strategies:
             try:
                 if tick_submitted >= max_per_tick:
