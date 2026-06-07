@@ -450,6 +450,83 @@ class HermesOverseer:
             pass
         return result
 
+    async def propose_risk_restrictions(self) -> Dict[str, Any]:
+        """Let the overseer decide which symbols from the active watchlist should be temporarily banned due to risk.
+
+        Only runs in 'enforcing' or 'autonomous' modes — advisory never mutates settings.
+        """
+        if self.autonomy not in ("enforcing", "autonomous"):
+            return {"banned_symbols": [], "rationale": "advisory mode — no changes"}
+
+        watchlist_syms = set()
+        try:
+            if self.db is not None:
+                all_wls = await self.db.list_all_watchlists()
+                for syms in all_wls.values():
+                    watchlist_syms.update(syms)
+        except Exception as exc:
+            logger.warning("Failed to fetch watchlist symbols for risk restrictions: %s", exc)
+
+        if not watchlist_syms:
+            return {"banned_symbols": [], "rationale": "watchlist is empty"}
+
+        recent_logs = await self.db.recent_logs(limit=200)
+        if len(recent_logs) > self._MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+
+        system_prompt = await self.get_system_prompt()
+        prompt = (
+            "Review recent strategy performance, operator doctrine, and the active watchlist.\n"
+            f"ACTIVE WATCHLIST: {list(watchlist_syms)}\n"
+            f"RECENT_LOGS:\n{recent_logs}\n"
+            "Identify any symbols on the watchlist that pose excessive short-term risk right now "
+            "(e.g., due to imminent earnings, technical breakouts/breakdowns, extreme volatility, macro factors) "
+            "and should be temporarily banned from rules-based strategy entries. Banned symbols will be completely "
+            "skipped for new entries until the next check.\n"
+            "Reply with strict JSON: {banned_symbols: [string, ...], rationale}."
+        )
+        try:
+            msg = await asyncio.to_thread(
+                self.llm.chat,
+                [{"role": "system", "content": system_prompt},
+                 {"role": "user",   "content": prompt}],
+                images=[],
+            )
+        except Exception as exc:                                   # noqa: BLE001
+            logger.warning("Risk-restrictions LLM call failed: %s", exc)
+            return {"banned_symbols": [], "rationale": f"LLM error: {exc}"}
+
+        decision = self._safe_json(msg)
+        banned = decision.get("banned_symbols") or []
+        rationale = decision.get("rationale", "")
+        if not isinstance(banned, list):
+            banned = []
+
+        # Intersect with active watchlist to prevent arbitrary symbols being injected
+        banned_set = {str(s).upper().strip() for s in banned} & {s.upper() for s in watchlist_syms}
+        banned_list = sorted(list(banned_set))
+
+        old_banned = await self.db.get_setting("banned_symbols") or ""
+        new_banned_str = ",".join(banned_list)
+
+        if old_banned != new_banned_str:
+            await self.db.set_setting("banned_symbols", new_banned_str)
+            await self.db.write_log(
+                "OVERSEER",
+                f"[RISK-RESTRICT] Banned symbols list updated: {old_banned or '-'} -> {new_banned_str or '-'} — {rationale}",
+            )
+            logger.info("[RISK-RESTRICT] updated banned symbols to %s — %s", banned_list, rationale)
+
+        result = {"banned_symbols": banned_list, "rationale": rationale}
+        try:
+            await self.db.write_ai_decision(
+                "OVERSEER", "RISK", self.autonomy,
+                {"type": "risk_restrictions", **result},
+            )
+        except Exception:                                          # noqa: BLE001
+            pass
+        return result
+
     # -- chart-only analysis (always runs when vision enabled) ---------------
     async def analyze_charts(self, watchlist: Iterable[str]) -> None:
         """Run a vision-only read on each symbol's chart and store the result.
