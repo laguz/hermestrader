@@ -62,7 +62,8 @@ class CascadingEngine:
                  approval_mode: bool = False,
                  money_manager: Optional["MoneyManager"] = None,
                  config: Optional[Dict[str, Any]] = None,
-                 event_bus: Optional[EventBus] = None):
+                 event_bus: Optional[EventBus] = None,
+                 llm_out_of_loop: bool = False):
         self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         # Sort by declared PRIORITY (1 highest)
@@ -78,6 +79,7 @@ class CascadingEngine:
         self.mm = money_manager or (strategies[0].mm if strategies else None)
         self.config = config or {}
         self.event_bus = event_bus
+        self.llm_out_of_loop = llm_out_of_loop
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
@@ -262,6 +264,10 @@ class CascadingEngine:
                     )
                     continue
 
+            if self.llm_out_of_loop:
+                await self._execute_or_queue(a, action_type)
+                continue
+
             if self.event_bus is not None:
                 if (self.overseer is not None and action_type != "ai"
                         and not getattr(a, "ai_authored", False)):
@@ -387,6 +393,18 @@ class CascadingEngine:
                 await self.db.record_order_response(a, resp)
 
     # ----- top level entry point used by main.py and the scheduler ----------
+    async def _read_banned_symbols(self) -> set[str]:
+        if not self.db:
+            return set()
+        try:
+            raw = await self.db.get_setting("banned_symbols")
+            if not raw:
+                return set()
+            return {s.strip().upper() for s in raw.split(",") if s.strip()}
+        except Exception:
+            logger.exception("[GOVERNANCE] Failed to read banned_symbols setting")
+            return set()
+
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         await self.sync_positions()
         # Refresh real-time broker order counts to prevent duplicate entries.
@@ -397,14 +415,28 @@ class CascadingEngine:
         await self.reconcile_orphans()
         mgmt = await self.process_management()
         await self.submit(mgmt, action_type="management")
+
+        # Filter out banned symbols under out-of-loop governance
+        banned = await self._read_banned_symbols()
+        if banned:
+            original_len = len(watchlist)
+            watchlist = [s for s in watchlist if s.upper() not in banned]
+            if len(watchlist) < original_len:
+                logger.info("[GOVERNANCE] Watchlist filtered by active AI risk restrictions. Banned symbols skipped: %s", banned)
+
         # Entries are now submitted internally strategy-by-strategy.
         num_entries = await self.process_entries(watchlist)
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
-            # Goal-aware parameter tuning — throttled, runs before proposals so
-            # any tightened gate thresholds take effect on this tick's AI ideas.
-            await self._maybe_tune_parameters()
+            # Goal-aware parameter tuning & risk restrictions
+            if self.llm_out_of_loop:
+                # Run out-of-loop background policy adjustments asynchronously
+                asyncio.create_task(self._maybe_tune_parameters())
+            else:
+                # Run inline blocking
+                await self._maybe_tune_parameters()
+
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
                 asyncio.create_task(self._async_propose(watchlist))
@@ -443,6 +475,11 @@ class CascadingEngine:
                 return
             await self.db.set_setting("ai_last_param_tuning_ts", str(now))
             await tuner()
+
+            # Execute risk restrictions check (banned symbols list)
+            risk_tuner = getattr(self.overseer, "propose_risk_restrictions", None)
+            if risk_tuner is not None:
+                await risk_tuner()
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("[PARAM-TUNE] tuning tick failed: %s", exc)
 

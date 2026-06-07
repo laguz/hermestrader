@@ -69,7 +69,7 @@ async def test_agent_loop_runs_approvals_immediately_on_trigger():
          patch("hermes.service1_agent.main._build_broker", return_value=broker_mock), \
          patch("hermes.service1_agent.main._build_llm", return_value=(llm_mock, {}, True)), \
          patch("hermes.service1_agent.main._resolve_mode_credentials", return_value=("dummy_token", "dummy_account", "http://dummy")), \
-         patch("hermes.service1_agent.main._read_overseer_settings", return_value={"paused": False, "approval_mode": True, "soul": "", "autonomy": "advisory", "strategy_enabled": {}}), \
+         patch("hermes.service1_agent.main._read_overseer_settings", return_value={"paused": False, "approval_mode": True, "soul": "", "autonomy": "advisory", "strategy_enabled": {}, "llm_out_of_loop": False}), \
          patch("hermes.service1_agent.main.build") as build_mock, \
          patch("hermes.service1_agent.main.market_session") as mkt_mock, \
          patch("hermes.service1_agent.main.enforce_daily_loss_limit", return_value=False), \

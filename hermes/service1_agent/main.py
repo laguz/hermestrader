@@ -58,6 +58,7 @@ SETTING_SOUL = "soul_md"
 SETTING_AUTONOMY = "agent_autonomy"
 SETTING_PAUSED = "agent_paused"
 SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
+SETTING_LLM_OUT_OF_LOOP = "llm_out_of_loop" # "true" | "false"
 # Daily-loss kill switch. Dollar amount of realized loss (positive number) that
 # auto-pauses the agent for the rest of the session. "" / "0" / unset disables.
 # Falls back to the HERMES_MAX_DAILY_LOSS env var when no setting is stored.
@@ -538,6 +539,7 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     soul = (await db.get_setting(SETTING_SOUL)) or ""
     paused = ((await db.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
     approval_mode = ((await db.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
+    llm_out_of_loop = ((await db.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
     # Per-strategy enable flags — default to enabled for all known strategies.
     strategy_enabled = {
         sid: ((await db.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
@@ -548,6 +550,7 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
         "soul": soul,
         "paused": paused,
         "approval_mode": approval_mode,
+        "llm_out_of_loop": llm_out_of_loop,
         "strategy_enabled": strategy_enabled,
     }
 
@@ -558,6 +561,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           soul: Optional[str] = None,
           approval_mode: bool = True,
           strategy_enabled: Optional[Dict[str, bool]] = None,
+          llm_out_of_loop: bool = False,
           event_bus = None) -> CascadingEngine:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
@@ -592,7 +596,8 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
 
     return CascadingEngine(broker, db, active_strategies, overseer=overseer,
                            approval_mode=approval_mode, money_manager=mm,
-                           config=config, event_bus=event_bus)
+                           config=config, event_bus=event_bus,
+                           llm_out_of_loop=llm_out_of_loop)
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +716,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     await db.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
     if await db.get_setting(SETTING_SOUL) is None:
         await db.set_setting(SETTING_SOUL, "")
+    if await db.get_setting(SETTING_LLM_OUT_OF_LOOP) is None:
+        await db.set_setting(SETTING_LLM_OUT_OF_LOOP, "true")
 
     # Initialize Event Bus
     from hermes.events.bus import EventBus
@@ -723,6 +730,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                    soul=current_overseer_cfg["soul"],
                    approval_mode=current_overseer_cfg["approval_mode"],
                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                   llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                    event_bus=event_bus)
 
     # Start the async Overseer background task if present
@@ -819,6 +827,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                        soul=current_overseer_cfg["soul"],
                                        approval_mode=current_overseer_cfg["approval_mode"],
                                        strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                                       llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                                        event_bus=event_bus)
                         current_mode = desired_mode
                         await db.write_log("ENGINE", f"mode switched to {current_mode}")
@@ -879,6 +888,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                    soul=current_overseer_cfg["soul"],
                                    approval_mode=current_overseer_cfg["approval_mode"],
                                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                                   llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                                    event_bus=event_bus)
                     # Clear options/quotes cache on mode switch to prevent stale paper data in live mode
                     from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
@@ -920,6 +930,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                                soul=current_overseer_cfg["soul"],
                                approval_mode=current_overseer_cfg["approval_mode"],
                                strategy_enabled=current_overseer_cfg["strategy_enabled"],
+                               llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
                                event_bus=event_bus)
                                
                 if engine.overseer is not None:
