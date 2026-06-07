@@ -671,6 +671,19 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
 
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
+    import signal
+    def handle_signal(sig, frame):
+        log.info("Received signal %s, setting shutdown event...", sig)
+        _SHUTDOWN_EVENT.set()
+        _TRIGGER_EVENT.set()
+
+    try:
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+    except ValueError:
+        # signal only works in main thread, ignore if running under testing
+        pass
+
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
     # Apply schema migrations before anything else so fresh deployments are
@@ -736,6 +749,27 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Start the async Overseer background task if present
     if engine.overseer is not None:
         await engine.overseer.start()
+
+    from hermes.ipc import ipc
+    await ipc.connect()
+
+    async def _ipc_callback(data: dict):
+        action = data.get("action")
+        if action == "trigger_approvals":
+            log.info("[IPC] Received trigger approvals signal")
+            _TRIGGER_EVENT.set()
+        elif action == "sync_settings":
+            log.info("[IPC] Received sync settings signal")
+            _TRIGGER_EVENT.set()
+        elif action == "trigger_ml":
+            log.info("[IPC] Received trigger ML signal")
+            try:
+                await db.set_setting("ml_force_run", "true")
+            except Exception:
+                pass
+            _TRIGGER_EVENT.set()
+
+    await ipc.subscribe("agent_commands", _ipc_callback)
 
     # Start Tradier WebSocket Stream Client
     from hermes.broker.tradier_stream import TradierStreamClient
@@ -1165,6 +1199,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     if engine.overseer is not None:
         await engine.overseer.stop()
     await event_bus.stop()
+
+    try:
+        await ipc.unsubscribe("agent_commands", _ipc_callback)
+        await ipc.disconnect()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

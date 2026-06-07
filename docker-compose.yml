@@ -39,6 +39,13 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  redis:
+    image: redis:alpine
+    ports:
+      - "${HERMES_REDIS_PORT:-6379}:6379"
+    security_opt:
+      - no-new-privileges:true
+
   watcher:
     image: ${HERMES_IMAGE:-ghcr.io/nousresearch/hermes-agent}:${HERMES_TAG:-latest}
     build: .
@@ -52,6 +59,7 @@ services:
     env_file: ${HERMES_ENV_FILE:-.env}
     environment:
       - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+      - HERMES_REDIS_DSN=redis://redis:6379/0
       - HERMES_MODE=${HERMES_MODE:-paper}
       - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
       - HERMES_UPGRADE_MARKER=/data/upgrade_requested
@@ -68,6 +76,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_started
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -80,6 +90,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  agent:
+    image: ${HERMES_IMAGE:-ghcr.io/nousresearch/hermes-agent}:${HERMES_TAG:-latest}
+    build: .
+    command: python -m hermes.service1_agent.main
+    env_file: ${HERMES_ENV_FILE:-.env}
+    environment:
+      - HERMES_DSN=postgresql+psycopg://hermes:hermes@db:5432/hermes
+      - HERMES_REDIS_DSN=redis://redis:6379/0
+      - HERMES_MODE=${HERMES_MODE:-paper}
+      - HERMES_INSTANCE=${COMPOSE_PROJECT_NAME:-hermes-paper}
+    volumes:
+      - ./hermes:/app/hermes:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+      - ${HERMES_DATA_DIR:-./.hermes-data}:/data
+      - ./soul.md:/app/soul.md:rw
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   hermes_db_data:

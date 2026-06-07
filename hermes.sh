@@ -169,8 +169,8 @@ cmd_restart() {
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
-        info "Restarting agent + watcher for ${BOLD}${proj_name}${NC}…"
-        docker compose --env-file "$env_file" -p "$proj_name" restart watcher
+        info "Restarting agent + watcher + redis for ${BOLD}${proj_name}${NC}…"
+        docker compose --env-file "$env_file" -p "$proj_name" restart watcher agent redis
         ok "Restarted ${proj_name}"
         _show_version "$env_file" "$proj_name"
     done

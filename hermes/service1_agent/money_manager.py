@@ -50,68 +50,21 @@ class MoneyManager:
     async def sync_broker_orders(self) -> None:
         """Fetch all active orders from the broker and cache their counts.
 
-        Hermes-authored orders carry a tag like ``HERMES_CS75`` that Tradier's
-        order endpoint sanitises to ``HERMES-CS75`` (only [A-Za-z0-9-] is
-        permitted). We accept either form so the matcher survives the
-        sanitisation round-trip.
+        Delegates to the normalized active orders broker interface, cleanly
+        encapsulating broker-specific fields/tags within the broker wrapper.
         """
         self._broker_order_counts = {}
         try:
-            orders = await self.broker.get_orders() or []
-            if not isinstance(orders, list):
-                logger.warning("[MM] get_orders returned non-list: %r", orders)
-                orders = []
+            orders = await self.broker.get_normalized_active_orders()
         except Exception:
             logger.exception("[MM] Failed to fetch broker orders for sync")
             return
 
-        active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
         for o in orders:
-            status = str(o.get("status", "")).lower()
-            if status not in active_statuses:
-                continue
-
-            tag = str(o.get("tag", "") or "")
-            # Tradier's tag sanitiser converts '_' to '-' so 'HERMES_CS75'
-            # arrives back as 'HERMES-CS75'. Normalise to hyphens for matching.
-            normalised_tag = tag.replace("_", "-")
-            if not normalised_tag.startswith("HERMES-"):
-                continue
-            strategy_id = normalised_tag[len("HERMES-"):].split("-", 1)[0]
-            if not strategy_id:
-                continue
-            symbol = str(o.get("symbol", "")).upper()
-
-            # Multileg orders return their legs under "leg"; single-leg option
-            # orders carry option_symbol at the top level (no "leg" array).
-            legs = o.get("leg") or []
-            if isinstance(legs, dict):
-                legs = [legs]
-            if not legs:
-                top_opt = o.get("option_symbol")
-                if top_opt:
-                    legs = [{"option_symbol": top_opt,
-                             "quantity": o.get("quantity", 1)}]
-
-            lots = int(o.get("quantity", 1) or 1)
-            side_type = "unknown"
-            expiry_iso = ""
-            for leg in legs:
-                occ_sym = str(leg.get("option_symbol", "") or "")
-                m = self._OCC_RE.match(occ_sym)
-                if not m:
-                    continue
-                side_type = "put" if m.group(3) == "P" else "call"
-                # OCC expiry is YYMMDD in group 2 → normalise to YYYY-MM-DD
-                yymmdd = m.group(2)
-                expiry_iso = f"20{yymmdd[0:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
-                break
-
-            if side_type != "unknown":
-                key = (strategy_id, symbol, side_type, expiry_iso)
-                self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + lots
-                logger.debug("[MM] Sync found active broker order: %s %s %s %s lots=%d",
-                             strategy_id, symbol, side_type, expiry_iso, lots)
+            key = (o["strategy_id"], o["symbol"], o["side_type"], o["expiry_iso"])
+            self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + o["lots"]
+            logger.debug("[MM] Sync found active broker order: %s %s %s %s lots=%d",
+                         o["strategy_id"], o["symbol"], o["side_type"], o["expiry_iso"], o["lots"])
 
     async def true_available_bp(self) -> float:
         balances = await self.broker.get_account_balances() or {}
