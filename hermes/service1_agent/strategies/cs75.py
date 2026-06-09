@@ -88,6 +88,17 @@ class CreditSpreads75(AbstractStrategy):
                 max_lots = max_lots_global
                 target_lots = min(target_lots, max_lots_global)
 
+                # Cooldown check: prevent immediate re-entry if a trade was closed recently
+                last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+                if last_closed:
+                    cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
+                    last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
+                    now_naive = self.now().replace(tzinfo=None) if self.now().tzinfo else self.now()
+                    time_since_close = (now_naive - last_closed_naive).total_seconds()
+                    if time_since_close < cooldown_seconds:
+                        self._log(f"ℹ️ {symbol}: closed recently ({time_since_close:.0f}s ago < {cooldown_seconds}s cooldown); skip entry.")
+                        continue
+
                 analysis = await self.broker.analyze_symbol(symbol, period="6m")
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
@@ -318,12 +329,26 @@ class CreditSpreads75(AbstractStrategy):
             elif dte < 21 and debit <= entry_credit * t.cs75_tp_pct_near:
                 close_reason = "TP-75"
             elif debit >= entry_credit * t.cs75_sl_mult:
-                close_reason = "SL-2.5x"
+                # Stop Loss width safety cap: don't close if already at/above max loss
+                if debit < width:
+                    close_reason = "SL-2.5x"
+                else:
+                    self._log(
+                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: debit ${debit:.2f} "
+                        f"is at/above width ${width:.2f} (max loss); skipping SL close."
+                    )
             elif dte <= t.cs75_time_exit_dte:
                 close_reason = "TIME-EXIT"
 
             if close_reason:
-                actions.append(self._close_action(trade, debit, close_reason))
+                # Morning pricing guard: before 10:30 AM ET, do not allow closing if it is not in profit
+                if self.is_morning_unreliable() and debit >= entry_credit:
+                    self._log(
+                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: close deferred (morning pricing unreliable, "
+                        f"debit ${debit:.2f} >= entry credit ${entry_credit:.2f})"
+                    )
+                else:
+                    actions.append(self._close_action(trade, debit, close_reason))
         return actions
 
     def _close_action(self, trade, debit, reason) -> TradeAction:

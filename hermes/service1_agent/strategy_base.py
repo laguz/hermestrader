@@ -242,6 +242,29 @@ class AbstractStrategy(ABC):
             )
         return debit, False, ""
 
+    def is_morning_unreliable(self, now_dt: Optional[datetime] = None) -> bool:
+        """True if the current time is between 9:30 AM and 10:30 AM Eastern Time."""
+        if now_dt is None:
+            now_dt = self.now()
+
+        try:
+            from zoneinfo import ZoneInfo
+            ET = ZoneInfo("America/New_York")
+        except Exception:
+            from datetime import timezone as dt_timezone, timedelta
+            ET = dt_timezone(timedelta(hours=-5))
+
+        # Ensure timezone-aware for zoneinfo conversion
+        from datetime import timezone as dt_timezone, time
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=dt_timezone.utc)
+
+        now_et = now_dt.astimezone(ET)
+        current_time = now_et.time()
+
+        # 9:30 AM to 10:30 AM Eastern Time
+        return time(9, 30) <= current_time < time(10, 30)
+
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...

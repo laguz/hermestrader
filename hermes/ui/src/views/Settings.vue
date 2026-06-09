@@ -22,6 +22,7 @@ import Icon from '../components/Icon.vue'
 // Local Settings tab state
 const activeTab = ref('soul')
 const logFeedRef = ref(null)
+const autoScroll = ref(true)
 const newSymbolInputs = ref({})
 const lotInputs = ref({})
 
@@ -75,12 +76,36 @@ watch(() => state.watchlistData?.strategies, (sids) => {
 // Auto scroll logs
 watch(() => state.logs, () => {
   nextTick(() => {
-    if (logFeedRef.value) {
+    if (logFeedRef.value && autoScroll.value) {
       const el = logFeedRef.value
-      el.scrollTop = el.scrollHeight
+      // Smart scrolling: only scroll to bottom if already near the bottom
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+      if (isNearBottom) {
+        el.scrollTop = el.scrollHeight
+      }
     }
   })
 }, { deep: true })
+
+watch(autoScroll, (val) => {
+  if (val) {
+    nextTick(() => {
+      if (logFeedRef.value) {
+        logFeedRef.value.scrollTop = logFeedRef.value.scrollHeight
+      }
+    })
+  }
+})
+
+watch(activeTab, (newTab) => {
+  if (newTab === 'diagnostics' && autoScroll.value) {
+    nextTick(() => {
+      if (logFeedRef.value) {
+        logFeedRef.value.scrollTop = logFeedRef.value.scrollHeight
+      }
+    })
+  }
+})
 
 // Polling for updates while Settings is open
 let pollInterval = null
@@ -431,7 +456,13 @@ function triggerUpdateInfo() {
           </div>
           
           <div class="divider"></div>
-          <div class="tab-sec-title">Daemon Activity Log</div>
+          <div class="log-header">
+            <div class="tab-sec-title">Daemon Activity Log</div>
+            <label class="auto-scroll-checkbox">
+              <input type="checkbox" v-model="autoScroll" />
+              <span>Auto-scroll</span>
+            </label>
+          </div>
           <div ref="logFeedRef" class="log-feed">
             <div v-if="!state.logs.length" class="log-line">Loading logs...</div>
             <div v-for="(log, idx) in state.logs" :key="idx" class="log-line" :class="{ 'log-error': log.text?.includes('ERROR'), 'log-c2': log.text?.includes('[C2]') }">
@@ -775,6 +806,28 @@ textarea {
 }
 .diag-row span:last-child {
   font-weight: 600;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.auto-scroll-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.auto-scroll-checkbox input {
+  cursor: pointer;
+  margin: 0;
 }
 
 .log-feed {
