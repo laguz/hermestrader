@@ -127,8 +127,14 @@ class StubDB:
         self._watchlists:  Dict[str, List[str]] = {}
         self._predictions: Dict[str, Dict[str, Any]] = {}
         self._vetoes: List[Dict[str, Any]] = []
+        self._closed_times: Dict[tuple, datetime] = {}
 
     # ── seeding helpers ─────────────────────────────────────────────────────
+    def set_latest_closed_trade_time(self, strategy_id: str, symbol: str, dt: Optional[datetime]):
+        if dt is None:
+            self._closed_times.pop((strategy_id, symbol), None)
+        else:
+            self._closed_times[(strategy_id, symbol)] = dt
     def set_open_trades(self, strategy_id: str, trades: List[Dict[str, Any]]):
         self._open_trades[strategy_id] = list(trades)
 
@@ -179,6 +185,9 @@ class StubDB:
 
     async def latest_prediction(self, symbol: str):
         return self._predictions.get(symbol)
+
+    async def latest_closed_trade_time(self, strategy_id: str, symbol: str) -> Optional[datetime]:
+        return self._closed_times.get((strategy_id, symbol))
 
     async def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
                               expiry: str) -> int:

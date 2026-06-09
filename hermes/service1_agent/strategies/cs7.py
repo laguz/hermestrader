@@ -80,6 +80,17 @@ class CreditSpreads7(AbstractStrategy):
                 max_lots = max_lots_global
                 target_lots = min(target_lots, max_lots_global)
 
+                # Cooldown check: prevent immediate re-entry if a trade was closed recently
+                last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+                if last_closed:
+                    cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
+                    last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
+                    now_naive = self.now().replace(tzinfo=None) if self.now().tzinfo else self.now()
+                    time_since_close = (now_naive - last_closed_naive).total_seconds()
+                    if time_since_close < cooldown_seconds:
+                        self._log(f"ℹ️ {symbol}: closed recently ({time_since_close:.0f}s ago < {cooldown_seconds}s cooldown); skip entry.")
+                        continue
+
                 analysis = await self.broker.analyze_symbol(symbol, period="3m")
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
@@ -250,17 +261,32 @@ class CreditSpreads7(AbstractStrategy):
             if debit <= width * t.cs7_tp_pct_width:
                 close_reason = "TP-2pctW"
             elif debit >= entry_credit * t.cs7_sl_mult:
-                close_reason = "SL-3x"
+                # Stop Loss width safety cap: don't close if already at/above max loss
+                if debit < width:
+                    close_reason = "SL-3x"
+                else:
+                    self._log(
+                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: debit ${debit:.2f} "
+                        f"is at/above width ${width:.2f} (max loss); skipping SL close."
+                    )
+
             if close_reason:
-                actions.append(TradeAction(
-                    strategy_id=self.strategy_id, symbol=trade["symbol"],
-                    order_class="multileg",
-                    legs=[
-                        {"option_symbol": trade["short_leg"], "side": "buy_to_close",  "quantity": int(trade["lots"])},
-                        {"option_symbol": trade["long_leg"],  "side": "sell_to_close", "quantity": int(trade["lots"])},
-                    ],
-                    price=round(debit * 1.05, 2), side="buy", quantity=1,
-                    order_type="debit", tag=f"HERMES_CS7_CLOSE_{close_reason}",
-                    strategy_params={"trade_id": trade["id"], "close_reason": close_reason},
-                ))
+                # Morning pricing guard: before 10:30 AM ET, do not allow closing if it is not in profit
+                if self.is_morning_unreliable() and debit >= entry_credit:
+                    self._log(
+                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: close deferred (morning pricing unreliable, "
+                        f"debit ${debit:.2f} >= entry credit ${entry_credit:.2f})"
+                    )
+                else:
+                    actions.append(TradeAction(
+                        strategy_id=self.strategy_id, symbol=trade["symbol"],
+                        order_class="multileg",
+                        legs=[
+                            {"option_symbol": trade["short_leg"], "side": "buy_to_close",  "quantity": int(trade["lots"])},
+                            {"option_symbol": trade["long_leg"],  "side": "sell_to_close", "quantity": int(trade["lots"])},
+                        ],
+                        price=round(debit * 1.05, 2), side="buy", quantity=1,
+                        order_type="debit", tag=f"HERMES_CS7_CLOSE_{close_reason}",
+                        strategy_params={"trade_id": trade["id"], "close_reason": close_reason},
+                    ))
         return actions

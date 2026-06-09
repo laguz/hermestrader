@@ -94,6 +94,25 @@ class HermesAlpha(AbstractStrategy):
             self._log("ℹ️ empty universe; stand down.")
             return []
 
+        # Filter universe by re-entry cooldown
+        filtered_universe = []
+        cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
+        now_naive = self.now().replace(tzinfo=None) if self.now().tzinfo else self.now()
+        for symbol in universe:
+            last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+            if last_closed:
+                last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
+                time_since_close = (now_naive - last_closed_naive).total_seconds()
+                if time_since_close < cooldown_seconds:
+                    self._log(f"ℹ️ {symbol}: on entry cooldown ({time_since_close:.0f}s ago < {cooldown_seconds}s cooldown); skip from universe.")
+                    continue
+            filtered_universe.append(symbol)
+
+        universe = filtered_universe
+        if not universe:
+            self._log("ℹ️ empty universe after cooldown filtering; stand down.")
+            return []
+
         open_summary = [
             {"symbol": t["symbol"], "side": t.get("side_type"),
              "expiry": str(t.get("expiry"))}
@@ -254,10 +273,26 @@ class HermesAlpha(AbstractStrategy):
             if dte is not None and dte <= close_dte:
                 close_reason = f"EXPIRY-{dte}DTE"
             elif entry_credit > 0 and debit >= entry_credit * sl_mult:
-                close_reason = "SL"
+                # Stop Loss width safety cap: don't close if already at/above max loss
+                if width is None or debit < width:
+                    close_reason = "SL"
+                else:
+                    self._log(
+                        f"ℹ️ {trade['symbol']}: debit ${debit:.2f} "
+                        f"is at/above width ${width:.2f} (max loss); skipping SL close."
+                    )
             elif width and debit <= width * tp_pct_width:
                 close_reason = "TP"
+
             if close_reason is None:
+                continue
+
+            # Morning pricing guard: before 10:30 AM ET, do not allow closing if it is not in profit
+            if self.is_morning_unreliable() and debit >= entry_credit:
+                self._log(
+                    f"ℹ️ {trade['symbol']}: close deferred (morning pricing unreliable, "
+                    f"debit ${debit:.2f} >= entry credit ${entry_credit:.2f})"
+                )
                 continue
 
             self._log(f"→ {trade['symbol']}: backstop close ({close_reason}) "

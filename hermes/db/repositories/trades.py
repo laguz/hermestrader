@@ -545,6 +545,20 @@ class TradesRepositoryMixin:
             row = result.scalars().first()
             return int(row.lots) if row else 0
 
+    async def latest_closed_trade_time(self, strategy_id: str, symbol: str) -> Optional[datetime]:
+        from sqlalchemy import select, desc
+        from ..orm import Trade
+        async with self.AsyncSession() as session:
+            q = select(Trade.closed_at).where(
+                Trade.strategy_id == strategy_id,
+                Trade.symbol == symbol,
+                Trade.status == "CLOSED",
+                Trade.closed_at.isnot(None)
+            ).order_by(desc(Trade.closed_at)).limit(1)
+            res = await session.execute(q)
+            row = res.first()
+            return row[0] if row else None
+
     @staticmethod
     def _trade_dict(r: Trade) -> Dict[str, Any]:
         return {
