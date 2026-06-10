@@ -224,3 +224,38 @@ async def test_wheel_falls_back_to_delta_when_analysis_unavailable():
     actions = await s.execute_entries(["AAPL"])
     assert len(actions) == 2   # gate inert, delta-only pick proceeds
     assert all("pop" not in (a.strategy_params or {}) for a in actions)
+
+
+async def test_wheel_skips_puts_when_insufficient_buying_power():
+    db = _DBWithShares(share_lots=0)
+    # Available BP is $5,000. A Put at strike ~$91 requires $9,100 collateral.
+    s, broker, db = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={
+            "expirations": _expirations_for(35, 40),
+            "option_buying_power": 5000.0,
+        },
+        config={"wheel_max_lots": 2},
+    )
+    actions = await s.execute_entries(["AAPL"])
+    # Should skip putting because of insufficient buying power
+    assert actions == []
+    # Verify the BLOCKED log was written to the database
+    await asyncio.sleep(0.05)
+    assert any("insufficient BP" in log for log in db.logs)
+
+
+async def test_wheel_allows_puts_when_sufficient_buying_power():
+    db = _DBWithShares(share_lots=0)
+    # Available BP is $20,000. A Put at strike ~$91 requires $9,100 collateral.
+    s, broker, db = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={
+            "expirations": _expirations_for(35, 40),
+            "option_buying_power": 20000.0,
+        },
+        config={"wheel_max_lots": 1},
+    )
+    actions = await s.execute_entries(["AAPL"])
+    # Should proceed since $20,000 is enough for a single contract ($9,100 req)
+    assert len(actions) == 1
