@@ -171,6 +171,23 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"✗ {symbol} {side}: no bid/ask on {short.get('symbol')}; skip.")
             return None
         mid = round((bid + ask) / 2, 2) if (bid > 0 and ask > 0) else round(max(bid, ask), 2)
+
+        # Scale quantity and check buying power
+        strike = float(short.get("strike") or 0.0)
+        requirement_per_lot = strike * 100.0 if side == "put" else 0.0
+        max_lots = int(self.config.get("wheel_max_lots", 5))
+        lots = await self.mm.scale_quantity(
+            requested_lots=1,
+            requirement_per_lot=requirement_per_lot,
+            symbol=symbol,
+            side=side,
+            strategy_id=self.strategy_id,
+            max_lots=max_lots,
+            expiry=expiry,
+        )
+        if lots < 1:
+            return None
+
         params = {"side_type": side, "short_leg": short["symbol"]}
         if pop is not None:
             params["pop"] = round(pop, 4)
