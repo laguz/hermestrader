@@ -104,19 +104,42 @@ class HermesDB(
                 await conn.exec_driver_sql(stmt + ";")
 
     # ------------------------------------------------------------------
-    # Schema migrations applied at watcher boot. Idempotent.
+    # Schema migrations applied at agent/watcher boot. Every statement is
+    # idempotent (IF NOT EXISTS), so a freshly-pulled image self-heals a DB
+    # that predates a column/table — including ``create_all``-bootstrapped
+    # DBs, where create_all never alters existing tables. **When a new
+    # alembic migration adds a column or table, add the matching idempotent
+    # statement here too**, or the running instance breaks on image upgrade
+    # (this is exactly how trades.entry_features went missing).
     # ------------------------------------------------------------------
+    MIGRATIONS: tuple[str, ...] = (
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_trades_open_order_id "
+        "ON trades(broker_order_id) WHERE status = 'OPEN'",
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT",
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT",
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4)",
+        "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
+        # Phase 0 — per-trade entry-feature snapshot for outcome learning.
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_features JSONB",
+        # Phase 3 — per-tick exit-state trajectory capture.
+        "CREATE TABLE IF NOT EXISTS exit_ticks ("
+        "id BIGSERIAL PRIMARY KEY, "
+        "ts TIMESTAMPTZ NOT NULL DEFAULT now(), "
+        "trade_id BIGINT NOT NULL, "
+        "strategy_id TEXT NOT NULL, "
+        "symbol TEXT NOT NULL, "
+        "dte INT, "
+        "unrealized_pnl_pct DOUBLE PRECISION, "
+        "debit DOUBLE PRECISION, "
+        "entry_credit DOUBLE PRECISION, "
+        "action TEXT NOT NULL DEFAULT 'hold', "
+        "close_reason TEXT)",
+        "CREATE INDEX IF NOT EXISTS idx_exit_ticks_trade ON exit_ticks(trade_id, ts)",
+    )
+
     async def run_migrations(self) -> None:
         from sqlalchemy import text as sa_text
-        stmts = [
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT",
-            "CREATE INDEX IF NOT EXISTS idx_trades_open_order_id "
-            "ON trades(broker_order_id) WHERE status = 'OPEN'",
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT",
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT",
-            "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4)",
-            "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
-        ]
         async with self.async_engine.begin() as conn:
-            for sql in stmts:
+            for sql in self.MIGRATIONS:
                 await conn.execute(sa_text(sql))
