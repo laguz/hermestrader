@@ -239,6 +239,31 @@ async def get_analytics() -> Response:
     return _safe_json_response(result)
 
 
+@router.get("/api/analytics/attribution")
+async def get_attribution(strategy_id: str = None, days: int = None,
+                          min_bucket_n: int = 5) -> Response:
+    """Per-knob / per-feature expectancy from closed-trade outcomes.
+
+    The offline evaluator behind outcome-driven tuning (Phase 1): it pairs each
+    closed trade's ``entry_features`` snapshot with its realized P&L and reports
+    win-rate + expectancy bucketed by market context and by knob value.
+
+    Query params: ``strategy_id`` (filter), ``days`` (look-back window),
+    ``min_bucket_n`` (small-sample flag threshold).
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    from hermes.ml.attribution import attribute_outcomes
+
+    since = (_dt.now(_tz.utc) - _td(days=days)) if days else None
+    try:
+        rows = await db.fetch_trade_outcomes(strategy_id=strategy_id, since=since)
+    except Exception:                                              # noqa: BLE001
+        logger.exception("[ATTRIBUTION] fetch_trade_outcomes failed")
+        rows = []
+    report = attribute_outcomes(rows, min_bucket_n=max(1, int(min_bucket_n)))
+    return _safe_json_response(report)
+
+
 def _build_broker_for_analysis():
     """Construct a broker matching the operator's current mode.
 
