@@ -126,21 +126,112 @@ class BrokerServiceServicer(broker_pb2_grpc.BrokerServiceServicer):
             context.set_details(str(exc))
 
     async def StreamQuotes(self, request, context):
-        """Mock stream market data quotes to the agent."""
+        """Forward real-time market data quotes to the agent."""
         logger.info("[gRPC] Received StreamQuotes request")
+        
+        is_live_broker = hasattr(self, "broker") and self.broker.__class__.__name__ == "TradierBroker"
+
+        if not is_live_broker:
+            logger.info("[gRPC] Starting mock StreamQuotes (non-live broker)")
+            try:
+                while True:
+                    watchlist_syms = set()
+                    try:
+                        from hermes.service2_watcher._app_state import db
+                        wl = await db.all_watchlist_symbols()
+                        tracked = await db.tracked_option_symbols()
+                        watchlist_syms.update(wl)
+                        watchlist_syms.update(tracked)
+                    except Exception as exc:
+                        logger.debug("[gRPC] Failed to query database for mock StreamQuotes watchlist: %s", exc)
+                    if not watchlist_syms:
+                        watchlist_syms = {"SPY"}
+                    
+                    for sym in sorted(list(watchlist_syms)):
+                        yield broker_pb2.MarketQuote(
+                            symbol=sym,
+                            price=500.0,
+                            bid=499.9,
+                            ask=500.1,
+                            volume=1000000,
+                            timestamp=datetime.utcnow().isoformat()
+                        )
+                    await asyncio.sleep(5.0)
+            except asyncio.CancelledError:
+                logger.info("[gRPC] Mock StreamQuotes cancelled")
+            return
+
+        token = self.broker.token
+        account_id = self.broker.account_id
+        base_url = self.broker.base_url
+
+        from hermes.broker.tradier_stream import TradierStreamClient
+        from hermes.service2_watcher._app_state import db
+
+        queue = asyncio.Queue()
+
+        class QueueEventBus:
+            def emit(self, event):
+                queue.put_nowait(event)
+
+        watchlist_syms = set()
+        try:
+            wl = await db.all_watchlist_symbols()
+            tracked = await db.tracked_option_symbols()
+            watchlist_syms.update(wl)
+            watchlist_syms.update(tracked)
+        except Exception as e:
+            logger.error("[gRPC] Failed to fetch initial watchlist: %s", e)
+
+        if not watchlist_syms:
+            watchlist_syms = {"SPY"}
+
+        stream_client = TradierStreamClient(
+            token=token,
+            account_id=account_id,
+            base_url=base_url,
+            event_bus=QueueEventBus(),
+            watchlist=list(watchlist_syms)
+        )
+
+        await stream_client.start()
+        logger.info("[gRPC] Started Tradier stream for symbols: %s", watchlist_syms)
+
+        async def poll_watchlist():
+            try:
+                while True:
+                    await asyncio.sleep(10.0)
+                    wl = await db.all_watchlist_symbols()
+                    tracked = await db.tracked_option_symbols()
+                    current_syms = set(wl) | set(tracked)
+                    if not current_syms:
+                        current_syms = {"SPY"}
+                    stream_client.update_watchlist(list(current_syms))
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                logger.error("[gRPC] Error in poll_watchlist: %s", exc)
+
+        poll_task = asyncio.create_task(poll_watchlist())
+
         try:
             while True:
+                event = await queue.get()
+                bid = float(event.data.get("bid") or event.price)
+                ask = float(event.data.get("ask") or event.price)
                 yield broker_pb2.MarketQuote(
-                    symbol="SPY",
-                    price=500.0,
-                    bid=499.9,
-                    ask=500.1,
-                    volume=1000000,
-                    timestamp=datetime.utcnow().isoformat()
+                    symbol=event.symbol,
+                    price=event.price,
+                    bid=bid,
+                    ask=ask,
+                    volume=event.volume,
+                    timestamp=event.timestamp.isoformat()
                 )
-                await asyncio.sleep(5.0)
         except asyncio.CancelledError:
-            logger.info("[gRPC] Client unsubscribed from StreamQuotes (cancelled)")
+            logger.info("[gRPC] StreamQuotes client disconnected")
+        finally:
+            poll_task.cancel()
+            await stream_client.stop()
 
     async def GetAccountBalances(self, request, context):
         """Fetch option and stock buying power, total equity, cash, and account type."""
