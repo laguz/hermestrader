@@ -264,6 +264,36 @@ async def get_attribution(strategy_id: str = None, days: int = None,
     return _safe_json_response(report)
 
 
+@router.get("/api/analytics/bandit")
+async def get_bandit(min_observations: int = 20) -> Response:
+    """Thompson-bandit knob proposals + per-arm posteriors (read-only).
+
+    Shows what the Phase-2 bandit would select for each learnable knob given
+    the closed-trade outcomes so far, and whether each proposal is
+    ``actionable`` (has enough data to act on). Never mutates a setting — the
+    agent tick does that, only when ``bandit_tuner_mode=active``.
+    """
+    from hermes.ml.bandit import propose_knob_updates, LEARNABLE_KNOBS
+
+    try:
+        rows = await db.fetch_trade_outcomes()
+        keys = [k for knobs in LEARNABLE_KNOBS.values() for k in knobs]
+        current = await db.get_settings(keys) or {}
+    except Exception:                                              # noqa: BLE001
+        logger.exception("[BANDIT] proposal fetch failed")
+        rows, current = [], {}
+
+    mode = (await db.get_setting("bandit_tuner_mode") or "off")
+    proposals = propose_knob_updates(
+        rows, current, min_observations=max(1, int(min_observations)))
+    return _safe_json_response({
+        "mode": str(mode).strip().lower(),
+        "n_trades": len(rows),
+        "min_observations": min_observations,
+        "proposals": proposals,
+    })
+
+
 def _build_broker_for_analysis():
     """Construct a broker matching the operator's current mode.
 
