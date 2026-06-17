@@ -73,3 +73,41 @@ def test_offline_upgrade_emits_full_schema():
         "create_hypertable", "add_compression_policy", "pnl_daily",
     ):
         assert needle in sql, f"baseline SQL missing {needle!r}"
+
+
+# ---------------------------------------------------------------------------
+# Boot-time self-heal migrations (HermesDB.run_migrations)
+#
+# These run at agent/watcher boot and must bring an older DB up to the current
+# schema — including create_all-bootstrapped DBs, where create_all never alters
+# existing tables. Guards the exact regression that took the paper bot down: a
+# new column/table shipped in code but missing from MIGRATIONS, so the running
+# instance crashed on image upgrade (trades.entry_features).
+# ---------------------------------------------------------------------------
+from hermes.db.models import HermesDB                              # noqa: E402
+
+_MIGRATIONS = HermesDB.MIGRATIONS
+
+
+def test_every_self_heal_migration_is_idempotent():
+    for stmt in _MIGRATIONS:
+        assert "IF NOT EXISTS" in stmt, f"non-idempotent migration: {stmt}"
+
+
+def test_phase0_entry_features_is_self_healed():
+    assert any("ADD COLUMN IF NOT EXISTS entry_features" in s for s in _MIGRATIONS), \
+        "trades.entry_features missing from run_migrations — Phase-0 capture breaks on upgrade"
+
+
+def test_phase3_exit_ticks_is_self_healed():
+    assert any("CREATE TABLE IF NOT EXISTS exit_ticks" in s for s in _MIGRATIONS), \
+        "exit_ticks missing from run_migrations — Phase-3 capture breaks on upgrade"
+    assert any("idx_exit_ticks_trade" in s for s in _MIGRATIONS), \
+        "exit_ticks index missing from run_migrations"
+
+
+def test_late_added_trade_columns_are_all_covered():
+    joined = " ".join(_MIGRATIONS)
+    for col in ("broker_order_id", "tag", "close_tag", "exit_price",
+                "entry_features"):
+        assert f"ADD COLUMN IF NOT EXISTS {col}" in joined, f"{col} not self-healed"
