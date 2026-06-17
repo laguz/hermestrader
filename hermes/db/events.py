@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Type
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func
+
+from hermes.db.models import EventLedger
+
+
+class BaseEvent(BaseModel):
+    """Base Event class for Event Sourcing."""
+    event_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+
+class OrderSubmittedEvent(BaseEvent):
+    """Event triggered when a pending order is submitted."""
+    id: int
+    strategy_id: str
+    symbol: str
+    side: str
+    quantity: int
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    submitted_at: str
+
+
+class OrderFilledEvent(BaseEvent):
+    """Event triggered when a pending order is filled at the broker."""
+    pending_order_id: int
+    trade_id: int
+    trade_fields: Dict[str, Any]
+
+
+class OrderRejectedEvent(BaseEvent):
+    """Event triggered when a pending order is rejected."""
+    pending_order_id: int
+
+
+class OrderExpiredEvent(BaseEvent):
+    """Event triggered when a pending order is expired."""
+    pending_order_id: int
+
+
+class CloseSubmittedEvent(BaseEvent):
+    """Event triggered when a close order is submitted for a trade."""
+    pending_order_id: int
+    trade_id: int
+    exit_price: Optional[float] = None
+    close_reason: str
+    close_tag: Optional[str] = None
+
+
+class CloseFilledEvent(BaseEvent):
+    """Event triggered when a close order is filled."""
+    trade_id: int
+    closed_at: str
+
+
+class CloseReopenedEvent(BaseEvent):
+    """Event triggered when a close order is cancelled and the trade is re-opened."""
+    trade_id: int
+
+
+class ReconcileFlatEvent(BaseEvent):
+    """Event triggered when a trade is reconciled to flat (closed)."""
+    trade_id: int
+    closed_at: str
+    close_reason: str = "RECONCILED_BROKER_FLAT"
+
+
+class DoctrineUpdatedEvent(BaseEvent):
+    """Event triggered when the doctrine/operator rules are updated."""
+    doctrine_text: str
+    updated_at: str
+
+
+class SystemSettingChangedEvent(BaseEvent):
+    """Event triggered when a system setting is modified."""
+    key: str
+    value: str
+    updated_at: str
+
+
+# Event Type Registry mapping to database event_type values
+EVENT_TYPE_TO_CLASS: Dict[str, Type[BaseEvent]] = {
+    "ORDER_SUBMITTED": OrderSubmittedEvent,
+    "ORDER_FILLED": OrderFilledEvent,
+    "ORDER_REJECTED": OrderRejectedEvent,
+    "ORDER_EXPIRED": OrderExpiredEvent,
+    "CLOSE_SUBMITTED": CloseSubmittedEvent,
+    "CLOSE_FILLED": CloseFilledEvent,
+    "CLOSE_REOPEN": CloseReopenedEvent,
+    "RECONCILE_FLAT": ReconcileFlatEvent,
+    "DOCTRINE_UPDATED": DoctrineUpdatedEvent,
+    "SYSTEM_SETTING_CHANGED": SystemSettingChangedEvent,
+}
+
+CLASS_TO_EVENT_TYPE: Dict[Type[BaseEvent], str] = {
+    v: k for k, v in EVENT_TYPE_TO_CLASS.items()
+}
+
+
+class EventStoreManager:
+    """Manages appending and loading events from the DB EventLedger."""
+
+    @staticmethod
+    async def append_event(session, event: BaseEvent) -> int:
+        """Serialize and save an event to the EventLedger."""
+        event_type = CLASS_TO_EVENT_TYPE.get(event.__class__)
+        if not event_type:
+            raise ValueError(f"Unknown event class: {event.__class__}")
+            
+        payload = event.model_dump(exclude={"event_id", "created_at"})
+        
+        dialect_name = "sqlite"
+        if session.bind:
+            dialect_name = session.bind.dialect.name
+            
+        row_id = None
+        if dialect_name == "sqlite":
+            q = select(func.max(EventLedger.id))
+            res = await session.execute(q)
+            max_id = res.scalar() or 0
+            row_id = max_id + 1
+
+        row = EventLedger(
+            id=row_id,
+            event_type=event_type,
+            payload=payload
+        )
+        session.add(row)
+        await session.flush()
+        
+        event.event_id = row.id
+        event.created_at = row.created_at
+        return row.id
+
+    @staticmethod
+    async def load_events(session, start_id: int = 0) -> List[BaseEvent]:
+        """Load and deserialize events from the EventLedger sorted by ID."""
+        from sqlalchemy import select
+        q = select(EventLedger).where(EventLedger.id >= start_id).order_by(EventLedger.id.asc())
+        result = await session.execute(q)
+        rows = result.scalars().all()
+        
+        events = []
+        for row in rows:
+            cls = EVENT_TYPE_TO_CLASS.get(row.event_type)
+            if not cls:
+                continue
+            
+            payload = row.payload
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+                
+            event = cls(**payload)
+            event.event_id = row.id
+            event.created_at = row.created_at
+            events.append(event)
+            
+        return events

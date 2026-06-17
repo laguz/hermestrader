@@ -354,20 +354,20 @@ class TradesRepositoryMixin:
                     if held or resting:
                         continue
                     close_reason = t.close_reason or "RECONCILED_BROKER_FLAT"
-                    TransactionManager.reconcile_trade(t, "force_close", close_reason=close_reason)
+                    await TransactionManager.reconcile_trade(s, t, "force_close", close_reason=close_reason)
                     closed += 1
                 else:  # CLOSING — a close was submitted; confirm its fate.
                     if not held:
                         # Legs went flat → the close filled. Finalize, keeping
                         # the close_reason / exit / pnl stashed at submit time.
-                        TransactionManager.reconcile_trade(t, "finish_close")
+                        await TransactionManager.reconcile_trade(s, t, "finish_close")
                         closed += 1
                     elif resting:
                         continue            # close order still working
                     else:
                         # Still held with no resting order → the close didn't
                         # take (rejected/canceled async). Re-arm for retry.
-                        TransactionManager.reconcile_trade(t, "reopen")
+                        await TransactionManager.reconcile_trade(s, t, "reopen")
                         reopened += 1
             if closed or reopened:
                 await s.commit()
@@ -613,7 +613,7 @@ class TradesRepositoryMixin:
             )
             stale = result.scalars().all()
             for row in stale:
-                TransactionManager.expire_order(row)
+                await TransactionManager.expire_order(s, row)
                 expired += 1
             if expired:
                 await s.commit()

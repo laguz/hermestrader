@@ -37,10 +37,27 @@ class SettingsRepositoryMixin:
             result = await s.execute(select(SystemSetting).filter_by(key=key).limit(1))
             row = result.scalars().first()
             if row is None:
-                s.add(SystemSetting(key=key, value=str(value)))
+                row = SystemSetting(key=key, value=str(value))
+                s.add(row)
             else:
                 row.value = str(value)
                 row.updated_at = datetime.utcnow()
+            await s.flush()
+            
+            # Emit Event-Sourced Event
+            from hermes.db.events import EventStoreManager, SystemSettingChangedEvent, DoctrineUpdatedEvent
+            if key == "soul_md":
+                ev = DoctrineUpdatedEvent(
+                    doctrine_text=str(value),
+                    updated_at=row.updated_at.isoformat() if row.updated_at else datetime.utcnow().isoformat()
+                )
+            else:
+                ev = SystemSettingChangedEvent(
+                    key=key,
+                    value=str(value),
+                    updated_at=row.updated_at.isoformat() if row.updated_at else datetime.utcnow().isoformat()
+                )
+            await EventStoreManager.append_event(s, ev)
             await s.commit()
 
     async def setting_updated_at(self, key: str) -> Optional[datetime]:
