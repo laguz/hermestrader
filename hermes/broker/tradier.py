@@ -24,6 +24,14 @@ from tenacity import (
 )
 
 from .base import AbstractBroker
+from .models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 
 logger = logging.getLogger("hermes.broker.tradier")
 
@@ -124,7 +132,7 @@ class TradierBroker(AbstractBroker):
             data["preview"] = "true"
         return data
 
-    async def get_account_balances(self) -> Dict[str, Any]:
+    async def get_account_balances(self) -> AccountBalances:
         data = await self._get(f"/accounts/{self.account_id}/balances")
         b = (data.get("balances") or {})
         margin = b.get("margin") or {}
@@ -156,17 +164,17 @@ class TradierBroker(AbstractBroker):
             b.get("account_type"), obp, sbp, list(b.keys()),
         )
 
-        return {
-            "option_buying_power": obp,
-            "stock_buying_power": sbp,
-            "total_equity": _f(b.get("total_equity")),
-            "cash": _f(cash.get("cash_available") or b.get("total_cash")),
-            "account_type": b.get("account_type"),
-            "margin_buying_power": _f(margin.get("stock_buying_power") or pdt.get("stock_buying_power")),
-            "raw": b,
-        }
+        return AccountBalances(
+            option_buying_power=obp,
+            stock_buying_power=sbp,
+            total_equity=_f(b.get("total_equity")),
+            cash=_f(cash.get("cash_available") or b.get("total_cash")),
+            account_type=b.get("account_type"),
+            margin_buying_power=_f(margin.get("stock_buying_power") or pdt.get("stock_buying_power")),
+            raw=b,
+        )
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> List[BrokerPosition]:
         data = await self._get(f"/accounts/{self.account_id}/positions")
         positions = (data.get("positions") or {})
         if not positions or positions == "null":
@@ -175,16 +183,16 @@ class TradierBroker(AbstractBroker):
         if isinstance(items, dict):
             items = [items]
         return [
-            {
-                "symbol": p.get("symbol"),
-                "quantity": float(p.get("quantity", 0.0) or 0.0),
-                "cost_basis": float(p.get("cost_basis", 0.0) or 0.0),
-                "date_acquired": p.get("date_acquired"),
-            }
+            BrokerPosition(
+                symbol=p.get("symbol"),
+                quantity=float(p.get("quantity", 0.0) or 0.0),
+                cost_basis=float(p.get("cost_basis", 0.0) or 0.0),
+                date_acquired=p.get("date_acquired"),
+            )
             for p in items
         ]
 
-    async def get_orders(self) -> List[Dict[str, Any]]:
+    async def get_orders(self) -> List[BrokerOrder]:
         data = await self._get(f"/accounts/{self.account_id}/orders", params={"includeTags": "true"})
         orders = (data.get("orders") or {})
         if not orders or orders == "null":
@@ -192,7 +200,23 @@ class TradierBroker(AbstractBroker):
         items = orders.get("order", [])
         if isinstance(items, dict):
             items = [items]
-        return items
+        orders_list = []
+        for o in items:
+            orders_list.append(
+                BrokerOrder(
+                    order_id=str(o.get("id") or o.get("order_id") or ""),
+                    symbol=str(o.get("symbol", "")),
+                    status=str(o.get("status", "")),
+                    quantity=int(o.get("quantity", 1) or 1),
+                    price=float(o.get("price") or o.get("avg_fill_price") or 0.0),
+                    side=str(o.get("side", "")),
+                    tag=str(o.get("tag", "")),
+                    legs=o.get("leg") or [],
+                    option_symbol=o.get("option_symbol"),
+                    **o
+                )
+            )
+        return orders_list
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         client = self._get_client()
@@ -211,7 +235,7 @@ class TradierBroker(AbstractBroker):
             exp = [exp]
         return exp
 
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         data = await self._get(
             "/markets/options/chains",
             params={"symbol": symbol, "expiration": expiry, "greeks": "true"},
@@ -222,9 +246,25 @@ class TradierBroker(AbstractBroker):
         items = options.get("option", [])
         if isinstance(items, dict):
             items = [items]
-        return items
+        legs = []
+        for o in items:
+            greeks = o.get("greeks") or {}
+            delta = float(greeks.get("delta") or 0.0)
+            legs.append(
+                OptionChainLeg(
+                    symbol=o.get("symbol", ""),
+                    strike=float(o.get("strike", 0.0) or 0.0),
+                    option_type=o.get("option_type", ""),
+                    bid=float(o.get("bid", 0.0) or 0.0),
+                    ask=float(o.get("ask", 0.0) or 0.0),
+                    delta=delta,
+                    greeks=greeks,
+                    **o
+                )
+            )
+        return legs
 
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
         data = await self._get("/markets/quotes", params={"symbols": symbols, "greeks": "true"})
         quotes = (data.get("quotes") or {})
         if not quotes or quotes == "null":
@@ -232,7 +272,21 @@ class TradierBroker(AbstractBroker):
         items = quotes.get("quote", [])
         if isinstance(items, dict):
             items = [items]
-        return items
+        quotes_list = []
+        for q in items:
+            price = float(q.get("last") or q.get("price") or 0.0)
+            quotes_list.append(
+                MarketQuote(
+                    symbol=q.get("symbol", ""),
+                    price=price,
+                    bid=float(q.get("bid", 0.0) or 0.0),
+                    ask=float(q.get("ask", 0.0) or 0.0),
+                    volume=int(q.get("volume", 0) or 0),
+                    timestamp=str(q.get("timestamp") or ""),
+                    **q
+                )
+            )
+        return quotes_list
 
     async def get_delta(self, option_symbol: str) -> float:
         quotes = await self.get_quote(option_symbol)
@@ -332,17 +386,27 @@ class TradierBroker(AbstractBroker):
             "period": period,
         }
 
-    async def place_order_from_action(self, action) -> Dict[str, Any]:
+    async def place_order_from_action(self, action) -> OrderPlacementResult:
         legs = action.legs or []
         if not legs:
             raise ValueError("TradeAction has no legs")
 
         order_class = (action.order_class or "multileg").lower()
         if order_class == "equity":
-            return await self._place_equity(action)
-        if order_class == "option" and len(legs) == 1:
-            return await self._place_single_option(action)
-        return await self._place_multileg(action)
+            res = await self._place_equity(action)
+        elif order_class == "option" and len(legs) == 1:
+            res = await self._place_single_option(action)
+        else:
+            res = await self._place_multileg(action)
+
+        order_dict = res.get("order") or {}
+        order_id = str(order_dict.get("id") or res.get("id") or "")
+        status = str(order_dict.get("status") or res.get("status") or "ok")
+        return OrderPlacementResult(
+            order_id=order_id,
+            status=status,
+            raw_response=res
+        )
 
     def _leg_action(self, leg: Dict[str, Any], default_open: bool = True) -> str:
         explicit = (leg.get("action") or "").lower().strip()

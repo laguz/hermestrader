@@ -7,6 +7,14 @@ from typing import Any, Dict, List, Optional
 import grpc
 
 from hermes.broker.base import AbstractBroker
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 from hermes.protos import broker_pb2, broker_pb2_grpc
 
 logger = logging.getLogger("hermes.broker.grpc_client")
@@ -27,44 +35,65 @@ class GRPCBrokerClient(AbstractBroker):
             self._stub = broker_pb2_grpc.BrokerServiceStub(self._channel)
         return self._stub
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> List[BrokerPosition]:
         stub = self._get_stub()
         positions = []
         try:
             response_stream = stub.QueryPositions(broker_pb2.Empty())
             async for pos in response_stream:
-                positions.append({
-                    "symbol": pos.symbol,
-                    "quantity": pos.quantity,
-                    "cost_basis": pos.cost_basis,
-                    "date_acquired": pos.date_acquired or None
-                })
+                positions.append(
+                    BrokerPosition(
+                        symbol=pos.symbol,
+                        quantity=float(pos.quantity),
+                        cost_basis=float(pos.cost_basis),
+                        date_acquired=pos.date_acquired or "",
+                    )
+                )
         except Exception as exc:
             logger.error("[gRPC Client] Failed to query positions over gRPC: %s", exc)
         return positions
 
-    async def get_account_balances(self) -> Dict[str, Any]:
+    async def get_account_balances(self) -> AccountBalances:
         stub = self._get_stub()
         try:
             res = await stub.GetAccountBalances(broker_pb2.Empty())
-            return {
-                "option_buying_power": res.option_buying_power,
-                "stock_buying_power": res.stock_buying_power,
-                "total_equity": res.total_equity,
-                "cash": res.cash,
-                "account_type": res.account_type,
-                "margin_buying_power": res.margin_buying_power
-            }
+            return AccountBalances(
+                option_buying_power=float(res.option_buying_power),
+                stock_buying_power=float(res.stock_buying_power),
+                total_equity=float(res.total_equity),
+                cash=float(res.cash),
+                account_type=str(res.account_type),
+                margin_buying_power=float(res.margin_buying_power),
+            )
         except Exception as exc:
             logger.error("[gRPC Client] Failed to get account balances: %s", exc)
-            return {}
+            return AccountBalances(0.0, 0.0, 0.0, 0.0, "margin")
 
-    async def get_orders(self) -> List[Dict[str, Any]]:
+    async def get_orders(self) -> List[BrokerOrder]:
         stub = self._get_stub()
         try:
             res = await stub.GetOrders(broker_pb2.Empty())
             if res.data_json:
-                return json.loads(res.data_json)
+                data = json.loads(res.data_json)
+                if isinstance(data, list):
+                    return [
+                        BrokerOrder(
+                            order_id=str(o.get("id") or o.get("order_id") or ""),
+                            symbol=str(o.get("symbol") or ""),
+                            status=str(o.get("status") or ""),
+                            quantity=int(o.get("quantity") or 0),
+                            price=float(o.get("price") or 0.0),
+                            side=str(o.get("side") or ""),
+                            tag=str(o.get("tag") or ""),
+                            legs=o.get("leg") or o.get("legs") or [],
+                            option_symbol=o.get("option_symbol"),
+                            **{k: v for k, v in o.items() if k not in (
+                                "order_id", "symbol", "status", "quantity", "price", "side",
+                                "tag", "legs", "option_symbol", "id", "leg"
+                            )}
+                        )
+                        for o in data
+                    ]
         except Exception as exc:
             logger.error("[gRPC Client] Failed to get orders: %s", exc)
         return []
@@ -88,25 +117,56 @@ class GRPCBrokerClient(AbstractBroker):
             logger.error("[gRPC Client] Failed to get option expirations for %s: %s", symbol, exc)
             return []
 
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         stub = self._get_stub()
         try:
             res = await stub.GetOptionChains(broker_pb2.OptionChainsRequest(symbol=symbol, expiry=expiry))
             if res.data_json:
-                return json.loads(res.data_json)
+                data = json.loads(res.data_json)
+                if isinstance(data, list):
+                    return [
+                        OptionChainLeg(
+                            symbol=str(leg.get("symbol") or ""),
+                            strike=float(leg.get("strike") or 0.0),
+                            option_type=str(leg.get("option_type") or "put"),
+                            bid=float(leg.get("bid") or 0.0),
+                            ask=float(leg.get("ask") or 0.0),
+                            delta=float(leg.get("delta") or (leg.get("greeks") or {}).get("delta") or 0.0),
+                            greeks=leg.get("greeks"),
+                            **{k: v for k, v in leg.items() if k not in (
+                                "symbol", "strike", "option_type", "bid", "ask", "delta", "greeks"
+                            )}
+                        )
+                        for leg in data
+                    ]
         except Exception as exc:
             logger.error("[gRPC Client] Failed to get option chains for %s on %s: %s", symbol, expiry, exc)
-            return []
+        return []
 
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
         stub = self._get_stub()
         try:
             res = await stub.GetQuote(broker_pb2.QuoteRequest(symbols=symbols))
             if res.data_json:
-                return json.loads(res.data_json)
+                data = json.loads(res.data_json)
+                if isinstance(data, list):
+                    return [
+                        MarketQuote(
+                            symbol=str(q.get("symbol") or ""),
+                            price=float(q.get("price") or q.get("last") or 0.0),
+                            bid=float(q.get("bid") or 0.0),
+                            ask=float(q.get("ask") or 0.0),
+                            volume=int(q.get("volume") or 0),
+                            timestamp=str(q.get("timestamp") or ""),
+                            **{k: v for k, v in q.items() if k not in (
+                                "symbol", "price", "bid", "ask", "volume", "timestamp"
+                            )}
+                        )
+                        for q in data
+                    ]
         except Exception as exc:
             logger.error("[gRPC Client] Failed to get quotes for %s: %s", symbols, exc)
-            return []
+        return []
 
     async def get_delta(self, option_symbol: str) -> float:
         stub = self._get_stub()
@@ -154,7 +214,7 @@ class GRPCBrokerClient(AbstractBroker):
             logger.error("[gRPC Client] Failed to roll %s to next month: %s", option_symbol, exc)
             return ""
 
-    async def place_order_from_action(self, action) -> Dict[str, Any]:
+    async def place_order_from_action(self, action) -> OrderPlacementResult:
         stub = self._get_stub()
         
         legs = []
@@ -194,7 +254,17 @@ class GRPCBrokerClient(AbstractBroker):
                     res.update(json.loads(report.raw_response_json))
                 except json.JSONDecodeError:
                     pass
-            return res
+
+            order_dict = res.get("order") or {}
+            order_id = str(order_dict.get("id") or res.get("order_id") or res.get("order_id") or "")
+            status = str(order_dict.get("status") or res.get("status") or "ok")
+            kwargs = {k: v for k, v in res.items() if k not in ("order_id", "status", "order")}
+            return OrderPlacementResult(
+                order_id=order_id,
+                status=status,
+                raw_response=res,
+                **kwargs
+            )
         except Exception as exc:
             logger.error("[gRPC Client] Failed to place order over gRPC: %s", exc)
             raise exc

@@ -12,6 +12,14 @@ import pandas as pd
 from hermes.common import OCC_RE
 from hermes.greeks import black_scholes_greeks, black_scholes_price
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 
 logger = logging.getLogger("hermes.backtest")
 
@@ -249,20 +257,45 @@ class BacktestBroker:
     def current_date(self, val: datetime.datetime) -> None:
         self._current_date = val
 
-    async def get_account_balances(self) -> Dict[str, Any]:
-        return {
-            "option_buying_power": self.balance,
-            "stock_buying_power": self.balance,
-            "cash": self.balance,
-            "total_equity": self.balance,
-            "account_type": "margin",
-        }
+    async def get_account_balances(self) -> AccountBalances:
+        return AccountBalances(
+            option_buying_power=self.balance,
+            stock_buying_power=self.balance,
+            cash=self.balance,
+            total_equity=self.balance,
+            account_type="margin",
+            margin_buying_power=self.balance,
+            raw={}
+        )
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
-        return list(self.virtual_positions.values())
+    async def get_positions(self) -> List[BrokerPosition]:
+        return [
+            BrokerPosition(
+                symbol=pos.get("symbol", ""),
+                quantity=float(pos.get("quantity", 0.0)),
+                cost_basis=float(pos.get("cost_basis", 0.0)),
+                date_acquired=str(pos.get("date_acquired", "")),
+                **pos
+            )
+            for pos in self.virtual_positions.values()
+        ]
 
-    async def get_orders(self) -> List[Dict[str, Any]]:
-        return self.placed_orders
+    async def get_orders(self) -> List[BrokerOrder]:
+        return [
+            BrokerOrder(
+                order_id=o.get("id", ""),
+                symbol=o.get("symbol", ""),
+                status=o.get("status", ""),
+                quantity=int(o.get("quantity", 1)),
+                price=float(o.get("price", 0.0)),
+                side=o.get("side", ""),
+                tag=o.get("tag", ""),
+                legs=o.get("legs", []),
+                option_symbol=o.get("option_symbol"),
+                **o
+            )
+            for o in self.placed_orders
+        ]
 
     async def _get_spot(self, symbol: str) -> float:
         try:
@@ -284,7 +317,7 @@ class BacktestBroker:
                 break
         return expirations
 
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         spot = await self._get_spot(symbol)
         expiry_date = datetime.datetime.strptime(expiry, "%Y-%m-%d").date()
         T = (expiry_date - self.current_date.date()).days / 365.0
@@ -314,18 +347,21 @@ class BacktestBroker:
                 price = black_scholes_price(spot, strike, T, r, sigma, option_type)
                 greeks = black_scholes_greeks(spot, strike, T, r, sigma, option_type)
                 occ = f"{symbol.upper()}{yymmdd}{'P' if option_type == 'put' else 'C'}{int(round(strike * 1000)):08d}"
-                chain.append({
-                    "symbol": occ,
-                    "option_type": option_type,
-                    "strike": strike,
-                    "bid": round(max(0.01, price - 0.05), 2),
-                    "ask": round(price + 0.05, 2),
-                    "greeks": greeks,
-                    "underlying_price": spot,
-                })
+                chain.append(
+                    OptionChainLeg(
+                        symbol=occ,
+                        option_type=option_type,
+                        strike=strike,
+                        bid=round(max(0.01, price - 0.05), 2),
+                        ask=round(price + 0.05, 2),
+                        delta=float(greeks.get("delta", 0.0) if greeks else 0.0),
+                        greeks=greeks,
+                        underlying_price=spot,
+                    )
+                )
         return chain
 
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
         result = []
         for s in symbols.split(","):
             s = s.strip().upper()
@@ -346,26 +382,36 @@ class BacktestBroker:
                 r = 0.05
                 price = black_scholes_price(spot, strike, T, r, sigma, option_type)
                 greeks = black_scholes_greeks(spot, strike, T, r, sigma, option_type)
-                result.append({
-                    "symbol": s,
-                    "option_type": option_type,
-                    "strike": strike,
-                    "bid": round(max(0.01, price - 0.05), 2),
-                    "ask": round(price + 0.05, 2),
-                    "greeks": greeks,
-                    "last": price,
-                })
+                result.append(
+                    MarketQuote(
+                        symbol=s,
+                        price=float(price),
+                        bid=round(max(0.01, price - 0.05), 2),
+                        ask=round(price + 0.05, 2),
+                        volume=0,
+                        timestamp=self.current_date.strftime("%Y-%m-%d %H:%M:%S"),
+                        option_type=option_type,
+                        strike=strike,
+                        greeks=greeks,
+                        last=price,
+                    )
+                )
             else:
                 spot = await self._get_spot(s)
-                result.append({
-                    "symbol": s,
-                    "last": spot,
-                    "bid": round(spot - 0.02, 2),
-                    "ask": round(spot + 0.02, 2),
-                })
+                result.append(
+                    MarketQuote(
+                        symbol=s,
+                        price=float(spot),
+                        bid=round(spot - 0.02, 2),
+                        ask=round(spot + 0.02, 2),
+                        volume=1000000,
+                        timestamp=self.current_date.strftime("%Y-%m-%d %H:%M:%S"),
+                        last=spot,
+                    )
+                )
         return result
 
-    async def place_order_from_action(self, action: Any) -> Dict[str, Any]:
+    async def place_order_from_action(self, action: Any) -> OrderPlacementResult:
         order_id = f"BT-ORD-{len(self.placed_orders) + 1}"
         order = {
             "id": order_id,
@@ -374,6 +420,9 @@ class BacktestBroker:
             "quantity": action.quantity or 1,
             "class": action.order_class,
             "tag": action.tag,
+            "price": float(action.price or 0.0),
+            "side": action.side,
+            "legs": [{"option_symbol": l.get("option_symbol"), "quantity": l.get("quantity", action.quantity or 1), "side": l.get("side")} for l in (action.legs or [])],
         }
         self.placed_orders.append(order)
 
@@ -398,6 +447,8 @@ class BacktestBroker:
                     self.virtual_positions[occ] = {
                         "symbol": occ,
                         "quantity": -lots if "sell" in side else lots,
+                        "cost_basis": float(action.price or 0.0),
+                        "date_acquired": self.current_date.strftime("%Y-%m-%d"),
                     }
                 else:
                     self.virtual_positions[occ]["quantity"] += -lots if "sell" in side else lots
@@ -410,7 +461,11 @@ class BacktestBroker:
             else:
                 self.balance -= tx_val
 
-        return {"status": "ok", "order": order}
+        return OrderPlacementResult(
+            order_id=order_id,
+            status="filled",
+            raw_response={"status": "ok", "order": order}
+        )
 
     async def roll_to_next_month(self, option_symbol: str) -> str:
         m = OCC_RE.match(option_symbol or "")

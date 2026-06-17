@@ -31,15 +31,15 @@ class _StubDB:
 
 
 
-def test_mock_broker_get_orders_returns_empty_list():
+async def test_mock_broker_get_orders_returns_empty_list():
     """Required by MoneyManager.sync_broker_orders — must not raise."""
     broker = MockBroker({})
-    assert broker.get_orders() == []
+    assert await broker.get_orders() == []
 
 
-def test_mock_broker_balances_include_account_type():
+async def test_mock_broker_balances_include_account_type():
     """MoneyManager logs reference balances['account_type']."""
-    balances = MockBroker({}).get_account_balances()
+    balances = await MockBroker({}).get_account_balances()
     assert balances.get("account_type") == "margin"
     assert balances.get("option_buying_power", 0) > 0
 
