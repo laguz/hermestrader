@@ -25,9 +25,10 @@ from sqlalchemy.orm import sessionmaker
 
 # Re-exported so ``from hermes.db.models import Base, Trade, ...`` keeps working.
 from hermes.db.orm import (  # noqa: F401
-    AIDecision, Base, BotLog, PendingApproval, PendingOrder, Prediction,
-    Strategy, StrategyWatchlist, SystemSetting, Trade, VetoSuppression,
-    _close_reason_from_tag, _compute_realized_pnl, sync_to_async_dsn,
+    AIDecision, Base, BotLog, ExitTick, PendingApproval, PendingOrder,
+    Prediction, Strategy, StrategyWatchlist, SystemSetting, Trade,
+    VetoSuppression, _close_reason_from_tag, _compute_realized_pnl,
+    sync_to_async_dsn,
 )
 from hermes.db.repositories import (
     AnalyticsRepositoryMixin, ApprovalsRepositoryMixin,
@@ -40,7 +41,7 @@ logger = logging.getLogger("hermes.db")
 __all__ = [
     "Base", "Strategy", "StrategyWatchlist", "Trade", "PendingOrder",
     "PendingApproval", "VetoSuppression", "BotLog", "AIDecision", "Prediction",
-    "SystemSetting", "HermesDB", "sync_to_async_dsn",
+    "SystemSetting", "ExitTick", "HermesDB", "sync_to_async_dsn",
     "_close_reason_from_tag", "_compute_realized_pnl",
 ]
 

@@ -294,6 +294,29 @@ async def get_bandit(min_observations: int = 20) -> Response:
     })
 
 
+@router.get("/api/analytics/exit_policy")
+async def get_exit_policy(min_support: int = 10, margin: float = 0.05) -> Response:
+    """Offline exit-policy value estimates per state (read-only, Phase 3).
+
+    Trains the tabular hold/close policy on the captured ``exit_ticks``
+    trajectories and returns Q(close)/Q(hold) and the recommendation per
+    discretized ``(pnl%, dte)`` state. Never closes anything — the agent tick
+    does that, only when ``exit_policy_mode=active``.
+    """
+    from hermes.ml.exit_policy import train_exit_policy
+
+    try:
+        ticks = await db.fetch_exit_ticks()
+    except Exception:                                              # noqa: BLE001
+        logger.exception("[EXIT-POLICY] fetch_exit_ticks failed")
+        ticks = []
+
+    mode = (await db.get_setting("exit_policy_mode") or "off")
+    policy = train_exit_policy(
+        ticks, min_support=max(1, int(min_support)), margin=float(margin))
+    return _safe_json_response({"mode": str(mode).strip().lower(), **policy})
+
+
 def _build_broker_for_analysis():
     """Construct a broker matching the operator's current mode.
 
