@@ -5,6 +5,14 @@ import json
 import logging
 import asyncio
 from typing import Any, Dict, List, Optional
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 
 logger = logging.getLogger("hermes.broker.mcp_client")
 
@@ -18,6 +26,10 @@ class MCPBrokerClient:
         self._ctx = None
         self._read_write = None
         self._session = None
+
+    @property
+    def dry_run(self) -> bool:
+        return self.config.get("dry_run", True)
 
     async def __aenter__(self) -> MCPBrokerClient:
         return self
@@ -106,29 +118,106 @@ class MCPBrokerClient:
             return decoded[0]
         return decoded
 
-    async def get_account_balances(self) -> Dict[str, Any]:
+    async def get_account_balances(self) -> AccountBalances:
         res = await self._call_mcp("get_account_balances")
-        return res if isinstance(res, dict) else {}
+        if not isinstance(res, dict):
+            res = {}
+        return AccountBalances(
+            option_buying_power=float(res.get("option_buying_power") or 0.0),
+            stock_buying_power=float(res.get("stock_buying_power") or 0.0),
+            total_equity=float(res.get("total_equity") or 0.0),
+            cash=float(res.get("cash") or 0.0),
+            account_type=str(res.get("account_type") or "margin"),
+            margin_buying_power=float(res.get("margin_buying_power") or 0.0),
+            **{k: v for k, v in res.items() if k not in (
+                "option_buying_power", "stock_buying_power", "total_equity", "cash", "account_type", "margin_buying_power"
+            )}
+        )
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> List[BrokerPosition]:
         res = await self._call_mcp("get_positions")
-        return res if isinstance(res, list) else []
+        if not isinstance(res, list):
+            return []
+        return [
+            BrokerPosition(
+                symbol=str(pos.get("symbol") or ""),
+                quantity=float(pos.get("quantity") or 0.0),
+                cost_basis=float(pos.get("cost_basis") or 0.0),
+                date_acquired=str(pos.get("date_acquired") or ""),
+                **{k: v for k, v in pos.items() if k not in (
+                    "symbol", "quantity", "cost_basis", "date_acquired"
+                )}
+            )
+            for pos in res
+        ]
 
-    async def get_orders(self) -> List[Dict[str, Any]]:
+    async def get_orders(self) -> List[BrokerOrder]:
         res = await self._call_mcp("get_orders")
-        return res if isinstance(res, list) else []
+        if not isinstance(res, list):
+            return []
+        return [
+            BrokerOrder(
+                order_id=str(o.get("id") or o.get("order_id") or ""),
+                symbol=str(o.get("symbol") or ""),
+                status=str(o.get("status") or ""),
+                quantity=int(o.get("quantity") or 0),
+                price=float(o.get("price") or 0.0),
+                side=str(o.get("side") or ""),
+                tag=str(o.get("tag") or ""),
+                legs=o.get("leg") or o.get("legs") or [],
+                option_symbol=o.get("option_symbol"),
+                **{k: v for k, v in o.items() if k not in (
+                    "order_id", "symbol", "status", "quantity", "price", "side",
+                    "tag", "legs", "option_symbol", "id", "leg"
+                )}
+            )
+            for o in res
+        ]
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         return await self._call_mcp("cancel_order", order_id=order_id)
 
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
-        return await self._call_mcp("get_quote", symbols=symbols)
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
+        res = await self._call_mcp("get_quote", symbols=symbols)
+        if not isinstance(res, list):
+            return []
+        return [
+            MarketQuote(
+                symbol=str(q.get("symbol") or ""),
+                price=float(q.get("price") or q.get("last") or 0.0),
+                bid=float(q.get("bid") or 0.0),
+                ask=float(q.get("ask") or 0.0),
+                volume=int(q.get("volume") or 0),
+                timestamp=str(q.get("timestamp") or ""),
+                **{k: v for k, v in q.items() if k not in (
+                    "symbol", "price", "bid", "ask", "volume", "timestamp"
+                )}
+            )
+            for q in res
+        ]
 
     async def get_option_expirations(self, symbol: str) -> List[str]:
         return await self._call_mcp("get_option_expirations", symbol=symbol)
 
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
-        return await self._call_mcp("get_option_chain", symbol=symbol, expiry=expiry)
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
+        res = await self._call_mcp("get_option_chain", symbol=symbol, expiry=expiry)
+        if not isinstance(res, list):
+            return []
+        return [
+            OptionChainLeg(
+                symbol=str(leg.get("symbol") or ""),
+                strike=float(leg.get("strike") or 0.0),
+                option_type=str(leg.get("option_type") or leg.get("option_type") or "put"),
+                bid=float(leg.get("bid") or 0.0),
+                ask=float(leg.get("ask") or 0.0),
+                delta=float(leg.get("delta") or (leg.get("greeks") or {}).get("delta") or 0.0),
+                greeks=leg.get("greeks"),
+                **{k: v for k, v in leg.items() if k not in (
+                    "symbol", "strike", "option_type", "bid", "ask", "delta", "greeks"
+                )}
+            )
+            for leg in res
+        ]
 
     async def get_history(self, symbol: str, interval: str = "daily",
                           start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -140,14 +229,14 @@ class MCPBrokerClient:
     async def roll_to_next_month(self, option_symbol: str) -> str:
         return await self._call_mcp("roll_to_next_month", option_symbol=option_symbol)
 
-    async def place_order_from_action(self, action) -> Dict[str, Any]:
+    async def place_order_from_action(self, action) -> OrderPlacementResult:
         legs = action.legs or []
         if not legs:
             raise ValueError("TradeAction has no legs")
 
         order_class = (action.order_class or "multileg").lower()
         if order_class == "equity":
-            return await self._call_mcp(
+            res = await self._call_mcp(
                 "place_equity_order",
                 symbol=action.symbol,
                 side=action.side,
@@ -159,7 +248,7 @@ class MCPBrokerClient:
             )
         elif order_class == "option" and len(legs) == 1:
             leg = legs[0]
-            return await self._call_mcp(
+            res = await self._call_mcp(
                 "place_single_option_order",
                 symbol=action.symbol,
                 option_symbol=leg["option_symbol"],
@@ -171,7 +260,7 @@ class MCPBrokerClient:
                 tag=action.tag,
             )
         else:
-            return await self._call_mcp(
+            res = await self._call_mcp(
                 "place_multileg_order",
                 symbol=action.symbol,
                 legs=[
@@ -187,3 +276,14 @@ class MCPBrokerClient:
                 duration=action.duration or "day",
                 tag=action.tag,
             )
+
+        if not isinstance(res, dict):
+            res = {}
+        order_dict = res.get("order") or {}
+        order_id = str(order_dict.get("id") or res.get("id") or "")
+        status = str(order_dict.get("status") or res.get("status") or "ok")
+        return OrderPlacementResult(
+            order_id=order_id,
+            status=status,
+            raw_response=res
+        )

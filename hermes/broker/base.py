@@ -3,22 +3,31 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
+
 
 class AbstractBroker(ABC):
     """Abstract base class representing the broker interface."""
 
     @abstractmethod
-    async def get_account_balances(self) -> Dict[str, Any]:
+    async def get_account_balances(self) -> AccountBalances:
         """Fetch option and stock buying power, total equity, cash, and account type."""
         pass
 
     @abstractmethod
-    async def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> List[BrokerPosition]:
         """Fetch list of open positions from the broker."""
         pass
 
     @abstractmethod
-    async def get_orders(self) -> List[Dict[str, Any]]:
+    async def get_orders(self) -> List[BrokerOrder]:
         """Fetch list of working and completed orders."""
         pass
 
@@ -33,12 +42,12 @@ class AbstractBroker(ABC):
         pass
 
     @abstractmethod
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         """Fetch the options chain for a symbol at a specific expiration."""
         pass
 
     @abstractmethod
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
         """Fetch market quotes for one or more comma-separated symbols."""
         pass
 
@@ -61,7 +70,7 @@ class AbstractBroker(ABC):
         pass
 
     @abstractmethod
-    async def place_order_from_action(self, action) -> Dict[str, Any]:
+    async def place_order_from_action(self, action) -> OrderPlacementResult:
         """Submit an equity, single option, or multileg option order from a TradeAction."""
         pass
 

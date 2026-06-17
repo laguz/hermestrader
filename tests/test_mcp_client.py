@@ -30,7 +30,8 @@ async def test_mcp_client_lazy_initialization():
         
         res = await client.get_account_balances()
         
-        assert res == {"status": "ok", "balances": {"option_buying_power": 50000.0}}
+        assert res["status"] == "ok"
+        assert res["balances"] == {"option_buying_power": 50000.0}
         mock_session.call_tool.assert_awaited_once_with("get_account_balances", arguments={})
         
         await client.close()
@@ -70,7 +71,7 @@ async def test_mcp_client_place_multileg():
         )
         
         res = await client.place_order_from_action(action)
-        assert res == {"order": {"id": "12345", "status": "ok"}}
+        assert res["order"] == {"id": "12345", "status": "ok"}
         mock_session.call_tool.assert_awaited_once_with(
             "place_multileg_order",
             arguments={
@@ -217,14 +218,14 @@ async def test_mcp_client_recreates_session_on_loop_change():
         mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
         
         res1 = await client.get_account_balances()
-        assert res1 == {"status": "ok"}
+        assert res1["status"] == "ok"
         assert client._loop == asyncio.get_running_loop()
         
         # Simulate loop change by manually setting client._loop to a different object
         client._loop = object()
         
         res2 = await client.get_account_balances()
-        assert res2 == {"status": "ok"}
+        assert res2["status"] == "ok"
         assert client._loop == asyncio.get_running_loop()
         
         assert mock_session1.__aexit__.called

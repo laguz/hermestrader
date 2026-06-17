@@ -1,6 +1,14 @@
 import logging
 from typing import Any, Dict, List, Optional
 from .core import TradeAction
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 
 logger = logging.getLogger("hermes.broker.mock")
 
@@ -13,21 +21,23 @@ class MockBroker:
         self.config = config
         self.current_date = None  # Use system time
 
-    def get_account_balances(self) -> Dict[str, Any]:
+    async def get_account_balances(self) -> AccountBalances:
         # account_type matches the field MoneyManager logs and Tradier returns
         # ("margin" / "pdt" / "cash") — without it, debug lines render as None.
-        return {
-            "option_buying_power": 100000.0,
-            "stock_buying_power": 100000.0,
-            "cash": 50000.0,
-            "total_equity": 100000.0,
-            "account_type": "margin",
-        }
+        return AccountBalances(
+            option_buying_power=100000.0,
+            stock_buying_power=100000.0,
+            cash=50000.0,
+            total_equity=100000.0,
+            account_type="margin",
+            margin_buying_power=100000.0,
+            raw={}
+        )
 
-    def get_positions(self) -> List[Dict[str, Any]]:
+    async def get_positions(self) -> List[BrokerPosition]:
         return []
 
-    def get_orders(self) -> List[Dict[str, Any]]:
+    async def get_orders(self) -> List[BrokerOrder]:
         # CascadingEngine.tick() → MoneyManager.sync_broker_orders() calls
         # this. Without it the call raised AttributeError, was swallowed by
         # the except clause, and mock-mode broker-side capacity tracking
@@ -35,27 +45,39 @@ class MockBroker:
         # calculations consistent (no resting broker orders) without crashing.
         return []
 
-    def get_option_expirations(self, symbol: str) -> List[str]:
+    async def get_option_expirations(self, symbol: str) -> List[str]:
         from datetime import datetime, timedelta
         today = datetime.utcnow().date()
         return [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in [7, 14, 21, 28, 45]]
 
-    def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         # Return some dummy legs
         return [
-            {"symbol": f"{symbol}230519P00150000", "option_type": "put", "strike": 150.0, "bid": 1.5, "ask": 1.6, "greeks": {"delta": -0.3}},
-            {"symbol": f"{symbol}230519P00145000", "option_type": "put", "strike": 145.0, "bid": 0.5, "ask": 0.6, "greeks": {"delta": -0.1}},
-            {"symbol": f"{symbol}230519C00160000", "option_type": "call", "strike": 160.0, "bid": 1.5, "ask": 1.6, "greeks": {"delta": 0.3}},
-            {"symbol": f"{symbol}230519C00165000", "option_type": "call", "strike": 165.0, "bid": 0.5, "ask": 0.6, "greeks": {"delta": 0.1}},
+            OptionChainLeg(symbol=f"{symbol}230519P00150000", option_type="put", strike=150.0, bid=1.5, ask=1.6, delta=-0.3),
+            OptionChainLeg(symbol=f"{symbol}230519P00145000", option_type="put", strike=145.0, bid=0.5, ask=0.6, delta=-0.1),
+            OptionChainLeg(symbol=f"{symbol}230519C00160000", option_type="call", strike=160.0, bid=1.5, ask=1.6, delta=0.3),
+            OptionChainLeg(symbol=f"{symbol}230519C00165000", option_type="call", strike=165.0, bid=0.5, ask=0.6, delta=0.1),
         ]
 
-    def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
-        return [{"symbol": s.strip(), "last": 155.0, "bid": 154.9, "ask": 155.1} for s in symbols.split(",")]
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
+        from datetime import datetime
+        return [
+            MarketQuote(
+                symbol=s.strip(),
+                price=155.0,
+                bid=154.9,
+                ask=155.1,
+                volume=1000000,
+                timestamp=datetime.utcnow().isoformat(),
+                last=155.0
+            )
+            for s in symbols.split(",")
+        ]
 
-    def get_delta(self, option_symbol: str) -> float:
+    async def get_delta(self, option_symbol: str) -> float:
         return 0.15
 
-    def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
+    async def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
         """Mirror TradierBroker.analyze_symbol over mock bars so the K-Means
         S/R panel renders in dev/paper mode without real Tradier credentials."""
         import numpy as np
@@ -149,11 +171,15 @@ class MockBroker:
             })
         return out
 
-    def place_order_from_action(self, action: TradeAction) -> Dict[str, Any]:
+    async def place_order_from_action(self, action: TradeAction) -> OrderPlacementResult:
         logger.info("[MOCK] Placing order for %s: %s", action.symbol, action.legs)
-        return {"status": "ok", "order_id": "MOCK-123"}
+        return OrderPlacementResult(
+            order_id="MOCK-123",
+            status="ok",
+            raw_response={"status": "ok", "order_id": "MOCK-123"}
+        )
 
-    def roll_to_next_month(self, option_symbol: str) -> str:
+    async def roll_to_next_month(self, option_symbol: str) -> str:
         return option_symbol + "_ROLLED"
 
 class MockLLM:

@@ -5,6 +5,14 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from hermes.common import OCC_RE
+from hermes.broker.models import (
+    AccountBalances,
+    BrokerPosition,
+    BrokerOrder,
+    OptionChainLeg,
+    MarketQuote,
+    OrderPlacementResult,
+)
 
 logger = logging.getLogger("hermes.broker.mock_engine")
 
@@ -36,14 +44,46 @@ class MockAsyncTradierBroker:
         self.commission_per_contract = float(self.config.get("commission_per_contract", 0.35))
         self.slippage_pct = float(self.config.get("slippage_pct", 0.05))
 
-    async def get_account_balances(self) -> Dict[str, Any]:
-        return self.balances
+    async def get_account_balances(self) -> AccountBalances:
+        return AccountBalances(
+            option_buying_power=float(self.balances.get("option_buying_power", 0.0)),
+            stock_buying_power=float(self.balances.get("stock_buying_power", 0.0)),
+            total_equity=float(self.balances.get("total_equity", 0.0)),
+            cash=float(self.balances.get("cash", 0.0)),
+            account_type=self.balances.get("account_type", "margin"),
+            margin_buying_power=float(self.balances.get("margin_buying_power", 0.0)),
+            raw=self.balances
+        )
 
-    async def get_positions(self) -> List[Dict[str, Any]]:
-        return self.positions
+    async def get_positions(self) -> List[BrokerPosition]:
+        return [
+            BrokerPosition(
+                symbol=p.get("symbol", ""),
+                quantity=float(p.get("quantity", 0.0)),
+                cost_basis=float(p.get("cost_basis", 0.0)),
+                date_acquired=p.get("date_acquired", "")
+            )
+            for p in self.positions
+        ]
 
-    async def get_orders(self) -> List[Dict[str, Any]]:
-        return self.orders
+    async def get_orders(self) -> List[BrokerOrder]:
+        orders_list = []
+        for o in self.orders:
+            orders_list.append(
+                BrokerOrder(
+                    order_id=str(o.get("id") or o.get("order_id") or ""),
+                    symbol=str(o.get("symbol", "")),
+                    status=str(o.get("status", "")),
+                    quantity=int(o.get("quantity", 1) or 1),
+                    price=float(o.get("price") or o.get("avg_fill_price") or 0.0),
+                    side=str(o.get("side", "")),
+                    tag=str(o.get("tag", "")),
+                    legs=o.get("leg") or [],
+                    option_symbol=o.get("option_symbol"),
+                    **o
+                )
+            )
+        return orders_list
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         for o in self.orders:
@@ -66,9 +106,9 @@ class MockAsyncTradierBroker:
             expirations.append(friday.strftime("%Y-%m-%d"))
         return expirations
 
-    async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
+    async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
         quote = await self.get_quote(symbol)
-        underlying_price = float(quote[0]["last"]) if quote else 100.0
+        underlying_price = float(quote[0]["price"]) if quote else 100.0
         
         center_strike = round(underlying_price)
         strikes = range(center_strike - 20, center_strike + 20, 5)
@@ -83,30 +123,36 @@ class MockAsyncTradierBroker:
             # Put option
             put_symbol = f"{symbol}{yymmdd}P{strike_str}"
             put_val = self._sim_option_value(underlying_price, strike, "P")
-            chain.append({
-                "symbol": put_symbol,
-                "option_type": "put",
-                "strike": float(strike),
-                "bid": max(0.01, round(put_val - 0.05, 2)),
-                "ask": max(0.02, round(put_val + 0.05, 2)),
-                "greeks": {"delta": -self._sim_delta(underlying_price, strike, "P")},
-                "underlying": symbol,
-                "expiration": expiry
-            })
+            chain.append(
+                OptionChainLeg(
+                    symbol=put_symbol,
+                    option_type="put",
+                    strike=float(strike),
+                    bid=max(0.01, round(put_val - 0.05, 2)),
+                    ask=max(0.02, round(put_val + 0.05, 2)),
+                    delta=-self._sim_delta(underlying_price, strike, "P"),
+                    greeks={"delta": -self._sim_delta(underlying_price, strike, "P")},
+                    underlying=symbol,
+                    expiration=expiry
+                )
+            )
             
             # Call option
             call_symbol = f"{symbol}{yymmdd}C{strike_str}"
             call_val = self._sim_option_value(underlying_price, strike, "C")
-            chain.append({
-                "symbol": call_symbol,
-                "option_type": "call",
-                "strike": float(strike),
-                "bid": max(0.01, round(call_val - 0.05, 2)),
-                "ask": max(0.02, round(call_val + 0.05, 2)),
-                "greeks": {"delta": self._sim_delta(underlying_price, strike, "C")},
-                "underlying": symbol,
-                "expiration": expiry
-            })
+            chain.append(
+                OptionChainLeg(
+                    symbol=call_symbol,
+                    option_type="call",
+                    strike=float(strike),
+                    bid=max(0.01, round(call_val - 0.05, 2)),
+                    ask=max(0.02, round(call_val + 0.05, 2)),
+                    delta=self._sim_delta(underlying_price, strike, "C"),
+                    greeks={"delta": self._sim_delta(underlying_price, strike, "C")},
+                    underlying=symbol,
+                    expiration=expiry
+                )
+            )
             
         return chain
 
@@ -125,7 +171,7 @@ class MockAsyncTradierBroker:
             return round(1.0 - val, 2)
         return round(val, 2)
 
-    async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:
+    async def get_quote(self, symbols: str) -> List[MarketQuote]:
         res = []
         for sym in symbols.split(","):
             sym = sym.strip()
@@ -136,19 +182,46 @@ class MockAsyncTradierBroker:
                 option_type = m.group(3)
                 
                 und_quote = self.quotes.get(underlying, {"last": 100.0})
-                spot = float(und_quote["last"])
+                spot = float(und_quote.get("last") or und_quote.get("price") or 100.0)
                 val = self._sim_option_value(spot, strike, option_type)
-                res.append({
-                    "symbol": sym,
-                    "last": val,
-                    "bid": max(0.01, round(val - 0.05, 2)),
-                    "ask": max(0.02, round(val + 0.05, 2)),
-                    "greeks": {"delta": -self._sim_delta(spot, strike, option_type) if option_type == "P" else self._sim_delta(spot, strike, option_type)}
-                })
+                res.append(
+                    MarketQuote(
+                        symbol=sym,
+                        price=val,
+                        bid=max(0.01, round(val - 0.05, 2)),
+                        ask=max(0.02, round(val + 0.05, 2)),
+                        volume=1000,
+                        timestamp=datetime.utcnow().isoformat(),
+                        greeks={"delta": -self._sim_delta(spot, strike, option_type) if option_type == "P" else self._sim_delta(spot, strike, option_type)},
+                        last=val
+                    )
+                )
             elif sym in self.quotes:
-                res.append(self.quotes[sym])
+                q = self.quotes[sym]
+                price = float(q.get("last") or q.get("price") or 0.0)
+                res.append(
+                    MarketQuote(
+                        symbol=sym,
+                        price=price,
+                        bid=float(q.get("bid", 0.0) or 0.0),
+                        ask=float(q.get("ask", 0.0) or 0.0),
+                        volume=int(q.get("volume", 0) or 0),
+                        timestamp=str(q.get("timestamp") or ""),
+                        **q
+                    )
+                )
             else:
-                res.append({"symbol": sym, "last": 100.0, "bid": 99.95, "ask": 100.05})
+                res.append(
+                    MarketQuote(
+                        symbol=sym,
+                        price=100.0,
+                        bid=99.95,
+                        ask=100.05,
+                        volume=1000000,
+                        timestamp=datetime.utcnow().isoformat(),
+                        last=100.0
+                    )
+                )
         return res
 
     async def get_delta(self, option_symbol: str) -> float:
@@ -202,7 +275,7 @@ class MockAsyncTradierBroker:
             "period": period,
         }
 
-    async def place_order_from_action(self, action) -> Dict[str, Any]:
+    async def place_order_from_action(self, action) -> OrderPlacementResult:
         order_id = f"MOCK-{len(self.orders) + 1}"
         legs = action.legs or []
         order_data = {
@@ -224,7 +297,7 @@ class MockAsyncTradierBroker:
         else:
             await self._check_order_fill_immediate(order_data)
             
-        return {"status": "ok", "order_id": order_id}
+        return OrderPlacementResult(order_id=order_id, status="ok", raw_response={"status": "ok", "order_id": order_id})
 
     async def _check_order_fill_immediate(self, order):
         await self._fill_order(order)
