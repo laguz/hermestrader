@@ -1,31 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hermes.db.models import HermesDB
-from hermes.service1_agent.main import _pg_listen_loop, _TRIGGER_EVENT, _SHUTDOWN_EVENT
+from hermes.ipc import AsyncIPC
 
 
-@pytest.fixture(autouse=True)
-def reset_events():
-    _TRIGGER_EVENT.clear()
-    _SHUTDOWN_EVENT.clear()
-    yield
-    _TRIGGER_EVENT.clear()
-    _SHUTDOWN_EVENT.clear()
-
-
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_pg_listen_loop_receives_notify():
-    """Verify that _pg_listen_loop processes PostgreSQL notifications and sets the trigger event."""
+    """Verify that AsyncIPC processes PostgreSQL notifications and triggers subscribers."""
     db_mock = MagicMock(spec=HermesDB)
     db_mock.async_engine = MagicMock()
     db_mock.async_engine.dialect.name = "postgresql"
     
-    # Mock connection and context manager to prevent swallowing exceptions like CancelledError
+    # Mock connection and context manager
     conn_mock = AsyncMock()
     ctx_mock = MagicMock()
     ctx_mock.__aenter__ = AsyncMock(return_value=conn_mock)
@@ -40,8 +30,8 @@ async def test_pg_listen_loop_receives_notify():
     
     # Fake a notify event generator
     fake_notify = MagicMock()
-    fake_notify.channel = "hermes_approvals"
-    fake_notify.payload = "trigger_approvals"
+    fake_notify.channel = "agent_commands"
+    fake_notify.payload = '{"action": "trigger_approvals"}'
     
     # An async generator to yield a single notification then block
     async def fake_notifies():
@@ -51,26 +41,33 @@ async def test_pg_listen_loop_receives_notify():
 
     driver_conn_mock.notifies = MagicMock(side_effect=fake_notifies)
     
-    # Run loop as background task
-    task = asyncio.create_task(_pg_listen_loop(db_mock, _TRIGGER_EVENT))
+    # Initialize and connect AsyncIPC
+    ipc = AsyncIPC()
+    
+    # Force pytest bypass check to False to test real loop behavior
+    connected = await ipc.connect(db_mock, bypass_pytest_check=True)
+    assert connected is True
+    
+    received_messages = []
+    async def callback(data: dict):
+        received_messages.append(data)
+        
+    await ipc.subscribe("agent_commands", callback)
     
     # Wait for the generator to yield the notify
     await asyncio.sleep(0.2)
     
-    # Verify that the trigger event was set immediately
-    assert _TRIGGER_EVENT.is_set()
+    # Verify that callback was called and message was received
+    assert len(received_messages) == 1
+    assert received_messages[0] == {"action": "trigger_approvals"}
     
     # Clean up
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
+    await ipc.disconnect()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_decide_approval_emits_notify():
-    """Verify that decide_approval executes NOTIFY query when database is PostgreSQL."""
+    """Verify that decide_approval executes NOTIFY query on agent_commands when database is PostgreSQL."""
     db = HermesDB("sqlite+aiosqlite:///:memory:")
     
     # Patch async_engine.dialect to pretend it is PostgreSQL
@@ -93,16 +90,16 @@ async def test_decide_approval_emits_notify():
             ok = await db.decide_approval(approval_id=42, decision="APPROVED")
             
             assert ok is True
-            # Verify NOTIFY hermes_approvals text query was executed before commit
+            # Verify NOTIFY agent_commands text query was executed before commit
             calls = session_mock.execute.call_args_list
             assert len(calls) >= 2  # 1 for select, 1 for NOTIFY
             
             notify_called = False
             for call in calls:
                 args, _ = call
-                if len(args) > 0 and hasattr(args[0], "text") and "NOTIFY hermes_approvals" in args[0].text:
+                if len(args) > 0 and hasattr(args[0], "text") and "NOTIFY agent_commands" in args[0].text:
                     notify_called = True
                     break
             
-            assert notify_called, "NOTIFY query was not executed"
+            assert notify_called, "NOTIFY agent_commands query was not executed"
             session_mock.commit.assert_called_once()

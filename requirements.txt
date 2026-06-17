@@ -10,7 +10,6 @@ sqlalchemy==2.0.49
 psycopg[binary]==3.3.4
 duckdb==1.5.3
 alembic==1.13.3   # Postgres/Timescale schema migrations (see alembic/)
-redis==5.0.8
 
 # Security
 cryptography==48.0.0
@@ -41,8 +40,5 @@ sse-starlette==3.4.4
 transitions==0.9.3
 aiosqlite==0.22.1
 greenlet==3.5.1
-grpcio==1.62.1
-grpcio-tools==1.62.1
-protobuf==4.25.9
 
 

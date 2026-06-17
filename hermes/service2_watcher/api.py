@@ -92,19 +92,13 @@ async def lifespan(app: FastAPI):
         logger.exception("regime_weight lookup wire-up failed: %s", exc)
     # Connect to Inter-Process Communication (IPC) broker
     from hermes.ipc import ipc
-    await ipc.connect()
-
-    # Start gRPC Server
-    from hermes.service2_watcher.api_grpc import start_grpc_server
-    grpc_port = int(os.environ.get("HERMES_GRPC_PORT", 50051))
-    grpc_server = await start_grpc_server(port=grpc_port)
+    await ipc.connect(db)
 
     yield
 
-    # Stop gRPC Server
-    await grpc_server.stop(grace=1.0)
     # Clean up IPC connection on shutdown
     await ipc.disconnect()
+
 
 
 app = FastAPI(title="Hermes C2", lifespan=lifespan)

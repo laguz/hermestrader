@@ -696,36 +696,27 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     return TradierBroker(cfg)
 
 
-async def _pg_listen_loop(db: HermesDB, trigger_event) -> None:
-    """Background listener task that awaits PostgreSQL LISTEN/NOTIFY events."""
-    if "postgresql" not in db.async_engine.dialect.name:
-        log.info("[PG-LISTEN] SQLite/Mock environment detected; skipping LISTEN channel.")
-        return
-
-    from sqlalchemy import text as sa_text
-    log.info("[PG-LISTEN] Starting PostgreSQL LISTEN loop on channel 'hermes_approvals'")
-    while True:
-        try:
-            async with db.async_engine.connect() as conn:
-                fairy = await conn.get_raw_connection()
-                driver_conn = fairy.driver_connection
-                
-                await conn.execute(sa_text("LISTEN hermes_approvals"))
-                await conn.commit()
-                
-                async for notify in driver_conn.notifies():
-                    log.info("[PG-LISTEN] Received notification: channel=%s, payload=%s", 
-                             notify.channel, notify.payload)
-                    if callable(trigger_event):
-                        trigger_event()
-                    else:
-                        trigger_event.set()
-        except asyncio.CancelledError:
-            log.info("[PG-LISTEN] Listener cancelled. Stopping.")
-            break
-        except Exception as exc:
-            log.error("[PG-LISTEN] Connection error: %s. Reconnecting in 5s...", exc)
-            await asyncio.sleep(5.0)
+def _build_stream_client(broker, db, event_bus, watchlist_syms: set):
+    """Build stream client directly inside the agent based on the broker class."""
+    from hermes.broker.tradier import TradierBroker
+    if isinstance(broker, TradierBroker):
+        from hermes.broker.tradier_stream import TradierStreamClient
+        log.info("Initializing direct TradierStreamClient")
+        return TradierStreamClient(
+            token=broker.token,
+            account_id=broker.account_id,
+            base_url=broker.base_url,
+            event_bus=event_bus,
+            watchlist=list(watchlist_syms)
+        )
+    else:
+        from hermes.broker.mock_stream import MockStreamClient
+        log.info("Initializing localized MockStreamClient")
+        return MockStreamClient(
+            event_bus=event_bus,
+            watchlist=list(watchlist_syms),
+            db=db
+        )
 
 
 async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
@@ -771,6 +762,7 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     global _ASYNC_TRIGGER_EVENT
     _ASYNC_TRIGGER_EVENT = asyncio.Event()
+    stream_client = None
 
     import signal
     def handle_signal(sig, frame):
@@ -871,7 +863,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         await engine.overseer.start()
 
     from hermes.ipc import ipc
-    await ipc.connect()
+    await ipc.connect(db)
 
     async def _ipc_callback(data: dict):
         action = data.get("action")
@@ -891,13 +883,6 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     await ipc.subscribe("agent_commands", _ipc_callback)
 
-    # Start PostgreSQL LISTEN background loop
-    pg_listener_task = asyncio.create_task(_pg_listen_loop(db, set_trigger))
-
-    # Start Watcher gRPC Quotes Stream Client
-    from hermes.broker.grpc_stream import GRPCStreamClient
-    from hermes.config import settings
-    
     # Track watchlist symbols + active DB option legs
     watchlist_syms = set(conf.get("watchlist", []))
     try:
@@ -905,12 +890,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    stream_client = GRPCStreamClient(
-        target=settings.hermes_grpc_target,
-        event_bus=event_bus,
-        watchlist=list(watchlist_syms)
-    )
-    
+    stream_client = _build_stream_client(broker, db, event_bus, watchlist_syms)
     await stream_client.start()
     
     # Spawn background pre-warming task for the option chain and quote cache
@@ -1032,13 +1012,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     except Exception:
                         pass
                         
-                    from hermes.broker.grpc_stream import GRPCStreamClient
-                    from hermes.config import settings
-                    stream_client = GRPCStreamClient(
-                        target=settings.hermes_grpc_target,
-                        event_bus=event_bus,
-                        watchlist=list(watchlist_syms)
-                    )
+                    stream_client = _build_stream_client(broker, db, event_bus, watchlist_syms)
                     await stream_client.start()
                     
                     engine = build(broker, current_llm, chart_provider, conf,
@@ -1123,13 +1097,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 db_watchlist = []
 
             # Update WebSocket stream subscriptions to include watchlist + open trade options
-            if not is_mock:
-                try:
-                    wl_syms = set(current_watchlist)
-                    wl_syms.update(await db.tracked_option_symbols())
-                    stream_client.update_watchlist(list(wl_syms))
-                except Exception as exc:
-                    log.warning("Failed to update WebSocket watchlist: %s", exc)
+            try:
+                wl_syms = set(current_watchlist)
+                wl_syms.update(await db.tracked_option_symbols())
+                stream_client.update_watchlist(list(wl_syms))
+            except Exception as exc:
+                log.warning("Failed to update WebSocket watchlist: %s", exc)
 
             # 1c-kill) Daily-loss kill switch — auto-halt the tick if the day's
             # drawdown (realized today + open-position unrealized) breaches the
@@ -1338,14 +1311,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             log.info("Agent loop detected shutdown signal. Exiting.")
             break
 
-    # Clean up stream client, pg listener, overseer, event bus on exit
-    if pg_listener_task:
-        pg_listener_task.cancel()
-        try:
-            await pg_listener_task
-        except asyncio.CancelledError:
-            pass
-    if not is_mock:
+    # Clean up stream client, overseer, event bus on exit
+    if stream_client:
         await stream_client.stop()
     if engine.overseer is not None:
         await engine.overseer.stop()
