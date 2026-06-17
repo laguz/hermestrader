@@ -109,6 +109,11 @@ class AsyncBrokerWrapper:
                 pass
         return time.time()
 
+    def update_cached_quote(self, symbol: str, data: Dict[str, Any]) -> None:
+        """Manually updates the quote cache with a streaming quote."""
+        now_ts = self._get_current_timestamp()
+        self._shared_cache.set_quote(symbol, data, now_ts)
+
     async def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
         cache = self._shared_cache
         now_ts = self._get_current_timestamp()

@@ -852,9 +852,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         await db.set_setting(SETTING_LLM_OUT_OF_LOOP, "true")
 
     # Initialize Event Bus
-    from hermes.events.bus import EventBus
+    from hermes.events.bus import EventBus, OrderFillEvent
     event_bus = EventBus()
     event_bus.start()
+    event_bus.subscribe(OrderFillEvent, lambda ev: set_trigger())
 
     engine = build(broker, current_llm, chart_provider, conf,
                    vision_enabled=current_vision,

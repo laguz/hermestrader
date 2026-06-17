@@ -1451,6 +1451,14 @@ class CascadingEngine:
             **event.data
         }
         
+        # Update shared quote cache in broker wrapper to prevent outbound REST calls
+        self.broker.update_cached_quote(symbol, {
+            "symbol": symbol,
+            "price": event.price,
+            "volume": event.volume,
+            **event.data
+        })
+        
         # Guard: off-hours block
         from hermes.market_hours import should_block_trades
         blocked, reason = should_block_trades()
@@ -1527,6 +1535,14 @@ class CascadingEngine:
             await self.reconcile_orphans()
         except Exception as exc:
             logger.exception("[ENGINE] Failed to reconcile orphans on order fill event: %s", exc)
+
+        try:
+            mgmt = await self.process_management()
+            if mgmt:
+                await self.submit(mgmt, action_type="management")
+                logger.info("[ENGINE] Reactively processed management post order fill: submitted %d actions", len(mgmt))
+        except Exception as exc:
+            logger.exception("[ENGINE] Failed to process management on order fill event: %s", exc)
 
         try:
             watchlist = await self.db.all_watchlist_symbols()
