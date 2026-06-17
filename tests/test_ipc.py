@@ -9,7 +9,7 @@ import pytest
 
 from hermes.ipc import AsyncIPC
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_mock_ipc_fallback_publish_subscribe():
     # Initialize with local DSN (connection will fail and fallback to mock)
     ipc = AsyncIPC("redis://localhost:9999/9")
@@ -45,7 +45,7 @@ async def test_mock_ipc_fallback_publish_subscribe():
     receivers = await ipc.publish("test_channel", payload)
     assert receivers == 0
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_mock_ipc_multiple_subscribers():
     ipc = AsyncIPC("redis://localhost:9999/9")
     await ipc.connect()

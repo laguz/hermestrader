@@ -2,9 +2,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 from hermes.events.bus import EventBus, MarketDataEvent, OrderFillEvent
-from hermes.broker.grpc_stream import GRPCStreamClient
+from hermes.broker.mock_stream import MockStreamClient
 from hermes.service1_agent.core import CascadingEngine, AbstractStrategy
-from hermes.service2_watcher.api_grpc import start_grpc_server
 from hermes.service1_agent.trade_action import TradeAction
 from ._stubs import StubDB, StubBroker
 
@@ -27,33 +26,26 @@ class DummyStrategy(AbstractStrategy):
         self.last_watchlist = list(watchlist)
         return []
 
-@pytest.fixture
-async def grpc_server_fixture():
-    # Start on ephemeral port
-    server = await start_grpc_server(host="127.0.0.1", port=50056)
-    yield server
-    await server.stop(grace=0.1)
-
 @pytest.fixture(autouse=True)
 def allow_offhours(monkeypatch):
     monkeypatch.setenv("HERMES_ALLOW_OFFHOURS_TRADES", "true")
 
 @pytest.mark.asyncio
-async def test_grpc_stream_client_quote_flow(grpc_server_fixture):
+async def test_mock_stream_client_quote_flow():
     # 1. Setup Event Bus
     bus = EventBus()
     bus.start()
 
-    # 2. Patch db.all_watchlist_symbols in api_grpc.py
-    from hermes.service2_watcher._app_state import db as watcher_db
-    with patch.object(watcher_db, "all_watchlist_symbols", new_callable=AsyncMock) as mock_wl, \
-         patch.object(watcher_db, "tracked_option_symbols", new_callable=AsyncMock) as mock_tracked:
+    # 2. Setup DB stub
+    db = StubDB()
+    with patch.object(db, "all_watchlist_symbols", new_callable=AsyncMock) as mock_wl, \
+         patch.object(db, "tracked_option_symbols", new_callable=AsyncMock) as mock_tracked:
         
         mock_wl.return_value = ["AAPL", "MSFT"]
         mock_tracked.return_value = set()
 
-        # 3. Setup GRPCStreamClient
-        client = GRPCStreamClient(target="127.0.0.1:50056", event_bus=bus)
+        # 3. Setup MockStreamClient
+        client = MockStreamClient(event_bus=bus, watchlist=["AAPL", "MSFT"], db=db)
 
         # 4. Listen to MarketDataEvents
         events_received = []
