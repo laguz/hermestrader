@@ -52,9 +52,12 @@ async def test_interruptible_sleep_wakes_on_shutdown():
 
 @pytest.mark.anyio
 async def test_agent_loop_runs_approvals_immediately_on_trigger():
-    # Mock all external dependencies to isolate the run_async loop
     db_mock = AsyncMock()
-    db_mock.get_setting.return_value = "paper"
+    async def mock_get_setting(key, default=None):
+        if key == "mode":
+            return "paper"
+        return None
+    db_mock.get_setting.side_effect = mock_get_setting
     db_mock.fetch_approved_actions.return_value = []
     db_mock.tracked_option_symbols.return_value = []
     db_mock.list_all_watchlists.return_value = {}

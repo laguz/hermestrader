@@ -102,20 +102,20 @@ async def get_analytics() -> Response:
     }
 
     try:
-        with db.Session() as s:
-            ml_err = s.execute(sa_text(
+        async with db.AsyncSession() as s:
+            ml_err = (await s.execute(sa_text(
                 "SELECT value FROM system_settings WHERE key = 'ml_last_error'"
-            )).scalar()
+            ))).scalar()
             if ml_err:
                 result["ml_last_error"] = ml_err
 
             # Latest prediction per symbol
-            raw = s.execute(sa_text("""
+            raw = (await s.execute(sa_text("""
                 SELECT DISTINCT ON (symbol)
                     symbol, predicted_return, predicted_price, spot, ts, model_tag
                 FROM predictions
                 ORDER BY symbol, ts DESC
-            """)).fetchall()
+            """))).fetchall()
             result["predictions"] = [
                 {
                     "symbol": r.symbol,
@@ -129,7 +129,7 @@ async def get_analytics() -> Response:
             ]
 
             # Performance per strategy (closed trades)
-            raw_perf = s.execute(sa_text("""
+            raw_perf = (await s.execute(sa_text("""
                 SELECT
                     strategy_id,
                     COUNT(*) FILTER (WHERE status = 'CLOSED') AS total_closed,
@@ -143,7 +143,7 @@ async def get_analytics() -> Response:
                 FROM trades
                 GROUP BY strategy_id
                 ORDER BY strategy_id
-            """)).fetchall()
+            """))).fetchall()
             for r in raw_perf:
                 total = int(r.total_closed or 0)
                 winners = int(r.winners or 0)
@@ -160,7 +160,7 @@ async def get_analytics() -> Response:
                 }
 
             # Open trades (all strategies)
-            raw_open = s.execute(sa_text("""
+            raw_open = (await s.execute(sa_text("""
                 SELECT id, strategy_id, symbol, side_type, short_leg, long_leg,
                        short_strike, long_strike, width, lots, entry_credit,
                        expiry, opened_at, ai_authored
@@ -168,7 +168,7 @@ async def get_analytics() -> Response:
                 WHERE status = 'OPEN'
                 ORDER BY opened_at DESC
                 LIMIT 100
-            """)).fetchall()
+            """))).fetchall()
             result["open_trades"] = [
                 {
                     "id": r.id,
@@ -192,7 +192,7 @@ async def get_analytics() -> Response:
             # Recent closed trades. ``pnl`` is left as NULL→None (instead of
             # coerced to 0) so the dashboard can render an "unknown" cell
             # and not lie when realized P&L couldn't be computed.
-            raw_closed = s.execute(sa_text("""
+            raw_closed = (await s.execute(sa_text("""
                 SELECT id, strategy_id, symbol, side_type, lots, entry_credit,
                        pnl, close_reason, expiry, opened_at, closed_at, ai_authored,
                        tag, close_tag, exit_price
@@ -200,7 +200,7 @@ async def get_analytics() -> Response:
                 WHERE status = 'CLOSED'
                 ORDER BY closed_at DESC
                 LIMIT 50
-            """)).fetchall()
+            """))).fetchall()
             result["closed_trades"] = [
                 {
                     "id": r.id,

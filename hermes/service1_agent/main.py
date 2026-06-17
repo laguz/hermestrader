@@ -728,6 +728,38 @@ async def _pg_listen_loop(db: HermesDB, trigger_event) -> None:
             await asyncio.sleep(5.0)
 
 
+async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
+    from hermes.config_schema import RuntimeConfig
+    
+    obp_reserve_val = await db.get_setting("obp_reserve")
+    tick_interval_val = await db.get_setting("tick_interval") or await db.get_setting("tick_interval_s")
+    bandit_val = await db.get_setting("bandit_tuner_mode")
+    exit_val = await db.get_setting("exit_policy_mode")
+
+    config_data = {}
+    if obp_reserve_val is not None and str(obp_reserve_val).strip() != "":
+        config_data["obp_reserve"] = float(str(obp_reserve_val).strip())
+    else:
+        config_data["obp_reserve"] = float(os.environ.get("HERMES_OBP_RESERVE", conf.get("obp_reserve", 0.0)))
+
+    if tick_interval_val is not None and str(tick_interval_val).strip() != "":
+        config_data["tick_interval"] = int(str(tick_interval_val).strip())
+    else:
+        config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 300)))
+
+    if bandit_val is not None and str(bandit_val).strip() != "":
+        config_data["bandit_tuner_mode"] = str(bandit_val).strip().lower()
+    else:
+        config_data["bandit_tuner_mode"] = os.environ.get("HERMES_BANDIT_TUNER_MODE", "off").lower()
+
+    if exit_val is not None and str(exit_val).strip() != "":
+        config_data["exit_policy_mode"] = str(exit_val).strip().lower()
+    else:
+        config_data["exit_policy_mode"] = os.environ.get("HERMES_EXIT_POLICY_MODE", "off").lower()
+
+    return RuntimeConfig(**config_data)
+
+
 # ---------------------------------------------------------------------------
 # Tick loop — re-reads the desired mode each iteration so the watcher's
 # toggle takes effect within one tick interval.
@@ -769,12 +801,29 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:                                      # noqa: BLE001
         log.exception("Agent startup update/soul sync failed: %s", exc)
-    # Seed the strategies registry — required before any watchlist row can be
-    # inserted (FK from strategy_watchlists.strategy_id). Idempotent.
     try:
         await db.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:                                      # noqa: BLE001
         log.exception("ensure_strategies failed at startup: %s", exc)
+
+    # Phase 3 Configuration Validation at startup
+    try:
+        runtime_config = await _load_and_validate_runtime_config(db, conf)
+        log.info("Runtime settings validated successfully: %s", runtime_config.model_dump())
+        
+        # Persist defaults/fallbacks back to DB if they were not there
+        if await db.get_setting("obp_reserve") is None:
+            await db.set_setting("obp_reserve", str(runtime_config.obp_reserve))
+        if await db.get_setting("tick_interval") is None:
+            await db.set_setting("tick_interval", str(runtime_config.tick_interval))
+        if await db.get_setting("bandit_tuner_mode") is None:
+            await db.set_setting("bandit_tuner_mode", runtime_config.bandit_tuner_mode)
+        if await db.get_setting("exit_policy_mode") is None:
+            await db.set_setting("exit_policy_mode", runtime_config.exit_policy_mode)
+    except Exception as exc:
+        log.error("Fatal startup settings validation error: %s", exc)
+        raise
+
     # Initial mode comes from settings (so the operator's last toggle wins
     # across restarts) and falls back to env config on first ever boot.
     initial_mode = (await db.get_setting(SETTING_MODE) or conf.get("mode") or "paper").lower()
@@ -869,7 +918,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Spawn background pre-warming task for the option chain and quote cache
     prewarm_task = asyncio.create_task(_cache_prewarm_loop(lambda: broker, db, conf))
     
-    interval_s = int(conf.get("tick_interval_s", 300))
+    interval_s = runtime_config.tick_interval
     log.info("Hermes Agent started mode=%s autonomy=%s paused=%s soul=%dB",
              current_mode, current_overseer_cfg["autonomy"],
              current_overseer_cfg["paused"], len(current_overseer_cfg["soul"]))
@@ -882,6 +931,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     triggered = False
 
     while True:
+        try:
+            runtime_config = await _load_and_validate_runtime_config(db, conf)
+            interval_s = runtime_config.tick_interval
+        except Exception as exc:
+            log.error("Tick settings validation failed: %s", exc)
+
         if _TRIGGER_EVENT.is_set():
             triggered = True
             _TRIGGER_EVENT.clear()

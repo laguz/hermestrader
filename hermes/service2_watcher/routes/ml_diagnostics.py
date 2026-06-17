@@ -52,8 +52,9 @@ def set_predictor(predictor: Any) -> None:
 # /api/ml/diagnostics
 # ---------------------------------------------------------------------------
 @router.get("/api/ml/diagnostics")
-def diagnostics() -> Dict[str, Any]:
+async def diagnostics() -> Dict[str, Any]:
     """Return everything the operator needs to audit prediction health."""
+    ledger_sum = await _ledger_summary()
     base: Dict[str, Any] = {
         "schema_hash": {
             "equity": feature_catalog.schema_hash("equity"),
@@ -62,7 +63,7 @@ def diagnostics() -> Dict[str, Any]:
             "meta": feature_catalog.schema_hash("meta"),
         },
         "predictor": None,
-        "ledger": _ledger_summary(),
+        "ledger": ledger_sum,
     }
     if _predictor is not None:
         try:
@@ -85,7 +86,7 @@ def feature_catalog_dump() -> Dict[str, Any]:
 # /api/ml/calibration
 # ---------------------------------------------------------------------------
 @router.get("/api/ml/calibration")
-def calibration_curve(
+async def calibration_curve(
     symbol: str = Query(..., min_length=1),
     model_name: str = Query("xgb-q50-7dte"),
     days: int = Query(90, ge=7, le=365),
@@ -96,7 +97,7 @@ def calibration_curve(
     Used by the operator to confirm the calibrator is doing its job —
     well-calibrated predictions land on the diagonal.
     """
-    rows = ledger_mod.fetch_for_calibration(
+    rows = await ledger_mod.fetch_for_calibration(
         db, symbol, model_name, days=days, require_outcome=True)
     if not rows:
         return {
@@ -167,18 +168,18 @@ def run_backtest(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _ledger_summary() -> Dict[str, Any]:
+async def _ledger_summary() -> Dict[str, Any]:
     """Tiny aggregate of recent ledger activity — surface-area indicator."""
     if ledger_mod.PredictionLedger is None:
         return {"available": False}
     try:
-        with db.Session() as s:
-            row_total = s.query(ledger_mod.PredictionLedger).count()
-            outcome_total = (
-                s.query(ledger_mod.PredictionLedger)
+        from sqlalchemy import select, func
+        async with db.AsyncSession() as s:
+            row_total = (await s.execute(select(func.count(ledger_mod.PredictionLedger.id)))).scalar()
+            outcome_total = (await s.execute(
+                select(func.count(ledger_mod.PredictionLedger.id))
                 .filter(ledger_mod.PredictionLedger.realized_outcome.is_not(None))
-                .count()
-            )
+            )).scalar()
         return {
             "available": True,
             "total_rows": int(row_total),

@@ -12,6 +12,7 @@ from hermes.db.orm import (
     ExitTick, PendingApproval, PendingOrder, Trade,
     _close_reason_from_tag, _compute_realized_pnl,
 )
+from hermes.service1_agent.transaction_manager import TransactionManager
 
 logger = logging.getLogger("hermes.db")
 
@@ -43,17 +44,19 @@ class TradesRepositoryMixin:
                 side_value = action.side
 
         async with self.AsyncSession() as s:
-            s.add(PendingOrder(
-                strategy_id=action.strategy_id, symbol=action.symbol,
+            await TransactionManager.place_order(
+                session=s,
+                strategy_id=action.strategy_id,
+                symbol=action.symbol,
                 side=side_value,
-                quantity=lots,          # lot count, not order count
+                quantity=lots,
                 payload={
                     "legs": action.legs, "price": action.price,
                     "tag": action.tag, "ai_authored": action.ai_authored,
                     "ai_rationale": action.ai_rationale,
                     "expiry": action.expiry,
-                },
-            ))
+                }
+            )
             await s.commit()
 
     async def record_order_response(self, action, response) -> None:
@@ -90,20 +93,6 @@ class TradesRepositoryMixin:
                 if m:
                     side_value = "put" if m.group(3) == "P" else "call"
                     break
-
-        await self._consume_matching_pending(
-            strategy_id=action.strategy_id, symbol=action.symbol,
-            side=(side_value or action.side or "").lower(), lots=lots,
-            terminal_status="REJECTED" if rejected else "SUBMITTED",
-        )
-
-        if rejected:
-            await self.write_log(
-                action.strategy_id,
-                f"[ORDER REJECTED] {action.symbol} side={side_value} "
-                f"qty={lots} response={response}",
-            )
-            return
 
         sp = action.strategy_params or {}
         short_leg = sp.get("short_leg")
@@ -142,26 +131,49 @@ class TradesRepositoryMixin:
                 entry_debit = float(action.price)
 
         async with self.AsyncSession() as s:
-            s.add(Trade(
+            if rejected:
+                await TransactionManager.reject(
+                    session=s,
+                    strategy_id=action.strategy_id,
+                    symbol=action.symbol,
+                    side=(side_value or action.side or "").lower(),
+                    lots=lots,
+                )
+                await s.commit()
+                await self.write_log(
+                    action.strategy_id,
+                    f"[ORDER REJECTED] {action.symbol} side={side_value} "
+                    f"qty={lots} response={response}",
+                )
+                return
+
+            trade_fields = {
+                "strategy_id": action.strategy_id,
+                "symbol": action.symbol,
+                "side_type": (side_value or "unknown").lower(),
+                "short_leg": short_leg,
+                "long_leg": long_leg,
+                "short_strike": short_strike,
+                "long_strike": long_strike,
+                "width": float(width) if width is not None else None,
+                "lots": lots,
+                "entry_credit": entry_credit,
+                "entry_debit": entry_debit,
+                "expiry": expiry_date,
+                "ai_authored": bool(getattr(action, "ai_authored", False)),
+                "ai_rationale": getattr(action, "ai_rationale", None),
+                "broker_order_id": broker_order_id,
+                "tag": getattr(action, "tag", None),
+                "entry_features": (action.strategy_params or {}).get("entry_features"),
+            }
+            await TransactionManager.fill(
+                session=s,
                 strategy_id=action.strategy_id,
                 symbol=action.symbol,
-                side_type=(side_value or "unknown").lower(),
-                short_leg=short_leg,
-                long_leg=long_leg,
-                short_strike=short_strike,
-                long_strike=long_strike,
-                width=float(width) if width is not None else None,
+                side=(side_value or action.side or "").lower(),
                 lots=lots,
-                entry_credit=entry_credit,
-                entry_debit=entry_debit,
-                expiry=expiry_date,
-                status="OPEN",
-                ai_authored=bool(getattr(action, "ai_authored", False)),
-                ai_rationale=getattr(action, "ai_rationale", None),
-                broker_order_id=broker_order_id,
-                tag=getattr(action, "tag", None),
-                entry_features=(action.strategy_params or {}).get("entry_features"),
-            ))
+                trade_fields=trade_fields,
+            )
             await s.commit()
 
         await self.write_log(
@@ -204,20 +216,6 @@ class TradesRepositoryMixin:
                     side_value = "put" if m.group(3) == "P" else "call"
                     break
 
-        await self._consume_matching_pending(
-            strategy_id=action.strategy_id, symbol=action.symbol,
-            side=(side_value or action.side or "").lower(), lots=lots,
-            terminal_status="REJECTED" if rejected else "SUBMITTED",
-        )
-
-        if rejected:
-            await self.write_log(
-                action.strategy_id,
-                f"[CLOSE REJECTED] {action.symbol} side={side_value} "
-                f"qty={lots} response={response}",
-            )
-            return
-
         sp = action.strategy_params or {}
         trade_id = sp.get("trade_id")
         close_reason = sp.get("close_reason") or _close_reason_from_tag(
@@ -225,6 +223,22 @@ class TradesRepositoryMixin:
         exit_price = float(action.price) if action.price is not None else None
 
         async with self.AsyncSession() as s:
+            if rejected:
+                await TransactionManager.reject(
+                    session=s,
+                    strategy_id=action.strategy_id,
+                    symbol=action.symbol,
+                    side=(side_value or action.side or "").lower(),
+                    lots=lots,
+                )
+                await s.commit()
+                await self.write_log(
+                    action.strategy_id,
+                    f"[CLOSE REJECTED] {action.symbol} side={side_value} "
+                    f"qty={lots} response={response}",
+                )
+                return
+
             row: Optional[Trade] = None
             if trade_id is not None:
                 q = select(Trade).filter(Trade.id == int(trade_id), Trade.status == "OPEN").limit(1)
@@ -248,6 +262,15 @@ class TradesRepositoryMixin:
                     row = result.scalars().first()
 
             if row is None:
+                # Still consume the matching pending order even if trade is orphan
+                await TransactionManager._consume_pending(
+                    session=s,
+                    strategy_id=action.strategy_id,
+                    symbol=action.symbol,
+                    side=(side_value or action.side or "").lower(),
+                    terminal_status="SUBMITTED"
+                )
+                await s.commit()
                 await self.write_log(
                     action.strategy_id,
                     f"[CLOSE ORPHAN] {action.symbol} no matching OPEN trade for "
@@ -256,32 +279,19 @@ class TradesRepositoryMixin:
                 )
                 return
 
-            # Stash the close economics now, regardless of fill timing, so they
-            # survive into the final CLOSED row whether we finalize here (on a
-            # confirmed fill) or later via the position-sync reconciler.
-            row.close_reason = close_reason
-            row.close_tag = getattr(action, "tag", None)
-            if exit_price is not None:
-                row.exit_price = exit_price
-            row.pnl = _compute_realized_pnl(
-                entry_credit=row.entry_credit,
-                entry_debit=row.entry_debit,
-                exit_price=exit_price,
-                lots=int(row.lots or 0),
-            )
-
-            # Only finalize CLOSED when the broker confirms the fill. On mere
-            # acceptance the order may still rest unfilled or be rejected
-            # asynchronously — marking CLOSED here is what stranded such closes
-            # as orphans (DB said closed while the broker still held the legs).
-            # Move to CLOSING instead; ``upsert_positions`` finalizes CLOSED
-            # once the legs go flat, or reopens the trade if the close fails.
             filled = order_status == "filled"
-            if filled:
-                row.force_close()
-                row.closed_at = datetime.utcnow()
-            else:
-                row.begin_close()
+            await TransactionManager.close(
+                session=s,
+                strategy_id=action.strategy_id,
+                symbol=action.symbol,
+                side=(side_value or action.side or "").lower(),
+                lots=lots,
+                trade=row,
+                filled=filled,
+                exit_price=exit_price,
+                close_reason=close_reason,
+                close_tag=getattr(action, "tag", None)
+            )
             await s.commit()
 
         verb = "FILLED" if filled else "SUBMITTED"
@@ -292,28 +302,6 @@ class TradesRepositoryMixin:
             f"order_id={broker_order_id} status={order_status or 'ok'}"
             + ("" if filled else " — awaiting broker fill"),
         )
-
-    async def _consume_matching_pending(self, *, strategy_id: str, symbol: str,
-                                  side: str, lots: int,
-                                  terminal_status: str) -> None:
-        """Delete the most-recent matching PendingOrder so capacity isn't
-        double-counted with the freshly-written Trade row."""
-        async with self.AsyncSession() as s:
-            q = (select(PendingOrder)
-                   .filter(
-                       PendingOrder.strategy_id == strategy_id,
-                       PendingOrder.symbol == symbol,
-                       PendingOrder.side == side,
-                       PendingOrder.status == "PENDING",
-                   )
-                   .order_by(PendingOrder.submitted_at.desc())
-                   .limit(1))
-            result = await s.execute(q)
-            row = result.scalars().first()
-            if row is None:
-                return
-            row.status = terminal_status
-            await s.commit()
 
     @staticmethod
     def _extract_strike(occ_symbol: Optional[str]):
@@ -365,24 +353,21 @@ class TradesRepositoryMixin:
                     # flatten it so the book matches broker truth.
                     if held or resting:
                         continue
-                    t.force_close()
-                    t.closed_at = datetime.utcnow()
-                    if not t.close_reason:
-                        t.close_reason = "RECONCILED_BROKER_FLAT"
+                    close_reason = t.close_reason or "RECONCILED_BROKER_FLAT"
+                    TransactionManager.reconcile_trade(t, "force_close", close_reason=close_reason)
                     closed += 1
                 else:  # CLOSING — a close was submitted; confirm its fate.
                     if not held:
                         # Legs went flat → the close filled. Finalize, keeping
                         # the close_reason / exit / pnl stashed at submit time.
-                        t.finish_close()
-                        t.closed_at = datetime.utcnow()
+                        TransactionManager.reconcile_trade(t, "finish_close")
                         closed += 1
                     elif resting:
                         continue            # close order still working
                     else:
                         # Still held with no resting order → the close didn't
                         # take (rejected/canceled async). Re-arm for retry.
-                        t.reopen()
+                        TransactionManager.reconcile_trade(t, "reopen")
                         reopened += 1
             if closed or reopened:
                 await s.commit()
@@ -628,7 +613,7 @@ class TradesRepositoryMixin:
             )
             stale = result.scalars().all()
             for row in stale:
-                row.status = "EXPIRED"
+                TransactionManager.expire_order(row)
                 expired += 1
             if expired:
                 await s.commit()
