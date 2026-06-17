@@ -30,6 +30,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import sys
@@ -38,7 +39,7 @@ from typing import Dict, List
 logger = logging.getLogger("hermes.scripts.nightly_calibrate")
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=90,
                         help="Lookback window for ledger rows")
@@ -80,33 +81,49 @@ def main() -> int:
     try:
         from datetime import datetime, timezone, timedelta
         from hermes.ml.ledger import PredictionLedger
-        from hermes.db.models import DailyBar
+        from sqlalchemy import select
         
         logger.info("evaluating and marking prediction ledger outcomes...")
-        with db.Session() as session:
+        async with db.AsyncSession() as session:
             now = datetime.now(timezone.utc)
-            unmarked_rows = (session.query(PredictionLedger)
-                             .filter(PredictionLedger.realized_outcome.is_(None))
-                             .all())
+            q = (
+                select(PredictionLedger)
+                .filter(PredictionLedger.realized_outcome.is_(None))
+            )
+            result = await session.execute(q)
+            unmarked_rows = result.scalars().all()
             
             marked_count = 0
+            cached_bars = {}
             for row in unmarked_rows:
                 horizon = row.horizon_dte or 7
                 target_date = row.ts + timedelta(days=horizon)
                 if target_date > now:
                     continue
                 
-                bar = (session.query(DailyBar)
-                       .filter(DailyBar.symbol == row.symbol, DailyBar.ts >= target_date)
-                       .order_by(DailyBar.ts.asc())
-                       .first())
-                if not bar:
+                sym = row.symbol.upper()
+                if sym not in cached_bars:
+                    df = await db.daily_bars(sym, lookback_days=args.days + 30)
+                    cached_bars[sym] = df
+                
+                df_bars = cached_bars[sym]
+                if df_bars is None or df_bars.empty:
                     continue
                 
-                if bar.ts > now:
+                df_future = df_bars[df_bars.index >= target_date]
+                if df_future.empty:
                     continue
                 
-                realized_close = float(bar.close)
+                first_bar_ts = df_future.index[0]
+                first_bar_ts_utc = first_bar_ts.to_pydatetime()
+                if first_bar_ts_utc.tzinfo is None:
+                    first_bar_ts_utc = first_bar_ts_utc.replace(tzinfo=timezone.utc)
+                
+                if first_bar_ts_utc > now:
+                    continue
+                
+                row_bar = df_future.iloc[0]
+                realized_close = float(row_bar["close"])
                 spot = float(row.spot) if row.spot else realized_close
                 outcome = 1.0 if realized_close > spot else 0.0
                 
@@ -116,14 +133,14 @@ def main() -> int:
                 marked_count += 1
                 
             if marked_count > 0:
-                session.commit()
+                await session.commit()
                 logger.info("Marked %d new prediction outcomes", marked_count)
             else:
                 logger.info("No new prediction outcomes to mark")
     except Exception as exc:
         logger.warning("Outcome marking failed: %s", exc)
 
-    symbols = _enumerate_symbols(db, args.symbols)
+    symbols = await _enumerate_symbols(db, args.symbols)
     if not symbols:
         logger.info("no symbols with ledger rows; nothing to calibrate")
         return 0
@@ -131,7 +148,7 @@ def main() -> int:
     fitted: Dict[str, Dict[str, float]] = {}
     for sym in symbols:
         try:
-            rows = ledger_mod.fetch_for_calibration(
+            rows = await ledger_mod.fetch_for_calibration(
                 db, sym, "xgb_q50_07dte", days=args.days, require_outcome=True,
             )
         except Exception as exc:                                   # noqa: BLE001
@@ -152,7 +169,7 @@ def main() -> int:
         # Reconstruct MetaLearner training rows from prediction ledger rows via synthetic strikes
         meta_rows = []
         meta_outs = []
-        df_all = db.daily_bars(sym, lookback_days=args.days + 300)
+        df_all = await db.daily_bars(sym, lookback_days=args.days + 300)
         if df_all is not None and not df_all.empty:
             from datetime import timedelta
             from scipy.stats import norm
@@ -237,7 +254,7 @@ def main() -> int:
         if not args.dry_run:
             for period in ("3M", "6M", "1Y"):
                 try:
-                    regime_weights.update_from_outcomes(
+                    await regime_weights.update_from_outcomes(
                         db, sym, period, hits=hits, misses=misses)
                 except Exception as exc:                           # noqa: BLE001
                     logger.warning("regime update failed %s/%s: %s",
@@ -246,10 +263,10 @@ def main() -> int:
         # Persist calibrator JSON for the predictor to reload.
         if not args.dry_run:
             try:
-                db.set_setting(f"ml_calibrator__{sym}",
+                await db.set_setting(f"ml_calibrator__{sym}",
                                json.dumps(cal.to_dict(), sort_keys=True))
                 if meta is not None:
-                    db.set_setting(f"ml_meta_learner__{sym}", meta.to_json())
+                    await db.set_setting(f"ml_meta_learner__{sym}", meta.to_json())
             except Exception as exc:                               # noqa: BLE001
                 logger.warning("setting write failed for %s: %s", sym, exc)
 
@@ -275,7 +292,7 @@ def main() -> int:
     return 0
 
 
-def _enumerate_symbols(db, override: str | None) -> List[str]:
+async def _enumerate_symbols(db, override: str | None) -> List[str]:
     if override:
         return [s.strip().upper() for s in override.split(",") if s.strip()]
     try:
@@ -285,10 +302,9 @@ def _enumerate_symbols(db, override: str | None) -> List[str]:
     if PredictionLedger is None:
         return []
     try:
-        with db.Session() as s:
-            rows = (s.query(PredictionLedger.symbol)
-                    .distinct()
-                    .all())
+        from sqlalchemy import select
+        async with db.AsyncSession() as s:
+            rows = (await s.execute(select(PredictionLedger.symbol).distinct())).all()
             return sorted({r[0] for r in rows if r[0]})
     except Exception as exc:                                       # noqa: BLE001
         logger.warning("symbol enumeration failed: %s", exc)
@@ -296,4 +312,4 @@ def _enumerate_symbols(db, override: str | None) -> List[str]:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

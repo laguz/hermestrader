@@ -11,6 +11,7 @@ Run via cron / docker-compose schedule, e.g.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -20,7 +21,7 @@ from typing import Any, Dict, List
 logger = logging.getLogger("hermes.scripts.self_learning_loop")
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--days", type=int, default=14,
                         help="Lookback window for closed trades")
@@ -34,6 +35,7 @@ def main() -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     try:
+        from sqlalchemy import select
         from hermes.db.models import HermesDB, Trade
         from hermes.charts.provider import render_chart
         from hermes.service1_agent.main import _build_llm
@@ -50,11 +52,14 @@ def main() -> int:
 
     # 1. Fetch closed trades
     cutoff = datetime.now(timezone.utc) - timedelta(days=args.days)
-    with db.Session() as session:
-        closed_trades = (session.query(Trade)
-                         .filter(Trade.status == "CLOSED", Trade.closed_at >= cutoff)
-                         .order_by(Trade.closed_at.asc())
-                         .all())
+    async with db.AsyncSession() as session:
+        q = (
+            select(Trade)
+            .filter(Trade.status == "CLOSED", Trade.closed_at >= cutoff)
+            .order_by(Trade.closed_at.asc())
+        )
+        result = await session.execute(q)
+        closed_trades = result.scalars().all()
         if not closed_trades:
             logger.info("No closed trades found in the last %d days; nothing to analyze.", args.days)
             return 0
@@ -76,7 +81,7 @@ def main() -> int:
             })
 
     # 2. Build the LLM client
-    llm_client, llm_snap, vision_enabled = _build_llm(db)
+    llm_client, llm_snap, vision_enabled = await _build_llm(db)
     if llm_snap.get("provider") == "mock":
         logger.warning("LLM client is mocked; self-learning analyses will be synthetic.")
 
@@ -88,7 +93,7 @@ def main() -> int:
         min_date = min(t["opened_at"] for t in trades) - timedelta(days=20)
         max_date = max(t["closed_at"] for t in trades) + timedelta(days=5)
         
-        df_bars = db.daily_bars(symbol, lookback_days=args.days + 60)
+        df_bars = await db.daily_bars(symbol, lookback_days=args.days + 60)
         if df_bars is None or df_bars.empty:
             logger.warning("No daily bar data found for %s; skipping visual analysis", symbol)
             continue
@@ -155,7 +160,7 @@ def main() -> int:
     new_section = f"{header}\n{timestamp_line}\n\n" + "\n\n".join(analyses)
 
     try:
-        current_soul = db.get_setting("soul_md") or ""
+        current_soul = (await db.get_setting("soul_md")) or ""
         if header in current_soul:
             parts = current_soul.split(header, 1)
             updated_soul = parts[0].rstrip() + "\n\n" + new_section
@@ -167,8 +172,8 @@ def main() -> int:
             logger.info(updated_soul)
             logger.info("---------------------------------------")
         else:
-            db.set_setting("soul_md", updated_soul)
-            db.write_log("ENGINE", f"[SELF-LEARNING] Updated soul_md with lessons learned for {', '.join(grouped_trades.keys())}")
+            await db.set_setting("soul_md", updated_soul)
+            await db.write_log("ENGINE", f"[SELF-LEARNING] Updated soul_md with lessons learned for {', '.join(grouped_trades.keys())}")
             logger.info("Successfully updated operator doctrine (soul_md) in system_settings.")
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("Failed to update soul_md: %s", exc)
@@ -178,4 +183,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(asyncio.run(main()))

@@ -78,6 +78,19 @@ class MoneyManager:
     async def true_available_bp(self) -> float:
         balances = await self.broker.get_account_balances() or {}
         available = max(0.0, float(balances.get("option_buying_power", 0.0)))
+        
+        try:
+            reserve_val = await self.db.get_setting("obp_reserve")
+            if reserve_val:
+                reserve = float(str(reserve_val).strip())
+                available = max(0.0, available - reserve)
+                logger.debug(
+                    "[MM] true_available_bp: subtracted reserve=%.2f, net_obp=%.2f",
+                    reserve, available
+                )
+        except Exception as e:
+            logger.debug("[MM] Failed to fetch or parse obp_reserve: %s", e)
+
         logger.debug(
             "[MM] true_available_bp: obp=%.2f account_type=%s",
             available, balances.get("account_type"),

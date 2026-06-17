@@ -136,7 +136,7 @@ def make_lookup_fn(db: "HermesDB"):
 # ---------------------------------------------------------------------------
 # Bayesian update
 # ---------------------------------------------------------------------------
-def update_from_outcomes(
+async def update_from_outcomes(
     db: "HermesDB",
     symbol: str,
     period: str,
@@ -155,11 +155,12 @@ def update_from_outcomes(
     """
     if RegimeWeights is None or db is None:
         return
+    from sqlalchemy import select
     period_key = period.upper()
-    with db.Session() as s:
-        row = (s.query(RegimeWeights)
-               .filter_by(symbol=symbol.upper(), period=period_key)
-               .first())
+    async with db.AsyncSession() as s:
+        q = select(RegimeWeights).filter_by(symbol=symbol.upper(), period=period_key)
+        result = await s.execute(q)
+        row = result.scalars().first()
         if row is None:
             row = RegimeWeights(
                 symbol=symbol.upper(), period=period_key,
@@ -190,7 +191,7 @@ def update_from_outcomes(
                         float(cur * scale + default * (1.0 - scale)))
         from datetime import datetime, timezone
         row.updated_at = datetime.now(timezone.utc)
-        s.commit()
+        await s.commit()
 
 
 def ensure_table(db: "HermesDB") -> None:
