@@ -352,6 +352,15 @@ class CreditSpreads75(AbstractStrategy):
         return actions
 
     def _close_action(self, trade, debit, reason) -> TradeAction:
+        # Cap the close limit at the spread width: a W-wide credit spread can
+        # never be worth more than W to close, so never bid above it (a 5-wide
+        # must not go out at 5.10). The 5% marketability buffer applies only up
+        # to that ceiling. Matters most on the stale-quote TIME-EXIT path, which
+        # passes a width-priced debit (width * 1.05 would otherwise exceed W).
+        price = round(debit * 1.05, 2)
+        width = trade.get("width")
+        if width:
+            price = min(price, round(float(width), 2))
         return TradeAction(
             strategy_id=self.strategy_id, symbol=trade["symbol"],
             order_class="multileg",
@@ -359,7 +368,7 @@ class CreditSpreads75(AbstractStrategy):
                 {"option_symbol": trade["short_leg"], "side": "buy_to_close",  "quantity": int(trade["lots"])},
                 {"option_symbol": trade["long_leg"],  "side": "sell_to_close", "quantity": int(trade["lots"])},
             ],
-            price=round(debit * 1.05, 2), side="buy", quantity=1,
+            price=price, side="buy", quantity=1,
             order_type="debit", tag=f"HERMES_CS75_CLOSE_{reason}",
             strategy_params={"trade_id": trade["id"], "close_reason": reason},
         )
