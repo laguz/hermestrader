@@ -250,6 +250,16 @@ class BotLog(Base):
     message = Column(Text, nullable=False)
 
 
+class EventLedger(Base):
+    __tablename__ = "event_ledger"
+    id = Column(BigInteger, Sequence("event_ledger_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+                        primary_key=True)
+    event_type = Column(String, nullable=False)
+    payload = Column(JSONB, nullable=False)
+
+
 class AIDecision(Base):
     __tablename__ = "ai_decisions"
     ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
