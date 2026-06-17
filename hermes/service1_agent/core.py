@@ -83,24 +83,116 @@ class CascadingEngine:
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
         self.queue = None
         self.loop_task = None
+        from hermes.ipc import ipc
+        self.ipc_client = ipc
+        self._pending_futures: Dict[str, asyncio.Future] = {}
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
             self.event_bus.subscribe(OrderFillEvent, self.handle_order_fill)
 
+    def _is_durable_loop(self) -> bool:
+        return self.ipc_client is not None and self.ipc_client.is_connected
+
     def _ensure_event_loop(self) -> None:
-        if self.queue is None:
-            self.queue = asyncio.Queue()
-        if self.loop_task is None or self.loop_task.done():
-            self.loop_task = asyncio.create_task(self._event_consumer_loop())
+        if self._is_durable_loop():
+            if self.loop_task is None or self.loop_task.done():
+                self._pending_futures = {}
+                self.loop_task = asyncio.create_task(self._redis_event_consumer_loop())
+        else:
+            if self.queue is None:
+                self.queue = asyncio.Queue()
+            if self.loop_task is None or self.loop_task.done():
+                self.loop_task = asyncio.create_task(self._event_consumer_loop())
 
     async def publish_event(self, event_type: str, payload: Dict[str, Any]) -> Any:
         self._ensure_event_loop()
-        fut = asyncio.get_running_loop().create_future()
-        payload_with_fut = dict(payload)
-        payload_with_fut["future"] = fut
-        await self.queue.put((event_type, payload_with_fut))
-        return await fut
+        
+        if self._is_durable_loop():
+            import json
+            client = self.ipc_client.client
+            fut = asyncio.get_running_loop().create_future()
+            
+            serializable_payload = {k: v for k, v in payload.items() if k != "future"}
+            
+            msg_id = await client.xadd(
+                "hermes_event_stream",
+                {
+                    "event_type": event_type,
+                    "payload": json.dumps(serializable_payload)
+                }
+            )
+            
+            self._pending_futures[msg_id] = fut
+            return await fut
+        else:
+            fut = asyncio.get_running_loop().create_future()
+            payload_with_fut = dict(payload)
+            payload_with_fut["future"] = fut
+            await self.queue.put((event_type, payload_with_fut))
+            return await fut
+
+    async def _redis_event_consumer_loop(self) -> None:
+        import json
+        logger.info("[ENGINE] Starting Redis Streams background durable event loop consumer.")
+        client = self.ipc_client.client
+        
+        try:
+            await client.xgroup_create("hermes_event_stream", "hermes_engine_group", id="0", mkstream=True)
+            logger.info("[ENGINE] Created Redis Stream consumer group 'hermes_engine_group'")
+        except Exception as err:
+            if "BUSYGROUP" not in str(err):
+                logger.warning("[ENGINE] Redis Stream group create failed or already exists: %s", err)
+                
+        consumer_name = "engine_consumer"
+        while True:
+            try:
+                # 1. Read unacknowledged/pending messages for recovery
+                response = await client.xreadgroup(
+                    groupname="hermes_engine_group",
+                    consumername=consumer_name,
+                    streams={"hermes_event_stream": "0"},
+                    count=5,
+                    block=100
+                )
+                
+                # 2. Read new messages
+                if not response:
+                    response = await client.xreadgroup(
+                        groupname="hermes_engine_group",
+                        consumername=consumer_name,
+                        streams={"hermes_event_stream": ">"},
+                        count=5,
+                        block=1000
+                    )
+                    
+                if not response:
+                    continue
+                    
+                for stream_name, messages in response:
+                    for msg_id, payload in messages:
+                        event_type = payload.get("event_type")
+                        payload_json = payload.get("payload")
+                        try:
+                            data = json.loads(payload_json) if payload_json else {}
+                            
+                            fut = self._pending_futures.get(msg_id)
+                            if fut:
+                                data["future"] = fut
+                                
+                            await self._process_event(event_type, data)
+                            await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
+                            
+                        except Exception as exc:
+                            logger.exception("[ENGINE] Error processing durable event %s: %s", msg_id, exc)
+                        finally:
+                            self._pending_futures.pop(msg_id, None)
+                            
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception("[ENGINE] Durable event consumer loop error: %s", exc)
+                await asyncio.sleep(1.0)
 
     async def _event_consumer_loop(self) -> None:
         logger.info("[ENGINE] Starting background event loop consumer.")
