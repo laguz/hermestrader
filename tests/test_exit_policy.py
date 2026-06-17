@@ -279,3 +279,42 @@ async def test_off_mode_is_a_noop(db):
 
     assert await db.fetch_exit_ticks() == []
     assert await db.recent_ai_decisions(strategy_id="EXITPOLICY") == []
+
+
+@pytest.mark.asyncio
+async def test_reactive_exit_on_market_data_event(db, monkeypatch):
+    from hermes.events.bus import MarketDataEvent
+    import hermes.market_hours
+    monkeypatch.setattr(hermes.market_hours, "should_block_trades", lambda: (False, ""))
+
+    await _seed_open_trade(db)
+    await _seed_close_recommending_trajectories(db)
+    await db.set_setting("exit_policy_mode", "active")
+
+    engine = CascadingEngine(
+        broker=_StubBroker(QUOTES), db=db, strategies=[],
+        overseer=_StubOverseer("enforcing"))
+
+    submitted = []
+    async def _spy(actions, action_type="entry"):
+        submitted.append((list(actions), action_type))
+    engine.submit = _spy
+
+    event = MarketDataEvent(
+        symbol="TSLA260717P00440000",
+        price=0.95,
+        volume=10,
+        data={"bid": 0.90, "ask": 1.00}
+    )
+
+    engine._quote_cache["TSLA260717P00440000"] = {"bid": 0.90, "ask": 1.00}
+    engine._quote_cache["TSLA260717P00435000"] = {"bid": 0.00, "ask": 0.10}
+
+    await engine.handle_market_data(event)
+
+    assert len(submitted) == 1
+    actions, action_type = submitted[0]
+    assert action_type == "management"
+    assert actions[0].strategy_params["trade_id"] == 1
+    assert actions[0].strategy_params["close_reason"] == "EXIT-POLICY-REACTIVE"
+    assert actions[0].ai_authored is True

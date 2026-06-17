@@ -794,6 +794,140 @@ class CascadingEngine:
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("[EXIT-POLICY] capture/advise tick failed: %s", exc)
 
+    async def _maybe_evaluate_reactive_exit(self, symbol: str, mgmt_actions) -> None:
+        """Evaluate continuous exit model reactively on quote changes for a specific option symbol."""
+        try:
+            mode = (await self.db.get_setting("exit_policy_mode") or "off")
+            mode = str(mode).strip().lower()
+            if mode not in ("shadow", "active"):
+                return
+
+            open_trades = await self.db.all_open_trades()
+            if not open_trades:
+                return
+
+            # Filter open trades to only those containing this ticking option leg symbol
+            trades_for_symbol = [
+                t for t in open_trades
+                if t.get("short_leg") == symbol or t.get("long_leg") == symbol
+            ]
+            if not trades_for_symbol:
+                return
+
+            # Skip if a close was already issued for this tick
+            closing_ids = {
+                (a.strategy_params or {}).get("trade_id")
+                for a in (mgmt_actions or [])
+                if (a.strategy_params or {}).get("trade_id") is not None
+            }
+
+            from datetime import datetime as _dt
+            from hermes.ml.exit_policy import train_exit_policy, recommend
+
+            today = _dt.utcnow().date()
+            autonomy = (getattr(self.overseer, "autonomy", "advisory")
+                        if self.overseer is not None else "advisory")
+            can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
+
+            policy = train_exit_policy(await self.db.fetch_exit_ticks())
+            advice: List[Dict[str, Any]] = []
+            acted: List[int] = []
+
+            for tr in trades_for_symbol:
+                tid = tr.get("id")
+                if tid in closing_ids:
+                    continue
+
+                entry_credit = tr.get("entry_credit")
+                short_leg = tr.get("short_leg")
+                long_leg = tr.get("long_leg")
+                expiry = tr.get("expiry")
+
+                if not entry_credit or not expiry:
+                    continue
+
+                # Retrieve prices from cache
+                short_mid = None
+                if short_leg in self._quote_cache:
+                    q = self._quote_cache[short_leg]
+                    try:
+                        short_mid = (float(q.get("bid")) + float(q.get("ask"))) / 2.0
+                    except (TypeError, ValueError):
+                        pass
+
+                long_mid = 0.0
+                if long_leg:
+                    if long_leg in self._quote_cache:
+                        q = self._quote_cache[long_leg]
+                        try:
+                            long_mid = (float(q.get("bid")) + float(q.get("ask"))) / 2.0
+                        except (TypeError, ValueError):
+                            pass
+                    else:
+                        continue
+
+                if short_mid is None:
+                    continue
+
+                debit = round(short_mid - long_mid, 4)
+                pnl_pct = round((float(entry_credit) - debit) / float(entry_credit), 4)
+                exp_date = expiry if hasattr(expiry, "year") else None
+                if exp_date is None:
+                    continue
+                dte = (exp_date - today).days
+
+                rec = recommend(policy, pnl_pct, dte)
+                rec.update({"trade_id": tid, "symbol": tr.get("symbol"),
+                            "pnl_pct": pnl_pct, "dte": dte})
+                advice.append(rec)
+
+                width = tr.get("width")
+                close_price = round(debit * 1.05, 2)
+                if width:
+                    close_price = min(close_price, round(float(width), 2))
+
+                if (can_act and rec["confident"]):
+                    close = TradeAction(
+                        strategy_id=tr.get("strategy_id"), symbol=tr.get("symbol"),
+                        order_class="multileg",
+                        legs=[
+                            {"option_symbol": tr["short_leg"], "side": "buy_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                            {"option_symbol": tr["long_leg"], "side": "sell_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                        ] if tr.get("long_leg") else [
+                            {"option_symbol": tr["short_leg"], "side": "buy_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                        ],
+                        price=close_price, side="buy", quantity=1,
+                        order_type="debit",
+                        tag=f"HERMES_{tr.get('strategy_id')}_CLOSE_EXIT-POLICY-REACTIVE",
+                        strategy_params={"trade_id": tid, "close_reason": "EXIT-POLICY-REACTIVE",
+                                         "side_type": tr.get("side_type")},
+                        ai_authored=True,
+                    )
+                    await self.submit([close], action_type="management")
+                    acted.append(tid)
+                    await self.db.write_log(
+                        "EXITPOLICY",
+                        f"[REACTIVE-EXIT] closing trade {tid} {tr.get('symbol')} "
+                        f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
+                        f"> q_hold={rec['q_hold']})",
+                    )
+
+            if acted:
+                logger.info("[REACTIVE-EXIT] closed %s", acted)
+                try:
+                    await self.db.write_ai_decision(
+                        "EXITPOLICY", "REACTIVE-EXITS", autonomy,
+                        {"type": "exit_policy_reactive", "mode": mode, "acted": acted,
+                         "advice": advice},
+                    )
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.exception("[REACTIVE-EXIT] evaluation failed: %s", exc)
+
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""
         a = event.original_action
@@ -1087,6 +1221,9 @@ class CascadingEngine:
                 
         if mgmt_actions:
             await self.submit(mgmt_actions, action_type="management")
+
+        # Evaluate continuous exit policy reactively for trades containing this ticking option leg
+        await self._maybe_evaluate_reactive_exit(symbol, mgmt_actions)
 
         # Check support/resistance crossing for entries
         if old_price is not None and old_price != event.price:
