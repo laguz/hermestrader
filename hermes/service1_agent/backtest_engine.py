@@ -4,10 +4,13 @@ from __future__ import annotations
 import datetime
 import logging
 import math
+import os
+import uuid
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from sqlalchemy import select
 
 from hermes.common import OCC_RE
 from hermes.greeks import black_scholes_greeks, black_scholes_price
@@ -20,8 +23,12 @@ from hermes.broker.models import (
     MarketQuote,
     OrderPlacementResult,
 )
+from hermes.db.models import HermesDB, SystemSetting, Strategy, StrategyWatchlist, Trade
+from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+from hermes.utils import set_virtual_time
 
 logger = logging.getLogger("hermes.backtest")
+
 
 
 class BacktestDatabase:
@@ -511,7 +518,35 @@ class BacktestController:
         end_date: datetime.date,
         start_balance: float = 100000.0,
     ):
-        self.db = BacktestDatabase()
+        os.makedirs(".hermes", exist_ok=True)
+        self.db_file = f".hermes/backtest_{uuid.uuid4().hex}.db"
+        self.db = HermesDB(f"sqlite:///{self.db_file}")
+        
+        # Populate settings, strategies, and watchlists synchronously
+        from hermes.common import STRATEGY_PRIORITIES
+        with self.db.Session() as session:
+            # Settings
+            for k, v in {
+                "hermes_mode": "paper",
+                "agent_autonomy": "autonomous",
+                "agent_paused": "false",
+                "approval_mode": "false",
+                "llm_out_of_loop": "true",
+            }.items():
+                session.add(SystemSetting(key=k, value=str(v)))
+            
+            # Strategies registry
+            for sid, priority in STRATEGY_PRIORITIES.items():
+                session.add(Strategy(strategy_id=sid, priority=int(priority), status="ACTIVE"))
+            
+            # Strategy Watchlists
+            for s_cls in strategies:
+                strat_id = s_cls.NAME if hasattr(s_cls, "NAME") else s_cls.__name__
+                for symbol in watchlist:
+                    session.add(StrategyWatchlist(strategy_id=strat_id, symbol=symbol, target_lots=1))
+                    
+            session.commit()
+
         self.broker = BacktestBroker(ts_engine, start_balance)
         self.watchlist = watchlist
         self.start_date = start_date
@@ -541,9 +576,39 @@ class BacktestController:
             llm_out_of_loop=True,
         )
 
+    def cleanup_sync(self) -> None:
+        if hasattr(self, "db") and self.db is not None:
+            if hasattr(self.db, "engine") and self.db.engine is not None:
+                self.db.engine.dispose()
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.db.async_engine.dispose())
+            except Exception:
+                pass
+            self.db = None
+        if hasattr(self, "db_file") and self.db_file and os.path.exists(self.db_file):
+            try:
+                os.remove(self.db_file)
+            except OSError:
+                pass
+
+    def __del__(self) -> None:
+        self.cleanup_sync()
+
+    async def __aenter__(self) -> BacktestController:
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_sync()
+
     async def step(self, current_date: datetime.date) -> Dict[str, int]:
         # Update current date at market close
-        self.broker.current_date = datetime.datetime.combine(current_date, datetime.time(16, 0, 0))
+        sim_dt = datetime.datetime.combine(current_date, datetime.time(16, 0, 0))
+        self.broker.current_date = sim_dt
+        set_virtual_time(sim_dt)
+        AsyncBrokerWrapper.clear_cache()
 
         # Check for option expirations / assignment
         # If spot price is below put strike, or above call strike at expiration, assign
@@ -582,13 +647,48 @@ class BacktestController:
         for occ in closed_contracts:
             del self.broker.virtual_positions[occ]
 
+        # Sync expired trades directly to CLOSED with realized pnl in database
+        async with self.db.AsyncSession() as session:
+            q = select(Trade).filter(Trade.status == "OPEN")
+            db_open_trades = (await session.execute(q)).scalars().all()
+            for t in db_open_trades:
+                if t.expiry and current_date >= t.expiry:
+                    spot = spot_map.get(t.symbol, 100.0)
+                    short_strike = float(t.short_strike) if t.short_strike else 0.0
+                    long_strike = float(t.long_strike) if t.long_strike else 0.0
+                    width = float(t.width) if t.width else abs(short_strike - long_strike)
+                    lots = int(t.lots)
+                    entry_credit = float(t.entry_credit or 0.0)
+                    entry_debit = float(t.entry_debit or 0.0)
+                    
+                    expiry_val = 0.0
+                    if t.side_type == "put":
+                        if spot <= long_strike:
+                            expiry_val = width
+                        elif spot < short_strike:
+                            expiry_val = short_strike - spot
+                    else:  # call
+                        if spot >= long_strike:
+                            expiry_val = width
+                        elif spot > short_strike:
+                            expiry_val = spot - short_strike
+                            
+                    t.status = "CLOSED"
+                    t.close_reason = "EXPIRED"
+                    t.closed_at = sim_dt
+                    t.exit_price = expiry_val
+                    if entry_credit > 0:
+                        t.pnl = (entry_credit - expiry_val) * 100.0 * lots
+                    else:
+                        t.pnl = (expiry_val - entry_debit) * 100.0 * lots
+            await session.commit()
+
         # Tick engine
         return await self.engine.tick(self.watchlist)
 
     async def run(self) -> Dict[str, Any]:
         current = self.start_date
         ticks_run = 0
-        total_trades_count = 0
 
         while current <= self.end_date:
             # Skip weekends for simplicity
@@ -597,15 +697,46 @@ class BacktestController:
                 ticks_run += 1
             current += datetime.timedelta(days=1)
 
-        # Calculate final stats
-        closed_trades = [t for t in self.db.trades if t["status"] == "CLOSED"]
+        # Calculate final stats from the database
+        async with self.db.AsyncSession() as session:
+            q = select(Trade)
+            rows = (await session.execute(q)).scalars().all()
+            
+            all_trades = []
+            for r in rows:
+                all_trades.append({
+                    "id": r.id,
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "side_type": r.side_type,
+                    "short_leg": r.short_leg,
+                    "long_leg": r.long_leg,
+                    "short_strike": float(r.short_strike) if r.short_strike else None,
+                    "long_strike": float(r.long_strike) if r.long_strike else None,
+                    "width": float(r.width) if r.width else None,
+                    "lots": int(r.lots),
+                    "entry_credit": float(r.entry_credit or 0.0) if r.entry_credit is not None else 0.0,
+                    "entry_debit": float(r.entry_debit or 0.0) if r.entry_debit is not None else 0.0,
+                    "expiry": r.expiry,
+                    "status": r.status,
+                    "opened_at": r.opened_at,
+                    "closed_at": r.closed_at,
+                    "exit_price": float(r.exit_price) if r.exit_price is not None else None,
+                    "pnl": float(r.pnl) if r.pnl is not None else None,
+                    "close_reason": r.close_reason,
+                    "close_tag": r.close_tag,
+                })
+        
+        closed_trades = [t for t in all_trades if t["status"] == "CLOSED"]
         total_pnl = sum(float(t["pnl"] or 0.0) for t in closed_trades)
         wins = sum(1 for t in closed_trades if float(t["pnl"] or 0.0) > 0)
         win_rate = wins / len(closed_trades) if closed_trades else 0.0
 
+        set_virtual_time(None)
+
         return {
             "ticks_run": ticks_run,
-            "total_trades": len(self.db.trades),
+            "total_trades": len(all_trades),
             "closed_trades": len(closed_trades),
             "total_pnl": total_pnl,
             "win_rate": win_rate,

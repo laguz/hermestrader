@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from hermes.utils import utc_now
 
 from sqlalchemy import select
 
@@ -39,7 +40,7 @@ class ApprovalsRepositoryMixin:
         ttl × hits) so a setup that keeps getting re-proposed is muted for
         longer. Returns the resulting ``hits`` count.
         """
-        now = datetime.utcnow()
+        now = utc_now()
         symbol = (symbol or "").upper()
         side_type = side_type.lower() if side_type else None
         async with self.AsyncSession() as s:
@@ -78,7 +79,7 @@ class ApprovalsRepositoryMixin:
         A stored suppression with NULL ``side_type``/``expiry`` is symbol-wide
         and matches any side/expiry; a populated field must match exactly.
         """
-        now = datetime.utcnow()
+        now = utc_now()
         symbol = (symbol or "").upper()
         side_type = side_type.lower() if side_type else None
         async with self.AsyncSession() as s:
@@ -98,7 +99,7 @@ class ApprovalsRepositoryMixin:
         return None
 
     async def expire_stale_approvals(self) -> int:
-        now = datetime.utcnow()
+        now = utc_now()
         expired = 0
         async with self.AsyncSession() as s:
             result = await s.execute(
@@ -123,7 +124,7 @@ class ApprovalsRepositoryMixin:
     async def queue_for_approval(self, action_json: Dict[str, Any],
                            action_type: str = "entry",
                            expires_hours: float = 24.0) -> int:
-        expires_at = (datetime.utcnow() + timedelta(hours=expires_hours)
+        expires_at = (utc_now() + timedelta(hours=expires_hours)
                       if expires_hours > 0 else None)
         async with self.AsyncSession() as s:
             row = PendingApproval(
@@ -176,7 +177,7 @@ class ApprovalsRepositoryMixin:
             if row is None or row.status != "PENDING":
                 return False
             row.status = decision
-            row.decided_at = datetime.utcnow()
+            row.decided_at = utc_now()
             if notes:
                 row.notes = notes
 
@@ -209,7 +210,7 @@ class ApprovalsRepositoryMixin:
             row = result.scalars().first()
             if row:
                 row.status = "EXECUTED" if success else "FAILED"
-                row.executed_at = datetime.utcnow()
+                row.executed_at = utc_now()
                 if notes:
                     row.notes = (row.notes or "") + f"\n{notes}"
                 await s.commit()

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Optional
+from hermes.utils import utc_now
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index,
@@ -35,7 +36,7 @@ class Strategy(Base):
     strategy_id = Column(String, primary_key=True)
     priority = Column(Integer, nullable=False)
     status = Column(String, nullable=False, default="ACTIVE")
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
 
 
 class StrategyWatchlist(Base):
@@ -44,7 +45,7 @@ class StrategyWatchlist(Base):
                          primary_key=True)
     symbol = Column(String, primary_key=True)
     target_lots = Column(Integer)
-    added_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    added_at = Column(DateTime(timezone=True), default=utc_now)
 
 
 class Trade(Base):
@@ -56,7 +57,7 @@ class Trade(Base):
     # via RETURNING instead of inserting NULL.
     id = Column(BigInteger, Sequence("trades_id_seq"), primary_key=True,
                 autoincrement=True)
-    opened_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+    opened_at = Column(DateTime(timezone=True), default=utc_now,
                        primary_key=True)
     strategy_id = Column(String, ForeignKey("strategies.strategy_id"), nullable=False)
     symbol = Column(String, nullable=False)
@@ -155,7 +156,7 @@ class ExitTick(Base):
     __tablename__ = "exit_ticks"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    ts = Column(DateTime(timezone=True), default=utc_now, nullable=False)
     trade_id = Column(BigInteger, nullable=False)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
@@ -177,7 +178,7 @@ class PendingOrder(Base):
     # hypertable's partitioning column.
     id = Column(BigInteger, Sequence("pending_orders_id_seq"), primary_key=True,
                 autoincrement=True)
-    submitted_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+    submitted_at = Column(DateTime(timezone=True), default=utc_now,
                           primary_key=True)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
@@ -197,7 +198,7 @@ class PendingApproval(Base):
     __tablename__ = "pending_approvals"
     id = Column(BigInteger, Sequence("pending_approvals_id_seq"), primary_key=True,
                 autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
     action_type = Column(String, nullable=False, default="entry")
@@ -225,7 +226,7 @@ class VetoSuppression(Base):
     __tablename__ = "veto_suppressions"
     id = Column(BigInteger, Sequence("veto_suppressions_id_seq"), primary_key=True,
                 autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
     # NULL side_type/expiry = symbol-wide veto (matches any); otherwise the
@@ -244,7 +245,7 @@ class VetoSuppression(Base):
 
 class BotLog(Base):
     __tablename__ = "bot_logs"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
     strategy_id = Column(String, nullable=False, primary_key=True)
     level = Column(String, default="INFO")
     message = Column(Text, nullable=False)
@@ -254,7 +255,7 @@ class EventLedger(Base):
     __tablename__ = "event_ledger"
     id = Column(BigInteger, Sequence("event_ledger_id_seq"), primary_key=True,
                 autoincrement=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow,
+    created_at = Column(DateTime(timezone=True), default=utc_now,
                         primary_key=True)
     event_type = Column(String, nullable=False)
     payload = Column(JSONB, nullable=False)
@@ -310,7 +311,7 @@ class DoctrineEmbedding(Base):
 
 class AIDecision(Base):
     __tablename__ = "ai_decisions"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
     strategy_id = Column(String)
     symbol = Column(String, primary_key=True)
     autonomy = Column(String, nullable=False)
@@ -319,7 +320,7 @@ class AIDecision(Base):
 
 class Prediction(Base):
     __tablename__ = "predictions"
-    ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
+    ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
     symbol = Column(String, nullable=False, primary_key=True)
     predicted_return = Column(Numeric(12, 6))
     predicted_price = Column(Numeric(12, 4))
@@ -337,8 +338,8 @@ class SystemSetting(Base):
     __tablename__ = "system_settings"
     key = Column(String, primary_key=True)
     value = Column(Text, nullable=False, default="")
-    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow,
-                        onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utc_now,
+                        onupdate=utc_now)
 
 
 # ---------------------------------------------------------------------------

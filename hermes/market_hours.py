@@ -76,7 +76,8 @@ _AFTER_CLOSE   = time(20,  0)  # after-hours ends
 
 
 def _now_et() -> datetime:
-    return datetime.now(ET)
+    from hermes.utils import now as clock_now
+    return clock_now(ET)
 
 
 def is_trading_day(d: Optional[date] = None) -> bool:

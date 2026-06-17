@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, date
+from hermes.utils import utc_now
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -601,7 +602,7 @@ class TradesRepositoryMixin:
         return po_lots + pa_lots
 
     async def expire_stale_pending_orders(self, older_than_seconds: int) -> int:
-        cutoff = datetime.utcnow() - timedelta(seconds=older_than_seconds)
+        cutoff = utc_now() - timedelta(seconds=older_than_seconds)
         expired = 0
         async with self.AsyncSession() as s:
             result = await s.execute(

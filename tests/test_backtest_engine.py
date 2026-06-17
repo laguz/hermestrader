@@ -82,3 +82,55 @@ async def test_backtest_controller_run():
     
     assert results["ticks_run"] == 11 # 11 weekdays in 2-week window
     assert results["final_balance"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_backtest_clock_and_database():
+    from hermes.utils import set_virtual_time, utc_now
+    from hermes.db.models import Trade
+    from sqlalchemy import select
+
+    ts = DummyTimeSeriesEngine()
+    start_date = datetime.date(2025, 1, 6)
+    end_date = datetime.date(2025, 1, 20)
+    
+    controller = BacktestController(
+        strategies=[TastyTrade45],
+        watchlist=["AAPL"],
+        ts_engine=ts,
+        start_date=start_date,
+        end_date=end_date,
+        start_balance=50000.0,
+    )
+
+    # Set virtual time to a specific past date
+    sim_dt = datetime.datetime(2025, 1, 10, 16, 0, 0)
+    set_virtual_time(sim_dt)
+    
+    assert utc_now() == sim_dt
+
+    # Let's insert a trade using the controller's database connection
+    async with controller.db.AsyncSession() as session:
+        trade = Trade(
+            id=1,
+            strategy_id="TT45",
+            symbol="AAPL",
+            side_type="put",
+            lots=1,
+            status="OPEN"
+        )
+        session.add(trade)
+        await session.commit()
+
+        # Query it back
+        q = select(Trade).filter_by(symbol="AAPL")
+        res = await session.execute(q)
+        fetched = res.scalars().first()
+        
+        # Verify opened_at matches the virtual clock instead of system time!
+        assert fetched.opened_at == sim_dt
+
+    # Clean up virtual clock
+    set_virtual_time(None)
+    controller.cleanup_sync()
+
