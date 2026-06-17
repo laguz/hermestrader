@@ -193,6 +193,7 @@ async def test_backstop_stop_loss_closes_position():
 
     broker.get_quote = quote
     strat, _b, db = _build(None, broker=broker)
+    strat.is_morning_unreliable = lambda: False
     db.set_open_trades("HermesAlpha", [trade])
     actions = await strat.manage_positions()
     assert len(actions) == 1
