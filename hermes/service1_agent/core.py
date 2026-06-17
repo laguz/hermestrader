@@ -507,6 +507,9 @@ class CascadingEngine:
 
         # Entries are now submitted internally strategy-by-strategy.
         num_entries = await self.process_entries(watchlist)
+        # Outcome-driven knob tuning (Phase 2 bandit). Independent of the LLM
+        # overseer — data-driven and gated by its own mode flag (off default).
+        await self._maybe_run_bandit_tuner()
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
@@ -563,6 +566,79 @@ class CascadingEngine:
                 await risk_tuner()
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("[PARAM-TUNE] tuning tick failed: %s", exc)
+
+    async def _maybe_run_bandit_tuner(self) -> None:
+        """Run the Thompson-bandit knob tuner, throttled and mode-gated.
+
+        Controlled by the ``bandit_tuner_mode`` setting:
+
+        - ``off`` (default) — does nothing.
+        - ``shadow``        — computes proposals and audits them to
+                              ``ai_decisions``, but never mutates a setting.
+        - ``active``        — additionally applies *actionable* (enough data)
+                              and *changed* proposals via ``set_setting``, but
+                              only when agent autonomy is enforcing/autonomous.
+
+        Best-effort: any failure is swallowed so a tuning hiccup can never break
+        the trading tick. The bandit's arm grids are themselves bounded, so an
+        applied value can never escape the knob's tunable range.
+        """
+        try:
+            mode = (await self.db.get_setting("bandit_tuner_mode") or "off")
+            mode = str(mode).strip().lower()
+            if mode not in ("shadow", "active"):
+                return
+
+            import time
+            interval = int(self.config.get("bandit_tuning_interval_s", 3600))
+            now = time.time()
+            last_raw = await self.db.get_setting("bandit_last_run_ts")
+            last = float(last_raw) if last_raw else 0.0
+            if interval > 0 and now - last < interval:
+                return
+            await self.db.set_setting("bandit_last_run_ts", str(now))
+
+            from hermes.ml.bandit import propose_knob_updates, LEARNABLE_KNOBS
+
+            outcomes = await self.db.fetch_trade_outcomes()
+            keys = [k for knobs in LEARNABLE_KNOBS.values() for k in knobs]
+            current: Dict[str, Any] = {}
+            bulk = getattr(self.db, "get_settings", None)
+            if callable(bulk):
+                current = await bulk(keys) or {}
+
+            min_obs = int(self.config.get("bandit_min_observations", 20))
+            proposals = propose_knob_updates(
+                outcomes, current, min_observations=min_obs)
+
+            autonomy = (getattr(self.overseer, "autonomy", "advisory")
+                        if self.overseer is not None else "advisory")
+            can_apply = mode == "active" and autonomy in ("enforcing", "autonomous")
+
+            applied: Dict[str, Any] = {}
+            for p in proposals:
+                if can_apply and p["actionable"] and p["changed"]:
+                    await self.db.set_setting(p["key"], str(p["proposed"]))
+                    applied[p["key"]] = p["proposed"]
+                    await self.db.write_log(
+                        "BANDIT",
+                        f"[BANDIT-TUNE] {p['key']}: {p['current']} → "
+                        f"{p['proposed']} (n={p['n_obs']}, mode={mode})",
+                    )
+
+            if applied:
+                logger.info("[BANDIT-TUNE] applied %s", applied)
+            try:
+                await self.db.write_ai_decision(
+                    "BANDIT", "PARAMS", autonomy,
+                    {"type": "bandit_tuning", "mode": mode,
+                     "applied": applied, "proposals": proposals,
+                     "min_observations": min_obs},
+                )
+            except Exception:                                      # noqa: BLE001
+                pass
+        except Exception as exc:                                   # noqa: BLE001
+            logger.exception("[BANDIT-TUNE] tuning tick failed: %s", exc)
 
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""
