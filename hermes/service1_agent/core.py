@@ -496,6 +496,9 @@ class CascadingEngine:
         await self.reconcile_orphans()
         mgmt = await self.process_management()
         await self.submit(mgmt, action_type="management")
+        # Exit-timing trajectory capture + advisory (Phase 3). Off by default;
+        # only runs when exit_policy_mode is shadow/active. Best-effort.
+        await self._maybe_capture_and_advise_exits(mgmt)
 
         # Filter out banned symbols under out-of-loop governance
         banned = await self._read_banned_symbols()
@@ -639,6 +642,157 @@ class CascadingEngine:
                 pass
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("[BANDIT-TUNE] tuning tick failed: %s", exc)
+
+    async def _maybe_capture_and_advise_exits(self, mgmt_actions) -> None:
+        """Capture exit-state trajectories and run the advisory exit policy.
+
+        Controlled by the ``exit_policy_mode`` setting:
+
+        - ``off`` (default) — does nothing (no extra quote traffic).
+        - ``shadow``        — records one ``exit_ticks`` row per open position and
+                              audits the policy's hold/close advice to
+                              ``ai_decisions``; never closes anything.
+        - ``active``        — additionally submits a close for positions the
+                              policy *confidently* says to close, but only under
+                              enforcing/autonomous autonomy and only for trades
+                              not already closing this tick.
+
+        Capture is done here at the engine (not inside the strategies) so the
+        money-critical exit logic stays untouched — this path only reads marks
+        and writes telemetry. Best-effort: failures never break the tick.
+        """
+        try:
+            mode = (await self.db.get_setting("exit_policy_mode") or "off")
+            mode = str(mode).strip().lower()
+            if mode not in ("shadow", "active"):
+                return
+
+            from datetime import datetime as _dt
+            from hermes.ml.exit_policy import train_exit_policy, recommend
+
+            open_trades = await self.db.all_open_trades()
+            if not open_trades:
+                return
+
+            # Trades a close was already issued for this tick — labelled 'close'
+            # and never re-closed by the active policy.
+            closing_ids = {
+                (a.strategy_params or {}).get("trade_id")
+                for a in (mgmt_actions or [])
+                if (a.strategy_params or {}).get("trade_id") is not None
+            }
+
+            # One batched quote fetch for every leg in the book.
+            legs = set()
+            for tr in open_trades:
+                for k in ("short_leg", "long_leg"):
+                    if tr.get(k):
+                        legs.add(tr[k])
+            quotes: Dict[str, Any] = {}
+            if legs:
+                raw = await self.broker.get_quote(",".join(sorted(legs))) or []
+                quotes = {q["symbol"]: q for q in raw if "symbol" in q}
+
+            def _mid(sym):
+                q = quotes.get(sym) or {}
+                try:
+                    bid, ask = float(q.get("bid")), float(q.get("ask"))
+                except (TypeError, ValueError):
+                    return None
+                # A deep-OTM long leg can legitimately have bid 0; require only
+                # a positive ask so (0+ask)/2 is a usable mark for telemetry.
+                return (bid + ask) / 2.0 if ask > 0 and bid >= 0 else None
+
+            today = _dt.utcnow().date()
+            autonomy = (getattr(self.overseer, "autonomy", "advisory")
+                        if self.overseer is not None else "advisory")
+            can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
+
+            policy = train_exit_policy(await self.db.fetch_exit_ticks())
+            advice: List[Dict[str, Any]] = []
+            acted: List[int] = []
+
+            for tr in open_trades:
+                entry_credit = tr.get("entry_credit")
+                short_mid = _mid(tr.get("short_leg"))
+                long_mid = _mid(tr.get("long_leg")) if tr.get("long_leg") else 0.0
+                expiry = tr.get("expiry")
+                if not entry_credit or short_mid is None or long_mid is None or not expiry:
+                    continue
+                debit = round(short_mid - long_mid, 4)
+                pnl_pct = round((float(entry_credit) - debit) / float(entry_credit), 4)
+                exp_date = expiry if hasattr(expiry, "year") else None
+                if exp_date is None:
+                    continue
+                dte = (exp_date - today).days
+
+                tid = tr.get("id")
+                action = "close" if tid in closing_ids else "hold"
+                await self.db.record_exit_tick(
+                    trade_id=tid, strategy_id=tr.get("strategy_id"),
+                    symbol=tr.get("symbol"), dte=dte, unrealized_pnl_pct=pnl_pct,
+                    debit=debit, entry_credit=float(entry_credit), action=action,
+                    close_reason=("MANAGED" if action == "close" else None),
+                )
+
+                rec = recommend(policy, pnl_pct, dte)
+                rec.update({"trade_id": tid, "symbol": tr.get("symbol"),
+                            "pnl_pct": pnl_pct, "dte": dte})
+                advice.append(rec)
+
+                # Width cap: a W-wide credit spread can never be worth more
+                # than W to close, so the close limit is capped at the width —
+                # a 5-wide spread can never go out at 5.10. The 5% marketability
+                # buffer applies only up to that ceiling.
+                width = tr.get("width")
+                close_price = round(debit * 1.05, 2)
+                if width:
+                    close_price = min(close_price, round(float(width), 2))
+
+                if (can_act and rec["confident"] and tid not in closing_ids):
+                    close = TradeAction(
+                        strategy_id=tr.get("strategy_id"), symbol=tr.get("symbol"),
+                        order_class="multileg",
+                        legs=[
+                            {"option_symbol": tr["short_leg"], "side": "buy_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                            {"option_symbol": tr["long_leg"], "side": "sell_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                        ] if tr.get("long_leg") else [
+                            {"option_symbol": tr["short_leg"], "side": "buy_to_close",
+                             "quantity": int(tr.get("lots") or 1)},
+                        ],
+                        price=close_price, side="buy", quantity=1,
+                        order_type="debit",
+                        tag=f"HERMES_{tr.get('strategy_id')}_CLOSE_EXIT-POLICY",
+                        strategy_params={"trade_id": tid, "close_reason": "EXIT-POLICY",
+                                         "side_type": tr.get("side_type")},
+                        # Engine-authored close — skip overseer re-review, like
+                        # other automated actions.
+                        ai_authored=True,
+                    )
+                    await self.submit([close], action_type="management")
+                    acted.append(tid)
+                    await self.db.write_log(
+                        "EXITPOLICY",
+                        f"[EXIT-POLICY] closing trade {tid} {tr.get('symbol')} "
+                        f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
+                        f"> q_hold={rec['q_hold']})",
+                    )
+
+            if acted:
+                logger.info("[EXIT-POLICY] closed %s", acted)
+            try:
+                await self.db.write_ai_decision(
+                    "EXITPOLICY", "EXITS", autonomy,
+                    {"type": "exit_policy", "mode": mode, "acted": acted,
+                     "n_completed_trajectories": policy["n_completed_trajectories"],
+                     "advice": advice},
+                )
+            except Exception:                                      # noqa: BLE001
+                pass
+        except Exception as exc:                                   # noqa: BLE001
+            logger.exception("[EXIT-POLICY] capture/advise tick failed: %s", exc)
 
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""

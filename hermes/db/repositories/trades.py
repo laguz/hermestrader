@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from hermes.common import OCC_RE as _OCC_RE
 from hermes.db.orm import (
-    PendingApproval, PendingOrder, Trade,
+    ExitTick, PendingApproval, PendingOrder, Trade,
     _close_reason_from_tag, _compute_realized_pnl,
 )
 
@@ -470,6 +470,63 @@ class TradesRepositoryMixin:
                 "entry_features": r.entry_features,
             })
         return out
+
+    async def record_exit_tick(
+        self,
+        *,
+        trade_id: int,
+        strategy_id: str,
+        symbol: str,
+        dte: Optional[int],
+        unrealized_pnl_pct: Optional[float],
+        debit: Optional[float],
+        entry_credit: Optional[float],
+        action: str = "hold",
+        close_reason: Optional[str] = None,
+    ) -> None:
+        """Persist one exit-state observation for an open position (Phase 3)."""
+        async with self.AsyncSession() as s:
+            s.add(ExitTick(
+                trade_id=int(trade_id), strategy_id=strategy_id, symbol=symbol,
+                dte=dte, unrealized_pnl_pct=unrealized_pnl_pct, debit=debit,
+                entry_credit=entry_credit, action=action,
+                close_reason=close_reason,
+            ))
+            await s.commit()
+
+    async def fetch_exit_ticks(
+        self,
+        *,
+        strategy_id: Optional[str] = None,
+        since: Optional[datetime] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Exit-state trajectory rows, oldest-first, for the offline policy."""
+        q = select(ExitTick)
+        if strategy_id is not None:
+            q = q.filter(ExitTick.strategy_id == strategy_id)
+        if since is not None:
+            q = q.filter(ExitTick.ts >= since)
+        q = q.order_by(ExitTick.ts)
+        if limit is not None:
+            q = q.limit(int(limit))
+        async with self.AsyncSession() as s:
+            rows = (await s.execute(q)).scalars().all()
+        return [
+            {
+                "trade_id": r.trade_id,
+                "strategy_id": r.strategy_id,
+                "symbol": r.symbol,
+                "ts": r.ts,
+                "dte": r.dte,
+                "unrealized_pnl_pct": r.unrealized_pnl_pct,
+                "debit": r.debit,
+                "entry_credit": r.entry_credit,
+                "action": r.action,
+                "close_reason": r.close_reason,
+            }
+            for r in rows
+        ]
 
     async def open_legs(self, strategy_id: str, symbol: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []

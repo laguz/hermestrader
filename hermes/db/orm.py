@@ -16,8 +16,8 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, DateTime, ForeignKey, Index, Integer,
-    Numeric, Sequence, String, Text,
+    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index,
+    Integer, Numeric, Sequence, String, Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, reconstructor
@@ -132,6 +132,43 @@ class Trade(Base):
         # OPEN to be eligible for another close attempt.
         self.machine.add_transition('reopen', 'CLOSING', 'OPEN')
         self.machine.add_transition('force_close', '*', 'CLOSED')
+
+
+class ExitTick(Base):
+    """Per-tick exit-state trajectory for an open position (Phase 3).
+
+    One row per OPEN trade per management tick while the exit-policy capture is
+    enabled. Together with the trade's eventual realized P&L these rows form the
+    ``(state, action, return)`` trajectories the offline exit policy learns
+    from — the data prerequisite for sequential exit-timing RL.
+
+    ``action`` is ``'hold'`` (the rules kept the position this tick) or
+    ``'close'`` (a close was issued this tick). ``unrealized_pnl_pct`` is the
+    fraction of entry credit currently retained as profit:
+    ``(entry_credit - spread_mid) / entry_credit``.
+
+    PK is a plain autoincrement Integer (not the BIGSERIAL/Sequence the other
+    hypertables use) so the SQLite create_all path autoincrements without
+    explicit ids; schema.sql owns the Postgres BIGSERIAL definition.
+    """
+
+    __tablename__ = "exit_ticks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ts = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    trade_id = Column(BigInteger, nullable=False)
+    strategy_id = Column(String, nullable=False)
+    symbol = Column(String, nullable=False)
+    dte = Column(Integer)
+    unrealized_pnl_pct = Column(Float)
+    debit = Column(Float)
+    entry_credit = Column(Float)
+    action = Column(String, nullable=False, default="hold")   # 'hold' | 'close'
+    close_reason = Column(String)
+
+    __table_args__ = (
+        Index("idx_exit_ticks_trade", "trade_id", "ts"),
+    )
 
 
 class PendingOrder(Base):

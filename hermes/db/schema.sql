@@ -224,6 +224,27 @@ CREATE INDEX IF NOT EXISTS idx_veto_suppressions_lookup
 -- materialized view (CREATE MATERIALIZED VIEW … WITH NO DATA) and refresh
 -- it from the agent's tick loop.
 -- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------
+-- exit_ticks: per-tick exit-state trajectory for open positions (Phase 3).
+-- One row per OPEN trade per management tick while exit-policy capture is on.
+-- With each trade's realized P&L these form the (state, action, return)
+-- trajectories the offline exit policy learns from.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS exit_ticks (
+    id                 BIGSERIAL PRIMARY KEY,
+    ts                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    trade_id           BIGINT NOT NULL,
+    strategy_id        TEXT NOT NULL,
+    symbol             TEXT NOT NULL,
+    dte                INT,
+    unrealized_pnl_pct DOUBLE PRECISION,
+    debit              DOUBLE PRECISION,
+    entry_credit       DOUBLE PRECISION,
+    action             TEXT NOT NULL DEFAULT 'hold',  -- 'hold' | 'close'
+    close_reason       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_exit_ticks_trade ON exit_ticks(trade_id, ts);
+
 CREATE OR REPLACE VIEW pnl_daily AS
 SELECT date_trunc('day', closed_at)::timestamptz AS day,
        strategy_id,
