@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from hermes.utils import utc_now
 
 from hermes.ml.pop_engine import augment_levels_with_pop
 
@@ -145,7 +146,7 @@ async def gate_ai_action(
     # --- DTE window ---------------------------------------------------------
     min_dte = int(await _setting_float(db, "ai_gate_min_dte"))
     max_dte = int(await _setting_float(db, "ai_gate_max_dte"))
-    now = getattr(broker, "current_date", None) or datetime.utcnow()
+    now = getattr(broker, "current_date", None) or utc_now()
     today = now.date() if hasattr(now, "date") else now
     dte = (expiry_date - today).days
     if not (min_dte <= dte <= max_dte):

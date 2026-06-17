@@ -911,7 +911,7 @@ class CascadingEngine:
             if mode not in ("shadow", "active"):
                 return
 
-            from datetime import datetime as _dt
+            from hermes.utils import utc_now
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
             open_trades = await self.db.all_open_trades()
@@ -947,7 +947,7 @@ class CascadingEngine:
                 # a positive ask so (0+ask)/2 is a usable mark for telemetry.
                 return (bid + ask) / 2.0 if ask > 0 and bid >= 0 else None
 
-            today = _dt.utcnow().date()
+            today = utc_now().date()
             autonomy = (getattr(self.overseer, "autonomy", "advisory")
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
@@ -1065,10 +1065,10 @@ class CascadingEngine:
                 if (a.strategy_params or {}).get("trade_id") is not None
             }
 
-            from datetime import datetime as _dt
+            from hermes.utils import utc_now
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
-            today = _dt.utcnow().date()
+            today = utc_now().date()
             autonomy = (getattr(self.overseer, "autonomy", "advisory")
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")

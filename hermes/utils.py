@@ -1,9 +1,39 @@
-"""Centralised utility functions for HermesTrader."""
-from __future__ import annotations
-
+import datetime
 import os
 import logging
 from cryptography.fernet import Fernet
+
+_VIRTUAL_TIME: datetime.datetime | None = None
+
+def utc_now() -> datetime.datetime:
+    """Return timezone-naive current UTC time, honoring virtual time if set."""
+    if _VIRTUAL_TIME is not None:
+        return _VIRTUAL_TIME
+    return datetime.datetime.utcnow()
+
+def date_today() -> datetime.date:
+    """Return current date, honoring virtual time if set."""
+    if _VIRTUAL_TIME is not None:
+        return _VIRTUAL_TIME.date()
+    return datetime.date.today()
+
+def now(tz: datetime.tzinfo | None = None) -> datetime.datetime:
+    """Return current local/aware time, honoring virtual time if set."""
+    if _VIRTUAL_TIME is not None:
+        utc_dt = _VIRTUAL_TIME.replace(tzinfo=datetime.timezone.utc)
+        if tz is not None:
+            return utc_dt.astimezone(tz)
+        return utc_dt
+    return datetime.datetime.now(tz)
+
+def set_virtual_time(dt: datetime.datetime | None) -> None:
+    """Set the virtual time for testing or simulation mode.
+
+    Pass None to reset and restore system time tracking.
+    """
+    global _VIRTUAL_TIME
+    _VIRTUAL_TIME = dt
+
 
 logger = logging.getLogger("hermes.utils")
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime
 from typing import Any, Dict, Optional, Tuple
+from hermes.utils import utc_now
 
 from sqlalchemy import select, func
 from hermes.db.orm import PendingOrder, Trade, _compute_realized_pnl
@@ -240,7 +241,7 @@ class TransactionManager:
         if filled:
             # Transition: OPEN/CLOSING -> CLOSED
             trade.force_close()
-            trade.closed_at = datetime.utcnow()
+            trade.closed_at = utc_now()
             logger.info(
                 f"[FSM close] Trade {trade.id} for {strategy_id} {symbol} closed immediately (filled). Status: {trade.status}"
             )
@@ -284,7 +285,7 @@ class TransactionManager:
         old_status = trade.status
         if event == "force_close":
             trade.force_close()
-            trade.closed_at = datetime.utcnow()
+            trade.closed_at = utc_now()
             if close_reason:
                 trade.close_reason = close_reason
             await session.flush()
@@ -296,7 +297,7 @@ class TransactionManager:
             await EventStoreManager.append_event(session, ev)
         elif event == "finish_close":
             trade.finish_close()
-            trade.closed_at = datetime.utcnow()
+            trade.closed_at = utc_now()
             await session.flush()
             ev = CloseFilledEvent(
                 trade_id=trade.id,
