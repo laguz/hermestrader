@@ -23,6 +23,8 @@ from tenacity import (
     before_sleep_log,
 )
 
+from .base import AbstractBroker
+
 logger = logging.getLogger("hermes.broker.tradier")
 
 OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
@@ -42,7 +44,7 @@ _OPENING_BY_SIDE = {"buy": "buy_to_open", "sell": "sell_to_open"}
 _CLOSING_BY_SIDE = {"buy": "buy_to_close", "sell": "sell_to_close"}
 
 
-class TradierBroker:
+class TradierBroker(AbstractBroker):
     """Asynchronous Tradier REST client shaped like Hermes' broker contract."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):

@@ -81,10 +81,62 @@ class CascadingEngine:
         self.event_bus = event_bus
         self.llm_out_of_loop = llm_out_of_loop
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
+        self.queue = None
+        self.loop_task = None
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
             self.event_bus.subscribe(OrderFillEvent, self.handle_order_fill)
+
+    def _ensure_event_loop(self) -> None:
+        if self.queue is None:
+            self.queue = asyncio.Queue()
+        if self.loop_task is None or self.loop_task.done():
+            self.loop_task = asyncio.create_task(self._event_consumer_loop())
+
+    async def publish_event(self, event_type: str, payload: Dict[str, Any]) -> Any:
+        self._ensure_event_loop()
+        fut = asyncio.get_running_loop().create_future()
+        payload_with_fut = dict(payload)
+        payload_with_fut["future"] = fut
+        await self.queue.put((event_type, payload_with_fut))
+        return await fut
+
+    async def _event_consumer_loop(self) -> None:
+        logger.info("[ENGINE] Starting background event loop consumer.")
+        while True:
+            try:
+                event_type, payload = await self.queue.get()
+                try:
+                    await self._process_event(event_type, payload)
+                except Exception as exc:
+                    logger.exception(f"[ENGINE] Error processing event {event_type}: {exc}")
+                finally:
+                    self.queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.exception(f"[ENGINE] Event consumer loop error: {exc}")
+
+    async def _process_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        fut = payload.get("future")
+        try:
+            res = None
+            if event_type == "TICK":
+                watchlist = payload["watchlist"]
+                res = await self._run_tick_internal(watchlist)
+            elif event_type == "AI_APPROVAL":
+                res = await self._handle_ai_approval_internal(payload["event"])
+            elif event_type == "MARKET_DATA":
+                res = await self._handle_market_data_internal(payload["event"])
+            elif event_type == "ORDER_FILL":
+                res = await self._handle_order_fill_internal(payload["event"])
+            if fut and not fut.done():
+                fut.set_result(res)
+        except Exception as exc:
+            if fut and not fut.done():
+                fut.set_exception(exc)
+            raise
 
     # 1
     async def sync_positions(self) -> None:
@@ -487,6 +539,9 @@ class CascadingEngine:
             return set()
 
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
+        return await self.publish_event("TICK", {"watchlist": watchlist})
+
+    async def _run_tick_internal(self, watchlist: Sequence[str]) -> Dict[str, int]:
         await self.sync_positions()
         # Refresh real-time broker order counts to prevent duplicate entries.
         # mm may be None on legacy callers that haven't been updated yet;
@@ -795,6 +850,9 @@ class CascadingEngine:
             logger.exception("[EXIT-POLICY] capture/advise tick failed: %s", exc)
 
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
+        await self.publish_event("AI_APPROVAL", {"event": event})
+
+    async def _handle_ai_approval_internal(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""
         a = event.original_action
         if a is None:
@@ -1052,6 +1110,9 @@ class CascadingEngine:
         return gated
 
     async def handle_market_data(self, event: MarketDataEvent) -> None:
+        await self.publish_event("MARKET_DATA", {"event": event})
+
+    async def _handle_market_data_internal(self, event: MarketDataEvent) -> None:
         """Evaluates strategies reactively when a new MarketDataEvent is received."""
         symbol = event.symbol
         
@@ -1117,6 +1178,9 @@ class CascadingEngine:
                     logger.exception("Failed to process reactive entries for %s: %s", symbol, exc)
 
     async def handle_order_fill(self, event: OrderFillEvent) -> None:
+        await self.publish_event("ORDER_FILL", {"event": event})
+
+    async def _handle_order_fill_internal(self, event: OrderFillEvent) -> None:
         """Reactively handles order fills by syncing positions and orders immediately."""
         logger.info(
             "[ENGINE] Order fill event received for order %s (%s %d shares/contracts of %s)",
