@@ -77,6 +77,22 @@ async def test_cs75_manage_positions_takes_profit_at_50pct_for_mid_dte():
     assert any("HERMES_CS75_CLOSE" in a.tag for a in actions)
 
 
+async def test_cs75_close_limit_is_capped_at_spread_width():
+    # A W-wide credit spread can never be worth more than W to close. The
+    # stale-quote TIME-EXIT path prices the close off the width itself, so
+    # width * 1.05 (= 5.25 on a 5-wide) must be clamped down to 5.00 — the bot
+    # must never bid above the width to close.
+    s, _broker, _ = _build(CreditSpreads75)
+    trade = make_trade("CS75", "AAPL", width=5.0)
+
+    capped = s._close_action(trade, debit=5.0, reason="TIME-EXIT")
+    assert capped.price == 5.0                       # 5.25 clamped to width
+
+    # Below the cap, the 5% marketability buffer still applies normally.
+    normal = s._close_action(trade, debit=1.00, reason="TP-50")
+    assert normal.price == 1.05
+
+
 # ── CS7 ──────────────────────────────────────────────────────────────────────
 async def test_cs7_execute_entries_requires_exact_7_dte():
     """CS7 only opens new entries on the exact 7 DTE expiry."""
