@@ -260,6 +260,54 @@ class EventLedger(Base):
     payload = Column(JSONB, nullable=False)
 
 
+from sqlalchemy.types import TypeDecorator
+
+try:
+    from pgvector.sqlalchemy import Vector as PGVector
+except ImportError:
+    PGVector = None
+
+
+class SafeVector(TypeDecorator):
+    impl = Text
+    cache_ok = True
+    
+    def __init__(self, dim: int):
+        super().__init__()
+        self.dim = dim
+        
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql" and PGVector is not None:
+            return dialect.type_descriptor(PGVector(self.dim))
+        else:
+            return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql" and PGVector is not None:
+            return value
+        import json
+        return json.dumps(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if dialect.name == "postgresql" and PGVector is not None:
+            return value
+        import json
+        return json.loads(value)
+
+
+class DoctrineEmbedding(Base):
+    __tablename__ = "doctrine_embeddings"
+    id = Column(BigInteger, Sequence("doctrine_embeddings_id_seq"), primary_key=True,
+                autoincrement=True)
+    guideline_text = Column(Text, nullable=False)
+    embedding = Column(SafeVector(768), nullable=False)
+    metadata_json = Column(JSONB, nullable=False, default=dict)
+
+
 class AIDecision(Base):
     __tablename__ = "ai_decisions"
     ts = Column(DateTime(timezone=True), default=datetime.utcnow, primary_key=True)
