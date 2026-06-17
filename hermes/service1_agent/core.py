@@ -249,6 +249,45 @@ class CascadingEngine:
                 logger.exception("Entry failure in %s: %s", s.NAME, exc)
         return total_entries
 
+    async def _attach_entry_features(self, a: TradeAction) -> None:
+        """Snapshot the resolved knobs + entry context onto an entry action.
+
+        Best-effort and fail-open: any error here must never block a trade, so
+        we swallow exceptions and simply leave ``entry_features`` unset. The
+        snapshot rides in ``strategy_params`` so it survives both the direct
+        broker path and the approval-queue round-trip (``dataclasses.asdict``),
+        and is persisted by ``record_order_response``.
+        """
+        try:
+            from .tunables import resolve as _resolve_tunables
+            from .strategies._helpers import entry_feature_snapshot
+
+            sp = dict(a.strategy_params or {})
+            if "entry_features" in sp:        # already stamped (e.g. by a strategy)
+                return
+            try:
+                knobs = (await _resolve_tunables(
+                    self.db, self.config, group=a.strategy_id)).as_dict()
+            except Exception:                                  # noqa: BLE001
+                knobs = None
+
+            credit = a.price if (a.order_type or "").lower() == "credit" else None
+            sp["entry_features"] = entry_feature_snapshot(
+                a.strategy_id,
+                knobs,
+                side_type=sp.get("side_type"),
+                pop=sp.get("pop"),
+                short_delta=sp.get("short_delta"),
+                width=getattr(a, "width", None),
+                entry_credit=credit,
+                expiry=getattr(a, "expiry", None),
+                ai_authored=bool(getattr(a, "ai_authored", False)),
+            )
+            a.strategy_params = sp
+        except Exception:                                      # noqa: BLE001
+            logger.debug("entry-feature snapshot failed for %s", a.symbol,
+                         exc_info=True)
+
     async def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
         # Defence-in-depth market-hours gate. Every broker round-trip
@@ -273,6 +312,13 @@ class CascadingEngine:
                             len(actions), action_type, reason)
             return
         for a in actions:
+            # Phase-0 outcome instrumentation: stamp every entry with a snapshot
+            # of the knobs + market context that produced it, so the realized
+            # P&L on close becomes a labelled training row. Pure observation —
+            # never alters the action's economics or routing.
+            if action_type in ("entry", "ai"):
+                await self._attach_entry_features(a)
+
             # Veto-suppression: if the overseer already vetoed this exact
             # entry within the TTL window, skip re-proposing it instead of
             # brute-forcing the same action through review every tick. Only

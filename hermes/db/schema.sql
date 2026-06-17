@@ -62,6 +62,10 @@ ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT;
 ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4);
+-- entry_features snapshots the resolved tunables + entry context at fill time
+-- so realized outcomes can be attributed back to the knobs that produced them
+-- (Phase-0 instrumentation for outcome-driven tuning).
+ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_features JSONB;
 CREATE INDEX IF NOT EXISTS idx_trades_strategy_status
     ON trades(strategy_id, status, symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_open_order_id

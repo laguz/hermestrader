@@ -85,6 +85,13 @@ class Trade(Base):
     tag = Column(String)
     close_tag = Column(String)
     exit_price = Column(Numeric(10, 4))
+    # Phase-0 outcome instrumentation: a JSON snapshot of the resolved
+    # tunables (the "knobs") plus the market context at entry — POP, short
+    # delta, width, credit, DTE. Combined with the realized ``pnl`` on close,
+    # this is the labelled ``(context, knobs, outcome)`` row the outcome-driven
+    # tuner / contextual bandit trains on. Nullable: trades opened before this
+    # column existed, and any path that can't assemble it, simply leave it NULL.
+    entry_features = Column(JSONB)
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
