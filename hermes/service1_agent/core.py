@@ -86,6 +86,8 @@ class CascadingEngine:
         from hermes.ipc import ipc
         self.ipc_client = ipc
         self._pending_futures: Dict[str, asyncio.Future] = {}
+        self._tracked_orders: Dict[str, Dict[str, Any]] = {}
+        self._order_monitor_task = None
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
@@ -104,6 +106,91 @@ class CascadingEngine:
                 self.queue = asyncio.Queue()
             if self.loop_task is None or self.loop_task.done():
                 self.loop_task = asyncio.create_task(self._event_consumer_loop())
+
+    def _ensure_order_monitor(self) -> None:
+        if self._order_monitor_task is None or self._order_monitor_task.done():
+            try:
+                self._order_monitor_task = asyncio.create_task(self._order_monitor_loop())
+            except RuntimeError:
+                pass
+
+    async def _order_monitor_loop(self) -> None:
+        logger.info("[ENGINE] Starting reactive order monitor loop")
+        missing_counts = {}
+        
+        # Initial scan for active/working orders
+        try:
+            active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
+            orders = await self.broker.get_orders() or []
+            if isinstance(orders, list):
+                for o in orders:
+                    status = str(o.get("status", "")).lower()
+                    if status in active_statuses:
+                        oid = str(o.get("id") or o.get("order_id") or "")
+                        if oid and oid not in self._tracked_orders:
+                            self._tracked_orders[oid] = {
+                                "symbol": str(o.get("symbol", "")).upper(),
+                                "side": str(o.get("side", "")),
+                                "quantity": int(o.get("quantity", 0))
+                            }
+                            logger.info("[ENGINE] Discovered existing active order %s in broker; tracking", oid)
+        except Exception as exc:
+            logger.error("[ENGINE] Failed initial order scan: %s", exc)
+
+        while True:
+            if not self._tracked_orders:
+                await asyncio.sleep(1.0)
+                continue
+
+            try:
+                orders = await self.broker.get_orders() or []
+                if isinstance(orders, list):
+                    orders_by_id = {}
+                    for o in orders:
+                        oid = str(o.get("id") or o.get("order_id") or "")
+                        if oid:
+                            orders_by_id[oid] = o
+
+                    for oid in list(self._tracked_orders.keys()):
+                        info = self._tracked_orders[oid]
+                        if oid in orders_by_id:
+                            missing_counts.pop(oid, None)
+                            broker_order = orders_by_id[oid]
+                            status = str(broker_order.get("status", "")).lower()
+
+                            if status in {"filled", "canceled", "rejected", "expired"}:
+                                logger.info("[ENGINE] Tracked order %s transitioned to terminal status: %s", oid, status)
+                                event = OrderFillEvent(
+                                    broker_order_id=oid,
+                                    symbol=str(broker_order.get("symbol", info.get("symbol", ""))).upper(),
+                                    side=str(broker_order.get("side", info.get("side", ""))),
+                                    quantity=int(broker_order.get("quantity", info.get("quantity", 0))),
+                                    price=float(broker_order.get("avg_fill_price") or broker_order.get("price") or 0.0),
+                                    status=status
+                                )
+                                if self.event_bus:
+                                    self.event_bus.emit(event)
+                                self._tracked_orders.pop(oid, None)
+                        else:
+                            missing_counts[oid] = missing_counts.get(oid, 0) + 1
+                            if missing_counts[oid] >= 3:
+                                logger.info("[ENGINE] Tracked order %s was missing from broker for 3 checks, treating as filled", oid)
+                                event = OrderFillEvent(
+                                    broker_order_id=oid,
+                                    symbol=info.get("symbol", "").upper(),
+                                    side=info.get("side", ""),
+                                    quantity=info.get("quantity", 0),
+                                    price=0.0,
+                                    status="filled"
+                                )
+                                if self.event_bus:
+                                    self.event_bus.emit(event)
+                                self._tracked_orders.pop(oid, None)
+                                missing_counts.pop(oid, None)
+            except Exception as exc:
+                logger.error("[ENGINE] Error in order monitor loop: %s", exc)
+
+            await asyncio.sleep(1.0)
 
     async def publish_event(self, event_type: str, payload: Dict[str, Any]) -> Any:
         self._ensure_event_loop()
@@ -616,6 +703,16 @@ class CascadingEngine:
                 await close_method(a, resp)
             else:
                 await self.db.record_order_response(a, resp)
+            if resp and isinstance(resp, dict):
+                oid = str(resp.get("order_id") or resp.get("id") or "")
+                if oid:
+                    self._tracked_orders[oid] = {
+                        "symbol": a.symbol,
+                        "side": a.side,
+                        "quantity": a.quantity
+                    }
+                    logger.info("[ENGINE] Registered order %s in reactive monitor", oid)
+                    self._ensure_order_monitor()
 
     # ----- top level entry point used by main.py and the scheduler ----------
     async def _read_banned_symbols(self) -> set[str]:
@@ -1430,6 +1527,18 @@ class CascadingEngine:
             await self.reconcile_orphans()
         except Exception as exc:
             logger.exception("[ENGINE] Failed to reconcile orphans on order fill event: %s", exc)
+
+        try:
+            watchlist = await self.db.all_watchlist_symbols()
+            if watchlist:
+                banned = await self._read_banned_symbols()
+                if banned:
+                    watchlist = [s for s in watchlist if s.upper() not in banned]
+                if watchlist:
+                    num_entries = await self.process_entries(watchlist)
+                    logger.info("[ENGINE] Reactively processed entries post order fill: placed %d entries", num_entries)
+        except Exception as exc:
+            logger.exception("[ENGINE] Failed to process entries on order fill event: %s", exc)
 
     async def process_reactive_entries(self, symbol: str) -> None:
         """Executes entries reactively for a single symbol that crossed support/resistance.

@@ -68,3 +68,7 @@ dev = [
 ml = [
     "hermestrader[ml]",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["hermes"]
+

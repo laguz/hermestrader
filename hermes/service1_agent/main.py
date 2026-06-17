@@ -745,7 +745,7 @@ async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
     if tick_interval_val is not None and str(tick_interval_val).strip() != "":
         config_data["tick_interval"] = int(str(tick_interval_val).strip())
     else:
-        config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 300)))
+        config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 3600)))
 
     if bandit_val is not None and str(bandit_val).strip() != "":
         config_data["bandit_tuner_mode"] = str(bandit_val).strip().lower()
@@ -834,6 +834,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     current_mode = initial_mode
     broker = _build_broker(conf, current_mode)
+    is_mock = "mock" in str(type(broker)).lower()
 
     # LLM client is built from settings rather than the hard-coded MockLLM
     # passed to run() — that lets the watcher swap providers at runtime.
@@ -892,9 +893,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Start PostgreSQL LISTEN background loop
     pg_listener_task = asyncio.create_task(_pg_listen_loop(db, set_trigger))
 
-    # Start Tradier WebSocket Stream Client
-    from hermes.broker.tradier_stream import TradierStreamClient
-    token, account, url = _resolve_mode_credentials(current_mode)
+    # Start Watcher gRPC Quotes Stream Client
+    from hermes.broker.grpc_stream import GRPCStreamClient
+    from hermes.config import settings
     
     # Track watchlist symbols + active DB option legs
     watchlist_syms = set(conf.get("watchlist", []))
@@ -903,17 +904,13 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    stream_client = TradierStreamClient(
-        token=token,
-        account_id=account,
-        base_url=url,
+    stream_client = GRPCStreamClient(
+        target=settings.hermes_grpc_target,
         event_bus=event_bus,
         watchlist=list(watchlist_syms)
     )
     
-    is_mock = "mock" in str(type(broker)).lower()
-    if not is_mock:
-        await stream_client.start()
+    await stream_client.start()
     
     # Spawn background pre-warming task for the option chain and quote cache
     prewarm_task = asyncio.create_task(_cache_prewarm_loop(lambda: broker, db, conf))
@@ -1024,12 +1021,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 try:
                     broker = _build_broker(conf, desired_mode)
                     
-                    # Stop old stream client
-                    if not is_mock:
-                        await stream_client.stop()
-                        
-                    # Rebuild stream client for the new mode credentials
-                    token, account, url = _resolve_mode_credentials(desired_mode)
+                    # Stop and rebuild stream client
+                    await stream_client.stop()
                     is_mock = "mock" in str(type(broker)).lower()
                     
                     watchlist_syms = set(conf.get("watchlist", []))
@@ -1038,15 +1031,14 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     except Exception:
                         pass
                         
-                    stream_client = TradierStreamClient(
-                        token=token,
-                        account_id=account,
-                        base_url=url,
+                    from hermes.broker.grpc_stream import GRPCStreamClient
+                    from hermes.config import settings
+                    stream_client = GRPCStreamClient(
+                        target=settings.hermes_grpc_target,
                         event_bus=event_bus,
                         watchlist=list(watchlist_syms)
                     )
-                    if not is_mock:
-                        await stream_client.start()
+                    await stream_client.start()
                     
                     engine = build(broker, current_llm, chart_provider, conf,
                                    vision_enabled=current_vision,
@@ -1369,7 +1361,7 @@ if __name__ == "__main__":
     conf = {
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
-        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 3600)),
         # How long an overseer VETO suppresses re-proposal of the identical
         # entry (seconds). 0 disables suppression. Repeat vetoes extend it.
         "veto_suppression_s": int(os.environ.get("HERMES_VETO_SUPPRESSION_S", 1800)),
@@ -1416,7 +1408,7 @@ def start_agent_thread() -> threading.Thread:
     conf = {
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
-        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
+        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 3600)),
         # How long an overseer VETO suppresses re-proposal of the identical
         # entry (seconds). 0 disables suppression. Repeat vetoes extend it.
         "veto_suppression_s": int(os.environ.get("HERMES_VETO_SUPPRESSION_S", 1800)),

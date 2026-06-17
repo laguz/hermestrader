@@ -13,13 +13,14 @@ class HermesSettings(BaseSettings):
     hermes_mode: str = Field(default="paper")
     hermes_dsn: str = Field(default="postgresql+psycopg://hermes:hermes@db:5432/hermes")
     hermes_redis_dsn: str = Field(default="redis://localhost:6379/0")
-    hermes_tick_interval: int = Field(default=300)
+    hermes_tick_interval: int = Field(default=3600)
     hermes_watchlist: str = Field(default="AAPL,SPY,QQQ,NVDA,AMD,KO")
     hermes_ai_autonomy: str = Field(default="advisory")
     hermes_dry_run: bool = Field(default=True)
     hermes_use_mcp_broker: bool = Field(default=True)
     hermes_soul_path: str = Field(default="/app/soul.md")
     hermes_version: str = Field(default="dev")
+    hermes_grpc_target: str = Field(default="localhost:50051")
 
     # Tradier generic credentials
     tradier_access_token: Optional[str] = None
