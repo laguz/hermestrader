@@ -66,23 +66,9 @@ def train_exit_policy(
     min_support: int = 10,
     margin: float = 0.05,
 ) -> Dict[str, Any]:
-    """Estimate a tabular hold/close policy from exit-state trajectories.
+    """Estimate a continuous exit policy from exit-state trajectories.
 
-    ``ticks`` are ``HermesDB.fetch_exit_ticks`` rows. Returns::
-
-        {
-          "min_support", "margin",
-          "n_ticks", "n_completed_trajectories",
-          "states": { state_key: {
-              "q_close", "q_hold",        # mean P&L fraction (or None)
-              "n_close", "n_hold",        # observation counts
-              "recommend",                # 'hold' | 'close'
-          } },
-        }
-
-    A state only recommends ``close`` when both Q values are known, the
-    completed-trajectory support (``n_hold``) meets ``min_support``, and closing
-    beats holding by more than ``margin``.
+    ``ticks`` are ``HermesDB.fetch_exit_ticks`` rows.
     """
     by_trade: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
     for r in ticks:
@@ -98,8 +84,11 @@ def train_exit_policy(
             if fv is not None:
                 final_pnl[tid] = fv
 
-    close_vals: Dict[str, List[float]] = defaultdict(list)   # immediate value
-    hold_vals: Dict[str, List[float]] = defaultdict(list)    # held-out final
+    close_vals: Dict[str, List[float]] = defaultdict(list)
+    hold_vals: Dict[str, List[float]] = defaultdict(list)
+
+    X_train = []
+    y_train = []
 
     n_ticks = 0
     for tid, rows in by_trade.items():
@@ -110,25 +99,56 @@ def train_exit_policy(
                 continue
             n_ticks += 1
             s = state_key(pnl, dte)
-            close_vals[s].append(pnl)               # closing locks ~current pnl
+            close_vals[s].append(pnl)
             if r.get("action") == "hold" and tid in final_pnl:
-                hold_vals[s].append(final_pnl[tid])  # what holding led to
+                hold_vals[s].append(final_pnl[tid])
+                X_train.append([pnl, dte])
+                y_train.append(final_pnl[tid])
 
+    # Fit a continuous regression model if we have sufficient observations
+    coef = None
+    intercept = None
+    if len(X_train) >= min_support:
+        try:
+            import numpy as np
+            from sklearn.linear_model import LinearRegression
+            X_arr = np.array(X_train)
+            y_arr = np.array(y_train)
+            X_poly = np.stack([
+                X_arr[:, 0],
+                X_arr[:, 1],
+                X_arr[:, 0]**2,
+                X_arr[:, 1]**2,
+                X_arr[:, 0] * X_arr[:, 1]
+            ], axis=1)
+            model = LinearRegression()
+            model.fit(X_poly, y_arr)
+            coef = model.coef_.tolist()
+            intercept = float(model.intercept_)
+        except Exception:
+            pass
+
+    # Compute support and empirical averages per state bucket for fallback/reporting
+    support_counts = {s: len(hv) for s, hv in hold_vals.items()}
+    empirical_hold = {s: round(mean(hv), 4) for s, hv in hold_vals.items() if hv}
+
+    # Backward-compatible states dict for diagnostics
     states: Dict[str, Any] = {}
     for s in set(close_vals) | set(hold_vals):
-        cv, hv = close_vals.get(s, []), hold_vals.get(s, [])
+        cv = close_vals.get(s, [])
+        hv = hold_vals.get(s, [])
         q_close = round(mean(cv), 4) if cv else None
         q_hold = round(mean(hv), 4) if hv else None
-        recommend = "hold"
+        recommend_action = "hold"
         if (q_close is not None and q_hold is not None
                 and len(hv) >= min_support and q_close > q_hold + margin):
-            recommend = "close"
+            recommend_action = "close"
         states[s] = {
             "q_close": q_close,
             "q_hold": q_hold,
             "n_close": len(cv),
             "n_hold": len(hv),
-            "recommend": recommend,
+            "recommend": recommend_action,
         }
 
     return {
@@ -137,28 +157,51 @@ def train_exit_policy(
         "n_ticks": n_ticks,
         "n_completed_trajectories": len(final_pnl),
         "states": states,
+        "coef": coef,
+        "intercept": intercept,
+        "support_counts": support_counts,
+        "empirical_hold": empirical_hold,
     }
 
 
 def recommend(policy: Dict[str, Any], pnl_pct: float, dte: float) -> Dict[str, Any]:
-    """Look up the advisory action for a live ``(pnl%, dte)`` state.
-
-    Returns ``{state, action, q_close, q_hold, support, confident}``. An unseen
-    state (no training data) yields ``action='hold'`` with ``confident=False`` —
-    the policy never recommends closing on a state it has not observed.
-    """
+    """Look up the advisory action for a live ``(pnl%, dte)`` state using continuous model."""
     s = state_key(pnl_pct, dte)
-    st = (policy.get("states") or {}).get(s)
-    if not st:
-        return {"state": s, "action": "hold", "q_close": None, "q_hold": None,
-                "support": 0, "confident": False}
-    action = st["recommend"]
-    support = st["n_hold"]
+    coef = policy.get("coef")
+    intercept = policy.get("intercept")
+
+    q_close = pnl_pct
+    q_hold = None
+
+    if coef is not None and intercept is not None:
+        try:
+            import numpy as np
+            X_poly = np.array([pnl_pct, dte, pnl_pct**2, dte**2, pnl_pct * dte])
+            q_hold = float(X_poly @ np.array(coef) + intercept)
+        except Exception:
+            pass
+
+    # Fallback to empirical hold if prediction failed or model not fitted
+    if q_hold is None:
+        empirical_hold = policy.get("empirical_hold") or {}
+        q_hold = empirical_hold.get(s)
+
+    support_counts = policy.get("support_counts") or {}
+    support = support_counts.get(s, 0)
+
+    action = "hold"
+    confident = False
+    if q_close is not None and q_hold is not None:
+        if q_close > q_hold + policy.get("margin", 0.05):
+            if support >= policy.get("min_support", 10):
+                action = "close"
+                confident = True
+
     return {
         "state": s,
         "action": action,
-        "q_close": st["q_close"],
-        "q_hold": st["q_hold"],
+        "q_close": q_close,
+        "q_hold": q_hold,
         "support": support,
-        "confident": action == "close" and support >= policy.get("min_support", 10),
+        "confident": confident,
     }

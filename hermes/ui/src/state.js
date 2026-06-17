@@ -43,6 +43,11 @@ export const state = reactive({
     last_error: '',
     last_ok_age_s: null
   },
+  learning: {
+    bandit_tuner_mode: 'off',
+    exit_policy_mode: 'off',
+    valid_modes: ['active', 'off', 'shadow']
+  },
   lastUpdated: '',
   isConnected: false,
   toast: {
@@ -231,6 +236,15 @@ export async function loadSoul() {
   }
 }
 
+export async function loadLearning() {
+  try {
+    const data = await api('GET', '/api/agent/learning')
+    state.learning = data
+  } catch (e) {
+    console.error('Failed to load learning settings:', e)
+  }
+}
+
 export async function loadLLM() {
   try {
     const data = await api('GET', '/api/llm')
@@ -316,6 +330,18 @@ export async function saveAutonomy(autonomyVal) {
     await api('PUT', '/api/soul', { autonomy: autonomyVal })
     state.soul.autonomy = autonomyVal
     showToast('✓ Autonomy updated')
+  } catch (e) {
+    showToast('Error: ' + e.message, true)
+  }
+}
+
+export async function saveLearning(learningObj) {
+  try {
+    const data = await api('PUT', '/api/agent/learning', learningObj)
+    if (data.updated) {
+      Object.assign(state.learning, data.updated)
+    }
+    showToast('✓ Learning configuration updated')
   } catch (e) {
     showToast('Error: ' + e.message, true)
   }
