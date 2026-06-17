@@ -15,7 +15,9 @@ import {
   saveLots,
   addSymbol,
   removeSymbol,
-  resetWatchlist
+  resetWatchlist,
+  loadLearning,
+  saveLearning
 } from '../state'
 import Icon from '../components/Icon.vue'
 
@@ -29,6 +31,10 @@ const lotInputs = ref({})
 // Soul inputs
 const soulText = ref('')
 const autonomySelect = ref('advisory')
+
+// Learning inputs
+const banditTunerModeSelect = ref('off')
+const exitPolicyModeSelect = ref('off')
 
 // LLM inputs
 const llmProvider = ref('mock')
@@ -45,6 +51,20 @@ watch(() => state.soul, (val) => {
     autonomySelect.value = val.autonomy || 'advisory'
   }
 }, { immediate: true, deep: true })
+
+watch(() => state.learning, (val) => {
+  if (val) {
+    banditTunerModeSelect.value = val.bandit_tuner_mode || 'off'
+    exitPolicyModeSelect.value = val.exit_policy_mode || 'off'
+  }
+}, { immediate: true, deep: true })
+
+async function updateLearningSettings() {
+  await saveLearning({
+    bandit_tuner_mode: banditTunerModeSelect.value,
+    exit_policy_mode: exitPolicyModeSelect.value
+  })
+}
 
 watch(() => state.llm, (val) => {
   if (val) {
@@ -117,7 +137,8 @@ onMounted(async () => {
     loadWatchlist(),
     loadSoul(),
     loadLLM(),
-    loadLogs()
+    loadLogs(),
+    loadLearning()
   ])
   
   pollInterval = setInterval(() => {
@@ -276,6 +297,25 @@ function triggerUpdateInfo() {
               <option value="enforcing">Enforcing — AI can veto trades</option>
               <option value="autonomous">Autonomous — AI may originate trades</option>
             </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label>Bandit Tuner Mode</label>
+              <select v-model="banditTunerModeSelect" @change="updateLearningSettings">
+                <option value="off">Off — Disable Thompson-bandit entry tuning</option>
+                <option value="shadow">Shadow — Log proposals to DB without modifying settings</option>
+                <option value="active">Active — Automatically apply tuned knob values</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Exit Policy Mode</label>
+              <select v-model="exitPolicyModeSelect" @change="updateLearningSettings">
+                <option value="off">Off — Disable exit policy model</option>
+                <option value="shadow">Shadow — Record ticks and log advice without closing trades</option>
+                <option value="active">Active — Automatically close trades on confident policy advice</option>
+              </select>
+            </div>
           </div>
           
           <div class="form-group">
