@@ -256,3 +256,28 @@ class ProjectionsRepository:
                 if event.executed_at:
                     pa.executed_at = datetime.fromisoformat(event.executed_at)
             logger.info("[Projection] Applied APPROVAL_DECIDED: id=%d status=%s", event.approval_id, event.status)
+
+    @staticmethod
+    async def rebuild(session) -> int:
+        """Reconstruct the order/trade read models by replaying the event log.
+
+        The defining event-sourcing recovery path: order/trade state is a pure
+        function of ``event_ledger``, so the read models can always be rebuilt
+        from it after corruption or loss. Wipes the order/trade read models and
+        re-applies every event in id order; settings / watchlist / approval
+        events re-apply idempotently (upsert / delete-then-insert), so they need
+        no explicit wipe. The caller owns the commit. Returns the event count.
+        """
+        from sqlalchemy import delete
+        from hermes.db.orm import Trade, PendingOrder
+        from hermes.db.events import EventStoreManager
+
+        await session.execute(delete(Trade))
+        await session.execute(delete(PendingOrder))
+
+        events = await EventStoreManager.load_events(session)
+        for event in events:
+            await ProjectionsRepository.apply_event_projection(session, event)
+
+        logger.info("[Projection] Rebuilt read models from %d ledger events", len(events))
+        return len(events)
