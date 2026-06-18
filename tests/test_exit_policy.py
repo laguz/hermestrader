@@ -154,7 +154,7 @@ async def test_shadow_captures_and_advises_without_acting(db):
     broker = _StubBroker(QUOTES)
     engine = CascadingEngine(broker=broker, db=db, strategies=[])
 
-    await engine._maybe_capture_and_advise_exits([])
+    await engine.tuning._maybe_capture_and_advise_exits([])
 
     # A trajectory tick was recorded; advice audited; nothing closed.
     ticks = await db.fetch_exit_ticks()
@@ -187,7 +187,7 @@ async def test_active_closes_confident_positions(db):
 
     engine.submit = _spy
 
-    await engine._maybe_capture_and_advise_exits([])
+    await engine.tuning._maybe_capture_and_advise_exits([])
 
     # A confident close was dispatched for the open trade.
     assert len(submitted) == 1
@@ -239,7 +239,7 @@ async def test_active_close_price_never_exceeds_spread_width(db):
 
     engine.submit = _spy
 
-    await engine._maybe_capture_and_advise_exits([])
+    await engine.tuning._maybe_capture_and_advise_exits([])
 
     assert len(submitted) == 1                              # confident close fired
     price = submitted[0][0][0].price
@@ -263,7 +263,7 @@ async def test_active_blocked_under_advisory_autonomy(db):
 
     engine.submit = _spy
 
-    await engine._maybe_capture_and_advise_exits([])
+    await engine.tuning._maybe_capture_and_advise_exits([])
 
     # Advisory autonomy never closes, even with a confident recommendation.
     assert submitted == []
@@ -275,7 +275,7 @@ async def test_off_mode_is_a_noop(db):
     broker = _StubBroker(QUOTES)
     engine = CascadingEngine(broker=broker, db=db, strategies=[])
 
-    await engine._maybe_capture_and_advise_exits([])
+    await engine.tuning._maybe_capture_and_advise_exits([])
 
     assert await db.fetch_exit_ticks() == []
     assert await db.recent_ai_decisions(strategy_id="EXITPOLICY") == []

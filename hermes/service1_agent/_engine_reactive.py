@@ -66,7 +66,7 @@ class EngineReactiveMixin:
             await self.submit(mgmt_actions, action_type="management")
 
         # Evaluate continuous exit policy reactively for trades containing this ticking option leg
-        await self._maybe_evaluate_reactive_exit(symbol, mgmt_actions)
+        await self.tuning._maybe_evaluate_reactive_exit(symbol, mgmt_actions)
 
         # Check support/resistance crossing for entries
         if old_price is not None and old_price != event.price:
