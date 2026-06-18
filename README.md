@@ -13,7 +13,7 @@ Two-service options-trading ecosystem on a TimescaleDB backbone.
 hermes/
 ├── service1_agent/
 │   ├── core.py          # CascadingEngine spine (orchestrator); re-exports the primitives below
-│   ├── _engine_*.py     # engine mixins — runtime, reactive, ai, tuning
+│   ├── _engine_*.py     # owned engine collaborators — pipeline, clock, runtime, reactive, ai, tuning
 │   ├── trade_action.py  # TradeAction — canonical order envelope
 │   ├── broker_wrapper.py# AsyncBrokerWrapper — unified async broker + circuit breaker
 │   ├── money_manager.py # MoneyManager, IronCondorBuilder — capacity & sizing

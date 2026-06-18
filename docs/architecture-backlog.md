@@ -47,7 +47,13 @@
     problem instead of monitoring it). Land behind the event-replay parity test.
 
 ## 2. Decompose `core.py` (850 lines)
-- [ ] **Keep splitting the engine spine.**
+- [x] **Keep splitting the engine spine.**
+  *(Done — `core.py` 1149 → 556 lines. The tick-phase bodies (sync / reconcile /
+  manage / entries / submit / execute_or_queue) moved to `PipelineController`
+  (`_engine_pipeline.py`) and the heartbeat body to `ClockController`
+  (`_engine_clock.py`); `core.py` keeps the `_run_tick_internal` spine plus
+  wiring, with thin delegators preserving the engine's public surface. Full
+  suite green: 542 passed.)*
   - **Problem:** Even after the mixins→controllers refactor, `core.py` is the
     largest file and the one most likely to keep accreting.
   - **Why:** The spine should orchestrate the owned collaborators (`_engine_*.py`),

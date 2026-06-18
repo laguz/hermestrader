@@ -69,8 +69,10 @@ paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
 ┌──────────────────────────────────────────────────────────────────┐
 │  Orchestration                                                   │
 │    CascadingEngine          — pipelines sync → manage → entries  │
-│      (spine in core.py; runtime/reactive/ai/tuning concerns are  │
-│       owned collaborators in _engine_*.py, not mixins)           │
+│      (spine in core.py; the tick-phase bodies, heartbeat and     │
+│       runtime/reactive/ai/tuning concerns are owned collaborators │
+│       in _engine_*.py — pipeline/clock/runtime/reactive/ai/tuning,│
+│       not mixins. core.py is pure orchestration + wiring.)       │
 │    HermesOverseer           — LLM review of every TradeAction;   │
 │      monolithic OR multi-agent committee (overseer.py)           │
 │    AsyncXGBPredictor        — background ML forecasting          │
@@ -121,7 +123,11 @@ If it does, that's a smell worth flagging.
 
 ## A single agent tick (Service-1)
 
-`CascadingEngine.tick(watchlist)` runs this pipeline on every interval:
+`CascadingEngine.tick(watchlist)` runs this pipeline on every interval. The
+spine (`core.py::_run_tick_internal`) only *names* the phases; each phase body
+lives on `engine.pipeline` (`PipelineController` in `_engine_pipeline.py`), and
+the slow operator-guard heartbeat that wraps it lives on `engine.clock_ctrl`
+(`ClockController` in `_engine_clock.py`):
 
 ```
 1. sync_positions()           ← broker.get_positions() → DB
