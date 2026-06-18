@@ -195,11 +195,23 @@ class RuntimeController(_EngineCollaborator):
                                 data["future"] = fut
                                 
                             await self._process_event(event_type, data)
-                            await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
-                            
+
                         except Exception as exc:
                             logger.exception("[ENGINE] Error processing durable event %s: %s", msg_id, exc)
                         finally:
+                            # Ack regardless of outcome (at-most-once). Each durable
+                            # message is the request half of one awaited
+                            # ``publish_event`` call, and ``_process_event`` has already
+                            # resolved that caller's future (result *or* exception). If
+                            # we left a failed message un-acked it would be re-delivered
+                            # next loop with its future already popped — re-running the
+                            # tick's side effects (e.g. duplicate broker orders) with no
+                            # awaiter to receive them. Dropping a failed tick is safer
+                            # than silently replaying it.
+                            try:
+                                await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
+                            except Exception:                      # noqa: BLE001
+                                logger.exception("[ENGINE] xack failed for %s", msg_id)
                             self._pending_futures.pop(msg_id, None)
                             
             except asyncio.CancelledError:
