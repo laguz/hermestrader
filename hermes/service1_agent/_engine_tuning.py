@@ -3,73 +3,46 @@
 
 Split out of ``core.py`` to keep the engine's spine readable.
 :class:`TuningController` is an injected collaborator owned by
-:class:`~hermes.service1_agent.core.CascadingEngine`: it reads the engine's
-state (config, db, broker, overseer, clock, quote cache) through a
-back-reference and submits engine-authored closes via ``self.submit``. These
-best-effort ML/tuning paths stay off the money-critical spine.
+:class:`~hermes.service1_agent.core.CascadingEngine`: it operates on injected
+dependencies and submits engine-authored closes via ``SubmitTradeActionsCommand``.
 """
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List
+import time
+from typing import Any, Dict, List
 
+from hermes.events.bus import (
+    EvaluateReactiveExitEvent,
+    SubmitTradeActionsCommand,
+)
 from .trade_action import TradeAction
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .core import CascadingEngine
+from ._engine_base import _EngineCollaborator
 
 logger = logging.getLogger("hermes.agent.core")
 
 
-class TuningController:
-    """Owns the engine's best-effort ML/tuning ticks — parameter tuning, the
-    Thompson-bandit knob tuner, and exit-policy capture/advice.
+class TuningController(_EngineCollaborator):
+    def __init__(self, db, broker, event_bus, config, overseer=None, clock=None, quote_cache=None) -> None:
+        super().__init__(db, broker, event_bus, config, clock)
+        self.overseer = overseer
+        self._quote_cache = quote_cache if quote_cache is not None else {}
 
-    Reads engine state via ``self._engine``; the forwarding properties below let
-    the method bodies keep reading ``self.config`` / ``self.db`` / ``self.submit``
-    etc. unchanged, so the extraction from the old mixin was a move, not a
-    rewrite.
-    """
+        if self.event_bus is not None:
+            self.event_bus.subscribe(EvaluateReactiveExitEvent, self.handle_evaluate_reactive_exit)
 
-    def __init__(self, engine: "CascadingEngine") -> None:
-        self._engine = engine
-
-    # ── forwarded engine handles (single source of truth on the engine) ──────
-    @property
-    def config(self):
-        return self._engine.config
-
-    @property
-    def overseer(self):
-        return self._engine.overseer
-
-    @property
-    def db(self):
-        return self._engine.db
-
-    @property
-    def broker(self):
-        return self._engine.broker
-
-    @property
-    def clock(self):
-        return self._engine.clock
-
-    @property
-    def _quote_cache(self):
-        return self._engine._quote_cache
-
-    @property
-    def submit(self):
-        return self._engine.submit
+    async def handle_evaluate_reactive_exit(self, event: EvaluateReactiveExitEvent) -> None:
+        try:
+            res = await self._maybe_evaluate_reactive_exit(event.symbol, event.mgmt_actions)
+            if event.future and not event.future.done():
+                event.future.set_result(res)
+        except Exception as exc:
+            if event.future and not event.future.done():
+                event.future.set_exception(exc)
+            raise
 
     async def _maybe_tune_parameters(self) -> None:
-        """Run the overseer's goal-aware parameter tuning, throttled by interval.
-
-        Defaults to once per hour (``param_tuning_interval_s``); set the
-        interval to 0 to disable. Best-effort — a tuning failure must never
-        break the trading tick.
-        """
+        """Run the overseer's goal-aware parameter tuning, throttled by interval."""
         interval = int(self.config.get("param_tuning_interval_s", 3600))
         if interval <= 0:
             return
@@ -77,7 +50,6 @@ class TuningController:
         if tuner is None:
             return
         try:
-            import time
             now = time.time()
             last_raw = await self.db.settings.get_setting("ai_last_param_tuning_ts")
             last = float(last_raw) if last_raw else 0.0
@@ -86,36 +58,20 @@ class TuningController:
             await self.db.settings.set_setting("ai_last_param_tuning_ts", str(now))
             await tuner()
 
-            # Execute risk restrictions check (banned symbols list)
             risk_tuner = getattr(self.overseer, "propose_risk_restrictions", None)
             if risk_tuner is not None:
                 await risk_tuner()
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:
             logger.exception("[PARAM-TUNE] tuning tick failed: %s", exc)
 
     async def _maybe_run_bandit_tuner(self) -> None:
-        """Run the Thompson-bandit knob tuner, throttled and mode-gated.
-
-        Controlled by the ``bandit_tuner_mode`` setting:
-
-        - ``off`` (default) — does nothing.
-        - ``shadow``        — computes proposals and audits them to
-                              ``ai_decisions``, but never mutates a setting.
-        - ``active``        — additionally applies *actionable* (enough data)
-                              and *changed* proposals via ``set_setting``, but
-                              only when agent autonomy is enforcing/autonomous.
-
-        Best-effort: any failure is swallowed so a tuning hiccup can never break
-        the trading tick. The bandit's arm grids are themselves bounded, so an
-        applied value can never escape the knob's tunable range.
-        """
+        """Run the Thompson-bandit knob tuner, throttled and mode-gated."""
         try:
             mode = (await self.db.settings.get_setting("bandit_tuner_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
-            import time
             interval = int(self.config.get("bandit_tuning_interval_s", 3600))
             now = time.time()
             last_raw = await self.db.settings.get_setting("bandit_last_run_ts")
@@ -161,29 +117,13 @@ class TuningController:
                      "applied": applied, "proposals": proposals,
                      "min_observations": min_obs},
                 )
-            except Exception:                                      # noqa: BLE001
+            except Exception:
                 pass
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:
             logger.exception("[BANDIT-TUNE] tuning tick failed: %s", exc)
 
     async def _maybe_capture_and_advise_exits(self, mgmt_actions) -> None:
-        """Capture exit-state trajectories and run the advisory exit policy.
-
-        Controlled by the ``exit_policy_mode`` setting:
-
-        - ``off`` (default) — does nothing (no extra quote traffic).
-        - ``shadow``        — records one ``exit_ticks`` row per open position and
-                              audits the policy's hold/close advice to
-                              ``ai_decisions``; never closes anything.
-        - ``active``        — additionally submits a close for positions the
-                              policy *confidently* says to close, but only under
-                              enforcing/autonomous autonomy and only for trades
-                              not already closing this tick.
-
-        Capture is done here at the engine (not inside the strategies) so the
-        money-critical exit logic stays untouched — this path only reads marks
-        and writes telemetry. Best-effort: failures never break the tick.
-        """
+        """Capture exit-state trajectories and run the advisory exit policy."""
         try:
             mode = (await self.db.settings.get_setting("exit_policy_mode") or "off")
             mode = str(mode).strip().lower()
@@ -196,15 +136,12 @@ class TuningController:
             if not open_trades:
                 return
 
-            # Trades a close was already issued for this tick — labelled 'close'
-            # and never re-closed by the active policy.
             closing_ids = {
                 (a.strategy_params or {}).get("trade_id")
                 for a in (mgmt_actions or [])
                 if (a.strategy_params or {}).get("trade_id") is not None
             }
 
-            # One batched quote fetch for every leg in the book.
             legs = set()
             for tr in open_trades:
                 for k in ("short_leg", "long_leg"):
@@ -221,8 +158,6 @@ class TuningController:
                     bid, ask = float(q.get("bid")), float(q.get("ask"))
                 except (TypeError, ValueError):
                     return None
-                # A deep-OTM long leg can legitimately have bid 0; require only
-                # a positive ask so (0+ask)/2 is a usable mark for telemetry.
                 return (bid + ask) / 2.0 if ask > 0 and bid >= 0 else None
 
             today = self.clock.utc_now().date()
@@ -262,10 +197,6 @@ class TuningController:
                             "pnl_pct": pnl_pct, "dte": dte})
                 advice.append(rec)
 
-                # Width cap: a W-wide credit spread can never be worth more
-                # than W to close, so the close limit is capped at the width —
-                # a 5-wide spread can never go out at 5.10. The 5% marketability
-                # buffer applies only up to that ceiling.
                 width = tr.get("width")
                 close_price = round(debit * 1.05, 2)
                 if width:
@@ -289,11 +220,11 @@ class TuningController:
                         tag=f"HERMES_{tr.get('strategy_id')}_CLOSE_EXIT-POLICY",
                         strategy_params={"trade_id": tid, "close_reason": "EXIT-POLICY",
                                          "side_type": tr.get("side_type")},
-                        # Engine-authored close — skip overseer re-review, like
-                        # other automated actions.
                         ai_authored=True,
                     )
-                    await self.submit([close], action_type="management")
+                    cmd = SubmitTradeActionsCommand(actions=[close], action_type="management")
+                    self.event_bus.emit(cmd)
+                    await cmd.future
                     acted.append(tid)
                     await self.db.logs.write_log(
                         "EXITPOLICY",
@@ -311,9 +242,9 @@ class TuningController:
                      "n_completed_trajectories": policy["n_completed_trajectories"],
                      "advice": advice},
                 )
-            except Exception:                                      # noqa: BLE001
+            except Exception:
                 pass
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:
             logger.exception("[EXIT-POLICY] capture/advise tick failed: %s", exc)
 
     async def _maybe_evaluate_reactive_exit(self, symbol: str, mgmt_actions) -> None:
@@ -328,7 +259,6 @@ class TuningController:
             if not open_trades:
                 return
 
-            # Filter open trades to only those containing this ticking option leg symbol
             trades_for_symbol = [
                 t for t in open_trades
                 if t.get("short_leg") == symbol or t.get("long_leg") == symbol
@@ -336,7 +266,6 @@ class TuningController:
             if not trades_for_symbol:
                 return
 
-            # Skip if a close was already issued for this tick
             closing_ids = {
                 (a.strategy_params or {}).get("trade_id")
                 for a in (mgmt_actions or [])
@@ -367,7 +296,6 @@ class TuningController:
                 if not entry_credit or not expiry:
                     continue
 
-                # Retrieve prices from cache
                 short_mid = None
                 if short_leg in self._quote_cache:
                     q = self._quote_cache[short_leg]
@@ -427,7 +355,9 @@ class TuningController:
                                          "side_type": tr.get("side_type")},
                         ai_authored=True,
                     )
-                    await self.submit([close], action_type="management")
+                    cmd = SubmitTradeActionsCommand(actions=[close], action_type="management")
+                    self.event_bus.emit(cmd)
+                    await cmd.future
                     acted.append(tid)
                     await self.db.logs.write_log(
                         "EXITPOLICY",

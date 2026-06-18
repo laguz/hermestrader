@@ -19,11 +19,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 class _EngineCollaborator:
-    """Behaviour split out of the engine that shares the engine's state explicitly.
+    """Behaviour split out of the engine that operates on injected dependencies."""
 
-    All state lives on the engine; the collaborator holds only the explicit
-    reference `self.engine`.
-    """
-
-    def __init__(self, engine: CascadingEngine) -> None:
-        self.engine = engine
+    def __init__(self, db, broker, event_bus, config, clock=None) -> None:
+        self.db = db
+        self.broker = broker
+        self.event_bus = event_bus
+        self.config = config or {}
+        from hermes.clock import RealClock
+        self.clock = clock or RealClock()

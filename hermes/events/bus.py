@@ -15,6 +15,10 @@ class Event:
 
     def __post_init__(self):
         self.timestamp = datetime.utcnow()
+        try:
+            self.future = asyncio.get_running_loop().create_future()
+        except RuntimeError:
+            self.future = None
 
 @dataclass
 class MarketDataEvent(Event):
@@ -81,6 +85,84 @@ class ChartRefreshTick(Event):
     pass
 
 
+@dataclass
+class TickStartedEvent(Event):
+    """Fired to trigger tick loops and safety sweeps."""
+    watchlist: List[str]
+
+
+@dataclass
+class ExecuteTickCommand(Event):
+    watchlist: List[str]
+
+
+@dataclass
+class ExecuteClockTickCommand(Event):
+    event: ClockTickEvent
+
+
+@dataclass
+class ExecuteAIApprovalCommand(Event):
+    event: AIApprovalEvent
+
+
+@dataclass
+class ExecuteMarketDataCommand(Event):
+    event: MarketDataEvent
+
+
+@dataclass
+class ExecuteOrderFillCommand(Event):
+    event: OrderFillEvent
+
+
+@dataclass
+class SubmitTradeActionsCommand(Event):
+    actions: List[Any]
+    action_type: str = "entry"
+    approval_id: Optional[int] = None
+    execute_directly: bool = False
+
+
+@dataclass
+class EvaluateReactiveExitEvent(Event):
+    symbol: str
+    mgmt_actions: List[Any]
+
+
+@dataclass
+class ProcessReactiveEntriesEvent(Event):
+    symbol: str
+
+
+@dataclass
+class OrderTrackedEvent(Event):
+    order_id: str
+    symbol: str
+    side: str
+    quantity: int
+
+
+@dataclass
+class SyncPositionsCommand(Event):
+    pass
+
+
+@dataclass
+class ReconcileOrphansCommand(Event):
+    pass
+
+
+@dataclass
+class ProcessManagementCommand(Event):
+    pass
+
+
+@dataclass
+class ProcessEntriesCommand(Event):
+    watchlist: List[str]
+
+
 E = TypeVar("E", bound=Event)
 EventHandler = Callable[[E], Awaitable[None]]
 
@@ -106,6 +188,10 @@ class EventBus:
     def emit(self, event: Event) -> None:
         """Publish an event to the bus without blocking."""
         self._queue.put_nowait(event)
+        try:
+            self.start()
+        except RuntimeError:
+            pass
 
     async def _process_events(self) -> None:
         """Background task loop that consumes events and dispatches them."""
@@ -118,20 +204,24 @@ class EventBus:
                 
                 if not handlers:
                     logger.debug(f"No subscribers for event: {event_type.__name__}")
+                    self._queue.task_done()
+                    continue
                 
-                # Dispatch concurrently to all handlers for this event type
-                tasks = []
-                for handler in handlers:
-                    tasks.append(asyncio.create_task(self._safe_invoke(handler, event)))
-                
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                
-                self._queue.task_done()
+                asyncio.create_task(self._dispatch_event(event, handlers))
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in EventBus processing loop: {e}", exc_info=True)
+
+    async def _dispatch_event(self, event: Event, handlers: List[EventHandler]) -> None:
+        try:
+            tasks = []
+            for handler in handlers:
+                tasks.append(asyncio.create_task(self._safe_invoke(handler, event)))
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            self._queue.task_done()
 
     async def _safe_invoke(self, handler: EventHandler, event: Event) -> None:
         """Invokes a handler and catches any exceptions to prevent bus crashes."""

@@ -3,80 +3,151 @@
 
 Split out of ``core.py`` to keep the engine's spine readable. ``ReactiveController``
 is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
-(``engine.reactive``); it shares the engine's hot tick state.
-Not meant to be used standalone.
+(``engine.reactive``); it operates on injected dependencies and handles events/commands.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import Any, Dict, List, Sequence
 
-from hermes.events.bus import MarketDataEvent, OrderFillEvent
+from hermes.events.bus import (
+    MarketDataEvent,
+    OrderFillEvent,
+    ExecuteMarketDataCommand,
+    ExecuteOrderFillCommand,
+    ProcessReactiveEntriesEvent,
+    SubmitTradeActionsCommand,
+    EvaluateReactiveExitEvent,
+    SyncPositionsCommand,
+    ReconcileOrphansCommand,
+    ProcessManagementCommand,
+    ProcessEntriesCommand,
+)
 from ._engine_base import _EngineCollaborator
-
-if TYPE_CHECKING:
-    from .core import CascadingEngine
 
 logger = logging.getLogger("hermes.agent.core")
 
 
 class ReactiveController(_EngineCollaborator):
-    async def handle_market_data(self, event: MarketDataEvent) -> None:
-        await self.engine.publish_event("MARKET_DATA", {"event": event})
+    def __init__(self, db, broker, event_bus, config, strategies=None, mm=None, quote_cache=None, clock=None) -> None:
+        super().__init__(db, broker, event_bus, config, clock)
+        self.strategies = strategies or []
+        self.mm = mm
+        self._quote_cache = quote_cache if quote_cache is not None else {}
+
+        if self.event_bus is not None:
+            self.event_bus.subscribe(ExecuteMarketDataCommand, self.handle_execute_market_data)
+            self.event_bus.subscribe(ExecuteOrderFillCommand, self.handle_execute_order_fill)
+            self.event_bus.subscribe(ProcessReactiveEntriesEvent, self.handle_process_reactive_entries)
+
+    async def handle_execute_market_data(self, command: ExecuteMarketDataCommand) -> None:
+        try:
+            res = await self._handle_market_data_internal(command.event)
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_execute_order_fill(self, command: ExecuteOrderFillCommand) -> None:
+        try:
+            res = await self._handle_order_fill_internal(command.event)
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_process_reactive_entries(self, event: ProcessReactiveEntriesEvent) -> None:
+        try:
+            res = await self.process_reactive_entries(event.symbol)
+            if event.future and not event.future.done():
+                event.future.set_result(res)
+        except Exception as exc:
+            if event.future and not event.future.done():
+                event.future.set_exception(exc)
+            raise
+
+    async def _read_banned_symbols(self) -> set[str]:
+        if not self.db:
+            return set()
+        try:
+            raw = await self.db.settings.get_setting("banned_symbols")
+            if not raw:
+                return set()
+            return {s.strip().upper() for s in raw.split(",") if s.strip()}
+        except Exception:
+            logger.exception("[GOVERNANCE] Failed to read banned_symbols setting")
+            return set()
+
+    async def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
+        getter = getattr(self.db.watchlist, "list_watchlist", None)
+        if getter is None:
+            return list(default)
+        try:
+            import inspect
+            if inspect.iscoroutinefunction(getter):
+                wl = await getter(strategy_id)
+            else:
+                wl = getter(strategy_id)
+                if inspect.iscoroutine(wl):
+                    wl = await wl
+        except Exception as exc:
+            logger.exception("watchlist read failed for %s: %s", strategy_id, exc)
+            return list(default)
+        return (wl or []) or list(default)
 
     async def _handle_market_data_internal(self, event: MarketDataEvent) -> None:
         """Evaluates strategies reactively when a new MarketDataEvent is received."""
         symbol = event.symbol
         
-        # Get old price from cache if it exists
         old_price = None
-        if symbol in self.engine._quote_cache:
-            old_price = self.engine._quote_cache[symbol].get("price")
+        if symbol in self._quote_cache:
+            old_price = self._quote_cache[symbol].get("price")
 
-        # Update quote cache
-        self.engine._quote_cache[symbol] = {
+        self._quote_cache[symbol] = {
             "price": event.price,
             "volume": event.volume,
             **event.data
         }
         
-        # Update shared quote cache in broker wrapper to prevent outbound REST calls
-        self.engine.broker.update_cached_quote(symbol, {
+        self.broker.update_cached_quote(symbol, {
             "symbol": symbol,
             "price": event.price,
             "volume": event.volume,
             **event.data
         })
         
-        # Guard: off-hours block
         from hermes.market_hours import should_block_trades
         blocked, reason = should_block_trades()
         if blocked:
             return
 
-        # Run position management for this symbol across all strategies
         mgmt_actions = []
-        for s in self.engine.strategies:
+        for s in self.strategies:
             try:
                 actions = await s.manage_positions()
                 if actions:
-                    # Filter actions to only close positions for the ticking symbol
                     symbol_actions = [a for a in actions if a.symbol == symbol]
                     mgmt_actions.extend(symbol_actions)
             except Exception as exc:
                 logger.exception("Management failure in %s for %s: %s", s.NAME, symbol, exc)
                 
         if mgmt_actions:
-            await self.engine.submit(mgmt_actions, action_type="management")
+            cmd = SubmitTradeActionsCommand(actions=mgmt_actions, action_type="management")
+            self.event_bus.emit(cmd)
+            await cmd.future
 
-        # Evaluate continuous exit policy reactively for trades containing this ticking option leg
-        await self.engine.tuning._maybe_evaluate_reactive_exit(symbol, mgmt_actions)
+        ev_exit = EvaluateReactiveExitEvent(symbol=symbol, mgmt_actions=mgmt_actions)
+        self.event_bus.emit(ev_exit)
+        await ev_exit.future
 
-        # Check support/resistance crossing for entries
         if old_price is not None and old_price != event.price:
             try:
-                analysis = await self.engine.broker.analyze_symbol(symbol)
+                analysis = await self.broker.analyze_symbol(symbol)
                 key_levels = analysis.get("key_levels", [])
             except Exception as exc:
                 logger.exception("Failed to analyze symbol %s on market data event: %s", symbol, exc)
@@ -97,12 +168,11 @@ class ReactiveController(_EngineCollaborator):
 
             if crossed:
                 try:
-                    await self.engine.process_reactive_entries(symbol)
+                    ev_entries = ProcessReactiveEntriesEvent(symbol=symbol)
+                    self.event_bus.emit(ev_entries)
+                    await ev_entries.future
                 except Exception as exc:
                     logger.exception("Failed to process reactive entries for %s: %s", symbol, exc)
-
-    async def handle_order_fill(self, event: OrderFillEvent) -> None:
-        await self.engine.publish_event("ORDER_FILL", {"event": event})
 
     async def _handle_order_fill_internal(self, event: OrderFillEvent) -> None:
         """Reactively handles order fills by syncing positions and orders immediately."""
@@ -111,59 +181,65 @@ class ReactiveController(_EngineCollaborator):
             event.broker_order_id, event.side, event.quantity, event.symbol,
         )
         try:
-            await self.engine.sync_positions()
+            cmd = SyncPositionsCommand()
+            self.event_bus.emit(cmd)
+            await cmd.future
         except Exception as exc:
             logger.exception("[ENGINE] Failed to sync positions on order fill event: %s", exc)
 
         try:
-            if self.engine.mm is not None:
-                await self.engine.mm.sync_broker_orders()
+            if self.mm is not None:
+                await self.mm.sync_broker_orders()
         except Exception as exc:
             logger.exception("[ENGINE] Failed to sync broker orders on order fill event: %s", exc)
 
         try:
-            await self.engine.reconcile_orphans()
+            cmd = ReconcileOrphansCommand()
+            self.event_bus.emit(cmd)
+            await cmd.future
         except Exception as exc:
             logger.exception("[ENGINE] Failed to reconcile orphans on order fill event: %s", exc)
 
         try:
-            mgmt = await self.engine.process_management()
+            cmd = ProcessManagementCommand()
+            self.event_bus.emit(cmd)
+            mgmt = await cmd.future
             if mgmt:
-                await self.engine.submit(mgmt, action_type="management")
+                cmd_submit = SubmitTradeActionsCommand(actions=mgmt, action_type="management")
+                self.event_bus.emit(cmd_submit)
+                await cmd_submit.future
                 logger.info("[ENGINE] Reactively processed management post order fill: submitted %d actions", len(mgmt))
         except Exception as exc:
             logger.exception("[ENGINE] Failed to process management on order fill event: %s", exc)
 
         try:
-            watchlist = await self.engine.db.watchlist.all_watchlist_symbols()
+            watchlist = await self.db.watchlist.all_watchlist_symbols()
             if watchlist:
-                banned = await self.engine._read_banned_symbols()
+                banned = await self._read_banned_symbols()
                 if banned:
                     watchlist = [s for s in watchlist if s.upper() not in banned]
                 if watchlist:
-                    num_entries = await self.engine.process_entries(watchlist)
+                    cmd = ProcessEntriesCommand(watchlist=watchlist)
+                    self.event_bus.emit(cmd)
+                    num_entries = await cmd.future
                     logger.info("[ENGINE] Reactively processed entries post order fill: placed %d entries", num_entries)
         except Exception as exc:
             logger.exception("[ENGINE] Failed to process entries on order fill event: %s", exc)
 
     async def process_reactive_entries(self, symbol: str) -> None:
-        """Executes entries reactively for a single symbol that crossed support/resistance.
-        Ensures the symbol is in each strategy's watchlist before executing.
-        """
-        # Determine matching strategies concurrently
+        """Executes entries reactively for a single symbol that crossed support/resistance."""
         async def _check_watchlist(s):
-            wl = await self.engine._watchlist_for(s.strategy_id, [symbol])
+            wl = await self._watchlist_for(s.strategy_id, [symbol])
             return s if symbol in wl else None
 
-        check_results = await asyncio.gather(*[_check_watchlist(s) for s in self.engine.strategies])
+        check_results = await asyncio.gather(*[_check_watchlist(s) for s in self.strategies])
         strategies_to_run = [s for s in check_results if s is not None]
 
         if not strategies_to_run:
             return
 
-        max_per_tick = int(self.engine.config.get("max_orders_per_tick", 5))
+        max_per_tick = int(self.config.get("max_orders_per_tick", 5))
 
-        # Gather proposed actions concurrently
         async def _run_reactive_entries(s):
             try:
                 return s, await s.execute_entries([symbol])
@@ -173,7 +249,7 @@ class ReactiveController(_EngineCollaborator):
 
         results = await asyncio.gather(*[_run_reactive_entries(s) for s in strategies_to_run])
 
-        if self.engine.config.get("portfolio_optimization"):
+        if self.config.get("portfolio_optimization"):
             all_proposed_actions = []
             for s, actions in results:
                 all_proposed_actions.extend(actions)
@@ -181,8 +257,8 @@ class ReactiveController(_EngineCollaborator):
             if not all_proposed_actions:
                 return
 
-            avail_bp = await self.engine.mm.true_available_bp()
-            optimized_actions = await self.engine.mm.optimize_allocation(all_proposed_actions, avail_bp)
+            avail_bp = await self.mm.true_available_bp()
+            optimized_actions = await self.mm.optimize_allocation(all_proposed_actions, avail_bp)
 
             if len(optimized_actions) > max_per_tick:
                 logger.warning(
@@ -190,15 +266,17 @@ class ReactiveController(_EngineCollaborator):
                     len(optimized_actions), max_per_tick, max_per_tick,
                 )
                 for a in optimized_actions[max_per_tick:]:
-                    await self.engine.db.logs.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[GUARD] {a.symbol} reactive entry trimmed due to max_orders_per_tick={max_per_tick}"
                     )
                 optimized_actions = optimized_actions[:max_per_tick]
 
-            await self.engine.submit(optimized_actions, action_type="entry")
+            cmd = SubmitTradeActionsCommand(actions=optimized_actions, action_type="entry")
+            self.event_bus.emit(cmd)
+            await cmd.future
             if optimized_actions:
-                await self.engine.mm.sync_broker_orders()
+                await self.mm.sync_broker_orders()
         else:
             tick_submitted = 0
             for s, actions in results:
@@ -210,7 +288,6 @@ class ReactiveController(_EngineCollaborator):
                         )
                         break
 
-                    # Sequentially re-scale and check capacity for each proposed entry
                     scaled_actions = []
                     for action in actions:
                         requested_lots = action.quantity
@@ -229,7 +306,7 @@ class ReactiveController(_EngineCollaborator):
                             "HERMESALPHA": 1,
                         }
                         config_key = f"{strat_id.lower()}_max_lots"
-                        max_lots = int(self.engine.config.get(config_key) or max_lots_map.get(strat_id, 1))
+                        max_lots = int(self.config.get(config_key) or max_lots_map.get(strat_id, 1))
 
                         requirement_per_lot = 0.0
                         if strat_id == "WHEEL":
@@ -244,7 +321,7 @@ class ReactiveController(_EngineCollaborator):
                             if action.width:
                                 requirement_per_lot = action.width * 100.0
 
-                        scaled = await self.engine.mm.scale_quantity(
+                        scaled = await self.mm.scale_quantity(
                             requested_lots=requested_lots,
                             requirement_per_lot=requirement_per_lot,
                             symbol=action.symbol,
@@ -264,10 +341,12 @@ class ReactiveController(_EngineCollaborator):
                     if len(scaled_actions) > remaining:
                         scaled_actions = scaled_actions[:remaining]
 
-                    await self.engine.submit(scaled_actions, action_type="entry")
+                    cmd = SubmitTradeActionsCommand(actions=scaled_actions, action_type="entry")
+                    self.event_bus.emit(cmd)
+                    await cmd.future
                     tick_submitted += len(scaled_actions)
 
                     if scaled_actions:
-                        await self.engine.mm.sync_broker_orders()
+                        await self.mm.sync_broker_orders()
                 except Exception as exc:
                     logger.exception("Reactive entry failure in %s for %s: %s", s.NAME, symbol, exc)
