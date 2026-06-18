@@ -1,10 +1,11 @@
 """
-[Service-1: Hermes-Agent-Core] — event-loop / IPC / order-monitor runtime mixin for ``CascadingEngine``.
+[Service-1: Hermes-Agent-Core] — event-loop / IPC / order-monitor runtime controller.
 
-Split out of ``core.py`` to keep the engine's spine readable. These methods
-run as part of :class:`~hermes.service1_agent.core.CascadingEngine` (composed
-via inheritance); they reference engine state on ``self`` and are not meant to
-be used standalone.
+Split out of ``core.py`` to keep the engine's spine readable. ``RuntimeController``
+is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
+(``engine.runtime``); it shares the engine's hot tick state via
+:class:`~hermes.service1_agent._engine_base._EngineCollaborator`, so ``self.X``
+reads/writes the engine. Not meant to be used standalone.
 """
 from __future__ import annotations
 
@@ -13,11 +14,12 @@ import logging
 from typing import Any, Dict
 
 from hermes.events.bus import OrderFillEvent
+from ._engine_base import _EngineCollaborator
 
 logger = logging.getLogger("hermes.agent.core")
 
 
-class EngineRuntimeMixin:
+class RuntimeController(_EngineCollaborator):
     def _is_durable_loop(self) -> bool:
         return self.ipc_client is not None and self.ipc_client.is_connected
 

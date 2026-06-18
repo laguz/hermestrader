@@ -100,7 +100,12 @@ require a live database — use the stub-broker / stub-DB pattern in
 
 - `hermes/service1_agent/core.py` — `CascadingEngine` (the orchestrator).
   Read this first. It holds the pipeline spine; the runtime/reactive/ai/tuning
-  method groups live in `_engine_*.py` mixins it inherits. The primitives it
+  method groups live in `_engine_*.py` as **owned collaborators** it constructs
+  (`self.runtime` / `self.reactive` / `self.ai` / `self.tuning`), not mixins it
+  inherits. Runtime/Reactive/AI share the engine's hot tick state through the
+  `_EngineCollaborator` base (`_engine_base.py`), which forwards attribute
+  reads/writes to the engine; `core.py` keeps thin delegators so the engine's
+  call surface is unchanged. The primitives it
   composes are split into siblings: `trade_action.py` (`TradeAction`),
   `broker_wrapper.py` (`AsyncBrokerWrapper`), `money_manager.py`
   (`MoneyManager`, `IronCondorBuilder`), and `strategy_base.py`

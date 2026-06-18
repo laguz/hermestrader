@@ -30,9 +30,9 @@ from .broker_wrapper import AsyncBrokerWrapper
 from .money_manager import IronCondorBuilder, MoneyManager
 from .strategy_base import AbstractStrategy
 from .trade_action import TradeAction
-from ._engine_runtime import EngineRuntimeMixin
-from ._engine_reactive import EngineReactiveMixin
-from ._engine_ai import EngineAIMixin
+from ._engine_runtime import RuntimeController
+from ._engine_reactive import ReactiveController
+from ._engine_ai import AIController
 from ._engine_tuning import TuningController
 
 if TYPE_CHECKING:
@@ -53,11 +53,7 @@ __all__ = [
 ]
 
 
-class CascadingEngine(
-    EngineRuntimeMixin,
-    EngineReactiveMixin,
-    EngineAIMixin,
-):
+class CascadingEngine:
     """
     Pipeline order (per spec):
         1. Sync positions (broker → DB)
@@ -105,6 +101,13 @@ class CascadingEngine(
         self.control_state = None
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
+        # Behaviour groups that used to be inherited mixins are now owned
+        # collaborators sharing the engine's hot tick state (see _engine_base).
+        # The thin delegators below keep the engine's call surface unchanged for
+        # the spine, the event bus, and the tests.
+        self.runtime = RuntimeController(self)
+        self.reactive = ReactiveController(self)
+        self.ai = AIController(self)
         # Best-effort ML/tuning ticks live on an owned collaborator rather than
         # a mixin, so the engine spine doesn't carry their state.
         self.tuning = TuningController(self)
@@ -113,6 +116,53 @@ class CascadingEngine(
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
             self.event_bus.subscribe(OrderFillEvent, self.handle_order_fill)
             self.event_bus.subscribe(ClockTickEvent, self.handle_clock_tick)
+
+    # ── delegators to the owned collaborators ────────────────────────────────
+    # These forward the engine's public/cross-called surface to the collaborator
+    # that owns the body. Kept explicit (rather than __getattr__ on the engine)
+    # so the engine's API stays greppable and there's no delegation cycle with
+    # _EngineCollaborator, which forwards the other direction.
+    def _ensure_event_loop(self) -> None:
+        return self.runtime._ensure_event_loop()
+
+    def _ensure_order_monitor(self) -> None:
+        return self.runtime._ensure_order_monitor()
+
+    async def publish_event(self, event_type, payload):
+        return await self.runtime.publish_event(event_type, payload)
+
+    async def handle_market_data(self, event):
+        return await self.reactive.handle_market_data(event)
+
+    async def _handle_market_data_internal(self, event):
+        return await self.reactive._handle_market_data_internal(event)
+
+    async def handle_order_fill(self, event):
+        return await self.reactive.handle_order_fill(event)
+
+    async def _handle_order_fill_internal(self, event):
+        return await self.reactive._handle_order_fill_internal(event)
+
+    async def process_reactive_entries(self, symbol):
+        return await self.reactive.process_reactive_entries(symbol)
+
+    async def handle_ai_approval(self, event):
+        return await self.ai.handle_ai_approval(event)
+
+    async def _handle_ai_approval_internal(self, event):
+        return await self.ai._handle_ai_approval_internal(event)
+
+    async def _async_propose(self, watchlist):
+        return await self.ai._async_propose(watchlist)
+
+    async def _async_propose_closes(self):
+        return await self.ai._async_propose_closes()
+
+    async def _price_ai_closes(self, actions):
+        return await self.ai._price_ai_closes(actions)
+
+    async def _gate_ai_actions(self, actions):
+        return await self.ai._gate_ai_actions(actions)
 
     # 1
     async def sync_positions(self) -> None:

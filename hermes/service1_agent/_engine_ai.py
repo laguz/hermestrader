@@ -1,10 +1,11 @@
 """
-[Service-1: Hermes-Agent-Core] — overseer AI proposal / close / gating mixin for ``CascadingEngine``.
+[Service-1: Hermes-Agent-Core] — overseer AI proposal / close / gating controller.
 
-Split out of ``core.py`` to keep the engine's spine readable. These methods
-run as part of :class:`~hermes.service1_agent.core.CascadingEngine` (composed
-via inheritance); they reference engine state on ``self`` and are not meant to
-be used standalone.
+Split out of ``core.py`` to keep the engine's spine readable. ``AIController``
+is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
+(``engine.ai``); it shares the engine's hot tick state via
+:class:`~hermes.service1_agent._engine_base._EngineCollaborator`, so ``self.X``
+reads/writes the engine. Not meant to be used standalone.
 """
 from __future__ import annotations
 
@@ -14,11 +15,12 @@ from typing import Any, Dict, List, Sequence
 from hermes.events.bus import AIApprovalEvent
 from .strategy_base import AbstractStrategy
 from .trade_action import TradeAction
+from ._engine_base import _EngineCollaborator
 
 logger = logging.getLogger("hermes.agent.core")
 
 
-class EngineAIMixin:
+class AIController(_EngineCollaborator):
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
         await self.publish_event("AI_APPROVAL", {"event": event})
 
