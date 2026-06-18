@@ -1,10 +1,21 @@
 """
-[TimescaleDB-Schema] — SQLAlchemy ORM mirror of schema.sql.
+[TimescaleDB-Schema] — authoritative SQLAlchemy ORM for the persistence layer.
 
 This module holds the declarative ``Base``, every table class, and the pure
 (DB-free) helper functions. It deliberately imports nothing from
 ``hermes.db.repositories`` or ``hermes.db.models`` so the repository mixins
 can import their ORM types from here without a circular import.
+
+The ORM is the **single source of truth** for table/column structure on *both*
+backends: ``create_all`` provisions every table here on SQLite and Postgres
+alike, the Alembic baseline generates its tables from this metadata, and the
+boot-time reconciler (``HermesDB.run_migrations``) derives its column self-heal
+from it. The only schema that lives outside the ORM is the irreducible
+TimescaleDB layer the ORM cannot express — hypertables, compression policies,
+the ``pnl_daily`` view, and the two raw ``bars_*`` tables — which lives in
+``schema.sql`` and is applied *after* ``create_all``. ``tests/test_schema_parity.py``
+guards that remaining seam (every hypertable-backed ORM table has its
+``create_hypertable`` line, and ``schema.sql`` never re-declares an ORM table).
 
 ``hermes.db.models`` re-exports every public name defined here, so existing
 ``from hermes.db.models import Base, Trade, ...`` call-sites keep working.
@@ -46,6 +57,10 @@ class StrategyWatchlist(Base):
     symbol = Column(String, primary_key=True)
     target_lots = Column(Integer)
     added_at = Column(DateTime(timezone=True), default=utc_now)
+
+    __table_args__ = (
+        Index("idx_strategy_watchlists_sid", "strategy_id"),
+    )
 
 
 class Trade(Base):
@@ -156,7 +171,7 @@ class ExitTick(Base):
 
     PK is a plain autoincrement Integer (not the BIGSERIAL/Sequence the other
     hypertables use) so the SQLite create_all path autoincrements without
-    explicit ids; schema.sql owns the Postgres BIGSERIAL definition.
+    explicit ids; on Postgres SQLAlchemy maps it to ``BIGSERIAL`` automatically.
     """
 
     __tablename__ = "exit_ticks"
@@ -256,13 +271,17 @@ class BotLog(Base):
     level = Column(String, default="INFO")
     message = Column(Text, nullable=False)
 
+    __table_args__ = (
+        Index("idx_bot_logs_strategy", "strategy_id", ts.desc()),
+    )
+
 
 class EventLedger(Base):
     """Append-only event store — the source-of-truth log for event sourcing.
 
     Read models (trades, pending_orders, system_settings, …) are projections
-    of this log; global event order is carried by ``id``. The canonical
-    Postgres DDL lives in ``schema.sql``; ``create_all`` mirrors it on SQLite.
+    of this log; global event order is carried by ``id``. ``create_all``
+    provisions this table identically on SQLite and Postgres.
     """
     __tablename__ = "event_ledger"
     id = Column(BigInteger, Sequence("event_ledger_id_seq"), primary_key=True,
@@ -342,6 +361,10 @@ class Prediction(Base):
     predicted_price = Column(Numeric(12, 4))
     spot = Column(Numeric(12, 4))
     model_tag = Column(String, default="xgb-10feat-v1")
+
+    __table_args__ = (
+        Index("idx_predictions_symbol_ts", "symbol", ts.desc()),
+    )
 
 
 class SystemSetting(Base):

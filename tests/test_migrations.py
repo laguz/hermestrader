@@ -67,7 +67,9 @@ def test_offline_upgrade_emits_full_schema():
 
     upper = sql.upper()
     assert "CREATE TABLE" in upper
-    # Core tables + the Timescale-specific bits that only live in schema.sql.
+    # Tables come from metadata.create_all; the Timescale-specific bits
+    # (create_hypertable / compression / pnl_daily) come from the schema.sql
+    # addendum. Both must land in a single base→0001 render.
     for needle in (
         "strategies", "trades", "predictions", "system_settings",
         "create_hypertable", "add_compression_policy", "pnl_daily",

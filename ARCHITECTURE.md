@@ -192,18 +192,30 @@ matter:
 | `bars_intraday`    | Service-1   | both         | Hypertable; intraday OHLCV               |
 | `system_settings`  | both        | both         | KV store: mode, autonomy, soul.md, etc.  |
 
-`schema.sql` is the canonical DDL for TimescaleDB hypertables, indexes,
-compression policies, and the `pnl_daily` view. **Alembic owns the Postgres
-schema**: `alembic upgrade head` applies the baseline migration
-(`alembic/versions/0001_baseline.py`, which runs `schema.sql`); on an
-already-populated DB, `alembic stamp 0001` marks it migrated. Future schema
-changes are new migrations, not edits to `schema.sql`.
+**The ORM (`hermes/db/orm.py`) is the single source of truth for tables and
+columns.** There is no second hand-maintained catalog to drift against:
+`create_all` provisions every table from `Base.metadata` on both backends, the
+Alembic baseline generates its tables from the same metadata, and the boot-time
+reconciler (`HermesDB.run_migrations`) derives its column self-heal from it too.
+
+`schema.sql` is **not** a table catalog — it is the irreducible TimescaleDB
+*addendum* the ORM cannot express: the two raw `bars_*` price tables,
+hypertable conversions, compression/retention policies, and the `pnl_daily`
+view. It is applied *after* the ORM tables exist.
+
+**Alembic owns the Postgres schema**: `alembic upgrade head` applies the
+baseline (`alembic/versions/0001_baseline.py`), which calls
+`metadata.create_all` for the ORM tables and then runs the `schema.sql`
+addendum; on an already-populated DB, `alembic stamp 0001` marks it migrated.
+Future schema changes are new migrations.
 
 `models.py` keeps a defensive `Base.metadata.create_all(checkfirst=True)` so
 plain SQLAlchemy CRUD works on **SQLite** without Timescale — used for dev,
-tests, **and the unified simulation mode**. The ORM models mirror `schema.sql`
-for that path (HermesDB swaps `JSONB` for portable `JSON` when the DSN is
-SQLite). Alembic governs Postgres only; `create_all` is the SQLite bootstrap.
+tests, **and the unified simulation mode** (HermesDB swaps `JSONB` for portable
+`JSON` when the DSN is SQLite); the hypertable/compression DDL simply doesn't
+apply there. `tests/test_schema_parity.py` guards the one remaining seam —
+every hypertable-backed ORM table has its `create_hypertable` line, and
+`schema.sql` never re-declares an ORM table.
 
 ## Where to look for what
 
