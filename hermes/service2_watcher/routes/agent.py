@@ -18,7 +18,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from hermes.common import VALID_MODES
+from hermes.common import (
+    IPC_ACTION_SYNC_SETTINGS,
+    IPC_ACTION_TRIGGER_ML,
+    IPC_CHANNEL_AGENT_COMMANDS,
+    VALID_MODES,
+)
 
 from .._app_state import SETTING_MODE, SETTING_PAUSED, db
 
@@ -40,7 +45,7 @@ async def pause_agent() -> Dict[str, Any]:
     await db.write_log("ENGINE", "[C2] Agent PAUSED by operator")
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "sync_settings"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
     except Exception:
         pass
     return {"paused": True}
@@ -52,7 +57,7 @@ async def resume_agent() -> Dict[str, Any]:
     await db.write_log("ENGINE", "[C2] Agent RESUMED by operator")
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "sync_settings"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
     except Exception:
         pass
     return {"paused": False}
@@ -65,7 +70,7 @@ async def trigger_ml_predictor() -> Dict[str, Any]:
     await db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "trigger_ml"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_TRIGGER_ML})
     except Exception:
         pass
     return {"status": "triggered"}
@@ -120,7 +125,7 @@ async def set_learning(body: LearningBody) -> Dict[str, Any]:
     await db.write_log("ENGINE", f"[C2] Learning modes updated by operator: {updated}")
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "sync_settings"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
     except Exception:
         pass
     return {"updated": updated}
@@ -142,7 +147,7 @@ async def set_mode(body: ModeBody) -> Dict[str, Any]:
     await db.write_log("ENGINE", f"[C2] Mode switched to {m}")
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "sync_settings"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
     except Exception:
         pass
     return {"mode": m}
