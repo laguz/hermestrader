@@ -3,41 +3,43 @@
 
 Split out of ``core.py`` to keep the engine's spine readable. ``RuntimeController``
 is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
-(``engine.runtime``); it shares the engine's hot tick state via
-:class:`~hermes.service1_agent._engine_base._EngineCollaborator`, so ``self.X``
-reads/writes the engine. Not meant to be used standalone.
+(``engine.runtime``); it shares the engine's hot tick state.
+Not meant to be used standalone.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
 from hermes.events.bus import OrderFillEvent
 from ._engine_base import _EngineCollaborator
+
+if TYPE_CHECKING:
+    from .core import CascadingEngine
 
 logger = logging.getLogger("hermes.agent.core")
 
 
 class RuntimeController(_EngineCollaborator):
     def _is_durable_loop(self) -> bool:
-        return self.ipc_client is not None and self.ipc_client.is_connected
+        return self.engine.ipc_client is not None and self.engine.ipc_client.is_connected
 
     def _ensure_event_loop(self) -> None:
         if self._is_durable_loop():
-            if self.loop_task is None or self.loop_task.done():
-                self._pending_futures = {}
-                self.loop_task = asyncio.create_task(self._redis_event_consumer_loop())
+            if self.engine.loop_task is None or self.engine.loop_task.done():
+                self.engine._pending_futures = {}
+                self.engine.loop_task = asyncio.create_task(self._redis_event_consumer_loop())
         else:
-            if self.queue is None:
-                self.queue = asyncio.Queue()
-            if self.loop_task is None or self.loop_task.done():
-                self.loop_task = asyncio.create_task(self._event_consumer_loop())
+            if self.engine.queue is None:
+                self.engine.queue = asyncio.Queue()
+            if self.engine.loop_task is None or self.engine.loop_task.done():
+                self.engine.loop_task = asyncio.create_task(self._event_consumer_loop())
 
     def _ensure_order_monitor(self) -> None:
-        if self._order_monitor_task is None or self._order_monitor_task.done():
+        if self.engine._order_monitor_task is None or self.engine._order_monitor_task.done():
             try:
-                self._order_monitor_task = asyncio.create_task(self._order_monitor_loop())
+                self.engine._order_monitor_task = asyncio.create_task(self._order_monitor_loop())
             except RuntimeError:
                 pass
 
@@ -48,14 +50,14 @@ class RuntimeController(_EngineCollaborator):
         # Initial scan for active/working orders
         try:
             active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
-            orders = await self.broker.get_orders() or []
+            orders = await self.engine.broker.get_orders() or []
             if isinstance(orders, list):
                 for o in orders:
                     status = str(o.get("status", "")).lower()
                     if status in active_statuses:
                         oid = str(o.get("id") or o.get("order_id") or "")
-                        if oid and oid not in self._tracked_orders:
-                            self._tracked_orders[oid] = {
+                        if oid and oid not in self.engine._tracked_orders:
+                            self.engine._tracked_orders[oid] = {
                                 "symbol": str(o.get("symbol", "")).upper(),
                                 "side": str(o.get("side", "")),
                                 "quantity": int(o.get("quantity", 0))
@@ -65,12 +67,12 @@ class RuntimeController(_EngineCollaborator):
             logger.error("[ENGINE] Failed initial order scan: %s", exc)
 
         while True:
-            if not self._tracked_orders:
+            if not self.engine._tracked_orders:
                 await asyncio.sleep(1.0)
                 continue
 
             try:
-                orders = await self.broker.get_orders() or []
+                orders = await self.engine.broker.get_orders() or []
                 if isinstance(orders, list):
                     orders_by_id = {}
                     for o in orders:
@@ -78,8 +80,8 @@ class RuntimeController(_EngineCollaborator):
                         if oid:
                             orders_by_id[oid] = o
 
-                    for oid in list(self._tracked_orders.keys()):
-                        info = self._tracked_orders[oid]
+                    for oid in list(self.engine._tracked_orders.keys()):
+                        info = self.engine._tracked_orders[oid]
                         if oid in orders_by_id:
                             missing_counts.pop(oid, None)
                             broker_order = orders_by_id[oid]
@@ -95,9 +97,9 @@ class RuntimeController(_EngineCollaborator):
                                     price=float(broker_order.get("avg_fill_price") or broker_order.get("price") or 0.0),
                                     status=status
                                 )
-                                if self.event_bus:
-                                    self.event_bus.emit(event)
-                                self._tracked_orders.pop(oid, None)
+                                if self.engine.event_bus:
+                                    self.engine.event_bus.emit(event)
+                                self.engine._tracked_orders.pop(oid, None)
                         else:
                             missing_counts[oid] = missing_counts.get(oid, 0) + 1
                             if missing_counts[oid] >= 3:
@@ -110,9 +112,9 @@ class RuntimeController(_EngineCollaborator):
                                     price=0.0,
                                     status="filled"
                                 )
-                                if self.event_bus:
-                                    self.event_bus.emit(event)
-                                self._tracked_orders.pop(oid, None)
+                                if self.engine.event_bus:
+                                    self.engine.event_bus.emit(event)
+                                self.engine._tracked_orders.pop(oid, None)
                                 missing_counts.pop(oid, None)
             except Exception as exc:
                 logger.error("[ENGINE] Error in order monitor loop: %s", exc)
@@ -124,7 +126,7 @@ class RuntimeController(_EngineCollaborator):
         
         if self._is_durable_loop():
             import json
-            client = self.ipc_client.client
+            client = self.engine.ipc_client.client
             fut = asyncio.get_running_loop().create_future()
             
             serializable_payload = {k: v for k, v in payload.items() if k != "future"}
@@ -137,19 +139,19 @@ class RuntimeController(_EngineCollaborator):
                 }
             )
             
-            self._pending_futures[msg_id] = fut
+            self.engine._pending_futures[msg_id] = fut
             return await fut
         else:
             fut = asyncio.get_running_loop().create_future()
             payload_with_fut = dict(payload)
             payload_with_fut["future"] = fut
-            await self.queue.put((event_type, payload_with_fut))
+            await self.engine.queue.put((event_type, payload_with_fut))
             return await fut
 
     async def _redis_event_consumer_loop(self) -> None:
         import json
         logger.info("[ENGINE] Starting Redis Streams background durable event loop consumer.")
-        client = self.ipc_client.client
+        client = self.engine.ipc_client.client
         
         try:
             await client.xgroup_create("hermes_event_stream", "hermes_engine_group", id="0", mkstream=True)
@@ -190,7 +192,7 @@ class RuntimeController(_EngineCollaborator):
                         try:
                             data = json.loads(payload_json) if payload_json else {}
                             
-                            fut = self._pending_futures.get(msg_id)
+                            fut = self.engine._pending_futures.get(msg_id)
                             if fut:
                                 data["future"] = fut
                                 
@@ -212,7 +214,7 @@ class RuntimeController(_EngineCollaborator):
                                 await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
                             except Exception:                      # noqa: BLE001
                                 logger.exception("[ENGINE] xack failed for %s", msg_id)
-                            self._pending_futures.pop(msg_id, None)
+                            self.engine._pending_futures.pop(msg_id, None)
                             
             except asyncio.CancelledError:
                 break
@@ -224,13 +226,13 @@ class RuntimeController(_EngineCollaborator):
         logger.info("[ENGINE] Starting background event loop consumer.")
         while True:
             try:
-                event_type, payload = await self.queue.get()
+                event_type, payload = await self.engine.queue.get()
                 try:
                     await self._process_event(event_type, payload)
                 except Exception as exc:
                     logger.exception(f"[ENGINE] Error processing event {event_type}: {exc}")
                 finally:
-                    self.queue.task_done()
+                    self.engine.queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -242,15 +244,15 @@ class RuntimeController(_EngineCollaborator):
             res = None
             if event_type == "TICK":
                 watchlist = payload["watchlist"]
-                res = await self._run_tick_internal(watchlist)
+                res = await self.engine._run_tick_internal(watchlist)
             elif event_type == "CLOCK_TICK":
-                res = await self._handle_clock_tick_internal(payload["event"])
+                res = await self.engine._handle_clock_tick_internal(payload["event"])
             elif event_type == "AI_APPROVAL":
-                res = await self._handle_ai_approval_internal(payload["event"])
+                res = await self.engine._handle_ai_approval_internal(payload["event"])
             elif event_type == "MARKET_DATA":
-                res = await self._handle_market_data_internal(payload["event"])
+                res = await self.engine._handle_market_data_internal(payload["event"])
             elif event_type == "ORDER_FILL":
-                res = await self._handle_order_fill_internal(payload["event"])
+                res = await self.engine._handle_order_fill_internal(payload["event"])
             if fut and not fut.done():
                 fut.set_result(res)
         except Exception as exc:
