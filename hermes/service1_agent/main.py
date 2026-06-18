@@ -33,6 +33,31 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("hermes.agent.main")
 
+# Helper clusters split out of this module. Re-imported here so the public
+# surface (`from ...main import X`) and test monkeypatches
+# (`patch("...main.X")`) keep resolving, and the run loop below can keep
+# calling them by bare name.
+from .agent_settings import (  # noqa: F401,E402
+    SETTING_MODE, SETTING_TRADIER_OK_TS, SETTING_TRADIER_ERROR,
+    SETTING_AGENT_STARTED_AT, SETTING_LLM_PROVIDER, SETTING_LLM_BASE_URL,
+    SETTING_LLM_MODEL, SETTING_LLM_API_KEY, SETTING_LLM_TEMPERATURE,
+    SETTING_LLM_VISION, SETTING_LLM_TIMEOUT, SETTING_LLM_OK_TS,
+    SETTING_LLM_ERROR, SETTING_SOUL, SETTING_AUTONOMY, SETTING_PAUSED,
+    SETTING_APPROVAL_MODE, SETTING_LLM_OUT_OF_LOOP, SETTING_MAX_DAILY_LOSS,
+    _strategy_enabled_key, _read_overseer_settings,
+)
+from .agent_risk import (  # noqa: F401,E402
+    resolve_max_daily_loss, _open_position_pnl, enforce_daily_loss_limit,
+)
+from .agent_approvals import (  # noqa: F401,E402
+    _REJECTED_ORDER_STATUSES, _execute_approved_action,
+)
+from .agent_construction import (  # noqa: F401,E402
+    _live_armed, _resolve_mode_credentials, _build_broker,
+    _build_stream_client, _build_llm, build,
+    _load_and_validate_runtime_config,
+)
+
 class ShutdownEvent(threading.Event):
     def set(self) -> None:
         super().set()
@@ -70,38 +95,7 @@ def set_trigger() -> None:
     """
     _TRIGGER_EVENT.set()
 
-# Settings keys shared with the watcher (see hermes/service2_watcher/api.py).
-SETTING_MODE = "hermes_mode"               # "paper" | "live"
-SETTING_TRADIER_OK_TS = "tradier_last_ok_ts"
-SETTING_TRADIER_ERROR = "tradier_last_error"
-SETTING_AGENT_STARTED_AT = "agent_started_at"
 
-# LLM overseer settings — written by the watcher's /api/llm endpoints.
-SETTING_LLM_PROVIDER = "llm_provider"           # "mock" | "local"
-SETTING_LLM_BASE_URL = "llm_base_url"
-SETTING_LLM_MODEL = "llm_model"
-SETTING_LLM_API_KEY = "llm_api_key"             # often empty for LM Studio / Ollama
-SETTING_LLM_TEMPERATURE = "llm_temperature"
-SETTING_LLM_VISION = "llm_vision"               # "true" | "false"
-SETTING_LLM_TIMEOUT = "llm_timeout_s"           # seconds; bump on cold-load setups
-SETTING_LLM_OK_TS = "llm_last_ok_ts"
-SETTING_LLM_ERROR = "llm_last_error"
-
-# Operator doctrine + agent control — written by the C2 panel.
-SETTING_SOUL = "soul_md"
-SETTING_AUTONOMY = "agent_autonomy"
-SETTING_PAUSED = "agent_paused"
-SETTING_APPROVAL_MODE = "approval_mode"   # "true" | "false"
-SETTING_LLM_OUT_OF_LOOP = "llm_out_of_loop" # "true" | "false"
-# Daily-loss kill switch. Dollar amount of realized loss (positive number) that
-# auto-pauses the agent for the rest of the session. "" / "0" / unset disables.
-# Falls back to the HERMES_MAX_DAILY_LOSS env var when no setting is stored.
-SETTING_MAX_DAILY_LOSS = "max_daily_loss"
-
-# Per-strategy enable/disable flags — written by the C2 panel.
-# Key pattern: "strategy_{id}_enabled"  value: "true" | "false"
-def _strategy_enabled_key(strategy_id: str) -> str:
-    return f"strategy_{strategy_id.lower()}_enabled"
 
 
 async def _interruptible_sleep(seconds: float) -> None:
@@ -206,103 +200,12 @@ async def _cache_prewarm_loop(broker_getter, db, conf):
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
 
-def resolve_max_daily_loss(setting_value: Optional[str]) -> float:
-    """Resolve the daily-loss limit (a positive dollar amount).
-
-    Precedence: the stored ``max_daily_loss`` setting, then the
-    ``HERMES_MAX_DAILY_LOSS`` env var. Returns 0.0 (disabled) when neither is
-    set or the value can't be parsed. The sign is normalised to positive so a
-    limit of "500" and "-500" both mean "halt at $500 of realized loss".
-    """
-    raw = setting_value
-    if raw in (None, ""):
-        raw = os.environ.get("HERMES_MAX_DAILY_LOSS", "")
-    if raw in (None, ""):
-        return 0.0
-    try:
-        return abs(float(raw))
-    except (TypeError, ValueError):
-        return 0.0
 
 
-async def _open_position_pnl(broker) -> Optional[float]:
-    """Best-effort unrealized P&L across all open positions, or None.
-
-    Sourced from Tradier's account balances (``open_pl``), which is the live
-    mark-to-market of every open position. Returns ``None`` (not 0.0) when no
-    broker is available or the read fails, so the caller can tell "flat" apart
-    from "unknown" and avoid relaxing the kill switch on a transient error.
-    """
-    if broker is None:
-        return None
-    try:
-        balances = await broker.get_account_balances() or {}
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("daily-loss check: get_account_balances failed: %s", exc)
-        return None
-    raw = balances.get("raw") or {}
-    val = raw.get("open_pl", balances.get("open_pl"))
-    if val is None:
-        return None
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return None
 
 
-async def enforce_daily_loss_limit(
-    db, max_daily_loss: float, *, currently_paused: bool, broker=None
-) -> bool:
-    """Auto-pause the agent when the day's drawdown breaches the limit.
-
-    The limit is compared against realized P&L for trades closed today **plus**
-    the unrealized mark-to-market of open positions (``open_pl`` from the
-    broker). Including the open leg closes the gap where a book of losing
-    spreads could bleed well past the limit without ever realizing a loss. When
-    the broker's open P&L can't be read the check degrades to realized-only
-    rather than failing open.
-
-    Returns ``True`` if the limit was hit and the agent was paused on this
-    call (caller should skip the rest of the tick). No-op returning ``False``
-    when the switch is disabled, the agent is already paused, the P&L read
-    fails, or the day is still within the limit. Reuses the ``agent_paused``
-    flag so the halt is visible in the dashboard and persists until an
-    operator manually re-arms.
-    """
-    if currently_paused or max_daily_loss <= 0.0:
-        return False
-    try:
-        realized_today = await db.realized_pnl_today()
-    except Exception as exc:                                      # noqa: BLE001
-        log.warning("daily-loss check: realized_pnl_today failed: %s", exc)
-        return False
-    unrealized = await _open_position_pnl(broker)
-    total_pnl = realized_today + (unrealized or 0.0)
-    if total_pnl <= -max_daily_loss:
-        await db.set_setting(SETTING_PAUSED, "true")
-        unreal_str = "n/a" if unrealized is None else f"${unrealized:,.2f}"
-        msg = (
-            f"[KILL SWITCH] daily loss limit hit: total P&L "
-            f"${total_pnl:,.2f} (realized ${realized_today:,.2f} + "
-            f"unrealized {unreal_str}) <= -${max_daily_loss:,.2f} — "
-            f"agent auto-paused for the session; operator must resume"
-        )
-        log.error(msg)
-        await db.write_log("ENGINE", msg, level="ERROR")
-        return True
-    return False
 
 
-def _live_armed() -> bool:
-    """True when the operator has explicitly armed real-money live orders.
-
-    Going live is gated behind ``HERMES_LIVE_ARMED=true`` so that merely setting
-    the mode to "live" never routes real orders by accident. Without arming,
-    live mode runs preview-only (dry_run). Accepts the usual truthy spellings.
-    """
-    return os.environ.get("HERMES_LIVE_ARMED", "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
 
 
 def _utcnow_iso() -> str:
@@ -326,435 +229,14 @@ def _parse_iso(s: Optional[str]) -> Optional[datetime]:
         return None
 
 
-# Tradier order statuses that mean the broker did NOT accept the order; the
-# approval row must NOT be flipped to EXECUTED for any of these.
-_REJECTED_ORDER_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
 
 
-async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
-    """Execute one C2-approved action and reconcile its approval row.
-
-    Returns one of: ``"executed"``, ``"preview"``, ``"rejected"``, ``"failed"``.
-    Exposed at module scope so the lifecycle is unit-testable without
-    standing up the full tick loop.
-
-    The approval row's final state must always reflect what the broker
-    actually did:
-
-    * ``dry_run=True`` → no broker call; mark FAILED with a preview note so
-      the C2 UI cannot mistake a preview for a live order.
-    * Broker raises  → ``record_order_response`` rolls the PendingOrder
-      back to REJECTED so capacity recovers; approval marked FAILED.
-    * Broker returns ``errors`` / a rejected status → approval marked
-      FAILED; ``record_order_response`` already wrote ``[ORDER REJECTED]``.
-    * Clean response → approval marked EXECUTED and ``[C2 EXECUTED]`` is
-      written for the operator feed.
-    """
-    from hermes.service1_agent.core import TradeAction, AsyncBrokerWrapper
-
-    async_broker = AsyncBrokerWrapper(broker, db)
-
-    approval_id = item["id"]
-    action_json = item["action_json"]
-    try:
-        action = TradeAction(**action_json)
-    except Exception as exc:                                   # noqa: BLE001
-        log.exception("[C2] Failed to rebuild TradeAction id=%d: %s",
-                      approval_id, exc)
-        await db.mark_approval_executed(
-            approval_id, success=False,
-            notes=f"action rebuild error: {exc}",
-        )
-        return "failed"
-
-    # Market-hours gate — C2-approved trades must respect the same
-    # off-hours block as strategy-emitted ones. Leave the approval row
-    # in PENDING (do NOT mark FAILED) so the next tick during regular
-    # session picks it up automatically.
-    from hermes.market_hours import should_block_trades
-    blocked, reason = should_block_trades()
-    if blocked:
-        log.info("[C2] OFF-HOURS — deferring approval id=%d (%s)",
-                 approval_id, reason)
-        await db.write_log(
-            action.strategy_id,
-            f"[C2 DEFERRED] {action.symbol} approval_id={approval_id} — "
-            f"{reason}; will execute on next tick during regular session",
-        )
-        return "deferred"
-
-    broker_dry_run = bool(getattr(broker, "dry_run", False))
-    if broker_dry_run:
-        # No broker call happens — don't pretend it did.  Skip
-        # record_pending_order so capacity isn't consumed by a row
-        # that will never settle.
-        await db.mark_approval_executed(
-            approval_id, success=False,
-            notes="dry_run=True — no broker order placed",
-        )
-        log.info("[C2] dry_run preview only — approval id=%d "
-                 "NOT submitted to broker", approval_id)
-        await db.write_log(
-            action.strategy_id,
-            f"[C2 PREVIEW] {action.symbol} {action.order_class} "
-            f"qty={action.quantity} approval_id={approval_id} — "
-            f"dry_run=True, no order sent to broker",
-        )
-        return "preview"
-
-    await db.record_pending_order(action)
-    try:
-        resp = await async_broker.place_order_from_action(action)
-    except Exception as exc:                                   # noqa: BLE001
-        await db.record_order_response(action, {"errors": str(exc)})
-        await db.mark_approval_executed(
-            approval_id, success=False,
-            notes=f"broker raised: {exc}",
-        )
-        log.exception("[C2] place_order_from_action raised for "
-                      "approval id=%d: %s", approval_id, exc)
-        await db.write_log(
-            action.strategy_id,
-            f"[C2 FAILED] {action.symbol} approval_id={approval_id} "
-            f"broker raised: {exc}",
-        )
-        return "failed"
-
-    await db.record_order_response(action, resp)
-
-    order = (resp or {}).get("order") if isinstance(resp, dict) else None
-    order_status = ""
-    if isinstance(order, dict):
-        order_status = str(order.get("status", "")).lower()
-    rejected = (
-        (isinstance(resp, dict) and "errors" in resp)
-        or order_status in _REJECTED_ORDER_STATUSES
-    )
-
-    if rejected:
-        # record_order_response already wrote [ORDER REJECTED].
-        await db.mark_approval_executed(
-            approval_id, success=False,
-            notes=f"broker rejected: {resp}",
-        )
-        log.warning("[C2] broker rejected approval id=%d: %s",
-                    approval_id, resp)
-        await db.write_log(
-            action.strategy_id,
-            f"[C2 REJECTED] {action.symbol} approval_id={approval_id}",
-        )
-        return "rejected"
-
-    await db.mark_approval_executed(approval_id, success=True)
-    log.info("[C2] Executed approved trade: %s %s strategy=%s id=%d",
-             action.symbol, action.order_class, action.strategy_id, approval_id)
-    await db.write_log(
-        action.strategy_id,
-        f"[C2 EXECUTED] {action.symbol} {action.order_class} "
-        f"qty={action.quantity} approval_id={approval_id}",
-    )
-    return "executed"
 
 
-async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
-    """Build the LLM overseer client from current settings.
-
-    Returns (client, snapshot, vision_enabled). `snapshot` is the dict of
-    config values used so the tick loop can detect changes and rebuild.
-    """
-    provider = ((await db.get_setting(SETTING_LLM_PROVIDER)) or "mock").lower()
-    base_url = ((await db.get_setting(SETTING_LLM_BASE_URL)) or "").strip()
-    model = ((await db.get_setting(SETTING_LLM_MODEL)) or "").strip()
-    api_key = decrypt_value(((await db.get_setting(SETTING_LLM_API_KEY)) or "").strip()) or None
-    temperature_raw = ((await db.get_setting(SETTING_LLM_TEMPERATURE)) or "0.2").strip()
-    try:
-        temperature = float(temperature_raw)
-    except ValueError:
-        temperature = 0.2
-    timeout_raw = ((await db.get_setting(SETTING_LLM_TIMEOUT)) or str(DEFAULT_LLM_TIMEOUT_S)).strip()
-    try:
-        timeout_s = max(5.0, float(timeout_raw))
-    except ValueError:
-        timeout_s = DEFAULT_LLM_TIMEOUT_S
-    vision = ((await db.get_setting(SETTING_LLM_VISION)) or "true").lower() != "false"
-    snapshot = {
-        "provider": provider,
-        "base_url": base_url,
-        "model": model,
-        # Store a hash of the key, not just bool, so that updating the key
-        # value (e.g. wrong → correct) is detected as a config change and
-        # triggers an LLM client rebuild on the next tick.
-        "api_key_hash": hash(api_key or ""),
-        "temperature": temperature,
-        "timeout_s": timeout_s,
-        "vision": vision,
-    }
-
-    if provider == "ollama_cloud":
-        # Use the native Ollama Python library — Ollama Cloud auth works
-        # differently from the OpenAI-compatible shim and requires the
-        # official client (as documented at api.ollama.com).
-        if not model or not api_key:
-            log.warning("ollama_cloud requires both model and api_key — falling back to MockLLM")
-        else:
-            try:
-                from hermes.llm.clients import OllamaCloudLLM
-                client = OllamaCloudLLM(
-                    model=model,
-                    api_key=api_key,
-                    temperature=temperature,
-                    max_tokens=1024,
-                    timeout_s=timeout_s,
-                )
-                log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
-                         model, vision, timeout_s)
-                try:
-                    await db.set_setting(SETTING_LLM_ERROR, "")
-                except Exception:                               # noqa: BLE001
-                    pass
-                return client, snapshot, vision
-            except Exception as exc:                            # noqa: BLE001
-                log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
-                try:
-                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
-                except Exception:                               # noqa: BLE001
-                    pass
-
-    elif provider in ("local", "gemini", "claude") and model:
-        # All three speak the OpenAI /chat/completions protocol, so a single
-        # client covers them. `local` points at a self-hosted server; gemini
-        # and claude use the vendor's OpenAI-compatible endpoint (URL filled in
-        # from LLM_PROVIDER_BASE_URLS when the operator didn't override it) and
-        # require an api_key.
-        effective_base = base_url or LLM_PROVIDER_BASE_URLS.get(provider, "")
-        needs_key = provider in ("gemini", "claude")
-        if not effective_base:
-            log.warning("%s requires a base_url — falling back to MockLLM", provider)
-        elif needs_key and not api_key:
-            log.warning("%s requires an api_key — falling back to MockLLM", provider)
-        else:
-            try:
-                from hermes.llm import OpenAICompatibleLLM
-                client = OpenAICompatibleLLM(
-                    base_url=effective_base, model=model,
-                    api_key=api_key, temperature=temperature,
-                    timeout_s=timeout_s,
-                )
-                log.info("LLM overseer: provider=%s model=%s base=%s vision=%s timeout=%.0fs",
-                         provider, model, effective_base, vision, timeout_s)
-                try:
-                    await db.set_setting(SETTING_LLM_ERROR, "")
-                except Exception:                               # noqa: BLE001
-                    pass
-                return client, snapshot, vision
-            except Exception as exc:                            # noqa: BLE001
-                log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
-                try:
-                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
-                except Exception:                               # noqa: BLE001
-                    pass
-
-    # Fallback — mock LLM keeps the overseer operational without a backend.
-    from hermes.service1_agent.mock_broker import MockLLM
-    log.info("LLM overseer: using MockLLM (provider=%s)", provider)
-    return MockLLM(), snapshot, vision
 
 
-async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
-    """Return the operator-driven overseer config (soul, autonomy, paused, approval_mode).
-
-    Defaults pull from `conf` (env vars) the very first time so nothing
-    surprising happens on first boot. After that, C2 panel writes win.
-    """
-    autonomy = ((await db.get_setting(SETTING_AUTONOMY))
-                or conf.get("ai_autonomy") or "advisory").lower()
-    if autonomy not in VALID_AUTONOMY:
-        autonomy = "advisory"
-    soul = (await db.get_setting(SETTING_SOUL)) or ""
-    paused = ((await db.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
-    approval_mode = ((await db.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
-    llm_out_of_loop = ((await db.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
-    overseer_mode = ((await db.get_setting("overseer_mode")) or "monolithic").lower()
-    if overseer_mode not in ("monolithic", "committee"):
-        overseer_mode = "monolithic"
-    # Per-strategy enable flags — default to enabled for all known strategies.
-    strategy_enabled = {
-        sid: ((await db.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
-        for sid in STRATEGY_PRIORITIES
-    }
-    return {
-        "autonomy": autonomy,
-        "soul": soul,
-        "paused": paused,
-        "approval_mode": approval_mode,
-        "llm_out_of_loop": llm_out_of_loop,
-        "overseer_mode": overseer_mode,
-        "strategy_enabled": strategy_enabled,
-    }
 
 
-def build(broker, llm_client, chart_provider, config: Dict[str, Any],
-          *, vision_enabled: bool = True,
-          autonomy: Optional[str] = None,
-          soul: Optional[str] = None,
-          approval_mode: bool = True,
-          strategy_enabled: Optional[Dict[str, bool]] = None,
-          llm_out_of_loop: bool = False,
-          overseer_mode: str = "monolithic",
-          event_bus = None) -> CascadingEngine:
-    db = HermesDB(os.environ.get("HERMES_DSN",
-                                 "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
-    mm = MoneyManager(broker, db, config)
-    ic = IronCondorBuilder(mm)
-
-    overseer = HermesOverseer(
-        llm_client=llm_client, db=db, vision_enabled=vision_enabled,
-        chart_provider=chart_provider,
-        autonomy=(autonomy or config.get("ai_autonomy", "advisory")),
-        soul=soul,
-        overseer_mode=overseer_mode,
-        event_bus=event_bus,
-    )
-
-    enabled = strategy_enabled or {}
-    common = dict(broker=broker, db=db, money_manager=mm, ic_builder=ic,
-                  config=config, overseer=overseer,
-                  dry_run=config.get("dry_run", False))
-    all_strategies = [
-        CreditSpreads75(**common),
-        CreditSpreads7(**common),
-        TastyTrade45(**common),
-        WheelStrategy(**common),
-        HermesAlpha(**common),
-    ]
-    # Filter out strategies the operator has disabled from the C2 panel.
-    active_strategies = [s for s in all_strategies
-                         if enabled.get(s.NAME, True)]
-    if len(active_strategies) < len(all_strategies):
-        disabled = [s.NAME for s in all_strategies if not enabled.get(s.NAME, True)]
-        log.info("Strategies disabled by C2 panel: %s", disabled)
-
-    return CascadingEngine(broker, db, active_strategies, overseer=overseer,
-                           approval_mode=approval_mode, money_manager=mm,
-                           config=config, event_bus=event_bus,
-                           llm_out_of_loop=llm_out_of_loop)
-
-
-# ---------------------------------------------------------------------------
-# Broker construction — supports per-mode credentials so the watcher's toggle
-# can flip between sandbox (paper) and live without restart.
-# ---------------------------------------------------------------------------
-def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
-    """Return (token, account_id, base_url) for the requested mode."""
-    from hermes.config import settings
-    orig_mode = settings.hermes_mode
-    try:
-        settings.hermes_mode = mode
-        return settings.get_tradier_credentials()
-    finally:
-        settings.hermes_mode = orig_mode
-
-
-def _build_broker(conf: Dict[str, Any], mode: str):
-    """Build the broker for `mode`. Falls back to MockBroker only when
-    *no* Tradier credentials of any kind are present in the environment."""
-    from hermes.config import settings
-    if settings.hermes_use_mcp_broker:
-        from hermes.broker.mcp_client import MCPBrokerClient
-        log.info("Initializing MCPBrokerClient mode=%s", mode)
-        return MCPBrokerClient(conf)
-
-    has_any_tradier = any(
-        os.environ.get(k) for k in (
-            "TRADIER_ACCESS_TOKEN", "TRADIER_PAPER_TOKEN", "TRADIER_LIVE_TOKEN",
-            "TRADIER_API_KEY",
-        )
-    )
-    if not has_any_tradier:
-        from hermes.service1_agent.mock_broker import MockBroker
-        log.warning("No Tradier credentials present — using MockBroker")
-        return MockBroker(conf)
-
-    from hermes.broker.tradier import TradierBroker
-    token, account, url = _resolve_mode_credentials(mode)
-    cfg = dict(conf)
-    # Paper mode hits the sandbox, which is harmless, so preview is never needed.
-    # Live mode honors the operator's dry_run, but real orders additionally
-    # require an explicit arming flag (HERMES_LIVE_ARMED=true). Absent it, we
-    # force dry_run so flipping the mode to "live" can never silently route real
-    # money — going live must be a deliberate act, not a default.
-    dry_run = conf.get("dry_run", False) if mode == "live" else False
-    if mode == "live" and not dry_run and not _live_armed():
-        dry_run = True
-        log.warning(
-            "LIVE mode selected but HERMES_LIVE_ARMED is not set — forcing "
-            "dry_run (preview-only). Set HERMES_LIVE_ARMED=true to place real "
-            "orders."
-        )
-    cfg.update({
-        "tradier_access_token": token,
-        "tradier_account_id": account,
-        "tradier_base_url": url,
-        "dry_run": dry_run,
-    })
-    log.info("Initializing TradierBroker mode=%s base=%s dry_run=%s armed=%s",
-             mode, url, cfg["dry_run"], _live_armed())
-    return TradierBroker(cfg)
-
-
-def _build_stream_client(broker, db, event_bus, watchlist_syms: set):
-    """Build stream client directly inside the agent based on the broker class."""
-    from hermes.broker.tradier import TradierBroker
-    if isinstance(broker, TradierBroker):
-        from hermes.broker.tradier_stream import TradierStreamClient
-        log.info("Initializing direct TradierStreamClient")
-        return TradierStreamClient(
-            token=broker.token,
-            account_id=broker.account_id,
-            base_url=broker.base_url,
-            event_bus=event_bus,
-            watchlist=list(watchlist_syms)
-        )
-    else:
-        from hermes.broker.mock_stream import MockStreamClient
-        log.info("Initializing localized MockStreamClient")
-        return MockStreamClient(
-            event_bus=event_bus,
-            watchlist=list(watchlist_syms),
-            db=db
-        )
-
-
-async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
-    from hermes.config_schema import RuntimeConfig
-    
-    obp_reserve_val = await db.get_setting("obp_reserve")
-    tick_interval_val = await db.get_setting("tick_interval") or await db.get_setting("tick_interval_s")
-    bandit_val = await db.get_setting("bandit_tuner_mode")
-    exit_val = await db.get_setting("exit_policy_mode")
-
-    config_data = {}
-    if obp_reserve_val is not None and str(obp_reserve_val).strip() != "":
-        config_data["obp_reserve"] = float(str(obp_reserve_val).strip())
-    else:
-        config_data["obp_reserve"] = float(os.environ.get("HERMES_OBP_RESERVE", conf.get("obp_reserve", 0.0)))
-
-    if tick_interval_val is not None and str(tick_interval_val).strip() != "":
-        config_data["tick_interval"] = int(str(tick_interval_val).strip())
-    else:
-        config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 3600)))
-
-    if bandit_val is not None and str(bandit_val).strip() != "":
-        config_data["bandit_tuner_mode"] = str(bandit_val).strip().lower()
-    else:
-        config_data["bandit_tuner_mode"] = os.environ.get("HERMES_BANDIT_TUNER_MODE", "off").lower()
-
-    if exit_val is not None and str(exit_val).strip() != "":
-        config_data["exit_policy_mode"] = str(exit_val).strip().lower()
-    else:
-        config_data["exit_policy_mode"] = os.environ.get("HERMES_EXIT_POLICY_MODE", "off").lower()
-
-    return RuntimeConfig(**config_data)
 
 
 # ---------------------------------------------------------------------------
