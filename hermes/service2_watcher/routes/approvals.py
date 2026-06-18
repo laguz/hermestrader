@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from hermes.common import IPC_ACTION_TRIGGER_APPROVALS, IPC_CHANNEL_AGENT_COMMANDS
+
 from .._app_state import SETTING_APPROVAL_MODE, db
 
 router = APIRouter()
@@ -51,7 +53,7 @@ async def approve_trade(approval_id: int,
     # Signal agent process to execute the approved trade immediately via IPC
     try:
         from hermes.ipc import ipc
-        await ipc.publish("agent_commands", {"action": "trigger_approvals"})
+        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_TRIGGER_APPROVALS})
     except Exception:
         pass
     return {"status": "approved", "id": approval_id}
@@ -103,7 +105,7 @@ async def bulk_decide(body: BulkDecisionBody) -> Dict[str, Any]:
         # Signal agent process to execute approved trades immediately via IPC
         try:
             from hermes.ipc import ipc
-            await ipc.publish("agent_commands", {"action": "trigger_approvals"})
+            await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_TRIGGER_APPROVALS})
         except Exception:
             pass
     return {"status": status.lower(), "count": count}

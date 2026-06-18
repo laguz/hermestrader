@@ -44,6 +44,22 @@ LLM_PROVIDER_BASE_URLS: dict[str, str] = {
 DEFAULT_LLM_TIMEOUT_S: float = 120.0
 
 # ---------------------------------------------------------------------------
+# Cross-service IPC (PostgreSQL LISTEN/NOTIFY) contract
+# ---------------------------------------------------------------------------
+# One multiplexed channel carries signals from the watcher (service-2,
+# publisher) to the agent (service-1, subscriber). Two payload shapes ride it:
+#   * command signals    — ``{"action": <IPC_ACTION_*>}``
+#   * event notifications — ``{"event_type": <name>, "payload": {...}}``
+#     (``event_type`` is resolved back to a class via ``EVENT_TYPE_TO_CLASS``,
+#      so those names are already centralized by the event registry.)
+# The channel name and the free-form action vocabulary are pinned here so the
+# publisher and subscriber can't drift on a typo.
+IPC_CHANNEL_AGENT_COMMANDS = "agent_commands"
+IPC_ACTION_TRIGGER_APPROVALS = "trigger_approvals"
+IPC_ACTION_SYNC_SETTINGS = "sync_settings"
+IPC_ACTION_TRIGGER_ML = "trigger_ml"
+
+# ---------------------------------------------------------------------------
 # OCC option symbol regex — shared between MoneyManager broker-order parsing,
 # the pending-order side derivation in HermesDB, and tests.  Centralised here
 # so a change to the OCC format (or its strict-match policy) only needs to

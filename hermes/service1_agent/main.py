@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from hermes.common import (
+    IPC_ACTION_SYNC_SETTINGS,
+    IPC_ACTION_TRIGGER_APPROVALS,
+    IPC_ACTION_TRIGGER_ML,
+    IPC_CHANNEL_AGENT_COMMANDS,
     STRATEGY_PRIORITIES,
     VALID_MODES,
 )
@@ -387,15 +391,15 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     event_bus.emit(event)
                 except Exception as exc:
                     log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
-        elif action == "trigger_approvals":
+        elif action == IPC_ACTION_TRIGGER_APPROVALS:
             log.info("[IPC] Received trigger approvals signal reactively")
             await control_state.refresh_approvals(db)
-        elif action == "sync_settings":
+        elif action == IPC_ACTION_SYNC_SETTINGS:
             log.info("[IPC] Received sync settings signal reactively")
             await control_state.load_from_db(db, conf)
             from hermes.db.events import ModeChangedEvent
             event_bus.emit(ModeChangedEvent(mode=control_state.mode, updated_at=_utcnow_iso()))
-        elif action == "trigger_ml":
+        elif action == IPC_ACTION_TRIGGER_ML:
             log.info("[IPC] Received trigger ML signal reactively")
             try:
                 await db.set_setting("ml_force_run", "true")
@@ -404,7 +408,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             from hermes.events.bus import MlRetrainTick
             event_bus.emit(MlRetrainTick(force=True))
 
-    await ipc.subscribe("agent_commands", _ipc_callback)
+    await ipc.subscribe(IPC_CHANNEL_AGENT_COMMANDS, _ipc_callback)
 
     # Track watchlist symbols + active DB option legs
     watchlist_syms = set(conf.get("watchlist", []))
@@ -550,7 +554,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     await event_bus.stop()
 
     try:
-        await ipc.unsubscribe("agent_commands", _ipc_callback)
+        await ipc.unsubscribe(IPC_CHANNEL_AGENT_COMMANDS, _ipc_callback)
         await ipc.disconnect()
     except Exception:
         pass
