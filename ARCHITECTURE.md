@@ -35,22 +35,28 @@
                                               └──────────────────┘
 ```
 
-**Service-1** runs the cascading strategy engine on a fixed tick interval
-(default 5 minutes). It never serves HTTP — its only outputs are broker
-orders and DB rows.
+**Service-1** runs the cascading strategy engine. It ticks on a heartbeat
+interval (default 3600 s, `HERMES_TICK_INTERVAL`) but is primarily
+**event-driven**: an `EventBus` plus a broker stream client wake it early on
+order fills, market-data crossings, and C2 triggers, so the interval is a
+fallback, not the only cadence. It never serves HTTP — its only outputs are
+broker orders and DB rows.
 
 **Service-2** is a FastAPI app that reads the same DB and exposes a control
 panel: approve queued trades, edit the operator's "soul" doctrine, toggle
 paper/live mode, see live P&L, etc.
 
-Both services share `TimescaleDB` as their single source of truth.
+Both services share one SQLAlchemy database as their single source of truth —
+**TimescaleDB (Postgres)** in production, or **SQLite** for dev, tests, and the
+unified simulation mode (a virtual clock replays history against the same code
+paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
 
 ## Layers (top-down)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │  Process entry points                                            │
-│    hermes/service1_agent/main.py    (agent tick loop)            │
+│    hermes/service1_agent/main.py    (agent run loop + wiring)    │
 │    hermes/service2_watcher/api.py   (FastAPI app)                │
 │    hermes/mcp/server.py             (MCP shim around Tradier)    │
 └──────────────────────────────────────────────────────────────────┘
@@ -59,17 +65,21 @@ Both services share `TimescaleDB` as their single source of truth.
 ┌──────────────────────────────────────────────────────────────────┐
 │  Orchestration                                                   │
 │    CascadingEngine          — pipelines sync → manage → entries  │
-│    HermesOverseer           — LLM review of every TradeAction    │
+│      (spine in core.py; runtime/reactive/ai/tuning concerns in   │
+│       _engine_*.py mixins)                                       │
+│    HermesOverseer           — LLM review of every TradeAction;   │
+│      monolithic OR multi-agent committee (overseer.py)           │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Domain logic (the four cascading strategies)                    │
+│  Domain logic (five cascading strategies — hermes/.../strategies/)│
 │    CreditSpreads75   PRIORITY=1   39–45 DTE entries              │
 │    CreditSpreads7    PRIORITY=2   7 DTE entries                  │
 │    TastyTrade45      PRIORITY=3   16Δ short, 30–60 DTE           │
 │    WheelStrategy     PRIORITY=4   put-→assignment-→call wheel    │
+│    HermesAlpha       PRIORITY=5   LLM-directed credit spread     │
 │  Plus shared invariants:                                         │
 │    MoneyManager      — true BP, side-aware capacity, scaling     │
 │    IronCondorBuilder — pairs put + call spreads on same expiry   │
@@ -87,8 +97,11 @@ Both services share `TimescaleDB` as their single source of truth.
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  Persistence                                                     │
-│    HermesDB (hermes/db/models.py)                                │
-│    SQLAlchemy ORM + thin repository layer over TimescaleDB       │
+│    HermesDB (hermes/db/models.py) — connection + schema only;    │
+│    query methods come from 8 repository mixins in                 │
+│    hermes/db/repositories/ (logs, trades, approvals, settings,   │
+│    decisions, timeseries, analytics, watchlist)                  │
+│    SQLAlchemy ORM over TimescaleDB (Postgres) or SQLite          │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -114,7 +127,7 @@ If it does, that's a smell worth flagging.
 4. process_management()       ← every strategy's manage_positions() runs
    → submit(actions, "management")
 5. process_entries(watchlist) ← strategies in PRIORITY order:
-                                 CS75 → CS7 → TT45 → WHEEL
+                                 CS75 → CS7 → TT45 → WHEEL → HermesAlpha
                                  each strategy drains the watchlist before
                                  the next one runs, so high-priority
                                  strategies see fresh capacity.
@@ -122,12 +135,21 @@ If it does, that's a smell worth flagging.
    → submit(ai_actions, "ai")
 ```
 
+`HermesAlpha` (priority 5) is the one rule-free strategy: instead of a fixed
+recipe it asks the overseer to pick one credit-spread *intent* from the
+deduped union of every strategy's watchlist, then resolves and prices that
+intent against the live chain like any other strategy.
+
 `submit()` either:
 - Queues the action in `pending_approvals` (when `approval_mode=true`), or
 - Records it in `pending_orders` and calls `broker.place_order_from_action`.
 
 The `HermesOverseer.review` hook can VETO, MODIFY, or APPROVE every action
-before it reaches `submit()`.
+before it reaches `submit()`. Review runs in one of two modes (the
+`overseer_mode` setting): **monolithic** (one LLM call) or **committee** — a
+Macro Specialist and a Strategy/Sizing Specialist run in parallel and a Risk
+Officer (Chairman) synthesizes their findings into the final verdict, falling
+back to monolithic if the committee call fails.
 
 ## A single watcher request (Service-2)
 
@@ -174,23 +196,28 @@ already-populated DB, `alembic stamp 0001` marks it migrated. Future schema
 changes are new migrations, not edits to `schema.sql`.
 
 `models.py` keeps a defensive `Base.metadata.create_all(checkfirst=True)` so
-plain SQLAlchemy CRUD works on **SQLite / dev / tests** without Timescale —
-the ORM models mirror `schema.sql` for that path. Alembic governs Postgres
-only; `create_all` is the SQLite bootstrap.
+plain SQLAlchemy CRUD works on **SQLite** without Timescale — used for dev,
+tests, **and the unified simulation mode**. The ORM models mirror `schema.sql`
+for that path (HermesDB swaps `JSONB` for portable `JSON` when the DSN is
+SQLite). Alembic governs Postgres only; `create_all` is the SQLite bootstrap.
 
 ## Where to look for what
 
 | You want to…                                  | Look in                                          |
 |-----------------------------------------------|--------------------------------------------------|
-| Change how a strategy enters a trade          | `hermes/service1_agent/strategies.py`            |
+| Change how a strategy enters a trade          | the strategy's module in `hermes/service1_agent/strategies/` (`cs75.py`, `cs7.py`, `tt45.py`, `wheel.py`, `hermes_alpha.py`) |
 | Change how a strategy exits a trade           | same — search `manage_positions`                 |
-| Add a new strategy                            | subclass `AbstractStrategy` in `strategy_base.py`, register in `main.py` |
+| Add a new strategy                            | subclass `AbstractStrategy` in `strategy_base.py`, add a module under `strategies/`, register in `common.py` (`STRATEGIES`/`STRATEGY_PRIORITIES`) and `agent_construction.build()` |
+| Change the engine pipeline / event handling   | `core.py` (spine) + `_engine_*.py` mixins        |
+| Change broker/LLM/engine construction or the run loop | `agent_construction.py`, `agent_*.py`, `main.py` |
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
-| Change what the overseer asks the LLM         | `hermes/service1_agent/overseer.py`              |
+| Change what the overseer asks the LLM (monolithic or committee) | `hermes/service1_agent/overseer.py`    |
+| Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
-| Add a new ML feature                          | `hermes/ml/xgb_features.py`                      |
+| Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |
+| Run / extend simulation (virtual clock)       | `hermes/service1_agent/backtest_engine.py`, `hermes/utils.py::set_virtual_time` |
 | Change shared constants (priorities, modes)   | `hermes/common.py`                               |
 | Change market-hours / holiday handling        | `hermes/market_hours.py`                         |
 
@@ -219,11 +246,18 @@ SQLAlchemy stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
 - **IC** — Iron Condor (put spread + call spread on the same expiry).
 - **Mode A / Mode B** — Strategy concepts. Mode A opens both sides of an
   IC at once. Mode B completes an existing single-sided spread.
-- **Cascading priority** — Strategies run in PRIORITY order; higher-priority
-  strategies consume capacity first.
+- **Cascading priority** — Strategies run in PRIORITY order (CS75=1 …
+  HermesAlpha=5); higher-priority strategies consume capacity first.
+- **HermesAlpha** — The rule-free strategy (priority 5): the overseer picks a
+  credit-spread intent and the strategy resolves/prices it against the chain.
+- **Overseer modes** — `monolithic` (single LLM review) or `committee`
+  (Macro + Strategy specialists run in parallel → Risk Officer synthesizes).
 - **Soul** — The operator's free-text doctrine appended to the LLM
   overseer's system prompt.
 - **Autonomy levels** — `advisory` (log only), `enforcing` (LLM may
   veto/modify), `autonomous` (LLM may originate trades).
 - **Approval mode** — When on, every proposed trade goes to a human queue
   before reaching the broker.
+- **Simulation mode** — Replays history against the real code paths on a
+  SQLite DB, driven by a virtual clock (`set_virtual_time`) so
+  `utc_now()`/`date_today()` advance through the backtest window.
