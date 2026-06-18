@@ -1,34 +1,12 @@
-"""Static interfaces (protocols) to decouple the trading engine from Tradier and TimescaleDB."""
+"""Static interfaces (protocols) to decouple the trading engine from TimescaleDB.
+
+The broker contract is defined by ``hermes.broker.base.AbstractBroker`` (an ABC
+that every concrete broker subclasses); it is the single source of truth for the
+broker surface. This module only carries the persistence protocol.
+"""
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
-
-from hermes.broker.models import (
-    AccountBalances,
-    BrokerPosition,
-    BrokerOrder,
-    OptionChainLeg,
-    MarketQuote,
-    OrderPlacementResult,
-)
-
-@runtime_checkable
-class IBroker(Protocol):
-    """Normalized broker interface for both live execution and backtests."""
-    @property
-    def current_date(self) -> Any: ...
-    @property
-    def dry_run(self) -> bool: ...
-
-    async def get_account_balances(self) -> AccountBalances: ...
-    async def get_positions(self) -> list[BrokerPosition]: ...
-    async def get_orders(self) -> list[BrokerOrder]: ...
-    async def get_option_expirations(self, symbol: str) -> list[str]: ...
-    async def get_option_chains(self, symbol: str, expiry: str) -> list[OptionChainLeg]: ...
-    async def get_quote(self, symbols: str) -> list[MarketQuote]: ...
-    async def place_order_from_action(self, action: Any) -> OrderPlacementResult: ...
-    async def roll_to_next_month(self, option_symbol: str) -> str: ...
-    async def analyze_symbol(self, symbol: str, period: str = "6m") -> dict[str, Any]: ...
 
 
 @runtime_checkable
