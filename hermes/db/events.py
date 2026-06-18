@@ -6,7 +6,12 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
-from hermes.db.models import EventLedger
+# Import EventLedger from its defining module (orm), not the re-exporter
+# (models). models pulls in the repository mixins, one of which imports
+# transaction_manager, which imports this module — importing from models here
+# closes that cycle and breaks whenever events/control_state is imported before
+# models. orm has no such back-edge.
+from hermes.db.orm import EventLedger
 
 
 class BaseEvent(BaseModel):
