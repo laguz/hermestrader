@@ -69,7 +69,7 @@ def _schema_sql_columns() -> dict[str, set[str]]:
     tables: dict[str, set[str]] = {}
 
     for m in re.finditer(
-        r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*?)\n\);", sql, re.S
+        r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\((.*?)\n\);", sql, re.S
     ):
         name, body = m.group(1), m.group(2)
         cols: set[str] = set()
@@ -144,6 +144,28 @@ def test_shared_tables_have_matching_columns():
         "reconcile both sides:\n" + "\n".join(
             f"  {t}: {d}" for t, d in mismatches.items()
         )
+    )
+
+
+def test_sql_parser_covers_every_create_table():
+    """Guard the guard: every ``CREATE TABLE`` in schema.sql must be captured by
+    the parity parser.
+
+    The parity checks can only flag drift on tables they can see. A new
+    Postgres-only table added in a DDL shape the body parser doesn't match
+    (e.g. plain ``CREATE TABLE foo (`` without ``IF NOT EXISTS``) would be
+    invisible to both the parser *and* the ORM — slipping through with no
+    failure and no allow-list entry. This asserts the parser sees every
+    declared table so it can't be silently defeated by a formatting change.
+    """
+    sql = SCHEMA_SQL.read_text()
+    declared = set(re.findall(r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)", sql))
+    parsed = set(_schema_sql_columns())
+    missed = declared - parsed
+    assert not missed, (
+        "schema.sql declares tables the parity parser doesn't capture: "
+        f"{sorted(missed)}. The column-parity check is blind to them — widen "
+        "the CREATE TABLE regex in _schema_sql_columns()."
     )
 
 
