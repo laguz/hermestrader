@@ -1,10 +1,11 @@
 """
-[Service-1: Hermes-Agent-Core] — reactive market-data / order-fill handlers mixin for ``CascadingEngine``.
+[Service-1: Hermes-Agent-Core] — reactive market-data / order-fill handlers controller.
 
-Split out of ``core.py`` to keep the engine's spine readable. These methods
-run as part of :class:`~hermes.service1_agent.core.CascadingEngine` (composed
-via inheritance); they reference engine state on ``self`` and are not meant to
-be used standalone.
+Split out of ``core.py`` to keep the engine's spine readable. ``ReactiveController``
+is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
+(``engine.reactive``); it shares the engine's hot tick state via
+:class:`~hermes.service1_agent._engine_base._EngineCollaborator`, so ``self.X``
+reads/writes the engine. Not meant to be used standalone.
 """
 from __future__ import annotations
 
@@ -12,11 +13,12 @@ import asyncio
 import logging
 
 from hermes.events.bus import MarketDataEvent, OrderFillEvent
+from ._engine_base import _EngineCollaborator
 
 logger = logging.getLogger("hermes.agent.core")
 
 
-class EngineReactiveMixin:
+class ReactiveController(_EngineCollaborator):
     async def handle_market_data(self, event: MarketDataEvent) -> None:
         await self.publish_event("MARKET_DATA", {"event": event})
 

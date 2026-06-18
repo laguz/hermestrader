@@ -69,8 +69,8 @@ paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
 ┌──────────────────────────────────────────────────────────────────┐
 │  Orchestration                                                   │
 │    CascadingEngine          — pipelines sync → manage → entries  │
-│      (spine in core.py; runtime/reactive/ai/tuning concerns in   │
-│       _engine_*.py mixins)                                       │
+│      (spine in core.py; runtime/reactive/ai/tuning concerns are  │
+│       owned collaborators in _engine_*.py, not mixins)           │
 │    HermesOverseer           — LLM review of every TradeAction;   │
 │      monolithic OR multi-agent committee (overseer.py)           │
 │    AsyncXGBPredictor        — background ML forecasting          │
@@ -212,7 +212,7 @@ SQLite). Alembic governs Postgres only; `create_all` is the SQLite bootstrap.
 | Change how a strategy enters a trade          | the strategy's module in `hermes/service1_agent/strategies/` (`cs75.py`, `cs7.py`, `tt45.py`, `wheel.py`, `hermes_alpha.py`) |
 | Change how a strategy exits a trade           | same — search `manage_positions`                 |
 | Add a new strategy                            | subclass `AbstractStrategy` in `strategy_base.py`, add a module under `strategies/`, register in `common.py` (`STRATEGIES`/`STRATEGY_PRIORITIES`) and `agent_construction.build()` |
-| Change the engine pipeline / event handling   | `core.py` (spine) + `_engine_*.py` mixins        |
+| Change the engine pipeline / event handling   | `core.py` (spine) + `_engine_*.py` collaborators |
 | Change broker/LLM/engine construction or the run loop | `agent_construction.py`, `agent_*.py`, `main.py` |
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
