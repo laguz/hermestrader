@@ -9,8 +9,10 @@ from sqlalchemy import select
 
 from hermes.db.orm import PendingApproval, VetoSuppression
 
+from .base import Repository
 
-class ApprovalsRepositoryMixin:
+
+class ApprovalsRepository(Repository):
     async def has_pending_approval(self, strategy_id: str, symbol: str,
                              side_type: Optional[str],
                              expiry: Optional[str]) -> bool:

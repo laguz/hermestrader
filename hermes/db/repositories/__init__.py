@@ -1,28 +1,34 @@
-"""Focused repository mixins composed onto :class:`hermes.db.models.HermesDB`.
+"""Focused repositories composed onto :class:`hermes.db.models.HermesDB`.
 
-Each mixin owns one slice of the persistence surface (logs, trades, approvals,
-…). They share the engine/session attributes that ``HermesDB.__init__`` sets
-up (``self.AsyncSession``, ``self.async_engine``, ``self.ts_engine``) and may
-call across one another via ``self`` — e.g. the trades mixin calls
-``self.write_log`` from the logs mixin. Splitting by concern keeps each file
-small without changing the public surface that the engine and watcher consume.
+Each repository owns one slice of the persistence surface (logs, trades,
+approvals, …). ``HermesDB`` *owns* one instance of each (``db.trades``,
+``db.approvals``, …) rather than inheriting them as mixins, so the
+collaborators are explicit and inspectable. They read the shared engine /
+session handles through their owner (``self._db``; see :class:`Repository`) and
+call into siblings explicitly, e.g. ``self._db.logs.write_log(...)``.
+
+For one transition period ``HermesDB`` also forwards each repository's public
+methods as flat attributes (``db.write_log(...)`` → ``db.logs.write_log(...)``)
+so existing call-sites keep working while they migrate to the namespaced form.
 """
-from .analytics import AnalyticsRepositoryMixin
-from .approvals import ApprovalsRepositoryMixin
-from .decisions import DecisionsRepositoryMixin
-from .logs import LogsRepositoryMixin
-from .settings import SettingsRepositoryMixin
-from .timeseries import TimeSeriesRepositoryMixin
-from .trades import TradesRepositoryMixin
-from .watchlist import WatchlistRepositoryMixin
+from .analytics import AnalyticsRepository
+from .approvals import ApprovalsRepository
+from .base import Repository
+from .decisions import DecisionsRepository
+from .logs import LogsRepository
+from .settings import SettingsRepository
+from .timeseries import TimeSeriesRepository
+from .trades import TradesRepository
+from .watchlist import WatchlistRepository
 
 __all__ = [
-    "AnalyticsRepositoryMixin",
-    "ApprovalsRepositoryMixin",
-    "DecisionsRepositoryMixin",
-    "LogsRepositoryMixin",
-    "SettingsRepositoryMixin",
-    "TimeSeriesRepositoryMixin",
-    "TradesRepositoryMixin",
-    "WatchlistRepositoryMixin",
+    "Repository",
+    "AnalyticsRepository",
+    "ApprovalsRepository",
+    "DecisionsRepository",
+    "LogsRepository",
+    "SettingsRepository",
+    "TimeSeriesRepository",
+    "TradesRepository",
+    "WatchlistRepository",
 ]

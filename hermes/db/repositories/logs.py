@@ -9,10 +9,12 @@ from sqlalchemy import select
 
 from hermes.db.orm import BotLog
 
+from .base import Repository
+
 logger = logging.getLogger("hermes.db")
 
 
-class LogsRepositoryMixin:
+class LogsRepository(Repository):
     async def write_log(self, strategy_id: str, message: str, level: str = "INFO") -> None:
         async with self.AsyncSession() as s:
             s.add(BotLog(strategy_id=strategy_id, level=level, message=message))

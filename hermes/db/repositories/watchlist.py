@@ -9,8 +9,10 @@ from sqlalchemy import select
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
 from hermes.db.orm import Strategy, StrategyWatchlist
 
+from .base import Repository
 
-class WatchlistRepositoryMixin:
+
+class WatchlistRepository(Repository):
     _DEFAULT_STRATEGY_PRIORITIES = _COMMON_STRATEGY_PRIORITIES
 
     # ---- strategies registry (must be populated before watchlists) -------

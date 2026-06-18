@@ -11,8 +11,10 @@ from typing import Optional
 
 import pandas as pd
 
+from .base import Repository
 
-class TimeSeriesRepositoryMixin:
+
+class TimeSeriesRepository(Repository):
     async def daily_bars(self, symbol: str, lookback_days: int = 400) -> Optional[pd.DataFrame]:
         return await self.ts_engine.daily_bars(symbol, lookback_days)
 

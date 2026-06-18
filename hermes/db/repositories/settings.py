@@ -8,8 +8,10 @@ from sqlalchemy import select
 
 from hermes.db.orm import SystemSetting
 
+from .base import Repository
 
-class SettingsRepositoryMixin:
+
+class SettingsRepository(Repository):
     async def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
         async with self.AsyncSession() as s:
             result = await s.execute(select(SystemSetting).filter_by(key=key).limit(1))
