@@ -81,7 +81,7 @@ async def test_risk_restrictions_filter_watchlist():
     engine.process_management = AsyncMock(return_value=[])
     engine.submit = AsyncMock()
     engine.process_entries = AsyncMock(return_value=0)
-    engine.tuning._maybe_tune_parameters = AsyncMock()
+    engine.ai._maybe_tune_parameters = AsyncMock()
     
     # Mock banned symbols read to return AAPL and TSLA
     engine._read_banned_symbols = AsyncMock(return_value={"AAPL", "TSLA"})

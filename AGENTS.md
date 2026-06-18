@@ -99,13 +99,14 @@ require a live database — use the stub-broker / stub-DB pattern in
 ## Useful entry points for understanding the codebase
 
 - `hermes/service1_agent/core.py` — `CascadingEngine` (the orchestrator).
-  Read this first. It holds the pipeline spine; the runtime/reactive/ai/tuning
-  method groups live in `_engine_*.py` as **owned collaborators** it constructs
-  (`self.runtime` / `self.reactive` / `self.ai` / `self.tuning`), not mixins it
-  inherits. Runtime/Reactive/AI share the engine's hot tick state through the
-  `_EngineCollaborator` base (`_engine_base.py`), which forwards attribute
-  reads/writes to the engine; `core.py` keeps thin delegators so the engine's
-  call surface is unchanged. The primitives it
+  Read this first. It holds the pipeline spine; the method groups live in three
+  `_engine_*.py` modules as **owned collaborators** it constructs (`self.pipeline`
+  / `self.reactive` / `self.ai`), not mixins it inherits. Each holds a typed
+  back-reference and reads the engine's hot tick state through `self.engine`;
+  `core.py` keeps thin delegators so the engine's call surface is unchanged
+  (the single seam tests monkeypatch). `pipeline` owns the tick phases + the slow
+  heartbeat, `reactive` the event-loop runtime + reactive handlers, `ai` the
+  overseer proposals/closes/gating + bandit/exit-policy tuning. The primitives it
   composes are split into siblings: `trade_action.py` (`TradeAction`),
   `broker_wrapper.py` (`AsyncBrokerWrapper`), `money_manager.py`
   (`MoneyManager`, `IronCondorBuilder`), and `strategy_base.py`

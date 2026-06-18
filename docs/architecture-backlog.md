@@ -50,10 +50,18 @@
 - [x] **Keep splitting the engine spine.**
   *(Done — `core.py` 1149 → 556 lines. The tick-phase bodies (sync / reconcile /
   manage / entries / submit / execute_or_queue) moved to `PipelineController`
-  (`_engine_pipeline.py`) and the heartbeat body to `ClockController`
-  (`_engine_clock.py`); `core.py` keeps the `_run_tick_internal` spine plus
-  wiring, with thin delegators preserving the engine's public surface. Full
-  suite green: 542 passed.)*
+  (`_engine_pipeline.py`) and the heartbeat body to a controller; `core.py` keeps
+  the `_run_tick_internal` spine plus wiring, with thin delegators preserving the
+  engine's public surface. Full suite green: 542 passed.)*
+- [x] **Consolidate the collaborators (6 → 3, unified back-reference pattern).**
+  *(Done — the six `_engine_*.py` collaborators collapsed to three:
+  `PipelineController` (tick phases + heartbeat), `ReactiveController` (event-loop
+  runtime + reactive handlers), `AIController` (overseer proposals/closes/gating +
+  bandit/exit-policy tuning). All three now use the same `self.engine`
+  back-reference; `_engine_base.py` and the injected-state property setters in
+  `core.py` were deleted, and the duplicated `_read_banned_symbols` /
+  `_watchlist_for` helpers were deduped. Public surface unchanged; full suite
+  green: 542 passed.)*
   - **Problem:** Even after the mixins→controllers refactor, `core.py` is the
     largest file and the one most likely to keep accreting.
   - **Why:** The spine should orchestrate the owned collaborators (`_engine_*.py`),

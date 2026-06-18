@@ -29,12 +29,9 @@ from .broker_wrapper import AsyncBrokerWrapper
 from .money_manager import IronCondorBuilder, MoneyManager
 from .strategy_base import AbstractStrategy
 from .trade_action import TradeAction
-from ._engine_runtime import RuntimeController
 from ._engine_reactive import ReactiveController
 from ._engine_ai import AIController
-from ._engine_tuning import TuningController
 from ._engine_pipeline import PipelineController
-from ._engine_clock import ClockController
 from .context import TickContext
 
 if TYPE_CHECKING:
@@ -111,50 +108,18 @@ class CascadingEngine:
         # overseer._worker_task) until they finish.
         self._bg_tasks: set[asyncio.Task] = set()
 
-        self.runtime = RuntimeController(
-            db=self.db,
-            broker=self.broker,
-            event_bus=self.event_bus,
-            config=self.config,
-            ipc_client=self.ipc_client,
-            clock=self.clock
-        )
-        self.reactive = ReactiveController(
-            db=self.db,
-            broker=self.broker,
-            event_bus=self.event_bus,
-            config=self.config,
-            strategies=self.strategies,
-            mm=self.mm,
-            quote_cache=self._quote_cache,
-            clock=self.clock
-        )
-        self.ai = AIController(
-            db=self.db,
-            broker=self.broker,
-            event_bus=self.event_bus,
-            config=self.config,
-            overseer=self.overseer,
-            mm=self.mm,
-            clock=self.clock
-        )
-        self.tuning = TuningController(
-            db=self.db,
-            broker=self.broker,
-            event_bus=self.event_bus,
-            config=self.config,
-            overseer=self.overseer,
-            clock=self.clock,
-            quote_cache=self._quote_cache
-        )
-        # Pipeline (tick phase bodies) and clock (heartbeat body) collaborators.
-        # Unlike the controllers above they hold a typed back-reference to the
-        # engine rather than injected copies, because they operate on mutable
-        # engine state (mm / overseer / control_state / risk_engine / approval
-        # flags) and must route cross-phase calls through the engine's own
-        # methods — those stay the single seam tests monkeypatch.
+        # Three owned collaborators, all on the same back-reference pattern:
+        # each holds a typed reference to the engine and reads mutable engine
+        # state (db / broker / event_bus / config / mm / overseer / strategies /
+        # ipc_client / _quote_cache) *through* it, so there is no second copy to
+        # keep in sync. Cross-phase calls route through the engine's own methods,
+        # which stay the single seam tests monkeypatch.
+        #   * pipeline — tick phase bodies + slow heartbeat guard tick
+        #   * reactive — event-loop/IPC/order-monitor runtime + reactive handlers
+        #   * ai       — overseer proposals/closes/gating + bandit/exit tuning
         self.pipeline = PipelineController(self)
-        self.clock_ctrl = ClockController(self)
+        self.reactive = ReactiveController(self)
+        self.ai = AIController(self)
 
         if self.event_bus is not None:
             from hermes.events.bus import (
@@ -177,18 +142,18 @@ class CascadingEngine:
     # ── delegators to the owned collaborators ────────────────────────────────
     # These forward the engine's public/cross-called surface to the collaborator
     # that owns the body. Kept explicit (rather than __getattr__ on the engine)
-    # so the engine's API stays greppable and there's no delegation cycle with
-    # _EngineCollaborator, which forwards the other direction.
+    # so the engine's API stays greppable and remains the single seam tests
+    # monkeypatch; the collaborators read engine state back through self.engine.
     def _ensure_event_loop(self) -> None:
         if self.event_bus is not None:
             self.event_bus.start()
-        return self.runtime._ensure_event_loop()
+        return self.reactive._ensure_event_loop()
 
     def _ensure_order_monitor(self) -> None:
-        return self.runtime._ensure_order_monitor()
+        return self.reactive._ensure_order_monitor()
 
     async def publish_event(self, event_type, payload):
-        return await self.runtime.publish_event(event_type, payload)
+        return await self.reactive.publish_event(event_type, payload)
 
     async def handle_market_data(self, event):
         if self.event_bus is not None:
@@ -314,50 +279,43 @@ class CascadingEngine:
                 command.future.set_exception(exc)
             raise
 
+    # Runtime loop/order-monitor state lives on the reactive collaborator (it is
+    # genuine per-loop state). These proxies keep ``engine.<x>`` working as the
+    # call-site/seam for the pipeline and external callers.
     @property
     def queue(self):
-        return self.runtime.queue
+        return self.reactive.queue
     @queue.setter
     def queue(self, val):
-        self.runtime.queue = val
+        self.reactive.queue = val
 
     @property
     def loop_task(self):
-        return self.runtime.loop_task
+        return self.reactive.loop_task
     @loop_task.setter
     def loop_task(self, val):
-        self.runtime.loop_task = val
+        self.reactive.loop_task = val
 
     @property
     def _pending_futures(self):
-        return self.runtime._pending_futures
+        return self.reactive._pending_futures
     @_pending_futures.setter
     def _pending_futures(self, val):
-        self.runtime._pending_futures = val
+        self.reactive._pending_futures = val
 
     @property
     def _tracked_orders(self):
-        return self.runtime._tracked_orders
+        return self.reactive._tracked_orders
     @_tracked_orders.setter
     def _tracked_orders(self, val):
-        self.runtime._tracked_orders = val
+        self.reactive._tracked_orders = val
 
     @property
     def _order_monitor_task(self):
-        return self.runtime._order_monitor_task
+        return self.reactive._order_monitor_task
     @_order_monitor_task.setter
     def _order_monitor_task(self, val):
-        self.runtime._order_monitor_task = val
-
-    @property
-    def ipc_client(self):
-        return self._ipc_client
-
-    @ipc_client.setter
-    def ipc_client(self, val):
-        self._ipc_client = val
-        if hasattr(self, "runtime"):
-            self.runtime.ipc_client = val
+        self.reactive._order_monitor_task = val
 
     @property
     def strategies(self):
@@ -365,33 +323,9 @@ class CascadingEngine:
 
     @strategies.setter
     def strategies(self, val):
+        # Collaborators read ``engine.strategies`` directly; this setter only
+        # preserves the PRIORITY sort invariant.
         self._strategies = sorted(val, key=lambda s: s.PRIORITY)
-        if hasattr(self, "reactive"):
-            self.reactive.strategies = self._strategies
-
-    @property
-    def overseer(self):
-        return self._overseer
-
-    @overseer.setter
-    def overseer(self, val):
-        self._overseer = val
-        if hasattr(self, "ai"):
-            self.ai.overseer = val
-        if hasattr(self, "tuning"):
-            self.tuning.overseer = val
-
-    @property
-    def mm(self):
-        return self._mm
-
-    @mm.setter
-    def mm(self, val):
-        self._mm = val
-        if hasattr(self, "reactive"):
-            self.reactive.mm = val
-        if hasattr(self, "ai"):
-            self.ai.mm = val
 
     async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
         return await self.pipeline._build_fallback_ctx(watchlist)
@@ -489,7 +423,7 @@ class CascadingEngine:
         await self.submit(mgmt, action_type="management")
         # Exit-timing trajectory capture + advisory (Phase 3). Off by default;
         # only runs when exit_policy_mode is shadow/active. Best-effort.
-        await self.tuning._maybe_capture_and_advise_exits(mgmt)
+        await self.ai._maybe_capture_and_advise_exits(mgmt)
 
         # Filter out banned symbols under out-of-loop governance
         banned = await self._read_banned_symbols()
@@ -512,17 +446,17 @@ class CascadingEngine:
         num_entries = await self.process_entries(watchlist)
         # Outcome-driven knob tuning (Phase 2 bandit). Independent of the LLM
         # overseer — data-driven and gated by its own mode flag (off default).
-        await self.tuning._maybe_run_bandit_tuner()
+        await self.ai._maybe_run_bandit_tuner()
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
             # Goal-aware parameter tuning & risk restrictions
             if self.llm_out_of_loop:
                 # Run out-of-loop background policy adjustments asynchronously
-                self._spawn_bg(self.tuning._maybe_tune_parameters())
+                self._spawn_bg(self.ai._maybe_tune_parameters())
             else:
                 # Run inline blocking
-                await self.tuning._maybe_tune_parameters()
+                await self.ai._maybe_tune_parameters()
 
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
@@ -551,4 +485,4 @@ class CascadingEngine:
             await self._handle_clock_tick_internal(event)
 
     async def _handle_clock_tick_internal(self, event: ClockTickEvent) -> None:
-        return await self.clock_ctrl.handle_clock_tick_internal(event)
+        return await self.pipeline.handle_clock_tick_internal(event)
