@@ -37,6 +37,15 @@
 
 **Service-1** runs the cascading strategy engine. It is fully **event-driven** and **event-sourced**: a central async `Scheduler` emits scheduled tick events (`ClockTickEvent`, `CacheWarmTick`, `MlRetrainTick`, `ChartRefreshTick`) over an in-process `EventBus`. The agent subscribes to these ticks and other incoming events (e.g., `OrderFillEvent`, `MarketDataEvent` from the broker stream client, and database settings/watchlist/approval changes published over `ipc` PG NOTIFY). It processes all engine, settings, ML prediction, and cache pre-warming logic reactively, avoiding database-polling loops. It never serves HTTP — its only outputs are broker orders and DB rows.
 
+Every state change is appended to the `event_ledger` and projected to the
+read-model tables (`trades`, `pending_orders`, `system_settings`,
+`strategy_watchlists`, `pending_approvals`) in the same transaction via
+`EventStoreManager.record_event`. Because state is a pure function of the log,
+the read models are fully recoverable: `ProjectionsRepository.rebuild` wipes the
+order/trade read models and replays the ledger to reconstruct them
+(`tests/test_event_replay_parity.py` guards both live-vs-replay parity and
+crash recovery).
+
 **Service-2** is a FastAPI app that reads the same DB and exposes a control
 panel: approve queued trades, edit the operator's "soul" doctrine, toggle
 paper/live mode, see live P&L, etc.

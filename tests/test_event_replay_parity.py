@@ -138,3 +138,37 @@ async def test_record_event_is_atomic_append_plus_projection(tmp_path):
         order = (await s.execute(select(PendingOrder).where(PendingOrder.id == 1))).scalars().first()
     assert len(ledger) == 1 and isinstance(ledger[0], OrderSubmittedEvent)
     assert order is not None and order.status == "PENDING"
+
+
+async def test_read_models_recover_by_rebuilding_from_ledger(tmp_path):
+    """Crash recovery: wipe the order/trade read models, replay the immutable
+    event_ledger, and the exact prior state returns — state is a pure function
+    of the log. This is the defining property of the event-sourced persistence."""
+    from sqlalchemy import delete
+
+    db = _fresh_db(str(tmp_path / "recover.db"))
+    async with db.AsyncSession() as s:
+        for ev in _sample_lifecycle():
+            await EventStoreManager.record_event(s, ev)
+        await s.commit()
+
+    before = await _snapshot(db)
+    assert before[0] and before[0][0][1] == "CLOSED"   # there is real trade state
+
+    # Simulate read-model loss/corruption — the event_ledger is left intact.
+    async with db.AsyncSession() as s:
+        await s.execute(delete(Trade))
+        await s.execute(delete(PendingOrder))
+        await s.commit()
+    wiped = await _snapshot(db)
+    assert wiped[0] == [] and wiped[1] == [], "read models were not actually wiped"
+
+    # Recover purely from the log.
+    async with db.AsyncSession() as s:
+        n = await ProjectionsRepository.rebuild(s)
+        await s.commit()
+    after = await _snapshot(db)
+
+    assert n >= 6
+    assert after[0] == before[0], "trades not fully recovered from the ledger"
+    assert after[1] == before[1], "pending_orders not fully recovered from the ledger"
