@@ -13,9 +13,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from hermes.common import (
-    IPC_ACTION_SYNC_SETTINGS,
-    IPC_ACTION_TRIGGER_APPROVALS,
-    IPC_ACTION_TRIGGER_ML,
     IPC_CHANNEL_AGENT_COMMANDS,
     STRATEGY_PRIORITIES,
     VALID_MODES,
@@ -54,6 +51,9 @@ from .agent_construction import (  # noqa: F401,E402
     _live_armed, _resolve_mode_credentials, _build_broker,
     _build_stream_client, _build_llm, build,
     _load_and_validate_runtime_config,
+)
+from .agent_reactive import (  # noqa: F401,E402
+    prewarm_quote_chain_cache, handle_ipc_command,
 )
 
 class ShutdownEvent(threading.Event):
@@ -378,35 +378,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     await ipc.connect(db)
 
     async def _ipc_callback(data: dict):
-        action = data.get("action")
-        event_type = data.get("event_type")
-        payload = data.get("payload")
-
-        if event_type and payload:
-            from hermes.db.events import EVENT_TYPE_TO_CLASS
-            cls = EVENT_TYPE_TO_CLASS.get(event_type)
-            if cls:
-                try:
-                    event = cls(**payload)
-                    event_bus.emit(event)
-                except Exception as exc:
-                    log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
-        elif action == IPC_ACTION_TRIGGER_APPROVALS:
-            log.info("[IPC] Received trigger approvals signal reactively")
-            await control_state.refresh_approvals(db)
-        elif action == IPC_ACTION_SYNC_SETTINGS:
-            log.info("[IPC] Received sync settings signal reactively")
-            await control_state.load_from_db(db, conf)
-            from hermes.db.events import ModeChangedEvent
-            event_bus.emit(ModeChangedEvent(mode=control_state.mode, updated_at=_utcnow_iso()))
-        elif action == IPC_ACTION_TRIGGER_ML:
-            log.info("[IPC] Received trigger ML signal reactively")
-            try:
-                await db.settings.set_setting("ml_force_run", "true")
-            except Exception:
-                pass
-            from hermes.events.bus import MlRetrainTick
-            event_bus.emit(MlRetrainTick(force=True))
+        await handle_ipc_command(data, control_state, db, conf, event_bus)
 
     await ipc.subscribe(IPC_CHANNEL_AGENT_COMMANDS, _ipc_callback)
 
@@ -422,73 +394,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     
     # Event-driven cache pre-warming
     from hermes.events.bus import CacheWarmTick
-    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
-    
+
     async def _handle_cache_warm_tick(event: CacheWarmTick) -> None:
-        try:
-            current_broker = engine.broker.broker
-            wrapper = AsyncBrokerWrapper(current_broker, db)
-            cache = wrapper._shared_cache
-            
-            watchlist_syms = set(conf.get("watchlist", []))
-            try:
-                all_wls = await db.watchlist.list_all_watchlists()
-                for syms in all_wls.values():
-                    watchlist_syms.update(syms)
-            except Exception:
-                pass
-                
-            symbols = sorted(list(watchlist_syms))
-            if symbols:
-                now_ts = wrapper._get_current_timestamp()
-                log.info("[PRE-WARM] Refreshing quote/chain cache for watchlist: %s", symbols)
-                
-                try:
-                    quotes = await wrapper.broker.get_quote(",".join(symbols))
-                    if quotes and isinstance(quotes, list):
-                        for q in quotes:
-                            sym = q.get("symbol")
-                            if sym:
-                                cache.set_quote(sym, q, now_ts)
-                except Exception as q_exc:
-                    log.debug("[PRE-WARM] Quote fetch failed: %s", q_exc)
-                    
-                for sym in symbols:
-                    if _SHUTDOWN_EVENT.is_set():
-                        break
-                    try:
-                        expirations = await wrapper.broker.get_option_expirations(sym)
-                        if expirations:
-                            cache.set_expirations(sym, expirations, now_ts)
-                            
-                            today = datetime.utcnow().date()
-                            if hasattr(wrapper.broker, "current_date") and wrapper.broker.current_date:
-                                today = wrapper.broker.current_date.date()
-                                
-                            valid_expiries = []
-                            for e in expirations:
-                                try:
-                                    d = datetime.strptime(str(e), "%Y-%m-%d").date()
-                                    dte = (d - today).days
-                                    if 5 <= dte <= 50:
-                                        valid_expiries.append((dte, e))
-                                except Exception:
-                                    continue
-                                    
-                            valid_expiries.sort()
-                            for _, exp in valid_expiries[:2]:
-                                if _SHUTDOWN_EVENT.is_set():
-                                    break
-                                try:
-                                    chain = await wrapper.broker.get_option_chains(sym, exp)
-                                    if chain:
-                                        cache.set_chain(sym, exp, chain, now_ts)
-                                except Exception as c_exc:
-                                    log.debug("[PRE-WARM] Chain fetch failed for %s %s: %s", sym, exp, c_exc)
-                    except Exception as exp_exc:
-                        log.debug("[PRE-WARM] Expirations fetch failed for %s: %s", sym, exp_exc)
-        except Exception as exc:
-            log.warning("[PRE-WARM] General cache pre-warm tick failed: %s", exc)
+        await prewarm_quote_chain_cache(engine, db, conf, _SHUTDOWN_EVENT)
 
     event_bus.subscribe(CacheWarmTick, _handle_cache_warm_tick)
 
