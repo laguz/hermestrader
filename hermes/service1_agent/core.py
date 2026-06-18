@@ -212,6 +212,15 @@ class CascadingEngine(
         for s, actions in results:
             all_proposed_actions.extend(actions)
 
+        # Keep the risk engine's per-strategy lot caps in sync with the
+        # operator's lot settings. control_state owns them (event-updated, with
+        # the clock-tick DB backstop); the risk engine reads them from the shared
+        # config dict, so push them across here before evaluation. Without this,
+        # risk_engine falls back to a hard-coded 1-lot cap and the bot silently
+        # under-trades, ignoring cs*/tt*/wheel _max_lots entirely.
+        if self.control_state is not None:
+            self.config.update(self.control_state.lot_settings)
+
         # Delegate validation, scaling, and risk filtering to risk engine
         validated_actions = await self.risk_engine.evaluate_and_scale(all_proposed_actions)
 
@@ -606,6 +615,22 @@ class CascadingEngine(
             logger.info("[CIRCUIT BREAKER] Cooldown elapsed — resuming ticks.")
 
         try:
+            # 0. Backstop re-sync. Control state is normally updated by settings
+            # events, but Postgres NOTIFY is fire-and-forget — a dropped one
+            # could leave us trading on stale pause / kill-switch / lot state.
+            # Re-hydrate from the DB on the slow clock cadence so a missed event
+            # self-heals. Throttled by last_sync_ts so IPC-triggered ticks (which
+            # already reloaded) don't re-read needlessly.
+            from hermes.service1_agent.control_state import CONTROL_STATE_BACKSTOP_S
+            _last = self.control_state.last_sync_ts
+            if _last is None or (
+                datetime.now(timezone.utc) - _last
+            ).total_seconds() >= CONTROL_STATE_BACKSTOP_S:
+                try:
+                    await self.control_state.load_from_db(self.db, self.config)
+                except Exception as exc:                          # noqa: BLE001
+                    logger.warning("[ENGINE] control_state backstop reload failed: %s", exc)
+
             # 2. Pause check
             if self.control_state.paused:
                 logger.info("[ENGINE] heartbeat tick PAUSED mode=%s", self.control_state.mode)
