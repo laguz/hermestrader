@@ -33,7 +33,7 @@ from .trade_action import TradeAction
 from ._engine_runtime import EngineRuntimeMixin
 from ._engine_reactive import EngineReactiveMixin
 from ._engine_ai import EngineAIMixin
-from ._engine_tuning import EngineTuningMixin
+from ._engine_tuning import TuningController
 
 if TYPE_CHECKING:
     # Imported only for type checking — resolves the forward references to
@@ -57,7 +57,6 @@ class CascadingEngine(
     EngineRuntimeMixin,
     EngineReactiveMixin,
     EngineAIMixin,
-    EngineTuningMixin,
 ):
     """
     Pipeline order (per spec):
@@ -106,6 +105,9 @@ class CascadingEngine(
         self.control_state = None
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
+        # Best-effort ML/tuning ticks live on an owned collaborator rather than
+        # a mixin, so the engine spine doesn't carry their state.
+        self.tuning = TuningController(self)
         if self.event_bus is not None:
             self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
@@ -546,7 +548,7 @@ class CascadingEngine(
         await self.submit(mgmt, action_type="management")
         # Exit-timing trajectory capture + advisory (Phase 3). Off by default;
         # only runs when exit_policy_mode is shadow/active. Best-effort.
-        await self._maybe_capture_and_advise_exits(mgmt)
+        await self.tuning._maybe_capture_and_advise_exits(mgmt)
 
         # Filter out banned symbols under out-of-loop governance
         banned = await self._read_banned_symbols()
@@ -560,17 +562,17 @@ class CascadingEngine(
         num_entries = await self.process_entries(watchlist)
         # Outcome-driven knob tuning (Phase 2 bandit). Independent of the LLM
         # overseer — data-driven and gated by its own mode flag (off default).
-        await self._maybe_run_bandit_tuner()
+        await self.tuning._maybe_run_bandit_tuner()
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:
             # Goal-aware parameter tuning & risk restrictions
             if self.llm_out_of_loop:
                 # Run out-of-loop background policy adjustments asynchronously
-                asyncio.create_task(self._maybe_tune_parameters())
+                asyncio.create_task(self.tuning._maybe_tune_parameters())
             else:
                 # Run inline blocking
-                await self._maybe_tune_parameters()
+                await self.tuning._maybe_tune_parameters()
 
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop

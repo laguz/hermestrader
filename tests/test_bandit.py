@@ -145,7 +145,7 @@ async def test_shadow_mode_audits_without_mutating(db):
         broker=object(), db=db, strategies=[],
         config={"bandit_min_observations": 3, "bandit_tuning_interval_s": 0})
 
-    await engine._maybe_run_bandit_tuner()
+    await engine.tuning._maybe_run_bandit_tuner()
 
     # Audited but no knob mutated.
     assert await db.get_setting("cs75_pop_target") is None
@@ -164,7 +164,7 @@ async def test_active_mode_applies_actionable_changes(db):
         overseer=_StubOverseer("enforcing"),
         config={"bandit_min_observations": 3, "bandit_tuning_interval_s": 0})
 
-    await engine._maybe_run_bandit_tuner()
+    await engine.tuning._maybe_run_bandit_tuner()
 
     # An actionable + changed knob was written to settings.
     applied_val = await db.get_setting("cs75_pop_target")
@@ -181,7 +181,7 @@ async def test_active_mode_blocked_when_autonomy_advisory(db):
         overseer=_StubOverseer("advisory"),
         config={"bandit_min_observations": 3, "bandit_tuning_interval_s": 0})
 
-    await engine._maybe_run_bandit_tuner()
+    await engine.tuning._maybe_run_bandit_tuner()
 
     # Advisory autonomy never mutates a live setting, even in active mode.
     assert await db.get_setting("cs75_pop_target") is None
@@ -195,7 +195,7 @@ async def test_off_mode_is_a_noop(db):
         broker=object(), db=db, strategies=[],
         config={"bandit_min_observations": 3, "bandit_tuning_interval_s": 0})
 
-    await engine._maybe_run_bandit_tuner()
+    await engine.tuning._maybe_run_bandit_tuner()
 
     assert await db.recent_ai_decisions(strategy_id="BANDIT") == []
     assert await db.get_setting("bandit_last_run_ts") is None

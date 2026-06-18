@@ -1,22 +1,68 @@
 """
-[Service-1: Hermes-Agent-Core] — ML knob-tuning / exit-policy mixin for ``CascadingEngine``.
+[Service-1: Hermes-Agent-Core] — ML knob-tuning / exit-policy controller.
 
-Split out of ``core.py`` to keep the engine's spine readable. These methods
-run as part of :class:`~hermes.service1_agent.core.CascadingEngine` (composed
-via inheritance); they reference engine state on ``self`` and are not meant to
-be used standalone.
+Split out of ``core.py`` to keep the engine's spine readable.
+:class:`TuningController` is an injected collaborator owned by
+:class:`~hermes.service1_agent.core.CascadingEngine`: it reads the engine's
+state (config, db, broker, overseer, clock, quote cache) through a
+back-reference and submits engine-authored closes via ``self.submit``. These
+best-effort ML/tuning paths stay off the money-critical spine.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
 from .trade_action import TradeAction
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .core import CascadingEngine
 
 logger = logging.getLogger("hermes.agent.core")
 
 
-class EngineTuningMixin:
+class TuningController:
+    """Owns the engine's best-effort ML/tuning ticks — parameter tuning, the
+    Thompson-bandit knob tuner, and exit-policy capture/advice.
+
+    Reads engine state via ``self._engine``; the forwarding properties below let
+    the method bodies keep reading ``self.config`` / ``self.db`` / ``self.submit``
+    etc. unchanged, so the extraction from the old mixin was a move, not a
+    rewrite.
+    """
+
+    def __init__(self, engine: "CascadingEngine") -> None:
+        self._engine = engine
+
+    # ── forwarded engine handles (single source of truth on the engine) ──────
+    @property
+    def config(self):
+        return self._engine.config
+
+    @property
+    def overseer(self):
+        return self._engine.overseer
+
+    @property
+    def db(self):
+        return self._engine.db
+
+    @property
+    def broker(self):
+        return self._engine.broker
+
+    @property
+    def clock(self):
+        return self._engine.clock
+
+    @property
+    def _quote_cache(self):
+        return self._engine._quote_cache
+
+    @property
+    def submit(self):
+        return self._engine.submit
+
     async def _maybe_tune_parameters(self) -> None:
         """Run the overseer's goal-aware parameter tuning, throttled by interval.
 
