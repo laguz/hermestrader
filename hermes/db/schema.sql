@@ -248,6 +248,21 @@ CREATE TABLE IF NOT EXISTS exit_ticks (
 );
 CREATE INDEX IF NOT EXISTS idx_exit_ticks_trade ON exit_ticks(trade_id, ts);
 
+-- ---------------------------------------------------------------------
+-- Event ledger — append-only event store for the event-sourcing layer.
+-- Read models (trades, pending_orders, system_settings, …) are projections
+-- of this log; global event order is carried by `id`. Regular table (matches
+-- the create_all bootstrap on every backend), not a hypertable.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_ledger (
+    id           BIGSERIAL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event_type   TEXT NOT NULL,
+    payload      JSONB NOT NULL,
+    PRIMARY KEY (id, created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_event_ledger_type ON event_ledger(event_type, id);
+
 CREATE OR REPLACE VIEW pnl_daily AS
 SELECT date_trunc('day', closed_at)::timestamptz AS day,
        strategy_id,

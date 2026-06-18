@@ -258,6 +258,12 @@ class BotLog(Base):
 
 
 class EventLedger(Base):
+    """Append-only event store — the source-of-truth log for event sourcing.
+
+    Read models (trades, pending_orders, system_settings, …) are projections
+    of this log; global event order is carried by ``id``. The canonical
+    Postgres DDL lives in ``schema.sql``; ``create_all`` mirrors it on SQLite.
+    """
     __tablename__ = "event_ledger"
     id = Column(BigInteger, Sequence("event_ledger_id_seq"), primary_key=True,
                 autoincrement=True)
@@ -265,6 +271,10 @@ class EventLedger(Base):
                         primary_key=True)
     event_type = Column(String, nullable=False)
     payload = Column(JSONB, nullable=False)
+
+    __table_args__ = (
+        Index("idx_event_ledger_type", "event_type", "id"),
+    )
 
 
 from sqlalchemy.types import TypeDecorator

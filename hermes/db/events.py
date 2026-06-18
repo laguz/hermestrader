@@ -132,10 +132,33 @@ class EventStoreManager:
         )
         session.add(row)
         await session.flush()
-        
+
         event.event_id = row.id
         event.created_at = row.created_at
         return row.id
+
+    @staticmethod
+    async def record_event(session, event: BaseEvent) -> int:
+        """Append an event AND apply its projection in the same transaction.
+
+        This is the single write path for the event-sourcing migration: the
+        ``event_ledger`` row and the read-model rows it implies (trades,
+        pending_orders, system_settings, …) are written under one transaction,
+        so the read models are always a deterministic function of the log and
+        can never diverge from it on a partial failure. The caller owns the
+        commit (so several events can be recorded atomically before one commit).
+
+        Global ordering is carried by ``EventLedger.id`` — ``BIGSERIAL`` on
+        Postgres, and ``max(id)+1`` under SQLite, whose serialized write
+        transactions make that increment safe for the dev/test/sim backend.
+        """
+        # Imported here, not at module scope: projections.py imports the event
+        # classes from this module, so a top-level import would be circular.
+        from hermes.db.repositories.projections import ProjectionsRepository
+
+        event_id = await EventStoreManager.append_event(session, event)
+        await ProjectionsRepository.apply_event_projection(session, event)
+        return event_id
 
     @staticmethod
     async def load_events(session, start_id: int = 0) -> List[BaseEvent]:
