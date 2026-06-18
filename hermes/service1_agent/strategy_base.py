@@ -89,9 +89,9 @@ class AbstractStrategy(ABC):
         logger.info(line)
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.db.write_log(self.strategy_id, msg))
+            loop.create_task(self.db.logs.write_log(self.strategy_id, msg))
         except RuntimeError:
-            asyncio.run(self.db.write_log(self.strategy_id, msg))
+            asyncio.run(self.db.logs.write_log(self.strategy_id, msg))
 
     async def find_expiry_in_dte_range(self, symbol: str, min_dte: int, max_dte: int,
                                  prefer: str = "max") -> Optional[str]:
@@ -120,7 +120,7 @@ class AbstractStrategy(ABC):
         closest to its DTE deadline. Without sorting, dict iteration order
         determined the choice — stable in CPython but reads as non-obvious.
         """
-        open_legs = await self.db.open_legs(self.strategy_id, symbol)
+        open_legs = await self.db.trades.open_legs(self.strategy_id, symbol)
         expiry_sides: Dict[str, set] = {}
         for leg in open_legs:
             exp = leg.get("expiry")

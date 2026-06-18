@@ -32,7 +32,7 @@ from hermes.db.orm import (  # noqa: F401
 )
 from hermes.db.repositories import (
     AnalyticsRepository, ApprovalsRepository, DecisionsRepository,
-    LogsRepository, Repository, SettingsRepository, TimeSeriesRepository,
+    LogsRepository, SettingsRepository, TimeSeriesRepository,
     TradesRepository, WatchlistRepository,
 )
 
@@ -51,11 +51,9 @@ class HermesDB:
 
     The query methods live on owned repositories — each owns one concern
     (``self.logs``, ``self.trades``, ``self.approvals``, …) and reads the
-    engine/session handles set up here through its back-reference. This class
-    itself only manages connections and schema lifecycle, and forwards each
-    repository's public methods as flat attributes (``db.write_log`` →
-    ``db.logs.write_log``) for call-sites that haven't migrated to the
-    namespaced form yet (see ``__getattr__``).
+    engine/session handles set up here through its back-reference. Call sites
+    use the explicit namespaced form (``db.logs.write_log(...)``). This class
+    itself only manages connections and schema lifecycle.
     """
 
     def __init__(self, dsn: str):
@@ -93,7 +91,6 @@ class HermesDB:
         self.settings = SettingsRepository(self)
         self.timeseries = TimeSeriesRepository(self)
         self.analytics = AnalyticsRepository(self)
-        self._build_method_registry()
 
         try:
             Base.metadata.create_all(self.engine, checkfirst=True)
@@ -101,54 +98,6 @@ class HermesDB:
             # Don't crash on import — the next real query surfaces the cause.
             pass
         self.engine.dispose()
-
-    # ------------------------------------------------------------------
-    # Flat-surface bridge.
-    #
-    # The query methods used to live directly on ``HermesDB`` via mixin MRO, so
-    # the engine, watcher, and tests all call ``db.write_log(...)`` /
-    # ``db.open_trades(...)`` etc. They now live on the owned repositories. To
-    # migrate call-sites incrementally rather than in one risky sweep, every
-    # repository's public methods are registered here and resolved through
-    # ``__getattr__`` — so the flat surface keeps working while new code uses
-    # the explicit ``db.trades.open_trades(...)`` form. The registry is built
-    # once and collisions (a name defined on two repositories) fail loudly.
-    # ------------------------------------------------------------------
-    _REPOSITORIES = (
-        "logs", "decisions", "trades", "watchlist",
-        "approvals", "settings", "timeseries", "analytics",
-    )
-
-    def _build_method_registry(self) -> None:
-        registry: dict = {}
-        for repo_name in self._REPOSITORIES:
-            repo = getattr(self, repo_name)
-            for klass in type(repo).__mro__:
-                if klass in (Repository, object):
-                    continue
-                for name, val in vars(klass).items():
-                    if name.startswith("_") or not callable(val):
-                        continue
-                    existing = registry.get(name)
-                    if existing is not None and existing.__self__ is not repo:
-                        raise RuntimeError(
-                            f"Repository method name collision: {name!r} is "
-                            f"defined on more than one repository; call it via "
-                            f"the explicit db.<repo>.{name}(...) form."
-                        )
-                    registry.setdefault(name, getattr(repo, name))
-        self._method_registry = registry
-
-    def __getattr__(self, name: str):
-        # Only invoked when normal attribute lookup misses, so real attributes
-        # (engine, AsyncSession, the repositories themselves, init_schema, …)
-        # are untouched. Forward known repository methods; otherwise raise.
-        registry = self.__dict__.get("_method_registry")
-        if registry is not None and name in registry:
-            return registry[name]
-        raise AttributeError(
-            f"{type(self).__name__!r} object has no attribute {name!r}"
-        )
 
     async def init_schema(self, schema_sql_path: str) -> None:
         with open(schema_sql_path, "r", encoding="utf-8") as fh:

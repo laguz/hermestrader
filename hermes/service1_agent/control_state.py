@@ -122,11 +122,11 @@ class ControlState:
                     self.llm_config[field] = value
 
     async def refresh_approvals(self, db) -> None:
-        self.approved_actions = await db.fetch_approved_actions()
+        self.approved_actions = await db.approvals.fetch_approved_actions()
         logger.info("[ControlState] Refreshed approved actions: %d items", len(self.approved_actions))
 
     async def load_from_db(self, db, conf: Dict[str, Any]) -> None:
-        settings = await db.get_settings(
+        settings = await db.settings.get_settings(
             ["hermes_mode", "agent_paused", "agent_autonomy", "approval_mode",
              "llm_out_of_loop", "overseer_mode", "max_daily_loss", "pending_order_ttl_s"]
             + list(self.lot_settings.keys())
@@ -161,11 +161,11 @@ class ControlState:
             self.strategy_enabled[sid] = settings.get(enabled_key, "true").lower() != "false"
             
         # Load soul
-        self.soul = await db.get_setting("soul_md") or ""
+        self.soul = await db.settings.get_setting("soul_md") or ""
         
         # Load LLM config
         llm_keys = ["llm_provider", "llm_base_url", "llm_model", "llm_api_key", "llm_temperature", "llm_vision", "llm_timeout_s"]
-        llm_settings = await db.get_settings(llm_keys)
+        llm_settings = await db.settings.get_settings(llm_keys)
         self.llm_config["provider"] = (llm_settings.get("llm_provider") or "mock").lower()
         self.llm_config["base_url"] = (llm_settings.get("llm_base_url") or "").strip()
         self.llm_config["model"] = (llm_settings.get("llm_model") or "").strip()
@@ -182,7 +182,7 @@ class ControlState:
         self.llm_config["vision"] = llm_settings.get("llm_vision", "true").lower() != "false"
         
         # Load watchlists
-        self.watchlist = await db.list_all_watchlists()
+        self.watchlist = await db.watchlist.list_all_watchlists()
         
         # Load approvals
         await self.refresh_approvals(db)

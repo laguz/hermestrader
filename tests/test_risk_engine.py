@@ -66,8 +66,8 @@ async def test_risk_engine_capacity_enforcement():
 @pytest.mark.asyncio
 async def test_risk_engine_safety_gateway_integration():
     db = StubDB()
-    await db.set_setting("safety_gateway_enabled", "true")
-    await db.set_setting("safety_max_risk_bp_ratio", "0.05")  # Max 5% risk of OBP ($500 limit on $10k OBP)
+    await db.settings.set_setting("safety_gateway_enabled", "true")
+    await db.settings.set_setting("safety_max_risk_bp_ratio", "0.05")  # Max 5% risk of OBP ($500 limit on $10k OBP)
     
     broker = StubBroker(option_buying_power=10000.0)
     config = {"cs75_max_lots": 5}

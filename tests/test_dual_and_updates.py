@@ -1,3 +1,4 @@
+from ._stubs import alias_db_namespaces
 import sys
 import os
 import json
@@ -40,6 +41,7 @@ from hermes.mcp import server
 async def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     # Setup a mock database
     mock_db = AsyncMock()
+    alias_db_namespaces(mock_db)
     mock_db.get_setting.return_value = "old soul content"
     
     # Setup temp soul.md file
@@ -56,6 +58,7 @@ async def test_sync_soul_file_to_db(tmp_path, monkeypatch):
 
 async def test_sync_soul_file_to_db_no_change(tmp_path, monkeypatch):
     mock_db = AsyncMock()
+    alias_db_namespaces(mock_db)
     mock_db.get_setting.return_value = "same content"
     
     soul_file = tmp_path / "soul.md"
@@ -71,6 +74,7 @@ async def test_sync_soul_file_to_db_no_change(tmp_path, monkeypatch):
 @patch("hermes.db.models.HermesDB")
 def test_check_for_updates_happy_path(mock_db_class, mock_get, monkeypatch):
     mock_db = AsyncMock()
+    alias_db_namespaces(mock_db)
     mock_db_class.return_value = mock_db
     
     # Mock VERSION response

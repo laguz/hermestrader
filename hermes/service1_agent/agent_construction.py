@@ -49,21 +49,21 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     Returns (client, snapshot, vision_enabled). `snapshot` is the dict of
     config values used so the tick loop can detect changes and rebuild.
     """
-    provider = ((await db.get_setting(SETTING_LLM_PROVIDER)) or "mock").lower()
-    base_url = ((await db.get_setting(SETTING_LLM_BASE_URL)) or "").strip()
-    model = ((await db.get_setting(SETTING_LLM_MODEL)) or "").strip()
-    api_key = decrypt_value(((await db.get_setting(SETTING_LLM_API_KEY)) or "").strip()) or None
-    temperature_raw = ((await db.get_setting(SETTING_LLM_TEMPERATURE)) or "0.2").strip()
+    provider = ((await db.settings.get_setting(SETTING_LLM_PROVIDER)) or "mock").lower()
+    base_url = ((await db.settings.get_setting(SETTING_LLM_BASE_URL)) or "").strip()
+    model = ((await db.settings.get_setting(SETTING_LLM_MODEL)) or "").strip()
+    api_key = decrypt_value(((await db.settings.get_setting(SETTING_LLM_API_KEY)) or "").strip()) or None
+    temperature_raw = ((await db.settings.get_setting(SETTING_LLM_TEMPERATURE)) or "0.2").strip()
     try:
         temperature = float(temperature_raw)
     except ValueError:
         temperature = 0.2
-    timeout_raw = ((await db.get_setting(SETTING_LLM_TIMEOUT)) or str(DEFAULT_LLM_TIMEOUT_S)).strip()
+    timeout_raw = ((await db.settings.get_setting(SETTING_LLM_TIMEOUT)) or str(DEFAULT_LLM_TIMEOUT_S)).strip()
     try:
         timeout_s = max(5.0, float(timeout_raw))
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
-    vision = ((await db.get_setting(SETTING_LLM_VISION)) or "true").lower() != "false"
+    vision = ((await db.settings.get_setting(SETTING_LLM_VISION)) or "true").lower() != "false"
     snapshot = {
         "provider": provider,
         "base_url": base_url,
@@ -96,14 +96,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
                          model, vision, timeout_s)
                 try:
-                    await db.set_setting(SETTING_LLM_ERROR, "")
+                    await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:                               # noqa: BLE001
                     pass
                 return client, snapshot, vision
             except Exception as exc:                            # noqa: BLE001
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
                 try:
-                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                    await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
                 except Exception:                               # noqa: BLE001
                     pass
 
@@ -130,14 +130,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 log.info("LLM overseer: provider=%s model=%s base=%s vision=%s timeout=%.0fs",
                          provider, model, effective_base, vision, timeout_s)
                 try:
-                    await db.set_setting(SETTING_LLM_ERROR, "")
+                    await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:                               # noqa: BLE001
                     pass
                 return client, snapshot, vision
             except Exception as exc:                            # noqa: BLE001
                 log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
                 try:
-                    await db.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
+                    await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
                 except Exception:                               # noqa: BLE001
                     pass
 
@@ -282,10 +282,10 @@ def _build_stream_client(broker, db, event_bus, watchlist_syms: set):
 async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
     from hermes.config_schema import RuntimeConfig
     
-    obp_reserve_val = await db.get_setting("obp_reserve")
-    tick_interval_val = await db.get_setting("tick_interval") or await db.get_setting("tick_interval_s")
-    bandit_val = await db.get_setting("bandit_tuner_mode")
-    exit_val = await db.get_setting("exit_policy_mode")
+    obp_reserve_val = await db.settings.get_setting("obp_reserve")
+    tick_interval_val = await db.settings.get_setting("tick_interval") or await db.settings.get_setting("tick_interval_s")
+    bandit_val = await db.settings.get_setting("bandit_tuner_mode")
+    exit_val = await db.settings.get_setting("exit_policy_mode")
 
     config_data = {}
     if obp_reserve_val is not None and str(obp_reserve_val).strip() != "":

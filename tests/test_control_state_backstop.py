@@ -14,6 +14,7 @@ Both guard correctness of the event-sourced control plane introduced in the
 """
 from __future__ import annotations
 
+from ._stubs import alias_db_namespaces
 from unittest.mock import AsyncMock, MagicMock
 
 from hermes.events.bus import ClockTickEvent
@@ -30,6 +31,7 @@ async def test_clock_tick_backstop_reloads_stale_pause():
     """A dropped pause event self-heals: the clock-tick backstop re-reads the DB
     and halts the tick before any trading pipeline runs."""
     db = AsyncMock()
+    alias_db_namespaces(db)
     # The operator paused in the DB, but the agent missed the PauseChangedEvent.
     db.get_settings = AsyncMock(return_value={"agent_paused": "true"})
     db.get_setting = AsyncMock(return_value=None)
@@ -62,6 +64,7 @@ async def test_clock_tick_backstop_throttled_when_recently_synced():
     from datetime import datetime, timezone
 
     db = AsyncMock()
+    alias_db_namespaces(db)
     db.get_settings = AsyncMock(return_value={})
     db.get_setting = AsyncMock(return_value=None)
     db.list_all_watchlists = AsyncMock(return_value={})
@@ -85,6 +88,7 @@ async def test_clock_tick_backstop_throttled_when_recently_synced():
 async def test_process_entries_syncs_operator_lot_caps_into_risk_config():
     """Operator lot caps on ControlState reach the risk engine's config."""
     db = AsyncMock()
+    alias_db_namespaces(db)
     strat = MagicMock()
     strat.PRIORITY = 1
     strat.NAME = "CS75"

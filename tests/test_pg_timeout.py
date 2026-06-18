@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import asyncio
 import time
@@ -27,6 +28,7 @@ async def test_chat_with_timeout_raises_timeout_error():
     """Verify that _chat_with_timeout raises TimeoutError when the provider takes too long."""
     llm = _SlowLLM(latency=1.0, timeout_s=0.1)
     db = MagicMock()
+    alias_db_namespaces(db)
     overseer = HermesOverseer(llm_client=llm, db=db, vision_enabled=False)
     
     with pytest.raises(asyncio.TimeoutError):
@@ -38,6 +40,7 @@ async def test_consult_falls_back_on_timeout():
     """Verify that _consult retries on timeouts and falls back to a safe APPROVED verdict."""
     llm = _SlowLLM(latency=1.0, timeout_s=0.05)
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     overseer = HermesOverseer(llm_client=llm, db=db_mock, vision_enabled=False)
     
     # We patch _LLM_MAX_RETRIES to 2 to keep the test fast

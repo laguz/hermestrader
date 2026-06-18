@@ -228,7 +228,7 @@ async def get_analytics() -> Response:
 
     # Daily P&L series (last 60 days) from pnl_daily view
     try:
-        result["pnl_series"] = await db.pnl_daily(days=60)
+        result["pnl_series"] = await db.analytics.pnl_daily(days=60)
         for row in result["pnl_series"]:
             if hasattr(row.get("day"), "isoformat"):
                 row["day"] = row["day"].isoformat()
@@ -256,7 +256,7 @@ async def get_attribution(strategy_id: str = None, days: int = None,
 
     since = (_dt.now(_tz.utc) - _td(days=days)) if days else None
     try:
-        rows = await db.fetch_trade_outcomes(strategy_id=strategy_id, since=since)
+        rows = await db.trades.fetch_trade_outcomes(strategy_id=strategy_id, since=since)
     except Exception:                                              # noqa: BLE001
         logger.exception("[ATTRIBUTION] fetch_trade_outcomes failed")
         rows = []
@@ -276,14 +276,14 @@ async def get_bandit(min_observations: int = 20) -> Response:
     from hermes.ml.bandit import propose_knob_updates, LEARNABLE_KNOBS
 
     try:
-        rows = await db.fetch_trade_outcomes()
+        rows = await db.trades.fetch_trade_outcomes()
         keys = [k for knobs in LEARNABLE_KNOBS.values() for k in knobs]
-        current = await db.get_settings(keys) or {}
+        current = await db.settings.get_settings(keys) or {}
     except Exception:                                              # noqa: BLE001
         logger.exception("[BANDIT] proposal fetch failed")
         rows, current = [], {}
 
-    mode = (await db.get_setting("bandit_tuner_mode") or "off")
+    mode = (await db.settings.get_setting("bandit_tuner_mode") or "off")
     proposals = propose_knob_updates(
         rows, current, min_observations=max(1, int(min_observations)))
     return _safe_json_response({
@@ -306,12 +306,12 @@ async def get_exit_policy(min_support: int = 10, margin: float = 0.05) -> Respon
     from hermes.ml.exit_policy import train_exit_policy
 
     try:
-        ticks = await db.fetch_exit_ticks()
+        ticks = await db.trades.fetch_exit_ticks()
     except Exception:                                              # noqa: BLE001
         logger.exception("[EXIT-POLICY] fetch_exit_ticks failed")
         ticks = []
 
-    mode = (await db.get_setting("exit_policy_mode") or "off")
+    mode = (await db.settings.get_setting("exit_policy_mode") or "off")
     policy = train_exit_policy(
         ticks, min_support=max(1, int(min_support)), margin=float(margin))
     return _safe_json_response({"mode": str(mode).strip().lower(), **policy})
@@ -377,7 +377,7 @@ async def get_symbol_analysis(symbol: str) -> Response:
         if "error" in analysis:
             return _safe_json_response(analysis)
         local_db = HermesDB(DSN)
-        xgb_pred = await local_db.latest_prediction(symbol.upper()) or {}
+        xgb_pred = await local_db.decisions.latest_prediction(symbol.upper()) or {}
         return _safe_json_response(augment_levels_with_pop(analysis, xgb_pred))
     except Exception as exc:                                       # noqa: BLE001
         return _safe_json_response({"error": str(exc)})
@@ -392,7 +392,7 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
         period = "6m"
     try:
         local_db = HermesDB(DSN)
-        all_wl = await local_db.list_all_watchlists()
+        all_wl = await local_db.watchlist.list_all_watchlists()
         symbols = set()
         for wl in all_wl.values():
             symbols.update(wl)
@@ -418,7 +418,7 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
                 results[sym] = res
 
         # 2. Fetch all predictions in one batch (DB optimization)
-        preds_map = await local_db.latest_predictions_batch(sorted_symbols)
+        preds_map = await local_db.decisions.latest_predictions_batch(sorted_symbols)
 
         # 3. Augment with POP
         for sym, ans in results.items():

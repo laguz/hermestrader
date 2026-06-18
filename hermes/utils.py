@@ -161,8 +161,8 @@ def check_for_updates() -> None:
             "error": error_msg
         }
         import asyncio
-        asyncio.run(db.set_setting("update_status", json.dumps(payload)))
-        asyncio.run(db.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}"))
+        asyncio.run(db.settings.set_setting("update_status", json.dumps(payload)))
+        asyncio.run(db.logs.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}"))
     except Exception as e:
         logger.warning("Failed to save update status to DB: %s", e)
 
@@ -177,10 +177,10 @@ async def sync_soul_file_to_db(db) -> None:
         try:
             with open(soul_path, "r", encoding="utf-8") as f:
                 file_soul = f.read()
-            db_soul = (await db.get_setting("soul_md")) or ""
+            db_soul = (await db.settings.get_setting("soul_md")) or ""
             if file_soul != db_soul:
                 logger.info("Syncing soul.md from file to database (length: %d)", len(file_soul))
-                await db.set_setting("soul_md", file_soul)
-                await db.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
+                await db.settings.set_setting("soul_md", file_soul)
+                await db.logs.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
         except Exception as exc:
             logger.warning("Failed to sync soul.md to database: %s", exc)

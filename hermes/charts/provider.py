@@ -262,7 +262,7 @@ class HermesChartProvider:
 
     async def _render_and_cache(self, symbol: str) -> Optional[bytes]:
         try:
-            bars = await self.db.daily_bars(symbol, lookback_days=self.lookback + 10)
+            bars = await self.db.timeseries.daily_bars(symbol, lookback_days=self.lookback + 10)
             if bars is None or bars.empty:
                 logger.warning("No bars for %s — chart skipped", symbol)
                 return None

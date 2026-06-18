@@ -252,26 +252,26 @@ class AsyncBrokerWrapper:
         enabled = False
         if self.db is not None and hasattr(self.db, "get_setting"):
             try:
-                enabled_raw = await self.db.get_setting("safety_gateway_enabled")
+                enabled_raw = await self.db.settings.get_setting("safety_gateway_enabled")
                 if enabled_raw is not None:
                     enabled = enabled_raw.lower() == "true"
 
-                max_risk_raw = await self.db.get_setting("safety_max_risk_bp_ratio")
+                max_risk_raw = await self.db.settings.get_setting("safety_max_risk_bp_ratio")
                 if max_risk_raw is not None:
                     config["safety_max_risk_bp_ratio"] = float(max_risk_raw)
                     enabled = True
                     
-                max_exp_raw = await self.db.get_setting("safety_max_symbol_exposure_ratio")
+                max_exp_raw = await self.db.settings.get_setting("safety_max_symbol_exposure_ratio")
                 if max_exp_raw is not None:
                     config["safety_max_symbol_exposure_ratio"] = float(max_exp_raw)
                     enabled = True
                     
-                max_trades_raw = await self.db.get_setting("safety_max_symbol_trades")
+                max_trades_raw = await self.db.settings.get_setting("safety_max_symbol_trades")
                 if max_trades_raw is not None:
                     config["safety_max_symbol_trades"] = int(max_trades_raw)
                     enabled = True
                     
-                side_lock_raw = await self.db.get_setting("safety_side_lock_enabled")
+                side_lock_raw = await self.db.settings.get_setting("safety_side_lock_enabled")
                 if side_lock_raw is not None:
                     config["safety_side_lock_enabled"] = side_lock_raw.lower() == "true"
                     enabled = True
@@ -291,7 +291,7 @@ class AsyncBrokerWrapper:
             try:
                 open_trades = []
                 if hasattr(self.db, "all_open_trades"):
-                    open_trades = await self.db.all_open_trades() or []
+                    open_trades = await self.db.trades.all_open_trades() or []
             except Exception as e:
                 logger.warning("[SAFETY] Failed to fetch open trades for safety checks: %s", e)
                 open_trades = []
@@ -305,7 +305,7 @@ class AsyncBrokerWrapper:
             logger.info(decision_msg)
             if self.db is not None and hasattr(self.db, "write_log"):
                 try:
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         strategy_id=action.strategy_id, 
                         msg=decision_msg, 
                         level="INFO" if report.decision == "APPROVED" else "WARNING"

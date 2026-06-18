@@ -82,14 +82,14 @@ async def enforce_daily_loss_limit(
     if currently_paused or max_daily_loss <= 0.0:
         return False
     try:
-        realized_today = await db.realized_pnl_today()
+        realized_today = await db.analytics.realized_pnl_today()
     except Exception as exc:                                      # noqa: BLE001
         log.warning("daily-loss check: realized_pnl_today failed: %s", exc)
         return False
     unrealized = await _open_position_pnl(broker)
     total_pnl = realized_today + (unrealized or 0.0)
     if total_pnl <= -max_daily_loss:
-        await db.set_setting(SETTING_PAUSED, "true")
+        await db.settings.set_setting(SETTING_PAUSED, "true")
         unreal_str = "n/a" if unrealized is None else f"${unrealized:,.2f}"
         msg = (
             f"[KILL SWITCH] daily loss limit hit: total P&L "
@@ -98,6 +98,6 @@ async def enforce_daily_loss_limit(
             f"agent auto-paused for the session; operator must resume"
         )
         log.error(msg)
-        await db.write_log("ENGINE", msg, level="ERROR")
+        await db.logs.write_log("ENGINE", msg, level="ERROR")
         return True
     return False

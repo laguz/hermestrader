@@ -62,7 +62,7 @@ async def _setting_float(db, key: str) -> float:
     """Read a numeric setting, falling back to the conservative default."""
     default = DEFAULTS[key]
     try:
-        raw = await db.get_setting(key)
+        raw = await db.settings.get_setting(key)
         if raw is None or str(raw).strip() == "":
             return float(default)
         return float(raw)
@@ -195,7 +195,7 @@ async def gate_ai_action(
     analysis = await broker.analyze_symbol(symbol, period="3m")
     if not analysis or "error" in analysis:
         return None, f"{symbol}: analysis unavailable for POP gate"
-    xgb_pred = await db.latest_prediction(symbol) or {}
+    xgb_pred = await db.decisions.latest_prediction(symbol) or {}
     analysis = augment_levels_with_pop(analysis, xgb_pred, period="3m")
     target_type = "support" if side == "put" else "resistance"
     qualifying = [

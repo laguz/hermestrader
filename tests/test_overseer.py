@@ -124,7 +124,7 @@ async def test_llm_failure_passes_action_through_in_enforcing_mode():
     out = await o.review(a)
     assert out is a
     # And the error is recorded for the watcher to surface.
-    assert "LLM unreachable" in await db.get_setting("llm_last_error", "")
+    assert "LLM unreachable" in await db.settings.get_setting("llm_last_error", "")
 
 
 # ── autonomous: propose() runs only here ─────────────────────────────────────

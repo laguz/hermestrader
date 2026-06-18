@@ -1,3 +1,4 @@
+from ._stubs import alias_db_namespaces
 import pytest
 from unittest.mock import AsyncMock
 from hermes.config import HermesSettings
@@ -7,6 +8,7 @@ async def test_reconcile_with_db():
     settings = HermesSettings()
     
     db = AsyncMock()
+    alias_db_namespaces(db)
     
     settings_dict = {
         "hermes_mode": "live",

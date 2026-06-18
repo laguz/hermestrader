@@ -5,11 +5,8 @@ approvals, …). ``HermesDB`` *owns* one instance of each (``db.trades``,
 ``db.approvals``, …) rather than inheriting them as mixins, so the
 collaborators are explicit and inspectable. They read the shared engine /
 session handles through their owner (``self._db``; see :class:`Repository`) and
-call into siblings explicitly, e.g. ``self._db.logs.write_log(...)``.
-
-For one transition period ``HermesDB`` also forwards each repository's public
-methods as flat attributes (``db.write_log(...)`` → ``db.logs.write_log(...)``)
-so existing call-sites keep working while they migrate to the namespaced form.
+call into siblings explicitly, e.g. ``self._db.logs.write_log(...)``. Call sites
+use the namespaced form throughout (``db.logs.write_log(...)``).
 """
 from .analytics import AnalyticsRepository
 from .approvals import ApprovalsRepository

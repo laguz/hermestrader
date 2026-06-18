@@ -36,7 +36,7 @@ async def test_market_data_sr_crossing_reactive_entries():
 
     db = StubDB()
     broker = StubBroker()
-    db.set_watchlist("DUMMY", ["AAPL"])
+    db.watchlist.set_watchlist("DUMMY", ["AAPL"])
 
     strategy = DummyStrategy(broker, db)
     engine = CascadingEngine(
@@ -171,7 +171,7 @@ async def test_order_fill_triggers_management_and_entries():
     
     db = StubDB()
     broker = StubBroker()
-    db.set_watchlist("DUMMY", ["AAPL"])
+    db.watchlist.set_watchlist("DUMMY", ["AAPL"])
     
     strategy = DummyStrategy(broker, db)
     engine = CascadingEngine(

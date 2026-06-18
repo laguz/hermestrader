@@ -34,7 +34,7 @@ async def get_tunables() -> Dict[str, Any]:
     what the agent would resolve (absent an env-config override, which the
     panel does not surface).
     """
-    stored = await db.get_settings(list(TUNABLES.keys()))
+    stored = await db.settings.get_settings(list(TUNABLES.keys()))
     by_group: Dict[str, List[Dict[str, Any]]] = {g: [] for g in groups()}
     for entry in catalog():
         spec = TUNABLES[entry["key"]]
@@ -72,6 +72,6 @@ async def set_tunable(body: TunableBody) -> Dict[str, Any]:
     if spec.max is not None and value > spec.max:
         raise HTTPException(status_code=400, detail=f"{body.key} must be ≤ {spec.max}.")
 
-    await db.set_setting(body.key, str(value))
-    await db.write_log("ENGINE", f"[C2] Tunable {body.key} set to {value}")
+    await db.settings.set_setting(body.key, str(value))
+    await db.logs.write_log("ENGINE", f"[C2] Tunable {body.key} set to {value}")
     return {"key": body.key, "value": value, "group": spec.group}

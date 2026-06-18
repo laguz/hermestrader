@@ -115,20 +115,104 @@ class StubBroker:
 # ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
+# Repository-namespace views. Production code calls the DB through namespaces
+# (``db.logs.write_log``, ``db.settings.get_setting``, …); HermesDB owns real
+# repository objects, but StubDB keeps one flat method surface. These thin views
+# forward an unknown attribute (a repo method) back to the stub's flat method,
+# so ``db.trades.open_trades(...)`` resolves to ``StubDB.open_trades``.
+#
+# Three namespace names — ``logs``, ``settings``, ``approvals`` — collide with
+# StubDB's own inspection state (a captured-log list, a settings dict, an
+# approval-row list). Making those views ``list``/``dict`` *subclasses* lets the
+# same attribute serve both roles: ``for m in db.logs`` still iterates captured
+# messages, while ``db.logs.write_log(...)`` forwards to the stub. ``__getattr__``
+# only fires for names the container itself doesn't define.
+class _NSView:
+    """Forwards repo-method lookups to the owning StubDB's flat surface."""
+    def __init__(self, db):
+        object.__setattr__(self, "_db", db)
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_db"), name)
+
+
+class _ListNSView(list):
+    def __init__(self, db):
+        super().__init__()
+        self._db = db
+    def __getattr__(self, name):          # only for attrs `list` lacks
+        return getattr(self._db, name)
+
+
+class _DictNSView(dict):
+    def __init__(self, db):
+        super().__init__()
+        self._db = db
+    def __getattr__(self, name):          # only for attrs `dict` lacks
+        return getattr(self._db, name)
+
+
+_REPO_NS_NAMES = frozenset({
+    "logs", "decisions", "trades", "watchlist",
+    "approvals", "settings", "timeseries", "analytics",
+})
+
+
+class RepoNamespaceMixin:
+    """Give a flat DB double the ``db.<repo>.<method>`` namespace surface.
+
+    Any ad-hoc test double that implements the flat DB methods (``get_setting``,
+    ``write_log``, …) can inherit this to also answer namespaced calls — a
+    missing ``db.settings`` / ``db.trades`` / … resolves to a view that forwards
+    method lookups back to the double's flat surface. Only fires for the eight
+    repo names the double doesn't already define as data.
+    """
+    def __getattr__(self, name):
+        if name in _REPO_NS_NAMES:
+            return _NSView(self)
+        raise AttributeError(
+            f"{type(self).__name__!r} object has no attribute {name!r}"
+        )
+
+
+def alias_db_namespaces(mock):
+    """Point a bare ``AsyncMock``/``MagicMock`` db's repo namespaces at itself.
+
+    After the namespace migration, production calls ``db.settings.get_setting``
+    instead of ``db.get_setting``. For a bare mock, ``db.settings`` would be a
+    *different* auto-child, so flat ``db.get_setting.return_value = …`` setups
+    and ``db.set_setting.assert_called`` assertions stop matching. Aliasing each
+    namespace back to the mock collapses ``db.<repo>.<method>`` to
+    ``db.<method>`` on the same child mock — exactly the flat behaviour the
+    tests were written against. Returns the mock for chaining.
+    """
+    for ns in _REPO_NS_NAMES:
+        setattr(mock, ns, mock)
+    return mock
+
+
 class StubDB:
     """Tracks writes (logs, pending orders, settings) without touching SQL."""
 
     def __init__(self):
-        self.logs: List[str] = []
+        # Container-backed namespaces: usable both as inspection state and as a
+        # repo namespace (see _ListNSView / _DictNSView above).
+        self.logs = _ListNSView(self)
+        self.settings = _DictNSView(self)
+        self.approvals = _ListNSView(self)
+        # Plain repo namespaces forwarding to the flat surface.
+        self.trades = _NSView(self)
+        self.watchlist = _NSView(self)
+        self.decisions = _NSView(self)
+        self.timeseries = _NSView(self)
+        self.analytics = _NSView(self)
+
         self.pending_orders: List[Any] = []
-        self.settings: Dict[str, str] = {}
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
         self._open_legs:   Dict[str, List[Dict[str, Any]]] = {}
         self._watchlists:  Dict[str, List[str]] = {}
         self._predictions: Dict[str, Dict[str, Any]] = {}
         self._vetoes: List[Dict[str, Any]] = []
         self._closed_times: Dict[tuple, datetime] = {}
-        self.approvals: List[Dict[str, Any]] = []
         self._next_approval_id = 1
 
     # ── seeding helpers ─────────────────────────────────────────────────────

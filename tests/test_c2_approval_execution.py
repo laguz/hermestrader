@@ -22,6 +22,7 @@ import pytest
 
 from hermes.service1_agent.core import TradeAction
 from hermes.service1_agent.main import _execute_approved_action
+from ._stubs import RepoNamespaceMixin
 
 
 @pytest.fixture(autouse=True)
@@ -62,7 +63,7 @@ class _FakeBroker:
         return self.response
 
 
-class _FakeDB:
+class _FakeDB(RepoNamespaceMixin):
     """Captures every DB write the helper performs so tests can assert order."""
 
     def __init__(self):

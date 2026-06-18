@@ -44,7 +44,7 @@ LONG = "TSLA260717C00450000"
 
 
 async def _open_trade(db, *, lots=3, entry_credit=1.50, width=5.0) -> int:
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         # Explicit id: the Postgres BIGSERIAL doesn't autoincrement under sqlite.
         t = Trade(id=1, strategy_id="CS75", symbol="TSLA", side_type="call",
@@ -80,7 +80,7 @@ async def _status(db, trade_id: int) -> str:
 async def test_close_acceptance_marks_closing_not_closed(db):
     tid = await _open_trade(db)
     # Tradier accepted the order ("ok") but it has not filled.
-    await db.close_trade_from_action(_close_action(tid), {"order": {"id": "1", "status": "ok"}})
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"id": "1", "status": "ok"}})
     assert await _status(db, tid) == "CLOSING"
     # Close economics are stashed for when it finalizes.
     from sqlalchemy import select
@@ -94,23 +94,23 @@ async def test_close_acceptance_marks_closing_not_closed(db):
 
 async def test_close_confirmed_fill_marks_closed(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"order": {"id": "1", "status": "filled"}})
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"id": "1", "status": "filled"}})
     assert await _status(db, tid) == "CLOSED"
 
 
 async def test_close_rejection_leaves_trade_open(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"errors": "bad price"})
+    await db.trades.close_trade_from_action(_close_action(tid), {"errors": "bad price"})
     assert await _status(db, tid) == "OPEN"
 
 
 # ── reconcile finalizes / reopens CLOSING ────────────────────────────────────
 async def test_reconcile_finalizes_closing_when_broker_flat(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
     assert await _status(db, tid) == "CLOSING"
     # Broker now shows the legs flat → the close filled.
-    await db.upsert_positions([], active_order_legs=set())
+    await db.trades.upsert_positions([], active_order_legs=set())
     assert await _status(db, tid) == "CLOSED"
     from sqlalchemy import select
     async with db.AsyncSession() as s:
@@ -120,9 +120,9 @@ async def test_reconcile_finalizes_closing_when_broker_flat(db):
 
 async def test_reconcile_reopens_closing_when_still_held_no_resting(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
     # Close was rejected async: broker still holds the short, no resting order.
-    await db.upsert_positions(
+    await db.trades.upsert_positions(
         [{"symbol": SHORT, "quantity": -3}, {"symbol": LONG, "quantity": 3}],
         active_order_legs=set())
     assert await _status(db, tid) == "OPEN"
@@ -130,9 +130,9 @@ async def test_reconcile_reopens_closing_when_still_held_no_resting(db):
 
 async def test_reconcile_keeps_closing_while_order_rests(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
     # Position still held AND a close order is resting → leave it CLOSING.
-    await db.upsert_positions(
+    await db.trades.upsert_positions(
         [{"symbol": SHORT, "quantity": -3}, {"symbol": LONG, "quantity": 3}],
         active_order_legs={SHORT, LONG})
     assert await _status(db, tid) == "CLOSING"
@@ -142,7 +142,7 @@ async def test_reconcile_flattens_open_when_broker_flat(db):
     # Existing behaviour preserved: an OPEN trade the bot never closed gets
     # flattened as RECONCILED_BROKER_FLAT when the broker shows it gone.
     tid = await _open_trade(db)
-    await db.upsert_positions([], active_order_legs=set())
+    await db.trades.upsert_positions([], active_order_legs=set())
     from sqlalchemy import select
     async with db.AsyncSession() as s:
         row = (await s.execute(select(Trade).filter(Trade.id == tid))).scalars().first()
@@ -152,7 +152,7 @@ async def test_reconcile_flattens_open_when_broker_flat(db):
 
 async def test_tracked_symbols_include_closing(db):
     tid = await _open_trade(db)
-    await db.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
-    tracked = await db.tracked_option_symbols()
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    tracked = await db.trades.tracked_option_symbols()
     # A mid-close position is still tracked, so it isn't misflagged as an orphan.
     assert SHORT in tracked and LONG in tracked

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from hermes.service1_agent.core import CascadingEngine, MoneyManager
 from hermes.service1_agent.mock_broker import MockBroker
+from ._stubs import RepoNamespaceMixin
 
 
-class _StubDB:
+class _StubDB(RepoNamespaceMixin):
     async def write_log(self, *_a, **_kw):
         pass
 

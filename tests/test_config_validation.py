@@ -1,3 +1,4 @@
+from ._stubs import alias_db_namespaces
 import pytest
 from pydantic import ValidationError
 from hermes.config_schema import RuntimeConfig
@@ -49,6 +50,7 @@ def test_runtime_config_invalid_literals():
 @pytest.mark.asyncio
 async def test_load_and_validate_runtime_config_success():
     db = AsyncMock()
+    alias_db_namespaces(db)
     # Mock settings returned from DB
     db.get_setting.side_effect = lambda key: {
         "obp_reserve": "2500",
@@ -68,6 +70,7 @@ async def test_load_and_validate_runtime_config_success():
 @pytest.mark.asyncio
 async def test_load_and_validate_runtime_config_db_fallback():
     db = AsyncMock()
+    alias_db_namespaces(db)
     # No settings in DB
     db.get_setting.return_value = None
 
@@ -84,6 +87,7 @@ async def test_load_and_validate_runtime_config_db_fallback():
 @pytest.mark.asyncio
 async def test_load_and_validate_runtime_config_validation_error():
     db = AsyncMock()
+    alias_db_namespaces(db)
     # Invalid setting in DB
     db.get_setting.side_effect = lambda key: {
         "obp_reserve": "-500",

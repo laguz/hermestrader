@@ -161,7 +161,7 @@ async def test_morning_pricing_guard():
 async def test_reentry_cooldown():
     """Verify that re-entry cooldown prevents opening a position on a recently closed symbol."""
     db = StubDB()
-    db.set_watchlist("CS75", ["TSLA"])
+    db.watchlist.set_watchlist("CS75", ["TSLA"])
     # Seed prediction to satisfy POP analyze check
     db.set_prediction("TSLA", {"predicted_return": 0.05, "predicted_price": 105.0, "spot": 100.0})
 

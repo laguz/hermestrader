@@ -124,7 +124,7 @@ QUOTES = {
 
 
 async def _seed_open_trade(db, *, dte=25):
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         s.add(Trade(
             id=1, strategy_id="CS75", symbol="TSLA", side_type="put",
@@ -138,10 +138,10 @@ async def _seed_open_trade(db, *, dte=25):
 async def _seed_close_recommending_trajectories(db, n=12):
     """Completed trajectories where holding at (0.1, ~25) decayed to -0.30."""
     for tid in range(100, 100 + n):
-        await db.record_exit_tick(
+        await db.trades.record_exit_tick(
             trade_id=tid, strategy_id="CS75", symbol="TSLA", dte=25,
             unrealized_pnl_pct=0.10, debit=0.90, entry_credit=1.0, action="hold")
-        await db.record_exit_tick(
+        await db.trades.record_exit_tick(
             trade_id=tid, strategy_id="CS75", symbol="TSLA", dte=4,
             unrealized_pnl_pct=-0.30, debit=1.30, entry_credit=1.0,
             action="close", close_reason="SL")
@@ -150,18 +150,18 @@ async def _seed_close_recommending_trajectories(db, n=12):
 @pytest.mark.asyncio
 async def test_shadow_captures_and_advises_without_acting(db):
     await _seed_open_trade(db)
-    await db.set_setting("exit_policy_mode", "shadow")
+    await db.settings.set_setting("exit_policy_mode", "shadow")
     broker = _StubBroker(QUOTES)
     engine = CascadingEngine(broker=broker, db=db, strategies=[])
 
     await engine.tuning._maybe_capture_and_advise_exits([])
 
     # A trajectory tick was recorded; advice audited; nothing closed.
-    ticks = await db.fetch_exit_ticks()
+    ticks = await db.trades.fetch_exit_ticks()
     assert len(ticks) == 1
     assert ticks[0]["action"] == "hold"
     assert abs(ticks[0]["unrealized_pnl_pct"] - 0.10) < 1e-6
-    decisions = await db.recent_ai_decisions(strategy_id="EXITPOLICY")
+    decisions = await db.decisions.recent_ai_decisions(strategy_id="EXITPOLICY")
     assert len(decisions) == 1
     assert decisions[0]["decision"]["mode"] == "shadow"
     assert decisions[0]["decision"]["acted"] == []
@@ -175,7 +175,7 @@ async def test_active_closes_confident_positions(db):
     # Postgres BIGSERIAL sequence that doesn't autoincrement under SQLite.
     await _seed_open_trade(db)
     await _seed_close_recommending_trajectories(db)       # policy learns 'close'
-    await db.set_setting("exit_policy_mode", "active")
+    await db.settings.set_setting("exit_policy_mode", "active")
     engine = CascadingEngine(
         broker=_StubBroker(QUOTES), db=db, strategies=[],
         overseer=_StubOverseer("enforcing"))
@@ -196,7 +196,7 @@ async def test_active_closes_confident_positions(db):
     assert actions[0].strategy_params["trade_id"] == 1
     assert actions[0].strategy_params["close_reason"] == "EXIT-POLICY"
     assert actions[0].ai_authored is True
-    decisions = await db.recent_ai_decisions(strategy_id="EXITPOLICY")
+    decisions = await db.decisions.recent_ai_decisions(strategy_id="EXITPOLICY")
     assert decisions[0]["decision"]["acted"] == [1]
 
 
@@ -210,7 +210,7 @@ async def test_active_close_price_never_exceeds_spread_width(db):
         deep_short: {"symbol": deep_short, "bid": 4.90, "ask": 5.00},   # mid 4.95
         deep_long: {"symbol": deep_long, "bid": 0.00, "ask": 0.10},      # mid 0.05
     }                                                                     # debit 4.90
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         s.add(Trade(
             id=1, strategy_id="CS75", symbol="TSLA", side_type="put",
@@ -220,14 +220,14 @@ async def test_active_close_price_never_exceeds_spread_width(db):
         await s.commit()
     # Trajectories that recommend closing at this deep-loss state.
     for tid in range(100, 112):
-        await db.record_exit_tick(
+        await db.trades.record_exit_tick(
             trade_id=tid, strategy_id="CS75", symbol="TSLA", dte=25,
             unrealized_pnl_pct=-3.90, debit=4.90, entry_credit=1.0, action="hold")
-        await db.record_exit_tick(
+        await db.trades.record_exit_tick(
             trade_id=tid, strategy_id="CS75", symbol="TSLA", dte=4,
             unrealized_pnl_pct=-4.50, debit=5.00, entry_credit=1.0,
             action="close", close_reason="SL")
-    await db.set_setting("exit_policy_mode", "active")
+    await db.settings.set_setting("exit_policy_mode", "active")
     engine = CascadingEngine(
         broker=_StubBroker(quotes), db=db, strategies=[],
         overseer=_StubOverseer("enforcing"))
@@ -251,7 +251,7 @@ async def test_active_close_price_never_exceeds_spread_width(db):
 async def test_active_blocked_under_advisory_autonomy(db):
     await _seed_open_trade(db)
     await _seed_close_recommending_trajectories(db)
-    await db.set_setting("exit_policy_mode", "active")
+    await db.settings.set_setting("exit_policy_mode", "active")
     engine = CascadingEngine(
         broker=_StubBroker(QUOTES), db=db, strategies=[],
         overseer=_StubOverseer("advisory"))
@@ -277,8 +277,8 @@ async def test_off_mode_is_a_noop(db):
 
     await engine.tuning._maybe_capture_and_advise_exits([])
 
-    assert await db.fetch_exit_ticks() == []
-    assert await db.recent_ai_decisions(strategy_id="EXITPOLICY") == []
+    assert await db.trades.fetch_exit_ticks() == []
+    assert await db.decisions.recent_ai_decisions(strategy_id="EXITPOLICY") == []
 
 
 @pytest.mark.asyncio
@@ -289,7 +289,7 @@ async def test_reactive_exit_on_market_data_event(db, monkeypatch):
 
     await _seed_open_trade(db)
     await _seed_close_recommending_trajectories(db)
-    await db.set_setting("exit_policy_mode", "active")
+    await db.settings.set_setting("exit_policy_mode", "active")
 
     engine = CascadingEngine(
         broker=_StubBroker(QUOTES), db=db, strategies=[],

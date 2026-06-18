@@ -31,12 +31,12 @@ class EngineAIMixin:
 
         if event.verdict == "VETO":
             logger.info("[AI VETOED] Strategy=%s symbol=%s - %s", event.strategy_id, event.symbol, event.rationale)
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
             if event.approval_id is not None:
-                await self.db.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
+                await self.db.approvals.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
             # Record a short-lived suppression so the rules engine stops
             # re-proposing this identical entry next tick (a veto consumes
             # no capacity, so without this it would brute-force the same
@@ -48,7 +48,7 @@ class EngineAIMixin:
                 if veto_side and str(veto_side).lower() in {"buy", "sell"}:
                     veto_side = None
                 try:
-                    hits = await self.db.record_veto(
+                    hits = await self.db.approvals.record_veto(
                         event.strategy_id, event.symbol, veto_side,
                         a.expiry, event.rationale, ttl)
                     logger.info("[VETO] suppression recorded for %s (hits=%d, ttl=%ds)",
@@ -176,7 +176,7 @@ class EngineAIMixin:
                 held = qty_map.get(short_sym, 0.0)
                 if held > -lots:
                     # Not short, or not short enough, to cover this close.
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: broker holds "
                         f"{held:g} of {short_sym} (need short ≥ {lots}); skip — "
@@ -185,7 +185,7 @@ class EngineAIMixin:
                     continue
                 long_sym = long_leg.get("option_symbol") if long_leg else None
                 if short_sym in active_legs or (long_sym and long_sym in active_legs):
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: a resting order "
                         f"already works this position; skip — avoids duplicate cover",
@@ -200,7 +200,7 @@ class EngineAIMixin:
                     lq = qmap.get(long_leg.get("option_symbol"))
                     debit, blocked, reason = AbstractStrategy.compute_close_debit(sq, lq, a.width)
                     if blocked:
-                        await self.db.write_log(
+                        await self.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol} trade_id="
                             f"{(a.strategy_params or {}).get('trade_id')}: "
@@ -210,7 +210,7 @@ class EngineAIMixin:
                 else:
                     ask = float((sq or {}).get("ask") or 0)
                     if ask <= 0:
-                        await self.db.write_log(
+                        await self.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol}: stale ask on "
                             f"{short_leg.get('option_symbol')}; skip this tick",
@@ -221,7 +221,7 @@ class EngineAIMixin:
                 logger.info("[AI-CLOSE] %s trade_id=%s debit=$%.2f — %s",
                             a.symbol, (a.strategy_params or {}).get("trade_id"),
                             a.price, a.ai_rationale)
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-CLOSE] {a.symbol} trade_id="
                     f"{(a.strategy_params or {}).get('trade_id')} debit=${a.price:.2f} "
@@ -251,7 +251,7 @@ class EngineAIMixin:
             return []
         if self.mm is None:
             for a in actions:
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — no MoneyManager wired; "
                     f"cannot validate capacity (fail-closed)",
@@ -267,16 +267,16 @@ class EngineAIMixin:
                     a, broker=self.broker, db=self.db, mm=self.mm)
             except Exception as exc:                              # noqa: BLE001
                 logger.exception("[AI-GATE] error validating %s: %s", a.symbol, exc)
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — validation error: {exc}",
                 )
                 continue
             if validated is None:
                 logger.info("[AI-GATE] REJECTED %s", reason)
-                await self.db.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
+                await self.db.logs.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
             else:
                 logger.info("[AI-GATE] %s", reason)
-                await self.db.write_log(a.strategy_id, f"[AI-GATE] {reason}")
+                await self.db.logs.write_log(a.strategy_id, f"[AI-GATE] {reason}")
                 gated.append(validated)
         return gated

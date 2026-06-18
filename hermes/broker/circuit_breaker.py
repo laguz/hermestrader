@@ -63,7 +63,7 @@ class CircuitBreaker:
         if db is not None:
             try:
                 # Set agent_paused to true in DB settings and write a critical log
-                await db.set_setting("agent_paused", "true")
-                await db.write_log("ENGINE", "[CRITICAL] Circuit Breaker tripped: Agent automatically PAUSED", level="ERROR")
+                await db.settings.set_setting("agent_paused", "true")
+                await db.logs.write_log("ENGINE", "[CRITICAL] Circuit Breaker tripped: Agent automatically PAUSED", level="ERROR")
             except Exception as e:
                 logger.error("Failed to automatically pause agent in database: %s", e)

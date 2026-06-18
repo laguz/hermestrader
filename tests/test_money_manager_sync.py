@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 
 from hermes.service1_agent.core import CascadingEngine, MoneyManager
+from ._stubs import RepoNamespaceMixin
 
 
 class _StubBroker:
@@ -28,7 +29,7 @@ class _StubBroker:
         return {"option_buying_power": 0.0, "account_type": "margin"}
 
 
-class _StubDB:
+class _StubDB(RepoNamespaceMixin):
     async def write_log(self, *_args, **_kwargs):
         pass
 

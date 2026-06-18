@@ -39,13 +39,13 @@ class PortfolioRiskEngine:
             balances = await self.broker.get_account_balances() or {}
             available_bp = max(0.0, float(balances.get("option_buying_power", 0.0)))
             try:
-                reserve_val = await self.db.get_setting("obp_reserve")
+                reserve_val = await self.db.settings.get_setting("obp_reserve")
                 if reserve_val:
                     available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
             except Exception:
                 pass
 
-            db_open_trades = await self.db.all_open_trades() or []
+            db_open_trades = await self.db.trades.all_open_trades() or []
 
             from hermes.portfolio.optimizer import PortfolioOptimizer
             optimizer = PortfolioOptimizer(self.config)
@@ -68,38 +68,38 @@ class PortfolioRiskEngine:
         balances = await self.broker.get_account_balances() or {}
         available_bp = max(0.0, float(balances.get("option_buying_power", 0.0)))
         try:
-            reserve_val = await self.db.get_setting("obp_reserve")
+            reserve_val = await self.db.settings.get_setting("obp_reserve")
             if reserve_val:
                 available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
         except Exception:
             pass
 
-        db_open_trades = await self.db.all_open_trades() or []
+        db_open_trades = await self.db.trades.all_open_trades() or []
         running_open_trades = list(db_open_trades)
 
         safety_enabled = False
         safety_config = {}
         try:
-            enabled_raw = await self.db.get_setting("safety_gateway_enabled")
+            enabled_raw = await self.db.settings.get_setting("safety_gateway_enabled")
             if enabled_raw is not None:
                 safety_enabled = enabled_raw.lower() == "true"
 
-            max_risk_raw = await self.db.get_setting("safety_max_risk_bp_ratio")
+            max_risk_raw = await self.db.settings.get_setting("safety_max_risk_bp_ratio")
             if max_risk_raw is not None:
                 safety_config["safety_max_risk_bp_ratio"] = float(max_risk_raw)
                 safety_enabled = True
 
-            max_exp_raw = await self.db.get_setting("safety_max_symbol_exposure_ratio")
+            max_exp_raw = await self.db.settings.get_setting("safety_max_symbol_exposure_ratio")
             if max_exp_raw is not None:
                 safety_config["safety_max_symbol_exposure_ratio"] = float(max_exp_raw)
                 safety_enabled = True
 
-            max_trades_raw = await self.db.get_setting("safety_max_symbol_trades")
+            max_trades_raw = await self.db.settings.get_setting("safety_max_symbol_trades")
             if max_trades_raw is not None:
                 safety_config["safety_max_symbol_trades"] = int(max_trades_raw)
                 safety_enabled = True
 
-            side_lock_raw = await self.db.get_setting("safety_side_lock_enabled")
+            side_lock_raw = await self.db.settings.get_setting("safety_side_lock_enabled")
             if side_lock_raw is not None:
                 safety_config["safety_side_lock_enabled"] = side_lock_raw.lower() == "true"
                 safety_enabled = True
@@ -145,8 +145,8 @@ class PortfolioRiskEngine:
             key = (action.strategy_id, action.symbol, action.side, action.expiry)
             in_tick_used = in_tick_allocated.get(key, 0)
 
-            open_qty = await self.db.count_open_contracts(action.strategy_id, action.symbol, action.side, action.expiry)
-            pending = await self.db.count_pending_orders(action.strategy_id, action.symbol, action.side, action.expiry)
+            open_qty = await self.db.trades.count_open_contracts(action.strategy_id, action.symbol, action.side, action.expiry)
+            pending = await self.db.trades.count_pending_orders(action.strategy_id, action.symbol, action.side, action.expiry)
             broker_qty = self._broker_order_counts.get((action.strategy_id, action.symbol, action.side, action.expiry), 0)
 
             total_used = open_qty + pending + broker_qty + in_tick_used
@@ -172,7 +172,7 @@ class PortfolioRiskEngine:
                 if report.decision == "REJECTED":
                     logger.warning("[RiskEngine] Safety gateway rejected %s entry: %s", action.symbol, report.violations)
                     for violation in report.violations:
-                        await self.db.write_log(
+                        await self.db.logs.write_log(
                             action.strategy_id,
                             f"[SAFETY VIOLATION] {action.symbol} {action.side.upper()}: {violation}"
                         )
@@ -186,7 +186,7 @@ class PortfolioRiskEngine:
                     reason = f"insufficient BP (avail=${available_bp:,.0f} need=${requirement_per_lot:,.0f}/lot acct_type={acct_type})"
                 else:
                     reason = f"bp_cap={bp_cap} side_cap={side_cap}"
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     action.strategy_id,
                     f"[MM] BLOCKED {action.symbol} {action.side.upper()}: {reason} — 0 lots available",
                 )
@@ -195,7 +195,7 @@ class PortfolioRiskEngine:
                     "[RiskEngine] Scaled %s/%s %s %d→%d (bp_cap=%d side_cap=%d)",
                     action.strategy_id, action.symbol, action.side, requested_lots, scaled, bp_cap, side_cap,
                 )
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     action.strategy_id,
                     f"[MM] Scaled {action.symbol} {action.side.upper()} {requested_lots}→{scaled} lots (bp_cap={bp_cap} side_cap={side_cap})",
                 )

@@ -123,7 +123,7 @@ class _StubOverseer:
 
 
 async def _seed_closed_trades(db, n=6, *, pop_value=0.80, pnl=90.0):
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         for i in range(n):
             s.add(Trade(
@@ -140,7 +140,7 @@ async def _seed_closed_trades(db, n=6, *, pop_value=0.80, pnl=90.0):
 @pytest.mark.asyncio
 async def test_shadow_mode_audits_without_mutating(db):
     await _seed_closed_trades(db)
-    await db.set_setting("bandit_tuner_mode", "shadow")
+    await db.settings.set_setting("bandit_tuner_mode", "shadow")
     engine = CascadingEngine(
         broker=object(), db=db, strategies=[],
         config={"bandit_min_observations": 3, "bandit_tuning_interval_s": 0})
@@ -148,8 +148,8 @@ async def test_shadow_mode_audits_without_mutating(db):
     await engine.tuning._maybe_run_bandit_tuner()
 
     # Audited but no knob mutated.
-    assert await db.get_setting("cs75_pop_target") is None
-    decisions = await db.recent_ai_decisions(strategy_id="BANDIT")
+    assert await db.settings.get_setting("cs75_pop_target") is None
+    decisions = await db.decisions.recent_ai_decisions(strategy_id="BANDIT")
     assert len(decisions) == 1
     assert decisions[0]["decision"]["mode"] == "shadow"
     assert decisions[0]["decision"]["applied"] == {}
@@ -158,7 +158,7 @@ async def test_shadow_mode_audits_without_mutating(db):
 @pytest.mark.asyncio
 async def test_active_mode_applies_actionable_changes(db):
     await _seed_closed_trades(db)
-    await db.set_setting("bandit_tuner_mode", "active")
+    await db.settings.set_setting("bandit_tuner_mode", "active")
     engine = CascadingEngine(
         broker=object(), db=db, strategies=[],
         overseer=_StubOverseer("enforcing"),
@@ -167,7 +167,7 @@ async def test_active_mode_applies_actionable_changes(db):
     await engine.tuning._maybe_run_bandit_tuner()
 
     # An actionable + changed knob was written to settings.
-    applied_val = await db.get_setting("cs75_pop_target")
+    applied_val = await db.settings.get_setting("cs75_pop_target")
     assert applied_val is not None
     assert float(applied_val) in LEARNABLE_KNOBS["CS75"]["cs75_pop_target"]
 
@@ -175,7 +175,7 @@ async def test_active_mode_applies_actionable_changes(db):
 @pytest.mark.asyncio
 async def test_active_mode_blocked_when_autonomy_advisory(db):
     await _seed_closed_trades(db)
-    await db.set_setting("bandit_tuner_mode", "active")
+    await db.settings.set_setting("bandit_tuner_mode", "active")
     engine = CascadingEngine(
         broker=object(), db=db, strategies=[],
         overseer=_StubOverseer("advisory"),
@@ -184,7 +184,7 @@ async def test_active_mode_blocked_when_autonomy_advisory(db):
     await engine.tuning._maybe_run_bandit_tuner()
 
     # Advisory autonomy never mutates a live setting, even in active mode.
-    assert await db.get_setting("cs75_pop_target") is None
+    assert await db.settings.get_setting("cs75_pop_target") is None
 
 
 @pytest.mark.asyncio
@@ -197,5 +197,5 @@ async def test_off_mode_is_a_noop(db):
 
     await engine.tuning._maybe_run_bandit_tuner()
 
-    assert await db.recent_ai_decisions(strategy_id="BANDIT") == []
-    assert await db.get_setting("bandit_last_run_ts") is None
+    assert await db.decisions.recent_ai_decisions(strategy_id="BANDIT") == []
+    assert await db.settings.get_setting("bandit_last_run_ts") is None

@@ -139,8 +139,8 @@ def run_backtest(
     Heavy enough that it runs synchronously — operator-initiated, not
     background-loop driven.
     """
-    bars = db.daily_bars(symbol, lookback_days=days)
-    spy = db.daily_bars("SPY", lookback_days=days)
+    bars = db.timeseries.daily_bars(symbol, lookback_days=days)
+    spy = db.timeseries.daily_bars("SPY", lookback_days=days)
     if bars is None or bars.empty or spy is None:
         raise HTTPException(404, f"insufficient bars for {symbol}")
 

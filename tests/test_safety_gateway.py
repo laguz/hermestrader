@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock
@@ -180,6 +181,7 @@ async def test_broker_wrapper_safety_validation_interception():
     mock_broker.place_order_from_action = AsyncMock(return_value={"order_id": "123"})
     
     mock_db = MagicMock()
+    alias_db_namespaces(mock_db)
     mock_db.get_setting = AsyncMock(return_value="0.05") # 5% of 1000 = $50 max risk
     mock_db.all_open_trades = AsyncMock(return_value=[])
     mock_db.write_log = AsyncMock()

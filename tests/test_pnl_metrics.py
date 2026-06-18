@@ -29,7 +29,7 @@ def db():
 
 
 async def test_pnl_metrics_option_spreads(db):
-    await db.ensure_strategies({
+    await db.watchlist.ensure_strategies({
         "CS7": 1,
         "CS75": 2,
         "TT45": 3,
@@ -78,7 +78,7 @@ async def test_pnl_metrics_option_spreads(db):
         s.add_all([t1, t2])
         await s.commit()
         
-    metrics = await db.get_strategy_performance_metrics(days=30)
+    metrics = await db.analytics.get_strategy_performance_metrics(days=30)
     cs7 = metrics["CS7"]
     assert cs7["closed_trades"] == 2
     assert cs7["passed"] == 1
@@ -88,7 +88,7 @@ async def test_pnl_metrics_option_spreads(db):
 
 
 async def test_pnl_metrics_cs75_and_tt45(db):
-    await db.ensure_strategies({
+    await db.watchlist.ensure_strategies({
         "CS7": 1,
         "CS75": 2,
         "TT45": 3,
@@ -137,7 +137,7 @@ async def test_pnl_metrics_cs75_and_tt45(db):
         s.add_all([t1, t2])
         await s.commit()
         
-    metrics = await db.get_strategy_performance_metrics(days=30)
+    metrics = await db.analytics.get_strategy_performance_metrics(days=30)
     
     assert metrics["CS75"]["passed"] == 1
     assert metrics["CS75"]["failed"] == 0
@@ -149,7 +149,7 @@ async def test_pnl_metrics_cs75_and_tt45(db):
 
 
 async def test_pnl_metrics_wheel(db):
-    await db.ensure_strategies({
+    await db.watchlist.ensure_strategies({
         "CS7": 1,
         "CS75": 2,
         "TT45": 3,
@@ -243,7 +243,7 @@ async def test_pnl_metrics_wheel(db):
         s.add_all([t1, t2, t3])
         await s.commit()
         
-    metrics = await db.get_strategy_performance_metrics(days=30)
+    metrics = await db.analytics.get_strategy_performance_metrics(days=30)
     wheel = metrics["WHEEL"]
     assert wheel["passed"] == 1
     assert wheel["failed"] == 1

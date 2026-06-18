@@ -50,7 +50,7 @@ class CreditSpreads7(AbstractStrategy):
         # DTE target — live-tunable via system_settings; fallback to 7.
         entry_dte = t.cs7_dte
 
-        detailed_wl = await self.db.list_watchlist_detailed(self.strategy_id)
+        detailed_wl = await self.db.watchlist.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
 
         self._log(
@@ -81,7 +81,7 @@ class CreditSpreads7(AbstractStrategy):
                 target_lots = min(target_lots, max_lots_global)
 
                 # Cooldown check: prevent immediate re-entry if a trade was closed recently
-                last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+                last_closed = await self.db.trades.latest_closed_trade_time(self.strategy_id, symbol)
                 if last_closed:
                     cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
                     last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
@@ -97,7 +97,7 @@ class CreditSpreads7(AbstractStrategy):
                     continue
 
                 # 3M POP regime (short-cycle entries → shorter lookback).
-                xgb_pred = await self.db.latest_prediction(symbol) or {}
+                xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
                 analysis = augment_levels_with_pop(analysis, xgb_pred, period="3m")
 
                 price = analysis["current_price"]
@@ -120,7 +120,7 @@ class CreditSpreads7(AbstractStrategy):
                         self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside {completion_min}-{entry_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
-                                      for leg in await self.db.open_legs(self.strategy_id, symbol)
+                                      for leg in await self.db.trades.open_legs(self.strategy_id, symbol)
                                       if leg.get("expiry") == expiry}
 
                 self._log(f"→ {symbol}: {'MODE A' if mode_a else 'MODE B'} expiry={expiry} existing_sides={sorted(existing_sides)}")
@@ -239,7 +239,7 @@ class CreditSpreads7(AbstractStrategy):
         # somehow lacks one — the previous default of 5.0 came from
         # CS75 and silently inflated CS7's TP threshold 5×.
         cfg_width = t.cs7_width
-        for trade in await self.db.open_trades(self.strategy_id):
+        for trade in await self.db.trades.open_trades(self.strategy_id):
             entry_credit = float(trade["entry_credit"])
             row_width = trade.get("width")
             width = float(row_width) if row_width is not None else cfg_width

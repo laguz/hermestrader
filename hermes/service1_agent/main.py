@@ -202,7 +202,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     except Exception as exc:                                      # noqa: BLE001
         log.exception("Agent startup update/soul sync failed: %s", exc)
     try:
-        await db.ensure_strategies(STRATEGY_PRIORITIES)
+        await db.watchlist.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:                                      # noqa: BLE001
         log.exception("ensure_strategies failed at startup: %s", exc)
 
@@ -212,25 +212,25 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         log.info("Runtime settings validated successfully: %s", runtime_config.model_dump())
         
         # Persist defaults/fallbacks back to DB if they were not there
-        if await db.get_setting("obp_reserve") is None:
-            await db.set_setting("obp_reserve", str(runtime_config.obp_reserve))
-        if await db.get_setting("tick_interval") is None:
-            await db.set_setting("tick_interval", str(runtime_config.tick_interval))
-        if await db.get_setting("bandit_tuner_mode") is None:
-            await db.set_setting("bandit_tuner_mode", runtime_config.bandit_tuner_mode)
-        if await db.get_setting("exit_policy_mode") is None:
-            await db.set_setting("exit_policy_mode", runtime_config.exit_policy_mode)
+        if await db.settings.get_setting("obp_reserve") is None:
+            await db.settings.set_setting("obp_reserve", str(runtime_config.obp_reserve))
+        if await db.settings.get_setting("tick_interval") is None:
+            await db.settings.set_setting("tick_interval", str(runtime_config.tick_interval))
+        if await db.settings.get_setting("bandit_tuner_mode") is None:
+            await db.settings.set_setting("bandit_tuner_mode", runtime_config.bandit_tuner_mode)
+        if await db.settings.get_setting("exit_policy_mode") is None:
+            await db.settings.set_setting("exit_policy_mode", runtime_config.exit_policy_mode)
     except Exception as exc:
         log.error("Fatal startup settings validation error: %s", exc)
         raise
 
     # Initial mode comes from settings (so the operator's last toggle wins
     # across restarts) and falls back to env config on first ever boot.
-    initial_mode = (await db.get_setting(SETTING_MODE) or conf.get("mode") or "paper").lower()
+    initial_mode = (await db.settings.get_setting(SETTING_MODE) or conf.get("mode") or "paper").lower()
     if initial_mode not in VALID_MODES:
         initial_mode = "paper"
-    await db.set_setting(SETTING_MODE, initial_mode)
-    await db.set_setting(SETTING_AGENT_STARTED_AT, _utcnow_iso())
+    await db.settings.set_setting(SETTING_MODE, initial_mode)
+    await db.settings.set_setting(SETTING_AGENT_STARTED_AT, _utcnow_iso())
 
     current_mode = initial_mode
     broker = _build_broker(conf, current_mode)
@@ -240,12 +240,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     # Operator doctrine + autonomy + pause are tracked together.
     current_overseer_cfg = await _read_overseer_settings(db, conf)
-    await db.set_setting(SETTING_AUTONOMY, current_overseer_cfg["autonomy"])
-    await db.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
-    if await db.get_setting(SETTING_SOUL) is None:
-        await db.set_setting(SETTING_SOUL, "")
-    if await db.get_setting(SETTING_LLM_OUT_OF_LOOP) is None:
-        await db.set_setting(SETTING_LLM_OUT_OF_LOOP, "true")
+    await db.settings.set_setting(SETTING_AUTONOMY, current_overseer_cfg["autonomy"])
+    await db.settings.set_setting(SETTING_PAUSED, "true" if current_overseer_cfg["paused"] else "false")
+    if await db.settings.get_setting(SETTING_SOUL) is None:
+        await db.settings.set_setting(SETTING_SOUL, "")
+    if await db.settings.get_setting(SETTING_LLM_OUT_OF_LOOP) is None:
+        await db.settings.set_setting(SETTING_LLM_OUT_OF_LOOP, "true")
 
     # Initialize Event Bus
     from hermes.events.bus import EventBus
@@ -310,7 +310,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 await stream_client.stop()
                 watchlist_syms = set(conf.get("watchlist", []))
                 try:
-                    watchlist_syms.update(await db.tracked_option_symbols())
+                    watchlist_syms.update(await db.trades.tracked_option_symbols())
                 except Exception:
                     pass
                 stream_client = _build_stream_client(new_broker, db, event_bus, watchlist_syms)
@@ -319,10 +319,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
                 AsyncBrokerWrapper.clear_cache()
                 current_mode = desired_mode
-                await db.write_log("ENGINE", f"mode switched to {current_mode}")
+                await db.logs.write_log("ENGINE", f"mode switched to {current_mode}")
             except Exception as exc:
                 log.exception("Mode switch to %s failed: %s", desired_mode, exc)
-                await db.set_setting(SETTING_TRADIER_ERROR, f"mode switch failed: {exc}")
+                await db.settings.set_setting(SETTING_TRADIER_ERROR, f"mode switch failed: {exc}")
 
     event_bus.subscribe(ModeChangedEvent, _handle_mode_change)
 
@@ -345,7 +345,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             if engine.overseer is not None:
                 await engine.overseer.start()
 
-            await db.write_log(
+            await db.logs.write_log(
                 "ENGINE",
                 f"LLM swapped reactively: provider={new_snapshot['provider']} model={new_snapshot['model'] or '-'}"
             )
@@ -402,7 +402,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         elif action == IPC_ACTION_TRIGGER_ML:
             log.info("[IPC] Received trigger ML signal reactively")
             try:
-                await db.set_setting("ml_force_run", "true")
+                await db.settings.set_setting("ml_force_run", "true")
             except Exception:
                 pass
             from hermes.events.bus import MlRetrainTick
@@ -413,7 +413,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Track watchlist symbols + active DB option legs
     watchlist_syms = set(conf.get("watchlist", []))
     try:
-        watchlist_syms.update(await db.tracked_option_symbols())
+        watchlist_syms.update(await db.trades.tracked_option_symbols())
     except Exception:
         pass
 
@@ -432,7 +432,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             
             watchlist_syms = set(conf.get("watchlist", []))
             try:
-                all_wls = await db.list_all_watchlists()
+                all_wls = await db.watchlist.list_all_watchlists()
                 for syms in all_wls.values():
                     watchlist_syms.update(syms)
             except Exception:

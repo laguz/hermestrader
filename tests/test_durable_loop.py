@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import asyncio
 import json
@@ -64,6 +65,7 @@ async def test_durable_loop_redis_streams_flow():
     # 3. Instantiate Engine with dummy strategy
     strat = DummyStrategy("CS75", 1, "CS75")
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     broker_mock = AsyncMock()
     
     engine = CascadingEngine(
