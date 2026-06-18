@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 import pytest
 
-from hermes.broker.async_tradier import AsyncTradierBroker
+from hermes.broker.tradier import TradierBroker
 from hermes.service1_agent.core import TradeAction
 
 
@@ -19,7 +19,7 @@ def broker_cfg():
 
 @pytest.mark.anyio
 async def test_async_broker_get_balances(broker_cfg):
-    broker = AsyncTradierBroker(broker_cfg)
+    broker = TradierBroker(broker_cfg)
     
     mock_response = {
         "balances": {
@@ -45,7 +45,7 @@ async def test_async_broker_get_balances(broker_cfg):
 
 @pytest.mark.anyio
 async def test_async_broker_place_order(broker_cfg):
-    broker = AsyncTradierBroker(broker_cfg)
+    broker = TradierBroker(broker_cfg)
     
     action = TradeAction(
         strategy_id="CS75",
@@ -80,7 +80,11 @@ async def test_async_broker_place_order(broker_cfg):
         assert post_data["price"] == "1.50"
         assert post_data["tag"] == "HERMES-CS75"
         assert post_data["preview"] == "true"
-        
-        assert res["order"]["id"] == 12345
-        
+
+        # TradierBroker normalizes the raw response into an OrderPlacementResult:
+        # the id is stringified, and the original payload is kept under raw_response.
+        assert res["order_id"] == "12345"
+        assert res["status"] == "ok"
+        assert res["raw_response"]["order"]["id"] == 12345
+
     await broker.close()

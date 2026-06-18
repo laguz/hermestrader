@@ -19,7 +19,7 @@ logger = logging.getLogger("hermes.broker.mock_engine")
 
 class MockAsyncTradierBroker(AbstractBroker):
     """
-    An in-memory simulated matching engine that satisfies the AsyncTradierBroker interface.
+    An in-memory simulated matching engine that satisfies the TradierBroker interface.
     Exposes simulated ticks to execute limit/market orders with simulated slippage.
     """
     def __init__(self, config: Optional[Dict[str, Any]] = None):

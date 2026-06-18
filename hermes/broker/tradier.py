@@ -1,7 +1,10 @@
 """
-TradierBroker — concrete asynchronous broker implementation against the Tradier REST API.
+TradierBroker — the asynchronous broker implementation against the Tradier REST API.
 
-Shaped identically to the original TradierBroker but functions are async and use httpx.AsyncClient.
+This is the single Tradier client for the whole codebase: the trading agent
+(Service-1), the watcher's analytics (Service-2), and the MCP server all use it.
+It conforms to ``AbstractBroker`` and returns the dict-compatible normalized
+models from ``hermes.broker.models``, built on ``httpx.AsyncClient``.
 """
 from __future__ import annotations
 

@@ -138,8 +138,8 @@ def test_mcp_server_broker_mode_aware_paper(monkeypatch):
     import hermes.config
     hermes.config.settings = hermes.config.HermesSettings()
     
-    # We mock AsyncTradierBroker so we don't hit requests inside its init
-    with patch("hermes.mcp.server.AsyncTradierBroker") as mock_broker_class:
+    # We mock TradierBroker so we don't hit requests inside its init
+    with patch("hermes.mcp.server.TradierBroker") as mock_broker_class:
         # Reset global _BROKERS dict to force instantiation
         if hasattr(server, "_BROKERS"):
             server._BROKERS.clear()
@@ -165,13 +165,13 @@ def test_mcp_server_broker_mode_aware_live(monkeypatch):
     import hermes.config
     hermes.config.settings = hermes.config.HermesSettings()
     
-    with patch("hermes.mcp.server.AsyncTradierBroker") as mock_broker_class:
+    with patch("hermes.mcp.server.TradierBroker") as mock_broker_class:
         if hasattr(server, "_BROKERS"):
             server._BROKERS.clear()
-            
+
         import asyncio
         asyncio.run(server._broker())
-        
+
         mock_broker_class.assert_called_once()
         cfg = mock_broker_class.call_args[0][0]
         assert cfg["tradier_access_token"] == "live-tok"

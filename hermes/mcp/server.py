@@ -1,7 +1,7 @@
 """
 Tradier MCP server.
 
-Exposes the AsyncTradierBroker as a Model Context Protocol server so any MCP client
+Exposes the TradierBroker as a Model Context Protocol server so any MCP client
 (Claude Desktop, Cursor, Windsurf) can call the broker asynchronously over stdio or SSE.
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from hermes.broker.async_tradier import AsyncTradierBroker
+from hermes.broker.tradier import TradierBroker
 
 mcp = FastMCP("tradier")
 
@@ -52,11 +52,11 @@ def load_env_file() -> None:
                         if k and v and k not in os.environ:
                             os.environ[k] = v
 
-_BROKERS: Dict[str, AsyncTradierBroker] = {}
+_BROKERS: Dict[str, TradierBroker] = {}
 
 
-async def _broker() -> AsyncTradierBroker:
-    """Resolve and cache AsyncTradierBroker per mode to handle dynamic toggling."""
+async def _broker() -> TradierBroker:
+    """Resolve and cache TradierBroker per mode to handle dynamic toggling."""
     from hermes.config import settings
     mode = settings.hermes_mode
     if mode not in _BROKERS:
@@ -68,7 +68,7 @@ async def _broker() -> AsyncTradierBroker:
             "tradier_base_url": url,
             "dry_run": dry_run
         }
-        _BROKERS[mode] = AsyncTradierBroker(cfg)
+        _BROKERS[mode] = TradierBroker(cfg)
     return _BROKERS[mode]
 
 
