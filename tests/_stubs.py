@@ -128,6 +128,8 @@ class StubDB:
         self._predictions: Dict[str, Dict[str, Any]] = {}
         self._vetoes: List[Dict[str, Any]] = []
         self._closed_times: Dict[tuple, datetime] = {}
+        self.approvals: List[Dict[str, Any]] = []
+        self._next_approval_id = 1
 
     # ── seeding helpers ─────────────────────────────────────────────────────
     def set_latest_closed_trade_time(self, strategy_id: str, symbol: str, dt: Optional[datetime]):
@@ -222,7 +224,14 @@ class StubDB:
     async def equity_position(self, symbol: str) -> int:
         return 0
 
-    async def has_pending_approval(self, *_a, **_kw):
+    async def has_pending_approval(self, strategy_id: str, symbol: str, side: str, expiry: str) -> bool:
+        for app in self.approvals:
+            if app["status"] in ("PENDING", "PENDING_AI_REVIEW"):
+                a_dict = app["action_json"]
+                app_side = (a_dict.get("strategy_params") or {}).get("side_type")
+                if (app["strategy_id"] == strategy_id and app["symbol"] == symbol.upper()
+                        and app_side == side and a_dict.get("expiry") == expiry):
+                    return True
         return False
 
     async def get_setting(self, key: str, default: Optional[str] = None):
@@ -243,8 +252,68 @@ class StubDB:
     async def close_trade_from_action(self, action, response):
         pass
 
-    async def queue_for_approval(self, action_dict, action_type="entry"):
-        pass
+    async def queue_for_approval(self, action_dict, action_type="entry", status="PENDING"):
+        app_id = self._next_approval_id
+        self._next_approval_id += 1
+        self.approvals.append({
+            "id": app_id,
+            "action_json": action_dict,
+            "strategy_id": action_dict.get("strategy_id"),
+            "symbol": action_dict.get("symbol"),
+            "action_type": action_type,
+            "status": status.upper(),
+            "notes": None,
+            "decided_at": None,
+            "executed_at": None
+        })
+        return app_id
+
+    async def fetch_pending_ai_review_actions(self):
+        return [
+            item for item in self.approvals
+            if item["status"] == "PENDING_AI_REVIEW"
+        ]
+
+    async def update_approval_status(self, approval_id: int, status: str,
+                               action_json=None, notes=None) -> bool:
+        for item in self.approvals:
+            if item["id"] == approval_id:
+                item["status"] = status.upper()
+                if action_json is not None:
+                    item["action_json"] = action_json
+                if notes is not None:
+                    item["notes"] = notes
+                return True
+        return False
+
+    async def fetch_approved_actions(self):
+        return [
+            item for item in self.approvals
+            if item["status"] == "APPROVED"
+        ]
+
+    async def mark_approval_executed(self, approval_id: int, success: bool = True,
+                               notes: Optional[str] = None) -> None:
+        for item in self.approvals:
+            if item["id"] == approval_id:
+                item["status"] = "EXECUTED" if success else "FAILED"
+                if notes is not None:
+                    item["notes"] = notes
+
+    async def decide_approval(self, approval_id: int, decision: str,
+                        notes: Optional[str] = None) -> bool:
+        decision = decision.upper()
+        if decision not in ("APPROVED", "REJECTED"):
+            raise ValueError(f"decision must be APPROVED or REJECTED, got {decision!r}")
+        for item in self.approvals:
+            if item["id"] == approval_id:
+                if item["status"] != "PENDING":
+                    return False
+                item["status"] = decision
+                if notes is not None:
+                    item["notes"] = notes
+                return True
+        return False
 
     async def recent_logs(self, limit: int = 200) -> str:
         return "\n".join(self.logs[-limit:])

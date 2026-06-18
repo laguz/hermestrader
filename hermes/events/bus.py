@@ -2,7 +2,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Type, TypeVar, Awaitable
+from typing import Any, Callable, Dict, List, Type, TypeVar, Awaitable, Optional
 
 logger = logging.getLogger("hermes.events")
 
@@ -44,6 +44,7 @@ class ReviewRequestEvent(Event):
     # 'entry' | 'management' | 'ai' — carried through review so the eventual
     # execution routes pure closes correctly instead of defaulting to 'entry'.
     action_type: str = "entry"
+    approval_id: Optional[int] = None
 
 @dataclass
 class AIApprovalEvent(Event):
@@ -56,6 +57,28 @@ class AIApprovalEvent(Event):
     original_action: Any = None
     # Preserved from the originating ReviewRequestEvent / submit() call.
     action_type: str = "entry"
+    approval_id: Optional[int] = None
+
+
+@dataclass
+class ClockTickEvent(Event):
+    """Fired periodically by the Scheduler to trigger tick loops and safety sweeps."""
+    pass
+
+@dataclass
+class MlRetrainTick(Event):
+    """Fired by the Scheduler to trigger ML retraining checks."""
+    force: bool = False
+
+@dataclass
+class CacheWarmTick(Event):
+    """Fired by the Scheduler to trigger cache pre-warming."""
+    pass
+
+@dataclass
+class ChartRefreshTick(Event):
+    """Fired by the Scheduler to trigger chart vision analysis."""
+    pass
 
 
 E = TypeVar("E", bound=Event)

@@ -3,36 +3,33 @@ import os
 import logging
 from cryptography.fernet import Fernet
 
-_VIRTUAL_TIME: datetime.datetime | None = None
+from hermes.clock import Clock, RealClock, SimulatedClock
+
+_GLOBAL_CLOCK: Clock = RealClock()
 
 def utc_now() -> datetime.datetime:
     """Return timezone-naive current UTC time, honoring virtual time if set."""
-    if _VIRTUAL_TIME is not None:
-        return _VIRTUAL_TIME
-    return datetime.datetime.utcnow()
+    return _GLOBAL_CLOCK.utc_now()
 
 def date_today() -> datetime.date:
     """Return current date, honoring virtual time if set."""
-    if _VIRTUAL_TIME is not None:
-        return _VIRTUAL_TIME.date()
-    return datetime.date.today()
+    return _GLOBAL_CLOCK.date_today()
 
 def now(tz: datetime.tzinfo | None = None) -> datetime.datetime:
     """Return current local/aware time, honoring virtual time if set."""
-    if _VIRTUAL_TIME is not None:
-        utc_dt = _VIRTUAL_TIME.replace(tzinfo=datetime.timezone.utc)
-        if tz is not None:
-            return utc_dt.astimezone(tz)
-        return utc_dt
-    return datetime.datetime.now(tz)
+    return _GLOBAL_CLOCK.now(tz)
 
 def set_virtual_time(dt: datetime.datetime | None) -> None:
     """Set the virtual time for testing or simulation mode.
 
     Pass None to reset and restore system time tracking.
     """
-    global _VIRTUAL_TIME
-    _VIRTUAL_TIME = dt
+    global _GLOBAL_CLOCK
+    if dt is None:
+        _GLOBAL_CLOCK = RealClock()
+    else:
+        _GLOBAL_CLOCK = SimulatedClock(dt)
+
 
 
 logger = logging.getLogger("hermes.utils")

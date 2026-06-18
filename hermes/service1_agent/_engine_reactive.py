@@ -8,6 +8,7 @@ be used standalone.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from hermes.events.bus import MarketDataEvent, OrderFillEvent
@@ -144,26 +145,33 @@ class EngineReactiveMixin:
         """Executes entries reactively for a single symbol that crossed support/resistance.
         Ensures the symbol is in each strategy's watchlist before executing.
         """
-        strategies_to_run = []
-        for s in self.strategies:
+        # Determine matching strategies concurrently
+        async def _check_watchlist(s):
             wl = await self._watchlist_for(s.strategy_id, [symbol])
-            if symbol in wl:
-                strategies_to_run.append(s)
+            return s if symbol in wl else None
+
+        check_results = await asyncio.gather(*[_check_watchlist(s) for s in self.strategies])
+        strategies_to_run = [s for s in check_results if s is not None]
 
         if not strategies_to_run:
             return
 
         max_per_tick = int(self.config.get("max_orders_per_tick", 5))
 
+        # Gather proposed actions concurrently
+        async def _run_reactive_entries(s):
+            try:
+                return s, await s.execute_entries([symbol])
+            except Exception as exc:
+                logger.exception("Reactive entry proposal failure in %s for %s: %s", s.NAME, symbol, exc)
+                return s, []
+
+        results = await asyncio.gather(*[_run_reactive_entries(s) for s in strategies_to_run])
+
         if self.config.get("portfolio_optimization"):
-            # Gather proposed actions across matching strategies
             all_proposed_actions = []
-            for s in strategies_to_run:
-                try:
-                    actions = await s.execute_entries([symbol])
-                    all_proposed_actions.extend(actions)
-                except Exception as exc:
-                    logger.exception("Reactive entry proposal failure in %s for %s: %s", s.NAME, symbol, exc)
+            for s, actions in results:
+                all_proposed_actions.extend(actions)
 
             if not all_proposed_actions:
                 return
@@ -188,7 +196,7 @@ class EngineReactiveMixin:
                 await self.mm.sync_broker_orders()
         else:
             tick_submitted = 0
-            for s in strategies_to_run:
+            for s, actions in results:
                 try:
                     if tick_submitted >= max_per_tick:
                         logger.warning(
@@ -197,15 +205,64 @@ class EngineReactiveMixin:
                         )
                         break
 
-                    actions = await s.execute_entries([symbol])
+                    # Sequentially re-scale and check capacity for each proposed entry
+                    scaled_actions = []
+                    for action in actions:
+                        requested_lots = action.quantity
+                        if action.order_class == "multileg" and action.legs:
+                            requested_lots = action.legs[0].get("quantity", 1)
+
+                        if requested_lots <= 0:
+                            continue
+
+                        strat_id = action.strategy_id.upper()
+                        max_lots_map = {
+                            "CS7": 1,
+                            "CS75": 1,
+                            "TT45": 1,
+                            "WHEEL": 5,
+                            "HERMESALPHA": 1,
+                        }
+                        config_key = f"{strat_id.lower()}_max_lots"
+                        max_lots = int(self.config.get(config_key) or max_lots_map.get(strat_id, 1))
+
+                        requirement_per_lot = 0.0
+                        if strat_id == "WHEEL":
+                            if action.strategy_params.get("side_type") == "put" and action.legs:
+                                opt_symbol = action.legs[0].get("option_symbol")
+                                if opt_symbol:
+                                    from .money_manager import parse_occ_strike
+                                    strike = parse_occ_strike(opt_symbol)
+                                    if strike:
+                                        requirement_per_lot = strike * 100.0
+                        else:
+                            if action.width:
+                                requirement_per_lot = action.width * 100.0
+
+                        scaled = await self.mm.scale_quantity(
+                            requested_lots=requested_lots,
+                            requirement_per_lot=requirement_per_lot,
+                            symbol=action.symbol,
+                            side=action.side,
+                            strategy_id=action.strategy_id,
+                            max_lots=max_lots,
+                            expiry=action.expiry,
+                        )
+
+                        if scaled > 0:
+                            action.quantity = scaled
+                            for leg in action.legs:
+                                leg["quantity"] = scaled
+                            scaled_actions.append(action)
+
                     remaining = max_per_tick - tick_submitted
-                    if len(actions) > remaining:
-                        actions = actions[:remaining]
+                    if len(scaled_actions) > remaining:
+                        scaled_actions = scaled_actions[:remaining]
 
-                    await self.submit(actions, action_type="entry")
-                    tick_submitted += len(actions)
+                    await self.submit(scaled_actions, action_type="entry")
+                    tick_submitted += len(scaled_actions)
 
-                    if actions:
+                    if scaled_actions:
                         await self.mm.sync_broker_orders()
                 except Exception as exc:
                     logger.exception("Reactive entry failure in %s for %s: %s", s.NAME, symbol, exc)

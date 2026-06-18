@@ -26,6 +26,7 @@ from hermes.broker.models import (
 from hermes.db.models import HermesDB, SystemSetting, Strategy, StrategyWatchlist, Trade
 from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
 from hermes.utils import set_virtual_time
+from hermes.clock import SimulatedClock
 
 logger = logging.getLogger("hermes.backtest")
 
@@ -552,6 +553,9 @@ class BacktestController:
         self.start_date = start_date
         self.end_date = end_date
 
+        sim_start_dt = datetime.datetime.combine(start_date, datetime.time(16, 0, 0))
+        self.clock = SimulatedClock(sim_start_dt)
+
         self.mm = MoneyManager(self.broker, self.db, config={})
         self.ic = IronCondorBuilder(self.mm)
 
@@ -563,6 +567,7 @@ class BacktestController:
                 money_manager=self.mm,
                 ic_builder=self.ic,
                 config={},
+                clock=self.clock,
             ))
 
         self.engine = CascadingEngine(
@@ -574,6 +579,7 @@ class BacktestController:
             money_manager=self.mm,
             config={},
             llm_out_of_loop=True,
+            clock=self.clock,
         )
 
     def cleanup_sync(self) -> None:
@@ -607,6 +613,7 @@ class BacktestController:
         # Update current date at market close
         sim_dt = datetime.datetime.combine(current_date, datetime.time(16, 0, 0))
         self.broker.current_date = sim_dt
+        self.clock.set_time(sim_dt)
         set_virtual_time(sim_dt)
         AsyncBrokerWrapper.clear_cache()
 

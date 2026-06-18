@@ -11,8 +11,8 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional, Tuple
 from hermes.utils import utc_now
 
-from sqlalchemy import select, func
-from hermes.db.orm import PendingOrder, Trade, _compute_realized_pnl
+from sqlalchemy import select
+from hermes.db.orm import PendingOrder, Trade
 from hermes.db.events import (
     EventStoreManager,
     OrderSubmittedEvent,
@@ -39,6 +39,20 @@ def _to_json_safe(val: Any) -> Any:
     return val
 
 
+async def _get_next_id(session, table_name: str, seq_name: str) -> int:
+    dialect_name = "sqlite"
+    if session.bind:
+        dialect_name = session.bind.dialect.name
+    if dialect_name == "sqlite":
+        from sqlalchemy import text
+        res = await session.execute(text(f"SELECT COALESCE(MAX(id), 0) FROM {table_name}"))
+        return (res.scalar() or 0) + 1
+    else:
+        from sqlalchemy import text
+        res = await session.execute(text(f"SELECT nextval('{seq_name}')"))
+        return res.scalar()
+
+
 class TransactionManager:
     @classmethod
     async def place_order(
@@ -51,41 +65,35 @@ class TransactionManager:
         payload: Dict[str, Any]
     ) -> PendingOrder:
         """Create and place a pending order with status PENDING, and record event."""
-        dialect_name = "sqlite"
-        if session.bind:
-            dialect_name = session.bind.dialect.name
-            
-        po_id = None
-        if dialect_name == "sqlite":
-            q = select(func.max(PendingOrder.id))
-            res = await session.execute(q)
-            max_id = res.scalar() or 0
-            po_id = max_id + 1
+        po_id = await _get_next_id(session, "pending_orders", "pending_orders_id_seq")
 
-        po = PendingOrder(
-            id=po_id,
-            strategy_id=strategy_id,
-            symbol=symbol,
-            side=side,
-            quantity=quantity,
-            payload=payload,
-            status="PENDING"
-        )
-        session.add(po)
-        await session.flush()  # Generate po.id (if postgres) and po.submitted_at
-        
         # Emit event
         event = OrderSubmittedEvent(
-            id=po.id,
+            id=po_id,
             strategy_id=strategy_id,
             symbol=symbol,
             side=side or "",
             quantity=quantity,
             payload=_to_json_safe(payload),
-            submitted_at=po.submitted_at.isoformat()
+            submitted_at=utc_now().isoformat()
         )
-        await EventStoreManager.append_event(session, event)
-        
+        await EventStoreManager.record_event(session, event)
+
+        q = select(PendingOrder).where(PendingOrder.id == po_id)
+        res = await session.execute(q)
+        po = res.scalars().first()
+        if not po:
+            po = PendingOrder(
+                id=po_id,
+                strategy_id=strategy_id,
+                symbol=symbol,
+                side=side,
+                quantity=quantity,
+                payload=payload,
+                status="PENDING",
+                submitted_at=datetime.fromisoformat(event.submitted_at)
+            )
+
         logger.info(
             f"[FSM place_order] Created PendingOrder {po.id} for {strategy_id} {symbol} side={side} qty={quantity}"
         )
@@ -97,10 +105,9 @@ class TransactionManager:
         session,
         strategy_id: str,
         symbol: str,
-        side: str,
-        terminal_status: str
+        side: str
     ) -> Optional[PendingOrder]:
-        """Find the latest PENDING order matching criteria and transition its status."""
+        """Find the latest PENDING order matching criteria."""
         q = (
             select(PendingOrder)
             .filter(
@@ -113,19 +120,7 @@ class TransactionManager:
             .limit(1)
         )
         result = await session.execute(q)
-        po = result.scalars().first()
-        if po:
-            logger.info(
-                f"[FSM pending_transition] PendingOrder {po.id} for {strategy_id} {symbol} "
-                f"transitioned PENDING -> {terminal_status}"
-            )
-            po.status = terminal_status
-        else:
-            logger.debug(
-                f"[FSM pending_transition] No matching PENDING order found for "
-                f"{strategy_id} {symbol} side={side}"
-            )
-        return po
+        return result.scalars().first()
 
     @classmethod
     async def reject(
@@ -141,12 +136,11 @@ class TransactionManager:
             session=session,
             strategy_id=strategy_id,
             symbol=symbol,
-            side=side,
-            terminal_status="REJECTED"
+            side=side
         )
         if po:
             event = OrderRejectedEvent(pending_order_id=po.id)
-            await EventStoreManager.append_event(session, event)
+            await EventStoreManager.record_event(session, event)
         return po
 
     @classmethod
@@ -160,44 +154,41 @@ class TransactionManager:
         trade_fields: Dict[str, Any]
     ) -> Tuple[Optional[PendingOrder], Trade]:
         """Transition a pending order to SUBMITTED, create an OPEN Trade, and record event."""
-        # First transition the matching pending order
         po = await cls._consume_pending(
             session=session,
             strategy_id=strategy_id,
             symbol=symbol,
-            side=side,
-            terminal_status="SUBMITTED"
+            side=side
         )
-        
-        dialect_name = "sqlite"
-        if session.bind:
-            dialect_name = session.bind.dialect.name
-            
+
         trade_id = trade_fields.get("id")
-        if trade_id is None and dialect_name == "sqlite":
-            q = select(func.max(Trade.id))
-            res = await session.execute(q)
-            max_id = res.scalar() or 0
-            trade_id = max_id + 1
-            
+        if trade_id is None:
+            trade_id = await _get_next_id(session, "trades", "trades_id_seq")
+
         trade_fields_copy = dict(trade_fields)
         trade_fields_copy["id"] = trade_id
+        if "opened_at" in trade_fields_copy and isinstance(trade_fields_copy["opened_at"], datetime):
+            trade_fields_copy["opened_at"] = trade_fields_copy["opened_at"].isoformat()
+        elif "opened_at" not in trade_fields_copy:
+            trade_fields_copy["opened_at"] = utc_now().isoformat()
 
-        # Create and add trade
-        trade = Trade(**trade_fields_copy)
-        trade.status = "OPEN"
-        session.add(trade)
-        await session.flush()  # Generate trade.id (if postgres)
-        
         # Emit event
         if po:
             event = OrderFilledEvent(
                 pending_order_id=po.id,
-                trade_id=trade.id,
+                trade_id=trade_id,
                 trade_fields=_to_json_safe(trade_fields_copy)
             )
-            await EventStoreManager.append_event(session, event)
-            
+            await EventStoreManager.record_event(session, event)
+
+        q = select(Trade).where(Trade.id == trade_id)
+        res = await session.execute(q)
+        trade = res.scalars().first()
+        if not trade:
+            trade = Trade(**trade_fields)
+            trade.id = trade_id
+            trade.status = "OPEN"
+
         logger.info(
             f"[FSM fill] Trade {trade.id} created for {strategy_id} {symbol} (Trade status: {trade.status})"
         )
@@ -222,55 +213,25 @@ class TransactionManager:
             session=session,
             strategy_id=strategy_id,
             symbol=symbol,
-            side=side,
-            terminal_status="SUBMITTED"
+            side=side
         )
 
-        trade.close_reason = close_reason
-        trade.close_tag = close_tag
-        if exit_price is not None:
-            trade.exit_price = exit_price
-        
-        trade.pnl = _compute_realized_pnl(
-            entry_credit=trade.entry_credit,
-            entry_debit=trade.entry_debit,
+        event = CloseSubmittedEvent(
+            pending_order_id=po.id if po else 0,
+            trade_id=trade.id,
             exit_price=exit_price,
-            lots=int(trade.lots or 0),
+            close_reason=close_reason,
+            close_tag=close_tag
         )
+        await EventStoreManager.record_event(session, event)
 
         if filled:
-            # Transition: OPEN/CLOSING -> CLOSED
-            trade.force_close()
-            trade.closed_at = utc_now()
-            logger.info(
-                f"[FSM close] Trade {trade.id} for {strategy_id} {symbol} closed immediately (filled). Status: {trade.status}"
-            )
-        else:
-            # Transition: OPEN -> CLOSING
-            trade.begin_close()
-            logger.info(
-                f"[FSM close] Trade {trade.id} for {strategy_id} {symbol} transitioned to CLOSING. Status: {trade.status}"
-            )
-            
-        await session.flush()
-        
-        if po:
-            event = CloseSubmittedEvent(
-                pending_order_id=po.id,
+            event_fill = CloseFilledEvent(
                 trade_id=trade.id,
-                exit_price=exit_price,
-                close_reason=close_reason,
-                close_tag=close_tag
+                closed_at=utc_now().isoformat()
             )
-            await EventStoreManager.append_event(session, event)
-            
-            if filled:
-                event_fill = CloseFilledEvent(
-                    trade_id=trade.id,
-                    closed_at=trade.closed_at.isoformat()
-                )
-                await EventStoreManager.append_event(session, event_fill)
-                
+            await EventStoreManager.record_event(session, event_fill)
+
         return po
 
     @classmethod
@@ -282,48 +243,34 @@ class TransactionManager:
         close_reason: Optional[str] = None
     ) -> None:
         """Apply reconciler transitions on a Trade object and append corresponding event."""
-        old_status = trade.status
         if event == "force_close":
-            trade.force_close()
-            trade.closed_at = utc_now()
-            if close_reason:
-                trade.close_reason = close_reason
-            await session.flush()
+            closed_at = utc_now().isoformat()
             ev = ReconcileFlatEvent(
                 trade_id=trade.id,
-                closed_at=trade.closed_at.isoformat(),
-                close_reason=trade.close_reason or "RECONCILED_BROKER_FLAT"
+                closed_at=closed_at,
+                close_reason=close_reason or trade.close_reason or "RECONCILED_BROKER_FLAT"
             )
-            await EventStoreManager.append_event(session, ev)
+            await EventStoreManager.record_event(session, ev)
         elif event == "finish_close":
-            trade.finish_close()
-            trade.closed_at = utc_now()
-            await session.flush()
+            closed_at = utc_now().isoformat()
             ev = CloseFilledEvent(
                 trade_id=trade.id,
-                closed_at=trade.closed_at.isoformat()
+                closed_at=closed_at
             )
-            await EventStoreManager.append_event(session, ev)
+            await EventStoreManager.record_event(session, ev)
         elif event == "reopen":
-            trade.reopen()
-            await session.flush()
             ev = CloseReopenedEvent(
                 trade_id=trade.id
             )
-            await EventStoreManager.append_event(session, ev)
-            
+            await EventStoreManager.record_event(session, ev)
+
         logger.info(
-            f"[FSM reconcile_trade] Trade {trade.id} symbol={trade.symbol} transitioned {old_status} -> {trade.status} via {event}"
+            f"[FSM reconcile_trade] Trade {trade.id} symbol={trade.symbol} transitioned via {event}"
         )
 
     @classmethod
     async def expire_order(cls, session, po: PendingOrder) -> None:
         """Transition PendingOrder to EXPIRED and append corresponding event."""
-        old_status = po.status
-        po.status = "EXPIRED"
-        await session.flush()
-        
         ev = OrderExpiredEvent(pending_order_id=po.id)
-        await EventStoreManager.append_event(session, ev)
-        
-        logger.info(f"[FSM expire_order] PendingOrder {po.id} transitioned {old_status} -> EXPIRED")
+        await EventStoreManager.record_event(session, ev)
+        logger.info(f"[FSM expire_order] PendingOrder {po.id} transitioned to EXPIRED")

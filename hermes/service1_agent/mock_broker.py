@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 from .core import TradeAction
+from hermes.broker.base import AbstractBroker
 from hermes.broker.models import (
     AccountBalances,
     BrokerPosition,
@@ -12,7 +13,7 @@ from hermes.broker.models import (
 
 logger = logging.getLogger("hermes.broker.mock")
 
-class MockBroker:
+class MockBroker(AbstractBroker):
     """
     A mock broker for testing and Docker demonstration.
     Returns dummy data for chains, quotes, and analysis.
@@ -181,6 +182,18 @@ class MockBroker:
 
     async def roll_to_next_month(self, option_symbol: str) -> str:
         return option_symbol + "_ROLLED"
+
+    async def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        return {"status": "ok", "id": order_id}
+
+    async def get_history(
+        self, symbol: str, *, interval: str = "daily",
+        start: Optional[str] = None, end: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        return []
+
+    async def close(self) -> None:
+        pass
 
 class MockLLM:
     def chat(self, messages: List[Dict[str, str]], images: List[Any] = None) -> str:

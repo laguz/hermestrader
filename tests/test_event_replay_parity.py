@@ -20,7 +20,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from hermes.db.models import HermesDB, Trade, PendingOrder, SystemSetting
+from hermes.db.models import HermesDB, Trade, PendingOrder, SystemSetting, StrategyWatchlist
 from hermes.db.events import (
     EventStoreManager,
     OrderSubmittedEvent,
@@ -28,6 +28,11 @@ from hermes.db.events import (
     CloseSubmittedEvent,
     CloseFilledEvent,
     SystemSettingChangedEvent,
+    WatchlistChangedEvent,
+    ModeChangedEvent,
+    StrategyToggledEvent,
+    AutonomyChangedEvent,
+    PauseChangedEvent,
 )
 from hermes.db.repositories.projections import ProjectionsRepository
 
@@ -54,6 +59,11 @@ def _sample_lifecycle():
         CloseSubmittedEvent(pending_order_id=2, trade_id=1, exit_price=0.25,
                             close_reason="TP", close_tag="HERMES_CS75_CLOSE_TP"),
         CloseFilledEvent(trade_id=1, closed_at=now),
+        WatchlistChangedEvent(strategy_id="CS75", symbols=["AAPL", "MSFT"], updated_at=now),
+        ModeChangedEvent(mode="live", updated_at=now),
+        StrategyToggledEvent(strategy_id="CS75", enabled=False, updated_at=now),
+        AutonomyChangedEvent(autonomy="live", updated_at=now),
+        PauseChangedEvent(paused=True, updated_at=now),
     ]
 
 
@@ -63,10 +73,12 @@ async def _snapshot(db: HermesDB):
         trades = (await s.execute(select(Trade).order_by(Trade.id))).scalars().all()
         orders = (await s.execute(select(PendingOrder).order_by(PendingOrder.id))).scalars().all()
         settings = (await s.execute(select(SystemSetting).order_by(SystemSetting.key))).scalars().all()
+        watchlists = (await s.execute(select(StrategyWatchlist).order_by(StrategyWatchlist.strategy_id, StrategyWatchlist.symbol))).scalars().all()
     return (
         [(t.id, t.status, str(t.exit_price), t.close_reason, str(t.pnl)) for t in trades],
         [(o.id, o.status) for o in orders],
         [(s.key, s.value) for s in settings],
+        [(w.strategy_id, w.symbol) for w in watchlists],
     )
 
 
@@ -97,10 +109,15 @@ async def test_live_projection_matches_ledger_replay(tmp_path):
     # Sanity: the lifecycle actually projected through to a closed, winning trade
     # and the setting change landed — so the parity above is meaningful, not two
     # empty databases matching.
-    trades, orders, settings = live_state
+    trades, orders, settings, watchlists = live_state
     assert trades == [(1, "CLOSED", "0.2500", "TP", "500.00")]
     assert orders == [(1, "SUBMITTED"), (2, "SUBMITTED")]
     assert ("agent_paused", "true") in settings
+    assert ("hermes_mode", "live") in settings
+    assert ("strategy_cs75_enabled", "false") in settings
+    assert ("agent_autonomy", "live") in settings
+    assert ("agent_paused", "true") in settings
+    assert watchlists == [("CS75", "AAPL"), ("CS75", "MSFT")]
 
 
 async def test_record_event_is_atomic_append_plus_projection(tmp_path):

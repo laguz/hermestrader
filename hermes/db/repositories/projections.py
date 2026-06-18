@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, List
 from sqlalchemy import select
 
 from hermes.db.orm import Trade, PendingOrder, SystemSetting, _compute_realized_pnl
@@ -18,6 +17,12 @@ from hermes.db.events import (
     ReconcileFlatEvent,
     SystemSettingChangedEvent,
     DoctrineUpdatedEvent,
+    WatchlistChangedEvent,
+    ModeChangedEvent,
+    StrategyToggledEvent,
+    AutonomyChangedEvent,
+    PauseChangedEvent,
+    ApprovalDecidedEvent,
 )
 
 logger = logging.getLogger("hermes.db.repositories.projections")
@@ -175,3 +180,79 @@ class ProjectionsRepository:
                 )
                 session.add(setting)
             logger.info("[Projection] Applied DOCTRINE_UPDATED: soul_md updated")
+
+        elif isinstance(event, WatchlistChangedEvent):
+            from sqlalchemy import delete
+            from hermes.db.orm import StrategyWatchlist
+            await session.execute(delete(StrategyWatchlist).filter_by(strategy_id=event.strategy_id))
+            for sym in event.symbols:
+                session.add(StrategyWatchlist(
+                    strategy_id=event.strategy_id,
+                    symbol=sym,
+                    added_at=datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()
+                ))
+            logger.info("[Projection] Applied WATCHLIST_CHANGED: strategy=%s symbols=%s", event.strategy_id, event.symbols)
+
+        elif isinstance(event, ModeChangedEvent):
+            q = select(SystemSetting).where(SystemSetting.key == "hermes_mode")
+            result = await session.execute(q)
+            setting = result.scalars().first()
+            val = event.mode.lower()
+            if setting:
+                setting.value = val
+                setting.updated_at = datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()
+            else:
+                session.add(SystemSetting(key="hermes_mode", value=val, updated_at=datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()))
+            logger.info("[Projection] Applied MODE_CHANGED: mode=%s", val)
+
+        elif isinstance(event, StrategyToggledEvent):
+            key = f"strategy_{event.strategy_id.lower()}_enabled"
+            val = "true" if event.enabled else "false"
+            q = select(SystemSetting).where(SystemSetting.key == key)
+            result = await session.execute(q)
+            setting = result.scalars().first()
+            if setting:
+                setting.value = val
+                setting.updated_at = datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()
+            else:
+                session.add(SystemSetting(key=key, value=val, updated_at=datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()))
+            logger.info("[Projection] Applied STRATEGY_TOGGLED: strategy=%s enabled=%s", event.strategy_id, event.enabled)
+
+        elif isinstance(event, AutonomyChangedEvent):
+            q = select(SystemSetting).where(SystemSetting.key == "agent_autonomy")
+            result = await session.execute(q)
+            setting = result.scalars().first()
+            val = event.autonomy.lower()
+            if setting:
+                setting.value = val
+                setting.updated_at = datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()
+            else:
+                session.add(SystemSetting(key="agent_autonomy", value=val, updated_at=datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()))
+            logger.info("[Projection] Applied AUTONOMY_CHANGED: autonomy=%s", val)
+
+        elif isinstance(event, PauseChangedEvent):
+            q = select(SystemSetting).where(SystemSetting.key == "agent_paused")
+            result = await session.execute(q)
+            setting = result.scalars().first()
+            val = "true" if event.paused else "false"
+            if setting:
+                setting.value = val
+                setting.updated_at = datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()
+            else:
+                session.add(SystemSetting(key="agent_paused", value=val, updated_at=datetime.fromisoformat(event.updated_at) if event.updated_at else datetime.utcnow()))
+            logger.info("[Projection] Applied PAUSE_CHANGED: paused=%s", event.paused)
+
+        elif isinstance(event, ApprovalDecidedEvent):
+            from hermes.db.orm import PendingApproval
+            q = select(PendingApproval).where(PendingApproval.id == event.approval_id)
+            result = await session.execute(q)
+            pa = result.scalars().first()
+            if pa:
+                pa.status = event.status
+                if event.notes is not None:
+                    pa.notes = event.notes
+                if event.decided_at:
+                    pa.decided_at = datetime.fromisoformat(event.decided_at)
+                if event.executed_at:
+                    pa.executed_at = datetime.fromisoformat(event.executed_at)
+            logger.info("[Projection] Applied APPROVAL_DECIDED: id=%d status=%s", event.approval_id, event.status)

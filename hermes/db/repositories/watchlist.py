@@ -1,9 +1,10 @@
 """Strategy registry and per-strategy watchlist CRUD."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
 from hermes.db.orm import Strategy, StrategyWatchlist
@@ -119,8 +120,31 @@ class WatchlistRepositoryMixin:
                 s.add(Strategy(strategy_id=strategy_id, priority=priority,
                                status="ACTIVE"))
                 await s.flush()
-            await s.execute(delete(StrategyWatchlist).filter_by(strategy_id=strategy_id))
-            for sym in clean:
-                s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
+                
+            from hermes.db.events import EventStoreManager, WatchlistChangedEvent
+            ev = WatchlistChangedEvent(
+                strategy_id=strategy_id,
+                symbols=clean,
+                updated_at=datetime.utcnow().isoformat()
+            )
+            await EventStoreManager.record_event(s, ev)
+            
+            import json
+            payload = {
+                "event_type": "WatchlistChangedEvent",
+                "payload": ev.model_dump(mode="json")
+            }
+            if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
+                from sqlalchemy import text as sa_text
+                escaped_payload = json.dumps(payload).replace("'", "''")
+                await s.execute(sa_text(f"NOTIFY agent_commands, '{escaped_payload}'"))
+                
             await s.commit()
+            
+            if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
+                try:
+                    from hermes.ipc import ipc
+                    await ipc.publish("agent_commands", payload)
+                except Exception:
+                    pass
         return clean
