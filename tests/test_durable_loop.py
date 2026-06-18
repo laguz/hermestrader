@@ -117,3 +117,101 @@ async def test_durable_loop_redis_streams_flow():
             await engine.loop_task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_durable_loop_failed_tick_is_not_replayed():
+    """A tick that raises must be acked and never re-executed.
+
+    Regression: previously a failed message was left un-acked (only the success
+    path called xack) while its future was popped in ``finally``. The next loop
+    re-read the pending message, found no future, and re-ran the tick's side
+    effects with no awaiter — i.e. a duplicate order-submitting tick.
+    """
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+
+    # Model proper consumer-group semantics: new messages are delivered once via
+    # ">" (which moves them into the Pending Entries List), pending unacked
+    # messages are re-read via "0", and xack removes them from the PEL.
+    new_msgs = []          # undelivered (msg_id, fields)
+    pel: dict = {}         # delivered, unacked
+    acked = []
+
+    async def mock_xack(name, group, msg_id):
+        pel.pop(msg_id, None)
+        acked.append(msg_id)
+
+    mock_redis.xack = AsyncMock(side_effect=mock_xack)
+
+    async def mock_xadd(name, fields, id="*"):
+        msg_id = f"1686984023000-{len(new_msgs) + len(pel) + len(acked)}"
+        new_msgs.append((msg_id, fields))
+        return msg_id
+
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+
+    async def mock_xreadgroup(groupname, consumername, streams, count=None, block=None):
+        stream_id = streams.get("hermes_event_stream")
+        if stream_id == "0":
+            return [("hermes_event_stream", list(pel.items()))] if pel else []
+        elif stream_id == ">":
+            if new_msgs:
+                delivered = list(new_msgs)
+                new_msgs.clear()
+                for mid, fields in delivered:
+                    pel[mid] = fields
+                return [("hermes_event_stream", delivered)]
+            await asyncio.sleep(0.01)
+            return []
+        return []
+
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    strat = DummyStrategy("CS75", 1, "CS75")
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    broker_mock = AsyncMock()
+
+    engine = CascadingEngine(
+        broker=broker_mock,
+        db=db_mock,
+        strategies=[strat],
+        config={"portfolio_optimization": False},
+    )
+    engine.ipc_client = mock_ipc
+
+    call_count = 0
+
+    async def boom(watchlist):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("tick blew up")
+
+    engine._run_tick_internal = AsyncMock(side_effect=boom)
+
+    engine._ensure_event_loop()
+
+    # The caller must observe the failure exactly once.
+    with pytest.raises(RuntimeError, match="tick blew up"):
+        await asyncio.wait_for(
+            engine.publish_event("TICK", {"watchlist": ["AAPL"]}), timeout=2.0
+        )
+
+    # Give the consumer a few extra loops to (incorrectly) replay if the bug
+    # were still present.
+    await asyncio.sleep(0.1)
+
+    assert call_count == 1, f"failed tick was replayed {call_count} times"
+    assert acked.count("1686984023000-0") == 1, "failed message was not acked"
+
+    if engine.loop_task:
+        engine.loop_task.cancel()
+        try:
+            await engine.loop_task
+        except asyncio.CancelledError:
+            pass

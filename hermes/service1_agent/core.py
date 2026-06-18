@@ -101,6 +101,12 @@ class CascadingEngine:
         self.control_state = None
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
+        # Strong references to fire-and-forget background tasks. asyncio only
+        # holds a *weak* reference to a bare ``create_task`` result, so a task
+        # whose handle is discarded can be garbage-collected mid-await and
+        # silently cancelled. Keep them here (mirrors scheduler._tasks /
+        # overseer._worker_task) until they finish.
+        self._bg_tasks: set[asyncio.Task] = set()
         # Behaviour groups that used to be inherited mixins are now owned
         # collaborators sharing the engine's hot tick state (see _engine_base).
         # The thin delegators below keep the engine's call surface unchanged for
@@ -163,6 +169,17 @@ class CascadingEngine:
 
     async def _gate_ai_actions(self, actions):
         return await self.ai._gate_ai_actions(actions)
+
+    def _spawn_bg(self, coro) -> asyncio.Task:
+        """Schedule a fire-and-forget coroutine while holding a strong reference.
+
+        Without the retained reference + done-callback, asyncio can collect the
+        task before it completes (see ``self._bg_tasks``).
+        """
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
 
     # 1
     async def sync_positions(self) -> None:
@@ -619,17 +636,17 @@ class CascadingEngine:
             # Goal-aware parameter tuning & risk restrictions
             if self.llm_out_of_loop:
                 # Run out-of-loop background policy adjustments asynchronously
-                asyncio.create_task(self.tuning._maybe_tune_parameters())
+                self._spawn_bg(self.tuning._maybe_tune_parameters())
             else:
                 # Run inline blocking
                 await self.tuning._maybe_tune_parameters()
 
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
-                asyncio.create_task(self._async_propose(watchlist))
+                self._spawn_bg(self._async_propose(watchlist))
                 # Symmetric exit path: let the overseer unwind open positions
                 # too. Independent of the watchlist — closes act on the book.
-                asyncio.create_task(self._async_propose_closes())
+                self._spawn_bg(self._async_propose_closes())
             else:
                 ai_actions = await self.overseer.propose(watchlist)
                 ai_actions = await self._gate_ai_actions(ai_actions)
