@@ -247,7 +247,7 @@ class BacktestDatabase:
 
 
 class BacktestBroker:
-    """Mock broker matching IBroker Protocol, replaying historical stock bars."""
+    """Mock broker matching the AbstractBroker contract, replaying historical stock bars."""
 
     def __init__(self, ts_engine: Any, start_balance: float = 100000.0):
         self.ts_engine = ts_engine
