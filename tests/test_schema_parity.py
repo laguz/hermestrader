@@ -1,26 +1,25 @@
-"""Schema-parity guardrail.
+"""Schema-seam guardrail.
 
-The persistence layer has two legitimate schema artifacts that must agree:
+The persistence layer has a single source of truth for table/column structure —
+the **ORM** (`hermes.db.orm.Base.metadata`), which `create_all` provisions on
+every backend and which the Alembic baseline generates its tables from. The only
+schema that lives outside the ORM is the irreducible TimescaleDB layer in
+**schema.sql**: the raw `bars_*` tables, hypertable conversions, compression
+policies, and the `pnl_daily` view, applied *after* the ORM tables exist.
 
-* the **ORM** (`hermes.db.orm.Base.metadata`) — what `create_all` provisions on
-  *every* backend (SQLite and Postgres), and the source the runtime reconciler
-  (`HermesDB.run_migrations`) derives column self-heal from;
-* **schema.sql** — the canonical Postgres/TimescaleDB DDL (hypertables,
-  compression, the `pnl_daily` view) that the Alembic baseline applies.
+Because columns are no longer duplicated between the two artifacts, there is no
+column drift to police. What remains is a narrow *seam*, and this test guards it:
 
-Historically these drifted silently — e.g. `trades.entry_features` was added to
-one but not the other and a deployed instance broke on upgrade. This test makes
-that drift a loud CI failure instead.
-
-It compares **column names** of every table the two sides share. Types and
-defaults are intentionally *not* compared: a column may legitimately be `JSONB`
-on Postgres and `JSON` on SQLite, or carry a Python-side default rather than a
-server default. Names are where the painful drift happens.
-
-Two categories of table live in only one artifact *by design*; they are
-allow-listed here with the reason. Adding a new table to one side without the
-other — or extending a shared table on only one side — fails this test until the
-divergence is either reconciled or consciously allow-listed.
+1. **schema.sql never re-declares an ORM table.** Any `CREATE TABLE` in the
+   addendum must be one of the SQL-only `bars_*` tables — otherwise the column
+   duplication this refactor removed has crept back in.
+2. **Every hypertable-backed ORM table has its `create_hypertable` line.** A
+   time-partitioned table that the ORM creates but the addendum forgets to
+   convert would silently run as a plain Postgres table (the "added a table,
+   forgot the Timescale bits" failure mode).
+3. **No orphan hypertable targets.** Every `create_hypertable('x', …)` names a
+   table that actually exists in the ORM or as a SQL-only table — catches typos
+   and tables deleted on one side only.
 """
 from __future__ import annotations
 
@@ -41,141 +40,88 @@ for _mod in ("hermes.ml.ledger", "hermes.ml.regime_weights"):
 
 SCHEMA_SQL = Path(__file__).resolve().parents[1] / "hermes" / "db" / "schema.sql"
 
-# Tables the ORM owns on BOTH backends via create_all, deliberately kept out of
-# schema.sql (which is the Postgres/Timescale baseline). doctrine_embeddings
-# needs the pgvector extension on Postgres, so its DDL lives in the dialect-aware
-# ORM (SafeVector → vector/Text) rather than as static SQL.
-ORM_ONLY_TABLES = {"doctrine_embeddings"}
-
-# Same idea, but defined in optional ML modules that only register their table
-# when their deps import. Allow-listed for the divergence check but not asserted
-# to exist (a CI run without the ML extras won't have loaded them).
-ORM_ONLY_OPTIONAL = {"prediction_ledger", "regime_weights"}
-
-# Tables that exist only as raw Postgres/TimescaleDB hypertables and are never
-# provisioned through the ORM (they are written/read by the time-series paths,
-# not the declarative models).
+# Tables that exist ONLY as raw Postgres/TimescaleDB tables in schema.sql and
+# are never modelled as ORM classes (written/read by the time-series paths).
+# These are the only `CREATE TABLE`s allowed to appear in the addendum.
 SQL_ONLY_TABLES = {"bars_daily", "bars_intraday"}
 
+# ORM tables that are time-partitioned and MUST be converted to hypertables by
+# the addendum. Keep this in lock-step with the time-series tables in orm.py.
+HYPERTABLE_ORM_TABLES = {
+    "trades", "pending_orders", "bot_logs", "ai_decisions", "predictions",
+}
 
-def _schema_sql_columns() -> dict[str, set[str]]:
-    """Parse schema.sql into {table: {column, ...}}.
 
-    Captures both the columns declared in each ``CREATE TABLE`` body and any
-    added later via ``ALTER TABLE … ADD COLUMN`` (schema.sql self-heals older
-    columns this way, so the effective column set is the union of both).
-    """
+def _orm_tables() -> set[str]:
+    return {t.name for t in Base.metadata.sorted_tables}
+
+
+def _schema_sql_created_tables() -> set[str]:
     sql = SCHEMA_SQL.read_text()
-    tables: dict[str, set[str]] = {}
-
-    for m in re.finditer(
-        r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\((.*?)\n\);", sql, re.S
-    ):
-        name, body = m.group(1), m.group(2)
-        cols: set[str] = set()
-        for raw in body.splitlines():
-            line = raw.strip().rstrip(",")
-            if not line or line.startswith("--"):
-                continue
-            # Skip table-level constraint clauses.
-            if re.match(
-                r"(PRIMARY KEY|FOREIGN KEY|UNIQUE|CONSTRAINT|CHECK)\b", line, re.I
-            ):
-                continue
-            token = line.split()[0].strip('"')
-            if token.isidentifier():
-                cols.add(token)
-        tables[name] = cols
-
-    for m in re.finditer(
-        r"ALTER TABLE (\w+)\s+ADD COLUMN(?:\s+IF NOT EXISTS)?\s+(\w+)",
-        sql, re.I,
-    ):
-        table, col = m.group(1), m.group(2)
-        tables.setdefault(table, set()).add(col)
-
-    return tables
+    return set(re.findall(r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)", sql))
 
 
-def _orm_columns() -> dict[str, set[str]]:
-    return {
-        t.name: {c.name for c in t.columns}
-        for t in Base.metadata.sorted_tables
-    }
-
-
-def test_no_unclassified_table_divergence():
-    """Every table is in both artifacts, or in a documented allow-list."""
-    orm = set(_orm_columns())
-    sql = set(_schema_sql_columns())
-
-    orm_only = orm - sql - ORM_ONLY_TABLES - ORM_ONLY_OPTIONAL
-    sql_only = sql - orm - SQL_ONLY_TABLES
-
-    assert not orm_only, (
-        "Tables in the ORM but missing from schema.sql (and not allow-listed "
-        f"as ORM-only): {sorted(orm_only)}. Either add them to schema.sql or, "
-        "if create_all should own them on both backends, add them to "
-        "ORM_ONLY_TABLES here with a reason."
-    )
-    assert not sql_only, (
-        "Tables in schema.sql but missing from the ORM (and not allow-listed "
-        f"as Postgres-only): {sorted(sql_only)}."
-    )
-
-
-def test_shared_tables_have_matching_columns():
-    """For every table both artifacts define, their column sets must agree."""
-    orm = _orm_columns()
-    sql = _schema_sql_columns()
-
-    mismatches: dict[str, dict[str, list[str]]] = {}
-    for table in sorted(set(orm) & set(sql)):
-        only_orm = orm[table] - sql[table]
-        only_sql = sql[table] - orm[table]
-        if only_orm or only_sql:
-            mismatches[table] = {
-                "missing_from_schema_sql": sorted(only_orm),
-                "missing_from_orm": sorted(only_sql),
-            }
-
-    assert not mismatches, (
-        "Column drift between the ORM and schema.sql for shared tables — "
-        "reconcile both sides:\n" + "\n".join(
-            f"  {t}: {d}" for t, d in mismatches.items()
-        )
-    )
-
-
-def test_sql_parser_covers_every_create_table():
-    """Guard the guard: every ``CREATE TABLE`` in schema.sql must be captured by
-    the parity parser.
-
-    The parity checks can only flag drift on tables they can see. A new
-    Postgres-only table added in a DDL shape the body parser doesn't match
-    (e.g. plain ``CREATE TABLE foo (`` without ``IF NOT EXISTS``) would be
-    invisible to both the parser *and* the ORM — slipping through with no
-    failure and no allow-list entry. This asserts the parser sees every
-    declared table so it can't be silently defeated by a formatting change.
-    """
+def _schema_sql_hypertable_targets() -> set[str]:
     sql = SCHEMA_SQL.read_text()
-    declared = set(re.findall(r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)", sql))
-    parsed = set(_schema_sql_columns())
-    missed = declared - parsed
-    assert not missed, (
-        "schema.sql declares tables the parity parser doesn't capture: "
-        f"{sorted(missed)}. The column-parity check is blind to them — widen "
-        "the CREATE TABLE regex in _schema_sql_columns()."
+    return set(re.findall(r"create_hypertable\(\s*'(\w+)'", sql))
+
+
+def test_schema_sql_declares_no_orm_tables():
+    """The addendum must not re-declare any ORM table's columns."""
+    created = _schema_sql_created_tables()
+    orm = _orm_tables()
+    re_declared = created & orm
+    assert not re_declared, (
+        "schema.sql re-declares ORM-owned tables: "
+        f"{sorted(re_declared)}. Columns belong to hermes/db/orm.py only; the "
+        "addendum should hold hypertable/compression/view DDL, not CREATE TABLE "
+        "for tables the ORM already owns."
+    )
+    # And every CREATE TABLE it *does* have is an expected SQL-only table.
+    unexpected = created - SQL_ONLY_TABLES
+    assert not unexpected, (
+        "schema.sql creates tables that are neither ORM-owned nor allow-listed "
+        f"SQL-only: {sorted(unexpected)}. Add them to the ORM, or to "
+        "SQL_ONLY_TABLES here with a reason."
     )
 
 
-def test_allowlisted_tables_still_exist():
-    """Guard against stale allow-lists: every allow-listed table must be real."""
-    orm = set(_orm_columns())
-    sql = set(_schema_sql_columns())
-    assert ORM_ONLY_TABLES <= orm, (
-        f"ORM_ONLY_TABLES names a table not in the ORM: {sorted(ORM_ONLY_TABLES - orm)}"
+def test_hypertable_orm_tables_are_converted():
+    """Every time-partitioned ORM table has a create_hypertable line."""
+    targets = _schema_sql_hypertable_targets()
+    orm = _orm_tables()
+
+    # The named ORM tables must actually exist (guard a stale list)...
+    missing_from_orm = HYPERTABLE_ORM_TABLES - orm
+    assert not missing_from_orm, (
+        "HYPERTABLE_ORM_TABLES names tables not in the ORM: "
+        f"{sorted(missing_from_orm)}."
     )
-    assert SQL_ONLY_TABLES <= sql, (
-        f"SQL_ONLY_TABLES names a table not in schema.sql: {sorted(SQL_ONLY_TABLES - sql)}"
+    # ...and each must be converted by the addendum.
+    not_converted = HYPERTABLE_ORM_TABLES - targets
+    assert not not_converted, (
+        "ORM tables that should be hypertables but have no create_hypertable in "
+        f"schema.sql: {sorted(not_converted)}. They would run as plain tables — "
+        "add the create_hypertable line (or drop them from HYPERTABLE_ORM_TABLES)."
+    )
+
+
+def test_no_orphan_hypertable_targets():
+    """Every create_hypertable target is a real ORM table or SQL-only table."""
+    targets = _schema_sql_hypertable_targets()
+    known = _orm_tables() | SQL_ONLY_TABLES
+    orphans = targets - known
+    assert not orphans, (
+        "schema.sql converts tables that exist in neither the ORM nor "
+        f"SQL_ONLY_TABLES: {sorted(orphans)} — likely a typo or a table removed "
+        "on only one side."
+    )
+
+
+def test_sql_only_tables_are_created():
+    """Guard against a stale allow-list: every SQL-only table is really created."""
+    created = _schema_sql_created_tables()
+    missing = SQL_ONLY_TABLES - created
+    assert not missing, (
+        f"SQL_ONLY_TABLES names tables not created in schema.sql: {sorted(missing)}"
     )

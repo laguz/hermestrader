@@ -1,14 +1,28 @@
-"""baseline — current HermesTrader TimescaleDB schema
+"""baseline — current HermesTrader schema (ORM tables + TimescaleDB addendum)
 
 Revision ID: 0001
 Revises:
 Create Date: 2026-06-02
 
-Captures the existing schema as the migration baseline. ``upgrade()`` applies
-``hermes/db/schema.sql`` verbatim — the single canonical DDL artifact (tables,
-TimescaleDB hypertables, compression/retention policies, indexes, and the
-``pnl_daily`` view). All statements are idempotent (``IF NOT EXISTS`` /
-``if_not_exists => TRUE``), so this is safe to run against a fresh database.
+Provisions a fresh database in two steps from the single source of truth:
+
+1. **Tables from the ORM.** ``Base.metadata`` (``hermes/db/orm.py``) is the
+   authoritative catalog of every table, column, and index. ``upgrade()``
+   emits their DDL via ``metadata.create_all`` so the migration can never drift
+   from the models the application actually uses.
+2. **TimescaleDB addendum.** ``hermes/db/schema.sql`` adds only what the ORM
+   cannot express — the raw ``bars_*`` tables, hypertable conversions,
+   compression/retention policies, and the ``pnl_daily`` view — applied *after*
+   the ORM tables exist.
+
+``doctrine_embeddings`` is intentionally excluded: it depends on the pgvector
+extension and is provisioned at runtime by ``HermesDB`` / ``run_migrations``,
+matching the pre-ORM baseline's table set.
+
+All statements are idempotent (``create_all(checkfirst=True)`` online,
+``IF NOT EXISTS`` / ``if_not_exists => TRUE`` in the addendum), so this is safe
+to re-run against a fresh database. In Alembic *offline* (``--sql``) mode the
+tables are emitted unconditionally (``checkfirst`` reflection has no live DB).
 
 For an existing populated database, do **not** run upgrade — stamp it as
 already-migrated instead::
@@ -34,12 +48,31 @@ depends_on: Union[str, Sequence[str], None] = None
 # Repo root is three parents up: versions/ -> alembic/ -> repo root.
 SCHEMA_SQL = Path(__file__).resolve().parents[2] / "hermes" / "db" / "schema.sql"
 
+# Provisioned at runtime (needs the pgvector extension), not by the baseline —
+# keeps the baseline's table set identical to the pre-ORM schema.sql.
+RUNTIME_ONLY_TABLES = {"doctrine_embeddings"}
+
 
 def upgrade() -> None:
-    sql = SCHEMA_SQL.read_text(encoding="utf-8")
-    # Same split as HermesDB.init_schema: schema.sql is plain DDL with no
-    # dollar-quoted bodies, so splitting on ';' yields whole statements.
-    for stmt in (s.strip() for s in sql.split(";")):
+    from hermes.db.orm import Base
+
+    bind = op.get_bind()
+    offline = op.get_context().as_sql
+
+    # 1) ORM tables — the authoritative catalog. Offline (--sql) has no live DB
+    #    to reflect, so emit unconditionally; online, checkfirst keeps it
+    #    idempotent on a partially-provisioned database.
+    tables = [
+        t for t in Base.metadata.sorted_tables
+        if t.name not in RUNTIME_ONLY_TABLES
+    ]
+    Base.metadata.create_all(bind, tables=tables, checkfirst=not offline)
+
+    # 2) TimescaleDB addendum — bars_* tables, hypertables, compression, view.
+    #    schema.sql is plain DDL with no dollar-quoted bodies, so splitting on
+    #    ';' yields whole statements.
+    addendum = SCHEMA_SQL.read_text(encoding="utf-8")
+    for stmt in (s.strip() for s in addendum.split(";")):
         if stmt:
             op.execute(stmt)
 

@@ -1,118 +1,31 @@
 -- =====================================================================
--- [TimescaleDB-Schema]
--- HermesTrader unified store. Run on a fresh TimescaleDB instance.
+-- [TimescaleDB-Schema] — TimescaleDB addendum (NOT the table catalog).
+--
+-- The ORM (hermes/db/orm.py) is the single source of truth for every
+-- table and column. This file holds ONLY the Postgres/TimescaleDB layer
+-- the ORM cannot express:
+--   * the two raw `bars_*` price tables (written by the time-series paths,
+--     never modelled as ORM classes),
+--   * hypertable conversions for the time-partitioned tables,
+--   * compression / retention policies,
+--   * the `pnl_daily` roll-up view.
+--
+-- It is applied *after* the ORM tables exist (via `create_all` on SQLite,
+-- and via the Alembic baseline's `metadata.create_all` on Postgres), so the
+-- `create_hypertable` / `ALTER TABLE … SET (compress…)` statements below all
+-- reference tables that are already present. It declares NO column structure
+-- for ORM tables — `tests/test_schema_parity.py` enforces that and checks
+-- every hypertable-backed ORM table has its `create_hypertable` line here.
+--
+-- All statements are idempotent so the baseline is safe to re-run.
 -- =====================================================================
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 -- ---------------------------------------------------------------------
--- Strategies registry
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS strategies (
-    strategy_id TEXT PRIMARY KEY,
-    priority    INT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'ACTIVE',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- ---------------------------------------------------------------------
--- Per-strategy watchlists — managed from the Human Watcher UI
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS strategy_watchlists (
-    strategy_id TEXT NOT NULL REFERENCES strategies(strategy_id) ON DELETE CASCADE,
-    symbol      TEXT NOT NULL,
-    target_lots INT,
-    added_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (strategy_id, symbol)
-);
-CREATE INDEX IF NOT EXISTS idx_strategy_watchlists_sid ON strategy_watchlists(strategy_id);
-
--- ---------------------------------------------------------------------
--- Trades — one row per opened structure (single leg, vertical, IC, etc.)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS trades (
-    id            BIGSERIAL,
-    strategy_id   TEXT NOT NULL REFERENCES strategies(strategy_id),
-    symbol        TEXT NOT NULL,
-    side_type     TEXT NOT NULL,            -- 'put' | 'call' | 'iron_condor' | 'wheel'
-    short_leg     TEXT,
-    long_leg      TEXT,
-    short_strike  NUMERIC(10,4),
-    long_strike   NUMERIC(10,4),
-    width         NUMERIC(10,4),
-    lots          INT NOT NULL,
-    entry_credit  NUMERIC(10,4),
-    entry_debit   NUMERIC(10,4),
-    expiry        DATE,
-    status        TEXT NOT NULL DEFAULT 'OPEN', -- OPEN/CLOSED/MANUAL_ORPHAN/PENDING
-    pnl           NUMERIC(12,2),
-    opened_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    closed_at     TIMESTAMPTZ,
-    close_reason  TEXT,
-    ai_authored   BOOLEAN NOT NULL DEFAULT FALSE,
-    ai_rationale  TEXT,
-    broker_order_id TEXT,
-    PRIMARY KEY (id, opened_at)
-);
-SELECT create_hypertable('trades', 'opened_at', if_not_exists => TRUE);
--- In-place migration for DBs created before broker_order_id existed.
-ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT;
--- Tag persistence (entry + close) so the analytics page can show *why*
--- a trade was closed instead of the catch-all 'RECONCILED_BROKER_FLAT'.
--- exit_price holds the closing fill so realized P&L can be computed.
-ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT;
-ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT;
-ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4);
--- entry_features snapshots the resolved tunables + entry context at fill time
--- so realized outcomes can be attributed back to the knobs that produced them
--- (Phase-0 instrumentation for outcome-driven tuning).
-ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_features JSONB;
-CREATE INDEX IF NOT EXISTS idx_trades_strategy_status
-    ON trades(strategy_id, status, symbol);
-CREATE INDEX IF NOT EXISTS idx_trades_open_order_id
-    ON trades(broker_order_id) WHERE status = 'OPEN';
-
--- ---------------------------------------------------------------------
--- Pending orders (deduped against side-aware sizing)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS pending_orders (
-    id            BIGSERIAL,
-    strategy_id   TEXT NOT NULL,
-    symbol        TEXT NOT NULL,
-    side          TEXT NOT NULL,
-    quantity      INT  NOT NULL,
-    payload       JSONB NOT NULL,
-    submitted_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    status        TEXT NOT NULL DEFAULT 'PENDING',
-    PRIMARY KEY (id, submitted_at)
-);
-SELECT create_hypertable('pending_orders', 'submitted_at', if_not_exists => TRUE);
-
--- ---------------------------------------------------------------------
--- Bot logs (Hermes execution trail)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS bot_logs (
-    ts           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    strategy_id  TEXT NOT NULL,
-    level        TEXT NOT NULL DEFAULT 'INFO',
-    message      TEXT NOT NULL
-);
-SELECT create_hypertable('bot_logs', 'ts', if_not_exists => TRUE);
-CREATE INDEX IF NOT EXISTS idx_bot_logs_strategy ON bot_logs(strategy_id, ts DESC);
-
--- ---------------------------------------------------------------------
--- AI decisions (overseer audit trail)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS ai_decisions (
-    ts           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    strategy_id  TEXT,
-    symbol       TEXT,
-    autonomy     TEXT NOT NULL,            -- advisory|enforcing|autonomous
-    decision     JSONB NOT NULL
-);
-SELECT create_hypertable('ai_decisions', 'ts', if_not_exists => TRUE);
-
--- ---------------------------------------------------------------------
--- Daily / intraday bars (price history for XGBoost features)
+-- Daily / intraday bars — raw price history for XGBoost features.
+-- These are the only data tables NOT backed by an ORM class: they are
+-- written and read by the time-series paths, not the declarative models,
+-- so their DDL lives here rather than in hermes/db/orm.py.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bars_daily (
     ts          TIMESTAMPTZ NOT NULL,
@@ -141,128 +54,34 @@ SELECT create_hypertable('bars_intraday', 'ts', if_not_exists => TRUE,
                          chunk_time_interval => INTERVAL '7 days');
 
 -- ---------------------------------------------------------------------
--- ML predictions (XGBoost output stream)
+-- Hypertable conversions for the ORM-owned, time-partitioned tables.
+-- Each table is created (with its composite PK over the partitioning
+-- column) by the ORM; this turns it into a TimescaleDB hypertable.
 -- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS predictions (
-    ts                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    symbol            TEXT NOT NULL,
-    predicted_return  DOUBLE PRECISION,
-    predicted_price   NUMERIC(12,4),
-    spot              NUMERIC(12,4),
-    model_tag         TEXT NOT NULL DEFAULT 'xgb-10feat-v1'
-);
-SELECT create_hypertable('predictions', 'ts', if_not_exists => TRUE);
-CREATE INDEX IF NOT EXISTS idx_predictions_symbol_ts ON predictions(symbol, ts DESC);
+SELECT create_hypertable('trades',         'opened_at',    if_not_exists => TRUE);
+SELECT create_hypertable('pending_orders', 'submitted_at', if_not_exists => TRUE);
+SELECT create_hypertable('bot_logs',       'ts',           if_not_exists => TRUE);
+SELECT create_hypertable('ai_decisions',   'ts',           if_not_exists => TRUE);
+SELECT create_hypertable('predictions',    'ts',           if_not_exists => TRUE);
 
 -- ---------------------------------------------------------------------
--- System settings (shared agent/watcher state — mode toggle, health pings)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS system_settings (
-    key        TEXT PRIMARY KEY,
-    value      TEXT NOT NULL DEFAULT '',
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- ---------------------------------------------------------------------
--- Compression / retention policies (TimescaleDB best-practice)
+-- Compression / retention policies (TimescaleDB best-practice).
 -- ---------------------------------------------------------------------
 ALTER TABLE bot_logs       SET (timescaledb.compress, timescaledb.compress_segmentby='strategy_id');
 ALTER TABLE bars_intraday  SET (timescaledb.compress, timescaledb.compress_segmentby='symbol');
 ALTER TABLE predictions    SET (timescaledb.compress, timescaledb.compress_segmentby='symbol');
-SELECT add_compression_policy('bot_logs',      INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_compression_policy('bot_logs',      INTERVAL '7 days',  if_not_exists => TRUE);
 SELECT add_compression_policy('bars_intraday', INTERVAL '14 days', if_not_exists => TRUE);
 SELECT add_compression_policy('predictions',   INTERVAL '30 days', if_not_exists => TRUE);
 
 -- ---------------------------------------------------------------------
--- ---------------------------------------------------------------------
--- Approval queue — agent proposed trades pending human review.
--- Regular table (not hypertable): low volume, random-access by id.
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS pending_approvals (
-    id           BIGSERIAL PRIMARY KEY,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    strategy_id  TEXT NOT NULL,
-    symbol       TEXT NOT NULL,
-    action_type  TEXT NOT NULL DEFAULT 'entry',   -- 'entry' | 'management' | 'ai'
-    action_json  JSONB NOT NULL,                  -- full TradeAction serialised
-    status       TEXT NOT NULL DEFAULT 'PENDING', -- PENDING/APPROVED/REJECTED/EXECUTED/FAILED
-    notes        TEXT,
-    decided_at   TIMESTAMPTZ,
-    executed_at  TIMESTAMPTZ
-);
--- TTL deadline; the agent auto-expires PENDING rows past this (see
--- expire_stale_approvals). Added after the baseline, so self-heal older DBs.
-ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
-    ON pending_approvals(status, created_at DESC);
-
--- ---------------------------------------------------------------------
--- Veto suppressions — short-lived memory of overseer VETO verdicts so the
--- rules engine stops re-proposing (brute-forcing) the identical entry every
--- tick. A veto consumes no capacity, so without this the strategy keeps
--- re-pitching the same action and the overseer keeps re-vetoing it.
--- Regular table (not hypertable): low volume, keyed random-access lookups.
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS veto_suppressions (
-    id           BIGSERIAL PRIMARY KEY,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    strategy_id  TEXT NOT NULL,
-    symbol       TEXT NOT NULL,
-    side_type    TEXT,                            -- 'put' | 'call' | NULL (all sides)
-    expiry       TEXT,                            -- ISO YYYY-MM-DD | NULL (all expiries)
-    rationale    TEXT,
-    expires_at   TIMESTAMPTZ NOT NULL,            -- TTL; row is inert once past
-    hits         INTEGER NOT NULL DEFAULT 1       -- repeat vetoes escalate the window
-);
-CREATE INDEX IF NOT EXISTS idx_veto_suppressions_lookup
-    ON veto_suppressions(strategy_id, symbol, expires_at DESC);
-
 -- Daily PnL roll-up for the C2 dashboard.
--- This was originally a TimescaleDB continuous aggregate, but those require
--- time_bucket() to reference the hypertable's primary time dimension. The
--- `trades` hypertable is partitioned by opened_at, while PnL needs to be
--- bucketed by closed_at — so a plain view is the right call here. The data
--- volume (closed trades only) is small enough that the unmaterialized
--- aggregate is fine; if it ever isn't, switch this to a refresh-on-demand
--- materialized view (CREATE MATERIALIZED VIEW … WITH NO DATA) and refresh
--- it from the agent's tick loop.
+-- A plain view (not a continuous aggregate): continuous aggregates need
+-- time_bucket() on the hypertable's primary time dimension, but `trades`
+-- is partitioned by opened_at while PnL must be bucketed by closed_at.
+-- The closed-trade volume is small enough that the unmaterialized view is
+-- fine; if it ever isn't, switch to a refresh-on-demand materialized view.
 -- ---------------------------------------------------------------------
--- ---------------------------------------------------------------------
--- exit_ticks: per-tick exit-state trajectory for open positions (Phase 3).
--- One row per OPEN trade per management tick while exit-policy capture is on.
--- With each trade's realized P&L these form the (state, action, return)
--- trajectories the offline exit policy learns from.
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS exit_ticks (
-    id                 BIGSERIAL PRIMARY KEY,
-    ts                 TIMESTAMPTZ NOT NULL DEFAULT now(),
-    trade_id           BIGINT NOT NULL,
-    strategy_id        TEXT NOT NULL,
-    symbol             TEXT NOT NULL,
-    dte                INT,
-    unrealized_pnl_pct DOUBLE PRECISION,
-    debit              DOUBLE PRECISION,
-    entry_credit       DOUBLE PRECISION,
-    action             TEXT NOT NULL DEFAULT 'hold',  -- 'hold' | 'close'
-    close_reason       TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_exit_ticks_trade ON exit_ticks(trade_id, ts);
-
--- ---------------------------------------------------------------------
--- Event ledger — append-only event store for the event-sourcing layer.
--- Read models (trades, pending_orders, system_settings, …) are projections
--- of this log; global event order is carried by `id`. Regular table (matches
--- the create_all bootstrap on every backend), not a hypertable.
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS event_ledger (
-    id           BIGSERIAL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    event_type   TEXT NOT NULL,
-    payload      JSONB NOT NULL,
-    PRIMARY KEY (id, created_at)
-);
-CREATE INDEX IF NOT EXISTS idx_event_ledger_type ON event_ledger(event_type, id);
-
 CREATE OR REPLACE VIEW pnl_daily AS
 SELECT date_trunc('day', closed_at)::timestamptz AS day,
        strategy_id,
