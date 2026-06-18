@@ -8,8 +8,10 @@ from sqlalchemy import select
 
 from hermes.db.orm import Trade, _compute_realized_pnl
 
+from .base import Repository
 
-class AnalyticsRepositoryMixin:
+
+class AnalyticsRepository(Repository):
     async def pnl_daily(self, days: int = 60) -> List[Dict[str, Any]]:
         sql = """
           SELECT day::date, strategy_id, symbol, COALESCE(realized_pnl,0) AS realized_pnl,
@@ -143,7 +145,7 @@ class AnalyticsRepositoryMixin:
                 option_pnl_sum = 0.0
                 net_shares = 0
                 stock_cash_flow = 0.0
-                current_spot = await self.last_price(symbol)
+                current_spot = await self._db.timeseries.last_price(symbol)
 
                 for t in trades:
                     pnl_val = float(t.pnl) if t.pnl is not None else None
@@ -160,7 +162,7 @@ class AnalyticsRepositoryMixin:
                         option_pnl_sum += pnl_val
 
                     if t.side_type == "put" and (t.close_reason == "RECONCILED_BROKER_FLAT" or (t.closed_at and t.expiry and t.closed_at.date() >= t.expiry)):
-                        expiry_price = await self.get_price_on_date(t.symbol, t.expiry)
+                        expiry_price = await self._db.timeseries.get_price_on_date(t.symbol, t.expiry)
                         if expiry_price is not None and expiry_price < float(t.short_strike or 0.0):
                             shares_bought = int(t.lots or 1) * 100
                             cost = float(t.short_strike) * shares_bought
@@ -168,7 +170,7 @@ class AnalyticsRepositoryMixin:
                             stock_cash_flow -= cost
 
                     elif t.side_type == "call" and (t.close_reason == "RECONCILED_BROKER_FLAT" or (t.closed_at and t.expiry and t.closed_at.date() >= t.expiry)):
-                        expiry_price = await self.get_price_on_date(t.symbol, t.expiry)
+                        expiry_price = await self._db.timeseries.get_price_on_date(t.symbol, t.expiry)
                         if expiry_price is not None and expiry_price > float(t.short_strike or 0.0):
                             shares_sold = int(t.lots or 1) * 100
                             proceeds = float(t.short_strike) * shares_sold

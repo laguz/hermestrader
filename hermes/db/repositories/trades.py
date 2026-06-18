@@ -15,10 +15,12 @@ from hermes.db.orm import (
 )
 from hermes.service1_agent.transaction_manager import TransactionManager
 
+from .base import Repository
+
 logger = logging.getLogger("hermes.db")
 
 
-class TradesRepositoryMixin:
+class TradesRepository(Repository):
     _REJECT_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
 
     # ---- writes -----------------------------------------------------------
@@ -141,7 +143,7 @@ class TradesRepositoryMixin:
                     lots=lots,
                 )
                 await s.commit()
-                await self.write_log(
+                await self._db.logs.write_log(
                     action.strategy_id,
                     f"[ORDER REJECTED] {action.symbol} side={side_value} "
                     f"qty={lots} response={response}",
@@ -177,7 +179,7 @@ class TradesRepositoryMixin:
             )
             await s.commit()
 
-        await self.write_log(
+        await self._db.logs.write_log(
             action.strategy_id,
             f"[ORDER ACCEPTED] {action.symbol} side={side_value} qty={lots} "
             f"order_id={broker_order_id} status={order_status or 'ok'}",
@@ -233,7 +235,7 @@ class TradesRepositoryMixin:
                     lots=lots,
                 )
                 await s.commit()
-                await self.write_log(
+                await self._db.logs.write_log(
                     action.strategy_id,
                     f"[CLOSE REJECTED] {action.symbol} side={side_value} "
                     f"qty={lots} response={response}",
@@ -272,7 +274,7 @@ class TradesRepositoryMixin:
                     terminal_status="SUBMITTED"
                 )
                 await s.commit()
-                await self.write_log(
+                await self._db.logs.write_log(
                     action.strategy_id,
                     f"[CLOSE ORPHAN] {action.symbol} no matching OPEN trade for "
                     f"trade_id={trade_id} legs={[leg.get('option_symbol') for leg in (action.legs or [])]} "
@@ -296,7 +298,7 @@ class TradesRepositoryMixin:
             await s.commit()
 
         verb = "FILLED" if filled else "SUBMITTED"
-        await self.write_log(
+        await self._db.logs.write_log(
             action.strategy_id,
             f"[CLOSE {verb}] {action.symbol} trade_id={trade_id} reason={close_reason} "
             f"exit={exit_price} pnl={float(row.pnl) if row.pnl is not None else None} "
@@ -373,7 +375,7 @@ class TradesRepositoryMixin:
             if closed or reopened:
                 await s.commit()
 
-        await self.write_log(
+        await self._db.logs.write_log(
             "ENGINE",
             f"reconciled {len(positions or [])} broker pos; "
             f"closed_orphans={closed} reopened={reopened} "

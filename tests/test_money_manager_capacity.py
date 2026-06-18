@@ -38,6 +38,55 @@ async def test_true_available_bp_floor_at_zero():
     assert await mm.true_available_bp() == 0.0
 
 
+# ── obp_reserve (operator capital fence) ─────────────────────────────────────
+# The `obp_reserve` setting walls off a slice of buying power the operator
+# never wants the agent to touch. true_available_bp() must subtract it from the
+# broker's reported OBP before any sizing decision. If this breaks, the agent
+# sizes into reserved capital — the worst kind of money-path bug.
+async def test_true_available_bp_subtracts_obp_reserve():
+    db = StubDB()
+    db.settings["obp_reserve"] = "1500"
+    broker = StubBroker(option_buying_power=10_000.0)
+    mm = MoneyManager(broker, db, config={})
+    # 10,000 OBP − 1,500 fenced = 8,500 truly available.
+    assert await mm.true_available_bp() == 8_500.0
+
+
+async def test_obp_reserve_exceeding_bp_floors_at_zero():
+    """A reserve larger than OBP must clamp to 0, never go negative."""
+    db = StubDB()
+    db.settings["obp_reserve"] = "5000"
+    broker = StubBroker(option_buying_power=1_000.0)
+    mm = MoneyManager(broker, db, config={})
+    assert await mm.true_available_bp() == 0.0
+
+
+async def test_no_obp_reserve_returns_full_bp():
+    """Default path (no reserve set) leaves broker OBP untouched."""
+    broker = StubBroker(option_buying_power=10_000.0)
+    mm = MoneyManager(broker, StubDB(), config={})
+    assert await mm.true_available_bp() == 10_000.0
+
+
+async def test_malformed_obp_reserve_is_ignored():
+    """A non-numeric reserve must not crash sizing — fall back to full OBP."""
+    db = StubDB()
+    db.settings["obp_reserve"] = "not-a-number"
+    broker = StubBroker(option_buying_power=10_000.0)
+    mm = MoneyManager(broker, db, config={})
+    assert await mm.true_available_bp() == 10_000.0
+
+
+async def test_obp_reserve_flows_through_to_affordable_lots():
+    """The fence must shrink downstream lot sizing, not just the BP number."""
+    db = StubDB()
+    db.settings["obp_reserve"] = "8000"
+    broker = StubBroker(option_buying_power=10_000.0)
+    mm = MoneyManager(broker, db, config={})
+    # Only 2,000 spendable after the fence; at 500/lot that's 4 lots, not 20.
+    assert await mm.max_affordable_contracts(500.0) == 4
+
+
 # ── max_affordable_contracts ─────────────────────────────────────────────────
 async def test_max_affordable_floor_divides_bp_by_requirement():
     broker = StubBroker(option_buying_power=10_000.0)

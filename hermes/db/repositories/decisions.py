@@ -7,8 +7,10 @@ from sqlalchemy import select
 
 from hermes.db.orm import AIDecision, Prediction
 
+from .base import Repository
 
-class DecisionsRepositoryMixin:
+
+class DecisionsRepository(Repository):
     async def write_ai_decision(self, strategy_id: str, symbol: str,
                           autonomy: str, decision: Dict[str, Any]) -> None:
         async with self.AsyncSession() as s:
