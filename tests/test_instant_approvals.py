@@ -52,12 +52,15 @@ async def test_interruptible_sleep_wakes_on_shutdown():
 
 @pytest.mark.anyio
 async def test_agent_loop_runs_approvals_immediately_on_trigger():
+    from hermes.events.bus import ClockTickEvent
+
     db_mock = AsyncMock()
     async def mock_get_setting(key, default=None):
         if key == "mode":
             return "paper"
         return None
     db_mock.get_setting.side_effect = mock_get_setting
+    db_mock.get_settings.return_value = {}
     db_mock.fetch_approved_actions.return_value = []
     db_mock.tracked_option_symbols.return_value = []
     db_mock.list_all_watchlists.return_value = {}
@@ -81,6 +84,22 @@ async def test_agent_loop_runs_approvals_immediately_on_trigger():
         engine_mock = MagicMock()
         engine_mock.overseer = AsyncMock()
         build_mock.return_value = engine_mock
+        
+        # Wire handle_clock_tick subscription and execution simulation
+        def mock_build(*args, **kwargs):
+            eb = kwargs.get("event_bus")
+            if eb:
+                eb.subscribe(ClockTickEvent, engine_mock.handle_clock_tick)
+            return engine_mock
+        build_mock.side_effect = mock_build
+        
+        async def mock_handle_clock_tick(event):
+            # Simulate real CascadingEngine clock tick approval execution
+            actions = await db_mock.fetch_approved_actions()
+            for item in actions:
+                await exec_mock(item, broker=broker_mock, db=db_mock)
+                
+        engine_mock.handle_clock_tick = mock_handle_clock_tick
         
         mkt_mock.return_value = {
             "trading_day": False,

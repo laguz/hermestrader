@@ -314,13 +314,69 @@ class AsyncXGBPredictor:
             logger.warning("Cannot create model dir %s: %s", self._model_root, exc)
 
     # -- public --------------------------------------------------------------
-    def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
+    def start(self, event_bus: Optional[Any] = None) -> None:
         self._load_models()
-        self._thread = threading.Thread(target=self._loop, name="xgb-predictor",
-                                        daemon=True)
-        self._thread.start()
+        if event_bus is not None:
+            from hermes.events.bus import MlRetrainTick
+            event_bus.subscribe(MlRetrainTick, self.handle_ml_retrain_tick)
+            logger.info("AsyncXGBPredictor registered to MlRetrainTick on EventBus.")
+        else:
+            if self._thread and self._thread.is_alive():
+                return
+            self._thread = threading.Thread(target=self._loop, name="xgb-predictor",
+                                            daemon=True)
+            self._thread.start()
+
+    async def handle_ml_retrain_tick(self, event: Any) -> None:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        force = getattr(event, "force", False)
+        await loop.run_in_executor(None, self._run_ml_cycle, force)
+
+    def _run_ml_cycle(self, force: bool = False) -> None:
+        from hermes.market_hours import ET
+        try:
+            self._cfg = PredictorConfig.from_db(self.db)
+            now = time.time()
+            now_et = datetime.now(ET)
+            force_run = force or (run_maybe_async(self.db.get_setting, "ml_force_run") == "true")
+
+            should_predict = self._should_predict(now_et, force_run)
+            should_retrain = (
+                force_run
+                or (now - self._last_train_ts > self._cfg.retrain_interval_s)
+            )
+            should_calibrate = (
+                force_run
+                or (now - self._last_calibrate_ts > self._cfg.calibrate_interval_s)
+            )
+
+            if should_predict or should_retrain or should_calibrate:
+                self._sync_history()
+
+            warnings: List[str] = []
+            if should_retrain:
+                warnings.extend(self._retrain_all())
+                self._last_train_ts = now
+            if should_calibrate:
+                self._calibrate_all()
+                self._last_calibrate_ts = now
+            if should_predict or should_retrain:
+                warnings.extend(self._predict_all())
+
+            if force_run:
+                try:
+                    run_maybe_async(self.db.set_setting, "ml_force_run", "false")
+                except Exception:
+                    pass
+
+            self._record_status(warnings)
+        except Exception as exc:
+            logger.exception("xgb cycle error: %s", exc)
+            try:
+                run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
+            except Exception:
+                pass
 
     def stop(self) -> None:
         self._stop.set()

@@ -5,6 +5,7 @@ import json
 import logging
 import asyncio
 from typing import Any, Dict, List, Optional
+from hermes.broker.base import AbstractBroker
 from hermes.broker.models import (
     AccountBalances,
     BrokerPosition,
@@ -17,7 +18,7 @@ from hermes.broker.models import (
 logger = logging.getLogger("hermes.broker.mcp_client")
 
 
-class MCPBrokerClient:
+class MCPBrokerClient(AbstractBroker):
     """Model Context Protocol Client wrapper that speaks to the Hermes Tradier MCP server."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -195,6 +196,13 @@ class MCPBrokerClient:
             )
             for q in res
         ]
+
+    async def get_delta(self, option_symbol: str) -> float:
+        quotes = await self.get_quote(option_symbol)
+        if not quotes:
+            return 0.0
+        greeks = (quotes[0].get("greeks") or {})
+        return float(greeks.get("delta", 0.0) or 0.0)
 
     async def get_option_expirations(self, symbol: str) -> List[str]:
         return await self._call_mcp("get_option_expirations", symbol=symbol)

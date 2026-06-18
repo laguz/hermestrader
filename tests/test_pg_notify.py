@@ -83,6 +83,7 @@ async def test_decide_approval_emits_notify():
             result_mock = MagicMock()
             row_mock = MagicMock()
             row_mock.status = "PENDING"
+            row_mock.notes = None
             result_mock.scalars.return_value.first.return_value = row_mock
             session_mock.execute.return_value = result_mock
             

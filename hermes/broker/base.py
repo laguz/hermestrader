@@ -83,3 +83,6 @@ class AbstractBroker(ABC):
     async def close(self) -> None:
         """Close any open connections or clients."""
         pass
+
+
+BrokerAdapter = AbstractBroker

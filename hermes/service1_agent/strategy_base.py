@@ -15,6 +15,7 @@ from abc import ABC, abstractmethod
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
+from hermes.clock import Clock, RealClock
 from .broker_wrapper import AsyncBrokerWrapper
 from .money_manager import IronCondorBuilder, MoneyManager
 from .trade_action import TradeAction
@@ -44,7 +45,9 @@ class AbstractStrategy(ABC):
         config: Dict[str, Any],
         dry_run: bool = False,
         overseer: Optional["HermesOverseer"] = None,
+        clock: Optional[Clock] = None,
     ):
+        self.clock = clock or RealClock()
         self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         self.mm = money_manager
@@ -71,7 +74,10 @@ class AbstractStrategy(ABC):
     def now(self) -> datetime:
         if hasattr(self.broker, "current_date") and self.broker.current_date:
             return self.broker.current_date
-        return datetime.utcnow()
+        inner = getattr(self.broker, "broker", None)
+        if inner and hasattr(inner, "current_date") and inner.current_date:
+            return inner.current_date
+        return self.clock.utc_now()
 
     def today(self) -> date:
         return self.now().date()

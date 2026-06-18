@@ -35,6 +35,8 @@ class EngineAIMixin:
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
+            if event.approval_id is not None:
+                await self.db.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
             # Record a short-lived suppression so the rules engine stops
             # re-proposing this identical entry next tick (a veto consumes
             # no capacity, so without this it would brute-force the same
@@ -68,7 +70,7 @@ class EngineAIMixin:
         # dry-run guard as the synchronous submit() path. ``action_type`` is
         # carried through the event so a management close approved via the bus
         # is routed as a close, not re-queued as a fresh entry.
-        await self._execute_or_queue(a, getattr(event, "action_type", "entry"))
+        await self._execute_or_queue(a, getattr(event, "action_type", "entry"), approval_id=getattr(event, "approval_id", None))
 
     async def _async_propose(self, watchlist: Sequence[str]) -> None:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""

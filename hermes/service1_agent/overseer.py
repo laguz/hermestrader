@@ -927,6 +927,28 @@ class HermesOverseer:
             self.event_bus.subscribe(ReviewRequestEvent, self.handle_review_request)
             logger.info("HermesOverseer background worker started.")
 
+            if self.db is not None:
+                try:
+                    pending = await self.db.fetch_pending_ai_review_actions()
+                    if pending:
+                        logger.info("Found %d pending AI review(s) in database at startup; enqueuing...", len(pending))
+                        from .core import TradeAction
+                        for item in pending:
+                            try:
+                                action = TradeAction(**item["action_json"])
+                                event = ReviewRequestEvent(
+                                    strategy_id=item["strategy_id"],
+                                    symbol=item["symbol"],
+                                    trade_action=action,
+                                    action_type=item["action_type"],
+                                    approval_id=item["id"]
+                                )
+                                await self.queue.put(event)
+                            except Exception as parse_exc:
+                                logger.error("Failed to parse pending AI review action id=%d: %s", item["id"], parse_exc)
+                except Exception as db_exc:
+                    logger.error("Failed to fetch pending AI reviews at startup: %s", db_exc)
+
     async def stop(self) -> None:
         """Stop the autonomous background worker."""
         if self._worker_task:
@@ -974,6 +996,7 @@ class HermesOverseer:
                     modifications=modifications,
                     original_action=action,
                     action_type=getattr(event, "action_type", "entry"),
+                    approval_id=getattr(event, "approval_id", None),
                 )
                 if self.event_bus:
                     self.event_bus.emit(approval_event)

@@ -35,12 +35,7 @@
                                               └──────────────────┘
 ```
 
-**Service-1** runs the cascading strategy engine. It ticks on a heartbeat
-interval (default 3600 s, `HERMES_TICK_INTERVAL`) but is primarily
-**event-driven**: an `EventBus` plus a broker stream client wake it early on
-order fills, market-data crossings, and C2 triggers, so the interval is a
-fallback, not the only cadence. It never serves HTTP — its only outputs are
-broker orders and DB rows.
+**Service-1** runs the cascading strategy engine. It is fully **event-driven** and **event-sourced**: a central async `Scheduler` emits scheduled tick events (`ClockTickEvent`, `CacheWarmTick`, `MlRetrainTick`, `ChartRefreshTick`) over an in-process `EventBus`. The agent subscribes to these ticks and other incoming events (e.g., `OrderFillEvent`, `MarketDataEvent` from the broker stream client, and database settings/watchlist/approval changes published over `ipc` PG NOTIFY). It processes all engine, settings, ML prediction, and cache pre-warming logic reactively, avoiding database-polling loops. It never serves HTTP — its only outputs are broker orders and DB rows.
 
 **Service-2** is a FastAPI app that reads the same DB and exposes a control
 panel: approve queued trades, edit the operator's "soul" doctrine, toggle

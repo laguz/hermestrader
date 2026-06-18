@@ -83,6 +83,67 @@ class SystemSettingChangedEvent(BaseEvent):
     updated_at: str
 
 
+class WatchlistChangedEvent(BaseEvent):
+    """Event triggered when a watchlist is modified."""
+    strategy_id: str
+    symbols: List[str]
+    updated_at: str
+
+
+class ModeChangedEvent(BaseEvent):
+    """Event triggered when trading mode changes."""
+    mode: str
+    updated_at: str
+
+
+class StrategyToggledEvent(BaseEvent):
+    """Event triggered when a strategy is toggled."""
+    strategy_id: str
+    enabled: bool
+    updated_at: str
+
+
+class AutonomyChangedEvent(BaseEvent):
+    """Event triggered when agent autonomy changes."""
+    autonomy: str
+    updated_at: str
+
+
+class PauseChangedEvent(BaseEvent):
+    """Event triggered when agent pause state changes."""
+    paused: bool
+    updated_at: str
+
+
+class ApprovalDecidedEvent(BaseEvent):
+    """Event triggered when an approval is decided."""
+    approval_id: int
+    status: str
+    notes: Optional[str] = None
+    decided_at: Optional[str] = None
+    executed_at: Optional[str] = None
+
+
+class MlRetrainTick(BaseEvent):
+    """Internal timer event to trigger ML retraining."""
+    force: bool = False
+
+
+class CacheWarmTick(BaseEvent):
+    """Internal timer event to warm quote/chain cache."""
+    pass
+
+
+class ChartRefreshTick(BaseEvent):
+    """Internal timer event to trigger chart vision analysis."""
+    pass
+
+
+class ClockTickEvent(BaseEvent):
+    """Internal timer event driving CascadingEngine periodic sweep."""
+    pass
+
+
 # Event Type Registry mapping to database event_type values
 EVENT_TYPE_TO_CLASS: Dict[str, Type[BaseEvent]] = {
     "ORDER_SUBMITTED": OrderSubmittedEvent,
@@ -95,6 +156,16 @@ EVENT_TYPE_TO_CLASS: Dict[str, Type[BaseEvent]] = {
     "RECONCILE_FLAT": ReconcileFlatEvent,
     "DOCTRINE_UPDATED": DoctrineUpdatedEvent,
     "SYSTEM_SETTING_CHANGED": SystemSettingChangedEvent,
+    "WATCHLIST_CHANGED": WatchlistChangedEvent,
+    "MODE_CHANGED": ModeChangedEvent,
+    "STRATEGY_TOGGLED": StrategyToggledEvent,
+    "AUTONOMY_CHANGED": AutonomyChangedEvent,
+    "PAUSE_CHANGED": PauseChangedEvent,
+    "APPROVAL_DECIDED": ApprovalDecidedEvent,
+    "ML_RETRAIN_TICK": MlRetrainTick,
+    "CACHE_WARM_TICK": CacheWarmTick,
+    "CHART_REFRESH_TICK": ChartRefreshTick,
+    "CLOCK_TICK_EVENT": ClockTickEvent,
 }
 
 CLASS_TO_EVENT_TYPE: Dict[Type[BaseEvent], str] = {

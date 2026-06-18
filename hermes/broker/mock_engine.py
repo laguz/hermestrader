@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from hermes.common import OCC_RE
+from hermes.broker.base import AbstractBroker
 from hermes.broker.models import (
     AccountBalances,
     BrokerPosition,
@@ -16,7 +17,7 @@ from hermes.broker.models import (
 
 logger = logging.getLogger("hermes.broker.mock_engine")
 
-class MockAsyncTradierBroker:
+class MockAsyncTradierBroker(AbstractBroker):
     """
     An in-memory simulated matching engine that satisfies the AsyncTradierBroker interface.
     Exposes simulated ticks to execute limit/market orders with simulated slippage.
@@ -358,6 +359,9 @@ class MockAsyncTradierBroker:
         current_exp = datetime.strptime(yymmdd, "%y%m%d").date()
         next_exp = current_exp + timedelta(days=30)
         return f"{underlying}{next_exp.strftime('%y%m%d')}{pc}{strike}"
+
+    async def close(self) -> None:
+        pass
 
     def tick_underlying(self, symbol: str, spot: float, high: float, low: float, dt: datetime):
         self.current_date = dt

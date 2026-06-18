@@ -34,31 +34,75 @@ class SettingsRepositoryMixin:
 
     async def set_setting(self, key: str, value: str) -> None:
         async with self.AsyncSession() as s:
-            result = await s.execute(select(SystemSetting).filter_by(key=key).limit(1))
-            row = result.scalars().first()
-            if row is None:
-                row = SystemSetting(key=key, value=str(value))
-                s.add(row)
-            else:
-                row.value = str(value)
-                row.updated_at = datetime.utcnow()
-            await s.flush()
+            updated_at = datetime.utcnow().isoformat()
             
             # Emit Event-Sourced Event
-            from hermes.db.events import EventStoreManager, SystemSettingChangedEvent, DoctrineUpdatedEvent
-            if key == "soul_md":
+            from hermes.db.events import (
+                EventStoreManager,
+                SystemSettingChangedEvent,
+                DoctrineUpdatedEvent,
+                ModeChangedEvent,
+                PauseChangedEvent,
+                AutonomyChangedEvent,
+                StrategyToggledEvent,
+            )
+            import re
+            
+            if key == "hermes_mode":
+                ev = ModeChangedEvent(
+                    mode=str(value),
+                    updated_at=updated_at
+                )
+            elif key == "agent_paused":
+                ev = PauseChangedEvent(
+                    paused=(str(value).lower() == "true"),
+                    updated_at=updated_at
+                )
+            elif key == "agent_autonomy":
+                ev = AutonomyChangedEvent(
+                    autonomy=str(value),
+                    updated_at=updated_at
+                )
+            elif key == "soul_md":
                 ev = DoctrineUpdatedEvent(
                     doctrine_text=str(value),
-                    updated_at=row.updated_at.isoformat() if row.updated_at else datetime.utcnow().isoformat()
+                    updated_at=updated_at
+                )
+            elif re.match(r"^strategy_([a-zA-Z0-9_]+)_enabled$", key):
+                m = re.match(r"^strategy_([a-zA-Z0-9_]+)_enabled$", key)
+                strat_id = m.group(1).upper()
+                ev = StrategyToggledEvent(
+                    strategy_id=strat_id,
+                    enabled=(str(value).lower() == "true"),
+                    updated_at=updated_at
                 )
             else:
                 ev = SystemSettingChangedEvent(
                     key=key,
                     value=str(value),
-                    updated_at=row.updated_at.isoformat() if row.updated_at else datetime.utcnow().isoformat()
+                    updated_at=updated_at
                 )
-            await EventStoreManager.append_event(s, ev)
+                
+            await EventStoreManager.record_event(s, ev)
+            
+            import json
+            payload = {
+                "event_type": ev.__class__.__name__,
+                "payload": ev.model_dump(mode="json")
+            }
+            if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
+                from sqlalchemy import text as sa_text
+                escaped_payload = json.dumps(payload).replace("'", "''")
+                await s.execute(sa_text(f"NOTIFY agent_commands, '{escaped_payload}'"))
+                
             await s.commit()
+            
+            if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
+                try:
+                    from hermes.ipc import ipc
+                    await ipc.publish("agent_commands", payload)
+                except Exception:
+                    pass
 
     async def setting_updated_at(self, key: str) -> Optional[datetime]:
         async with self.AsyncSession() as s:

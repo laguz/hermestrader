@@ -229,6 +229,8 @@ class EngineRuntimeMixin:
             if event_type == "TICK":
                 watchlist = payload["watchlist"]
                 res = await self._run_tick_internal(watchlist)
+            elif event_type == "CLOCK_TICK":
+                res = await self._handle_clock_tick_internal(payload["event"])
             elif event_type == "AI_APPROVAL":
                 res = await self._handle_ai_approval_internal(payload["event"])
             elif event_type == "MARKET_DATA":

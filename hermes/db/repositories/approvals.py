@@ -1,7 +1,7 @@
 """Human-approval queue and overseer veto-suppression bookkeeping."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional
 from hermes.utils import utc_now
 
@@ -15,7 +15,14 @@ class ApprovalsRepositoryMixin:
                              side_type: Optional[str],
                              expiry: Optional[str]) -> bool:
         async with self.AsyncSession() as s:
-            result = await s.execute(select(PendingApproval).filter_by(strategy_id=strategy_id, symbol=symbol, status="PENDING"))
+            result = await s.execute(
+                select(PendingApproval)
+                .filter(
+                    PendingApproval.strategy_id == strategy_id,
+                    PendingApproval.symbol == symbol,
+                    PendingApproval.status.in_(["PENDING", "PENDING_AI_REVIEW"])
+                )
+            )
             rows = result.scalars().all()
             for r in rows:
                 aj = r.action_json or {}
@@ -176,17 +183,34 @@ class ApprovalsRepositoryMixin:
             row = result.scalars().first()
             if row is None or row.status != "PENDING":
                 return False
-            row.status = decision
-            row.decided_at = utc_now()
-            if notes:
-                row.notes = notes
-
-            # Zero-Latency Control Signaling: notify agent process of approval
-            if decision == "APPROVED" and hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
+                
+            from hermes.db.events import EventStoreManager, ApprovalDecidedEvent
+            ev = ApprovalDecidedEvent(
+                approval_id=approval_id,
+                status=decision,
+                notes=notes or row.notes,
+                decided_at=utc_now().isoformat()
+            )
+            await EventStoreManager.record_event(s, ev)
+            
+            import json
+            payload = {
+                "event_type": "ApprovalDecidedEvent",
+                "payload": ev.model_dump(mode="json")
+            }
+            if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
                 from sqlalchemy import text as sa_text
-                await s.execute(sa_text("NOTIFY agent_commands, '{\"action\": \"trigger_approvals\"}'"))
-
+                escaped_payload = json.dumps(payload).replace("'", "''")
+                await s.execute(sa_text(f"NOTIFY agent_commands, '{escaped_payload}'"))
+            
             await s.commit()
+            
+            if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
+                try:
+                    from hermes.ipc import ipc
+                    await ipc.publish("agent_commands", payload)
+                except Exception:
+                    pass
             return True
 
     async def fetch_approved_actions(self) -> List[Dict[str, Any]]:
@@ -209,11 +233,65 @@ class ApprovalsRepositoryMixin:
             result = await s.execute(select(PendingApproval).filter_by(id=approval_id).limit(1))
             row = result.scalars().first()
             if row:
-                row.status = "EXECUTED" if success else "FAILED"
-                row.executed_at = utc_now()
-                if notes:
-                    row.notes = (row.notes or "") + f"\n{notes}"
+                from hermes.db.events import EventStoreManager, ApprovalDecidedEvent
+                ev = ApprovalDecidedEvent(
+                    approval_id=approval_id,
+                    status="EXECUTED" if success else "FAILED",
+                    notes=notes,
+                    executed_at=utc_now().isoformat()
+                )
+                await EventStoreManager.record_event(s, ev)
+                
+                import json
+                payload = {
+                    "event_type": "ApprovalDecidedEvent",
+                    "payload": ev.model_dump(mode="json")
+                }
+                if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
+                    from sqlalchemy import text as sa_text
+                    escaped_payload = json.dumps(payload).replace("'", "''")
+                    await s.execute(sa_text(f"NOTIFY agent_commands, '{escaped_payload}'"))
+                
                 await s.commit()
+                
+                if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
+                    try:
+                        from hermes.ipc import ipc
+                        await ipc.publish("agent_commands", payload)
+                    except Exception:
+                        pass
 
     async def list_approvals_async(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         return await self.list_approvals(status, limit)
+
+    async def fetch_pending_ai_review_actions(self) -> List[Dict[str, Any]]:
+        async with self.AsyncSession() as s:
+            result = await s.execute(
+                select(PendingApproval)
+                .filter_by(status="PENDING_AI_REVIEW")
+                .order_by(PendingApproval.created_at)
+            )
+            rows = result.scalars().all()
+            return [
+                {"id": r.id, "action_json": r.action_json,
+                 "strategy_id": r.strategy_id, "symbol": r.symbol,
+                 "action_type": r.action_type}
+                for r in rows
+            ]
+
+    async def update_approval_status(self, approval_id: int, status: str,
+                               action_json: Optional[Dict[str, Any]] = None,
+                               notes: Optional[str] = None) -> bool:
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(PendingApproval).filter_by(id=approval_id).limit(1))
+            row = result.scalars().first()
+            if row is None:
+                return False
+            row.status = status.upper()
+            row.decided_at = utc_now()
+            if action_json is not None:
+                row.action_json = action_json
+            if notes is not None:
+                row.notes = notes
+            await s.commit()
+            return True

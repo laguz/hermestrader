@@ -144,7 +144,6 @@ class EngineTuningMixin:
             if mode not in ("shadow", "active"):
                 return
 
-            from hermes.utils import utc_now
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
             open_trades = await self.db.all_open_trades()
@@ -180,7 +179,7 @@ class EngineTuningMixin:
                 # a positive ask so (0+ask)/2 is a usable mark for telemetry.
                 return (bid + ask) / 2.0 if ask > 0 and bid >= 0 else None
 
-            today = utc_now().date()
+            today = self.clock.utc_now().date()
             autonomy = (getattr(self.overseer, "autonomy", "advisory")
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
@@ -298,10 +297,9 @@ class EngineTuningMixin:
                 if (a.strategy_params or {}).get("trade_id") is not None
             }
 
-            from hermes.utils import utc_now
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
-            today = utc_now().date()
+            today = self.clock.utc_now().date()
             autonomy = (getattr(self.overseer, "autonomy", "advisory")
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
