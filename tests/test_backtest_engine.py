@@ -21,17 +21,17 @@ async def test_backtest_database():
     db = BacktestDatabase()
     
     # Logs
-    await db.write_log("TEST", "Hello World", level="INFO")
+    await db.logs.write_log("TEST", "Hello World", level="INFO")
     assert len(db.logs) == 1
     assert db.logs[0]["msg"] == "Hello World"
     
     # Settings
-    await db.set_setting("foo", "bar")
-    assert await db.get_setting("foo") == "bar"
-    assert await db.get_setting("nonexistent", "default") == "default"
+    await db.settings.set_setting("foo", "bar")
+    assert await db.settings.get_setting("foo") == "bar"
+    assert await db.settings.get_setting("nonexistent", "default") == "default"
     
     # Open trades count starts at 0
-    assert await db.count_open_contracts("TEST", "AAPL", "put", "2025-06-20") == 0
+    assert await db.trades.count_open_contracts("TEST", "AAPL", "put", "2025-06-20") == 0
 
 @pytest.mark.asyncio
 async def test_backtest_broker():

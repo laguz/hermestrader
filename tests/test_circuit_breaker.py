@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
@@ -12,6 +13,7 @@ from tests._stubs import StubBroker
 @pytest.mark.anyio
 async def test_circuit_breaker_state_transitions():
     db = AsyncMock()
+    alias_db_namespaces(db)
     cb = CircuitBreaker(failure_threshold=3, cooldown_s=0.2)
 
     assert cb.state == "CLOSED"
@@ -50,6 +52,7 @@ async def test_circuit_breaker_state_transitions():
 @pytest.mark.anyio
 async def test_circuit_breaker_half_open_failure():
     db = AsyncMock()
+    alias_db_namespaces(db)
     cb = CircuitBreaker(failure_threshold=2, cooldown_s=0.1)
 
     # Trip the circuit
@@ -75,6 +78,7 @@ async def test_async_broker_wrapper_circuit_breaker_integration():
     cb = AsyncBrokerWrapper._shared_cb
 
     db = AsyncMock()
+    alias_db_namespaces(db)
     broker = StubBroker()
     
     # Wrap broker

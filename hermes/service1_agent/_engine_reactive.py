@@ -130,7 +130,7 @@ class EngineReactiveMixin:
             logger.exception("[ENGINE] Failed to process management on order fill event: %s", exc)
 
         try:
-            watchlist = await self.db.all_watchlist_symbols()
+            watchlist = await self.db.watchlist.all_watchlist_symbols()
             if watchlist:
                 banned = await self._read_banned_symbols()
                 if banned:
@@ -185,7 +185,7 @@ class EngineReactiveMixin:
                     len(optimized_actions), max_per_tick, max_per_tick,
                 )
                 for a in optimized_actions[max_per_tick:]:
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[GUARD] {a.symbol} reactive entry trimmed due to max_orders_per_tick={max_per_tick}"
                     )

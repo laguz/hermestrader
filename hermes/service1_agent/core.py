@@ -146,16 +146,16 @@ class CascadingEngine(
                     active_legs.add(top)
         except Exception:                              # noqa: BLE001
             logger.exception("[ENGINE] active-order leg fetch failed")
-        await self.db.upsert_positions(positions, active_order_legs=active_legs)
+        await self.db.trades.upsert_positions(positions, active_order_legs=active_legs)
 
     # 2
     async def reconcile_orphans(self) -> None:
         """Flag broker positions not tied to any strategy as MANUAL_ORPHAN."""
-        tracked = await self.db.tracked_option_symbols()
+        tracked = await self.db.trades.tracked_option_symbols()
         live = {p["symbol"] for p in await self.broker.get_positions() or []}
         orphans = live - tracked
         if orphans:
-            await self.db.flag_orphans(orphans)
+            await self.db.logs.flag_orphans(orphans)
 
     # 3
     async def process_management(self) -> List[TradeAction]:
@@ -175,7 +175,7 @@ class CascadingEngine(
     # 4
     async def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
         """Per-strategy watchlist with fallback to the engine-level default."""
-        getter = getattr(self.db, "list_watchlist", None)
+        getter = getattr(self.db.watchlist, "list_watchlist", None)
         if getter is None:
             return list(default)
         try:
@@ -233,7 +233,7 @@ class CascadingEngine(
                 len(validated_actions), max_per_tick, max_per_tick,
             )
             for a in validated_actions[max_per_tick:]:
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     a.strategy_id,
                     f"[GUARD] {a.symbol} entry trimmed due to max_orders_per_tick={max_per_tick}"
                 )
@@ -301,7 +301,7 @@ class CascadingEngine(
         if blocked:
             actions = list(actions)
             for a in actions:
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     a.strategy_id,
                     f"[OFF-HOURS BLOCKED] {a.symbol} {action_type} "
                     f"qty={a.quantity} — {reason}; not sent to broker",
@@ -328,7 +328,7 @@ class CascadingEngine(
                 if veto_side and str(veto_side).lower() in {"buy", "sell"}:
                     veto_side = None
                 try:
-                    veto_reason = await self.db.active_veto(
+                    veto_reason = await self.db.approvals.active_veto(
                         a.strategy_id, a.symbol, veto_side, a.expiry)
                 except Exception:                                  # noqa: BLE001
                     logger.exception("[VETO] active_veto lookup failed for %s", a.symbol)
@@ -336,7 +336,7 @@ class CascadingEngine(
                 if veto_reason:
                     logger.info("[VETO-SUPPRESSED] %s %s side=%s expiry=%s",
                                 a.strategy_id, a.symbol, veto_side, a.expiry)
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[VETO-SUPPRESSED] {a.symbol} {veto_side or ''} "
                         f"expiry={a.expiry} — skipped re-proposal "
@@ -353,7 +353,7 @@ class CascadingEngine(
                         and not getattr(a, "ai_authored", False)):
                     # Queue for AI review in the database
                     action_dict = dataclasses.asdict(a)
-                    approval_id = await self.db.queue_for_approval(
+                    approval_id = await self.db.approvals.queue_for_approval(
                         action_dict, action_type=action_type, status="PENDING_AI_REVIEW"
                     )
                     # Yield to AI Overseer asynchronously
@@ -413,14 +413,14 @@ class CascadingEngine(
                 # approval for the same (strategy, symbol, side, expiry). Without
                 # this, every tick re-generates and re-queues the same spread
                 # because the approval hasn't been actioned yet.
-                if await self.db.has_pending_approval(a.strategy_id, a.symbol,
+                if await self.db.approvals.has_pending_approval(a.strategy_id, a.symbol,
                                                       side_type, a.expiry):
                     logger.info(
                         "[C2] Skipping duplicate — already PENDING: %s %s "
                         "side=%s expiry=%s",
                         a.strategy_id, a.symbol, side_type, a.expiry,
                     )
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         a.strategy_id,
                         f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
                         f"already PENDING approval — skipped",
@@ -429,16 +429,16 @@ class CascadingEngine(
 
                 # Queue for human review instead of firing directly.
                 action_dict = dataclasses.asdict(a)
-                await self.db.queue_for_approval(action_dict, action_type=action_type)
+                await self.db.approvals.queue_for_approval(action_dict, action_type=action_type)
             else:
                 # Transition the existing PENDING_AI_REVIEW row to PENDING
-                await self.db.update_approval_status(approval_id, "PENDING")
+                await self.db.approvals.update_approval_status(approval_id, "PENDING")
 
             logger.info(
                 "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
                 a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
             )
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 a.strategy_id,
                 f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
                 f"side={side_type} expiry={a.expiry} "
@@ -446,7 +446,7 @@ class CascadingEngine(
             )
             return
 
-        await self.db.record_pending_order(a)
+        await self.db.trades.record_pending_order(a)
         # Management actions whose legs are all *_to_close represent the close
         # of an existing trade, not a new entry. Route them to
         # ``close_trade_from_action`` which UPDATES the original Trade row
@@ -463,10 +463,10 @@ class CascadingEngine(
             and all("to_open" not in (leg.get("side") or "").lower()
                     for leg in a.legs)
         )
-        close_method = getattr(self.db, "close_trade_from_action", None)
+        close_method = getattr(self.db.trades, "close_trade_from_action", None)
         if getattr(self.broker, "dry_run", False):
             if approval_id is not None:
-                await self.db.mark_approval_executed(
+                await self.db.approvals.mark_approval_executed(
                     approval_id, success=False,
                     notes="dry_run=True — no broker order placed",
                 )
@@ -480,9 +480,9 @@ class CascadingEngine(
             if is_pure_close and close_method is not None:
                 await close_method(a, {"errors": str(exc)})
             else:
-                await self.db.record_order_response(a, {"errors": str(exc)})
+                await self.db.trades.record_order_response(a, {"errors": str(exc)})
             if approval_id is not None:
-                await self.db.mark_approval_executed(
+                await self.db.approvals.mark_approval_executed(
                     approval_id, success=False,
                     notes=f"broker raised: {exc}",
                 )
@@ -491,7 +491,7 @@ class CascadingEngine(
             if is_pure_close and close_method is not None:
                 await close_method(a, resp)
             else:
-                await self.db.record_order_response(a, resp)
+                await self.db.trades.record_order_response(a, resp)
             if approval_id is not None:
                 order = (resp or {}).get("order") if isinstance(resp, dict) else None
                 order_status = ""
@@ -503,12 +503,12 @@ class CascadingEngine(
                     or order_status in _REJECTED_ORDER_STATUSES
                 )
                 if rejected:
-                    await self.db.mark_approval_executed(
+                    await self.db.approvals.mark_approval_executed(
                         approval_id, success=False,
                         notes=f"broker rejected: {resp}",
                     )
                 else:
-                    await self.db.mark_approval_executed(approval_id, success=True)
+                    await self.db.approvals.mark_approval_executed(approval_id, success=True)
             if resp and isinstance(resp, dict):
                 oid = str(resp.get("order_id") or resp.get("id") or "")
                 if oid:
@@ -525,7 +525,7 @@ class CascadingEngine(
         if not self.db:
             return set()
         try:
-            raw = await self.db.get_setting("banned_symbols")
+            raw = await self.db.settings.get_setting("banned_symbols")
             if not raw:
                 return set()
             return {s.strip().upper() for s in raw.split(",") if s.strip()}
@@ -636,7 +636,7 @@ class CascadingEngine(
             # 2. Pause check
             if self.control_state.paused:
                 logger.info("[ENGINE] heartbeat tick PAUSED mode=%s", self.control_state.mode)
-                await self.db.write_log("ENGINE", f"heartbeat tick PAUSED mode={self.control_state.mode}")
+                await self.db.logs.write_log("ENGINE", f"heartbeat tick PAUSED mode={self.control_state.mode}")
                 return
 
             # 3. Daily loss check
@@ -651,24 +651,24 @@ class CascadingEngine(
 
             # 4. Clean stale pending orders & approvals
             try:
-                expired = await self.db.expire_stale_pending_orders(self.control_state.pending_order_ttl_s)
+                expired = await self.db.trades.expire_stale_pending_orders(self.control_state.pending_order_ttl_s)
                 if expired:
                     logger.info("Expired %d stale PENDING order(s)", expired)
-                    await self.db.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
+                    await self.db.logs.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
             except Exception as exc:
                 logger.warning("expire_stale_pending_orders failed: %s", exc)
 
             try:
-                expired_approvals = await self.db.expire_stale_approvals()
+                expired_approvals = await self.db.approvals.expire_stale_approvals()
                 if expired_approvals:
                     logger.info("Auto-expired %d stale approval(s)", expired_approvals)
-                    await self.db.write_log("ENGINE", f"auto-expired {expired_approvals} stale approval(s) past deadline")
+                    await self.db.logs.write_log("ENGINE", f"auto-expired {expired_approvals} stale approval(s) past deadline")
             except Exception as exc:
                 logger.warning("expire_stale_approvals failed: %s", exc)
 
             # 5. Execute approved actions
             try:
-                approved_actions = await self.db.fetch_approved_actions()
+                approved_actions = await self.db.approvals.fetch_approved_actions()
                 for item in approved_actions:
                     await _execute_approved_action(item, broker=self.broker.broker, db=self.db)
             except Exception as exc:
@@ -676,14 +676,14 @@ class CascadingEngine(
 
             # 6. Heartbeat and Market-hours gate
             mkt = market_session()
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 "ENGINE",
                 f"heartbeat tick start mode={self.control_state.mode} market={mkt['session']} open={mkt['is_open']}"
             )
 
             if not mkt["trading_day"]:
                 nxt = next_open()
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     "ENGINE",
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} ({mkt['et_date']} is not a trading day)"
                 )
@@ -710,7 +710,7 @@ class CascadingEngine(
                 _should_run_charts = False
                 _age_days: float = 0.0
                 try:
-                    _recent_decisions = await self.db.recent_ai_decisions(
+                    _recent_decisions = await self.db.decisions.recent_ai_decisions(
                         strategy_id="CHART",
                         limit=max(len(db_watchlist) * 2, 20)
                     )
@@ -721,7 +721,7 @@ class CascadingEngine(
                         _should_run_charts = True
                         logger.info("Forcing chart analysis: some symbols in watchlist are missing analysis.")
                     else:
-                        _last_chart_ts_raw = await self.db.get_setting(_CHART_ANALYSIS_KEY)
+                        _last_chart_ts_raw = await self.db.settings.get_setting(_CHART_ANALYSIS_KEY)
                         if _last_chart_ts_raw:
                             def _parse_iso(s: Optional[str]) -> Optional[datetime]:
                                 if not s:
@@ -750,8 +750,8 @@ class CascadingEngine(
                     logger.info("Running chart vision analysis for %d symbols", len(db_watchlist))
                     try:
                         await self.overseer.analyze_charts(db_watchlist)
-                        await self.db.set_setting(_CHART_ANALYSIS_KEY, datetime.now(timezone.utc).isoformat())
-                        await self.db.write_log(
+                        await self.db.settings.set_setting(_CHART_ANALYSIS_KEY, datetime.now(timezone.utc).isoformat())
+                        await self.db.logs.write_log(
                             "ENGINE",
                             f"chart vision: analysed {len(db_watchlist)} symbols (7-month daily bars, next run in 7 days)"
                         )
@@ -762,11 +762,11 @@ class CascadingEngine(
                     logger.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
 
             # 9. Update live status indicators
-            await self.db.set_setting("tradier_last_ok_ts", datetime.now(timezone.utc).isoformat())
-            await self.db.set_setting("tradier_last_error", "")
-            await self.db.set_setting("market_session", mkt["session"])
+            await self.db.settings.set_setting("tradier_last_ok_ts", datetime.now(timezone.utc).isoformat())
+            await self.db.settings.set_setting("tradier_last_error", "")
+            await self.db.settings.set_setting("market_session", mkt["session"])
             logger.info("tick complete: %s", stats)
-            await self.db.write_log("ENGINE", f"heartbeat tick complete: {stats}")
+            await self.db.logs.write_log("ENGINE", f"heartbeat tick complete: {stats}")
             self._cb_fail_count = 0
 
         except Exception as exc:
@@ -776,8 +776,8 @@ class CascadingEngine(
             logger.exception("tick failed: %s", exc)
             try:
                 exc_str = str(exc)[:500]
-                await self.db.set_setting("tradier_last_error", exc_str)
-                await self.db.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
+                await self.db.settings.set_setting("tradier_last_error", exc_str)
+                await self.db.logs.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:
                 pass
 

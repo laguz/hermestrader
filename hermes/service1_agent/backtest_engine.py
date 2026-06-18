@@ -32,21 +32,61 @@ logger = logging.getLogger("hermes.backtest")
 
 
 
+# Repository-namespace views. The agent calls the DB through namespaces
+# (``db.logs.write_log``, ``db.trades.open_trades``, ``db.settings.get_setting``,
+# …). HermesDB owns real repository objects; this in-memory simulation DB keeps
+# one flat method surface, so these thin views forward an unknown attribute (a
+# repo method) back to the owner's flat method. ``logs``/``trades``/``settings``
+# also double as inspection state, so those views subclass ``list``/``dict`` —
+# ``for t in db.trades`` still iterates rows while ``db.trades.open_trades(...)``
+# forwards. ``__getattr__`` only fires for names the container itself lacks.
+class _NSView:
+    def __init__(self, db):
+        object.__setattr__(self, "_db", db)
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_db"), name)
+
+
+class _ListNSView(list):
+    def __init__(self, db):
+        super().__init__()
+        self._db = db
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
+class _DictNSView(dict):
+    def __init__(self, db, initial=None):
+        super().__init__(initial or {})
+        self._db = db
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
 class BacktestDatabase:
     """Mock repository matching IDatabase Protocol, persisting state in memory."""
 
     def __init__(self):
-        self.logs: List[Dict[str, Any]] = []
-        self.trades: List[Dict[str, Any]] = []
-        self.pending_orders: List[Any] = []
-        self.pending_approvals: List[Dict[str, Any]] = []
-        self.settings: Dict[str, str] = {
+        # Container-backed namespaces: usable both as inspection state and as a
+        # repo namespace (see view classes above).
+        self.logs: List[Dict[str, Any]] = _ListNSView(self)
+        self.trades: List[Dict[str, Any]] = _ListNSView(self)
+        self.settings: Dict[str, str] = _DictNSView(self, {
             "hermes_mode": "paper",
             "agent_autonomy": "autonomous",
             "agent_paused": "false",
             "approval_mode": "false",
             "llm_out_of_loop": "true",
-        }
+        })
+        # Plain repo namespaces forwarding to the flat surface below.
+        self.decisions = _NSView(self)
+        self.watchlist = _NSView(self)
+        self.approvals = _NSView(self)
+        self.timeseries = _NSView(self)
+        self.analytics = _NSView(self)
+
+        self.pending_orders: List[Any] = []
+        self.pending_approvals: List[Dict[str, Any]] = []
         self.predictions: Dict[str, Dict[str, Any]] = {}
         self.trade_counter = 1
 

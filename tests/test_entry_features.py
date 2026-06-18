@@ -82,7 +82,7 @@ async def _seed_open_trade(db, features: dict, *, trade_id: int = 1) -> int:
     test_close_lifecycle). This exercises the new column + close path + reader
     without depending on the broker order-recording sequence.
     """
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         s.add(Trade(
             id=trade_id, strategy_id="CS75", symbol="TSLA", side_type="call",
@@ -115,12 +115,12 @@ async def test_entry_features_persist_and_resolve_to_outcome(db):
     await _seed_open_trade(db, feats)
 
     # Open trade carries the snapshot; not yet an outcome (no pnl).
-    assert await db.fetch_trade_outcomes() == []
+    assert await db.trades.fetch_trade_outcomes() == []
 
-    await db.close_trade_from_action(
+    await db.trades.close_trade_from_action(
         _close_action(), {"order": {"status": "filled", "id": "def456"}})
 
-    rows = await db.fetch_trade_outcomes()
+    rows = await db.trades.fetch_trade_outcomes()
     assert len(rows) == 1
     row = rows[0]
     assert row["strategy_id"] == "CS75"
@@ -134,11 +134,11 @@ async def test_entry_features_persist_and_resolve_to_outcome(db):
 @pytest.mark.asyncio
 async def test_fetch_trade_outcomes_filters_by_strategy(db):
     await _seed_open_trade(db, {"schema": 1})
-    await db.close_trade_from_action(
+    await db.trades.close_trade_from_action(
         _close_action(), {"order": {"status": "filled", "id": "y"}})
 
-    assert len(await db.fetch_trade_outcomes(strategy_id="CS75")) == 1
-    assert await db.fetch_trade_outcomes(strategy_id="WHEEL") == []
+    assert len(await db.trades.fetch_trade_outcomes(strategy_id="CS75")) == 1
+    assert await db.trades.fetch_trade_outcomes(strategy_id="WHEEL") == []
 
 
 # --------------------------------------------------------------------------- #
@@ -146,7 +146,7 @@ async def test_fetch_trade_outcomes_filters_by_strategy(db):
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_engine_attaches_entry_features_with_resolved_knobs(db):
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     engine = CascadingEngine(broker=object(), db=db, strategies=[])
 
     action = TradeAction(
@@ -168,7 +168,7 @@ async def test_engine_attaches_entry_features_with_resolved_knobs(db):
 
 @pytest.mark.asyncio
 async def test_engine_does_not_overwrite_existing_features(db):
-    await db.ensure_strategies({"CS75": 1})
+    await db.watchlist.ensure_strategies({"CS75": 1})
     engine = CascadingEngine(broker=object(), db=db, strategies=[])
 
     action = TradeAction(

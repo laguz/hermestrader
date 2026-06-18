@@ -13,6 +13,7 @@ from hermes.service1_agent.tunables import (
     groups,
     resolve,
 )
+from ._stubs import RepoNamespaceMixin
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ def test_coerce_falls_back_to_default_on_garbage():
 # ---------------------------------------------------------------------------
 # resolve() precedence with a lightweight stub DB
 # ---------------------------------------------------------------------------
-class _StubDB:
+class _StubDB(RepoNamespaceMixin):
     """Minimal DB double exposing the bulk + single settings readers."""
 
     def __init__(self, settings):
@@ -103,7 +104,7 @@ async def test_group_filter_scopes_keys():
 
 
 async def test_resolve_uses_per_key_getter_when_no_bulk_reader():
-    class _NoBulk:
+    class _NoBulk(RepoNamespaceMixin):
         def __init__(self, s):
             self._s = s
 
@@ -137,11 +138,11 @@ def db():
 
 
 async def test_get_settings_bulk_reads_only_existing_keys(db):
-    await db.set_setting("cs75_sl_mult", "2.8")
-    await db.set_setting("cs7_sl_mult", "3.3")
-    got = await db.get_settings(["cs75_sl_mult", "cs7_sl_mult", "does_not_exist"])
+    await db.settings.set_setting("cs75_sl_mult", "2.8")
+    await db.settings.set_setting("cs7_sl_mult", "3.3")
+    got = await db.settings.get_settings(["cs75_sl_mult", "cs7_sl_mult", "does_not_exist"])
     assert got == {"cs75_sl_mult": "2.8", "cs7_sl_mult": "3.3"}
-    assert await db.get_settings([]) == {}
+    assert await db.settings.get_settings([]) == {}
 
 
 async def test_setting_flows_through_resolve_against_real_db(db):
@@ -149,6 +150,6 @@ async def test_setting_flows_through_resolve_against_real_db(db):
     t = await resolve(db, group="CS75")
     assert t.cs75_sl_mult == 2.5
     # Operator override lands in system_settings and is picked up.
-    await db.set_setting("cs75_sl_mult", "3.0")
+    await db.settings.set_setting("cs75_sl_mult", "3.0")
     t2 = await resolve(db, group="CS75")
     assert t2.cs75_sl_mult == 3.0

@@ -6,6 +6,7 @@ Covers the two testable units extracted from the tick loop:
   * ``enforce_daily_loss_limit`` — the pause decision against a mocked DB.
 """
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 from unittest.mock import AsyncMock
 import pytest
@@ -43,6 +44,7 @@ def test_resolve_normalises_sign_and_bad_input(monkeypatch):
 # ── enforce_daily_loss_limit ──────────────────────────────────────────────
 def _db(realized):
     db = AsyncMock()
+    alias_db_namespaces(db)
     db.realized_pnl_today.return_value = realized
     return db
 
@@ -88,6 +90,7 @@ async def test_breach_pauses_and_logs():
 @pytest.mark.anyio
 async def test_pnl_read_failure_is_safe_noop():
     db = AsyncMock()
+    alias_db_namespaces(db)
     db.realized_pnl_today.side_effect = RuntimeError("db down")
     # A failed P&L read must not pause (and must not raise) — fail open so a
     # transient DB hiccup doesn't halt trading, while real breaches still trip.

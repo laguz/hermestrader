@@ -70,7 +70,7 @@ class WheelStrategy(AbstractStrategy):
         self._log(f"↻ scanning {len(symbols)} symbol(s) — max_lots={max_lots} delta={t.wheel_delta:.2f}")
 
         for symbol in symbols:
-            shares = int(await self.db.equity_position(symbol) or 0)
+            shares = int(await self.db.trades.equity_position(symbol) or 0)
             shares_lots = shares // 100
 
             # Pick the target expiry first so capacity is checked per
@@ -152,7 +152,7 @@ class WheelStrategy(AbstractStrategy):
         if not analysis or "error" in analysis:
             self._log(f"ℹ️ {symbol}: no 6M analysis; delta-only strike selection.")
             return None, None
-        xgb_pred = await self.db.latest_prediction(symbol) or {}
+        xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
         current_vol = float(analysis.get("current_vol") or 0.30)
         return analysis, coerce_xgb_prob(xgb_pred, current_vol)
 
@@ -296,7 +296,7 @@ class WheelStrategy(AbstractStrategy):
                 qty = int(float(p.get("quantity") or p.get("qty") or 0))
                 live_equity_lots[sym] = live_equity_lots.get(sym, 0) + qty
 
-        for trade in await self.db.open_trades(self.strategy_id):
+        for trade in await self.db.trades.open_trades(self.strategy_id):
             info = parse_occ(trade["short_leg"])
             if not info:
                 continue

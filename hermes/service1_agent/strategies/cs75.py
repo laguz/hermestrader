@@ -56,7 +56,7 @@ class CreditSpreads75(AbstractStrategy):
         entry_max_dte = t.cs75_max_dte
 
         # Per-symbol target overrides live in strategy_watchlists.target_lots.
-        detailed_wl = await self.db.list_watchlist_detailed(self.strategy_id)
+        detailed_wl = await self.db.watchlist.list_watchlist_detailed(self.strategy_id)
         symbols = list(watchlist)
 
         self._log(
@@ -89,7 +89,7 @@ class CreditSpreads75(AbstractStrategy):
                 target_lots = min(target_lots, max_lots_global)
 
                 # Cooldown check: prevent immediate re-entry if a trade was closed recently
-                last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+                last_closed = await self.db.trades.latest_closed_trade_time(self.strategy_id, symbol)
                 if last_closed:
                     cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
                     last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
@@ -105,7 +105,7 @@ class CreditSpreads75(AbstractStrategy):
                     continue
 
                 # Centralised POP: 6M regime for CS75 (longer-dated entries).
-                xgb_pred = await self.db.latest_prediction(symbol) or {}
+                xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
                 analysis = augment_levels_with_pop(analysis, xgb_pred, period="6m")
 
                 price = analysis["current_price"]
@@ -123,7 +123,7 @@ class CreditSpreads75(AbstractStrategy):
                         self._log(f"ℹ️ {symbol}: incomplete IC expiry {expiry} ({dte}DTE) outside {t.cs75_completion_min_dte}-{entry_max_dte} completion window; skip.")
                         continue
                     existing_sides = {leg.get("side", "").lower()
-                                      for leg in await self.db.open_legs(self.strategy_id, symbol)
+                                      for leg in await self.db.trades.open_legs(self.strategy_id, symbol)
                                       if leg.get("expiry") == expiry}
 
                 if not expiry:
@@ -273,7 +273,7 @@ class CreditSpreads75(AbstractStrategy):
         defaults match the docstring.
         """
         actions: List[TradeAction] = []
-        trades = await self.db.open_trades(self.strategy_id)
+        trades = await self.db.trades.open_trades(self.strategy_id)
         if not trades:
             return actions
         t = await self.load_tunables()

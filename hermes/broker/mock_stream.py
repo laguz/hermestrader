@@ -48,8 +48,8 @@ class MockStreamClient:
                 watchlist_syms = set(self.watchlist)
                 if self.db:
                     try:
-                        wl = await self.db.all_watchlist_symbols()
-                        tracked = await self.db.tracked_option_symbols()
+                        wl = await self.db.watchlist.all_watchlist_symbols()
+                        tracked = await self.db.trades.tracked_option_symbols()
                         watchlist_syms.update(wl)
                         watchlist_syms.update(tracked)
                     except Exception:

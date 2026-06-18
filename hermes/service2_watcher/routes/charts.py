@@ -82,7 +82,7 @@ async def chart_analysis(symbol: str) -> Dict[str, Any]:
     """Most recent LLM chart analysis written by the agent for ``symbol``."""
     sym = symbol.upper().strip()
     try:
-        rows = await db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+        rows = await db.decisions.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
         return {"symbol": sym, "analysis": rows[0] if rows else None}
     except Exception as exc:                                     # noqa: BLE001
         logger.warning("chart_analysis query failed for %s: %s", sym, exc)
@@ -98,7 +98,7 @@ async def all_chart_analyses() -> Dict[str, Any]:
     tickers that aren't actually being tracked by an operator.
     """
     try:
-        all_wls = await db.list_all_watchlists()
+        all_wls = await db.watchlist.list_all_watchlists()
         symbols = sorted({s for syms in all_wls.values() for s in syms})
     except Exception as exc:                                     # noqa: BLE001
         logger.warning("Could not load DB watchlists for /api/charts: %s", exc)
@@ -107,7 +107,7 @@ async def all_chart_analyses() -> Dict[str, Any]:
     results: Dict[str, Any] = {}
     for sym in symbols:
         try:
-            rows = await db.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
+            rows = await db.decisions.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
             results[sym] = rows[0] if rows else None
         except Exception:                                        # noqa: BLE001
             results[sym] = None

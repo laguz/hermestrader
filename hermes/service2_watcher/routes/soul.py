@@ -33,8 +33,8 @@ router = APIRouter()
 
 @router.get("/api/soul")
 async def get_soul() -> Dict[str, Any]:
-    soul = await db.get_setting(SETTING_SOUL) or ""
-    autonomy = (await db.get_setting(SETTING_AUTONOMY) or "advisory").lower()
+    soul = await db.settings.get_setting(SETTING_SOUL) or ""
+    autonomy = (await db.settings.get_setting(SETTING_AUTONOMY) or "advisory").lower()
     if autonomy not in VALID_AUTONOMY:
         autonomy = "advisory"
     return {
@@ -59,8 +59,8 @@ async def set_soul(body: SoulBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"Soul exceeds {MAX_SOUL_BYTES // 1024}KB limit",
             )
-        await db.set_setting(SETTING_SOUL, body.soul)
-        await db.write_log("ENGINE", f"[C2] Soul updated ({len(body.soul.encode())}B)")
+        await db.settings.set_setting(SETTING_SOUL, body.soul)
+        await db.logs.write_log("ENGINE", f"[C2] Soul updated ({len(body.soul.encode())}B)")
         import os
         soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
         try:
@@ -90,21 +90,21 @@ async def set_soul(body: SoulBody) -> Dict[str, Any]:
                         
                         commit_msg = f"docs: update operator doctrine (soul.md) on branch {branch_name}"
                         repo.index.commit(commit_msg)
-                        await db.write_log("ENGINE", f"[GIT] Committed soul.md: {commit_msg}")
+                        await db.logs.write_log("ENGINE", f"[GIT] Committed soul.md: {commit_msg}")
                         
                         try:
                             origin = repo.remote(name="origin")
                             origin.push()
-                            await db.write_log("ENGINE", f"[GIT] Pushed soul.md changes to origin/{branch_name}")
+                            await db.logs.write_log("ENGINE", f"[GIT] Pushed soul.md changes to origin/{branch_name}")
                         except Exception as push_err:
-                            await db.write_log("ENGINE", f"[GIT WARNING] Failed to push to remote: {push_err}", level="WARNING")
+                            await db.logs.write_log("ENGINE", f"[GIT WARNING] Failed to push to remote: {push_err}", level="WARNING")
                     else:
-                        await db.write_log("ENGINE", "[GIT] No changes detected in soul.md for commit")
+                        await db.logs.write_log("ENGINE", "[GIT] No changes detected in soul.md for commit")
             except Exception as git_err:
-                await db.write_log("ENGINE", f"[GIT WARNING] Git sync failed: {git_err}", level="WARNING")
+                await db.logs.write_log("ENGINE", f"[GIT WARNING] Git sync failed: {git_err}", level="WARNING")
 
         except Exception as exc:
-            await db.write_log("ENGINE", f"Failed to write soul to file path {soul_path}: {exc}", level="WARNING")
+            await db.logs.write_log("ENGINE", f"Failed to write soul to file path {soul_path}: {exc}", level="WARNING")
 
     if body.autonomy is not None:
         a = body.autonomy.lower().strip()
@@ -113,7 +113,7 @@ async def set_soul(body: SoulBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"autonomy must be one of {list(VALID_AUTONOMY)}",
             )
-        await db.set_setting(SETTING_AUTONOMY, a)
-        await db.write_log("ENGINE", f"[C2] Autonomy set to {a}")
+        await db.settings.set_setting(SETTING_AUTONOMY, a)
+        await db.logs.write_log("ENGINE", f"[C2] Autonomy set to {a}")
 
     return await get_soul()

@@ -60,7 +60,7 @@ class TastyTrade45(AbstractStrategy):
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no expiry in {entry_min_dte}-{entry_max_dte} DTE range; skip.")
                     continue
-                existing = {leg["side"] for leg in await self.db.open_legs(self.strategy_id, symbol)
+                existing = {leg["side"] for leg in await self.db.trades.open_legs(self.strategy_id, symbol)
                             if leg.get("expiry") == expiry}
                 dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                 self._log(f"→ {symbol}: expiry={expiry} {dte}DTE existing_sides={sorted(existing)}")
@@ -135,7 +135,7 @@ class TastyTrade45(AbstractStrategy):
     async def manage_positions(self) -> List[TradeAction]:
         """Hard exit at 21 DTE; neutralise challenged side (|Δ_short| > 0.30)."""
         actions: List[TradeAction] = []
-        trades = await self.db.open_trades(self.strategy_id)
+        trades = await self.db.trades.open_trades(self.strategy_id)
         if not trades:
             return []
         t = await self.load_tunables()

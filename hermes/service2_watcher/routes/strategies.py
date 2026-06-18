@@ -30,7 +30,7 @@ router = APIRouter()
 async def get_strategies() -> List[Dict[str, Any]]:
     out = []
     for sid in STRATEGIES:
-        enabled_val = await db.get_setting(strategy_enabled_key(sid))
+        enabled_val = await db.settings.get_setting(strategy_enabled_key(sid))
         out.append({
             "id": sid,
             "priority": STRATEGY_PRIORITIES[sid],
@@ -52,8 +52,8 @@ async def toggle_strategy(strategy_id: str, body: StrategyToggleBody) -> Dict[st
             status_code=404,
             detail=f"Unknown strategy {strategy_id!r}; valid: {list(STRATEGIES)}",
         )
-    await db.set_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
-    await db.write_log(
+    await db.settings.set_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
+    await db.logs.write_log(
         "ENGINE",
         f"[C2] Strategy {sid} {'ENABLED' if body.enabled else 'DISABLED'}",
     )
@@ -84,7 +84,7 @@ async def _read_lots() -> Dict[str, Any]:
     for sid, spec in _LOT_SPECS.items():
         entry: Dict[str, Any] = {}
         for role, (key, default) in spec.items():
-            raw = await db.get_setting(key)
+            raw = await db.settings.get_setting(key)
             try:
                 entry[role] = int(raw) if raw is not None else default
             except (ValueError, TypeError):
@@ -118,13 +118,13 @@ async def set_lots(body: LotBody) -> Dict[str, Any]:
     if body.target_lots is not None:
         if body.target_lots < 1 or body.target_lots > 100:
             raise HTTPException(status_code=400, detail="target_lots must be 1–100")
-        await db.set_setting(spec["target"][0], str(body.target_lots))
+        await db.settings.set_setting(spec["target"][0], str(body.target_lots))
         changed.append(f"target→{body.target_lots}")
     if body.max_lots is not None:
         if body.max_lots < 1 or body.max_lots > 100:
             raise HTTPException(status_code=400, detail="max_lots must be 1–100")
-        await db.set_setting(spec["max"][0], str(body.max_lots))
+        await db.settings.set_setting(spec["max"][0], str(body.max_lots))
         changed.append(f"max→{body.max_lots}")
     if changed:
-        await db.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")
+        await db.logs.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")
     return await _read_lots()

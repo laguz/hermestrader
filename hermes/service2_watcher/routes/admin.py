@@ -197,7 +197,7 @@ async def get_ml_intervals() -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for label, key in _ML_INTERVAL_KEYS.items():
         try:
-            raw = await db.get_setting(key)
+            raw = await db.settings.get_setting(key)
         except Exception:                                          # noqa: BLE001
             raw = None
         out[label] = raw if raw not in (None, "") else None
@@ -235,10 +235,10 @@ async def set_ml_intervals(
             if not (lo <= fv <= hi):
                 raise HTTPException(
                     400, f"{label}: must be in [{lo}, {hi}], got {fv}")
-            await db.set_setting(key, str(fv))
+            await db.settings.set_setting(key, str(fv))
             applied[label] = fv
         else:
-            await db.set_setting(key, str(value))
+            await db.settings.set_setting(key, str(value))
             applied[label] = value
 
     logger.info("admin: ml-intervals updated: %s", applied)

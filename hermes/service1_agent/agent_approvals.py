@@ -48,7 +48,7 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     except Exception as exc:                                   # noqa: BLE001
         log.exception("[C2] Failed to rebuild TradeAction id=%d: %s",
                       approval_id, exc)
-        await db.mark_approval_executed(
+        await db.approvals.mark_approval_executed(
             approval_id, success=False,
             notes=f"action rebuild error: {exc}",
         )
@@ -63,7 +63,7 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     if blocked:
         log.info("[C2] OFF-HOURS — deferring approval id=%d (%s)",
                  approval_id, reason)
-        await db.write_log(
+        await db.logs.write_log(
             action.strategy_id,
             f"[C2 DEFERRED] {action.symbol} approval_id={approval_id} — "
             f"{reason}; will execute on next tick during regular session",
@@ -75,13 +75,13 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         # No broker call happens — don't pretend it did.  Skip
         # record_pending_order so capacity isn't consumed by a row
         # that will never settle.
-        await db.mark_approval_executed(
+        await db.approvals.mark_approval_executed(
             approval_id, success=False,
             notes="dry_run=True — no broker order placed",
         )
         log.info("[C2] dry_run preview only — approval id=%d "
                  "NOT submitted to broker", approval_id)
-        await db.write_log(
+        await db.logs.write_log(
             action.strategy_id,
             f"[C2 PREVIEW] {action.symbol} {action.order_class} "
             f"qty={action.quantity} approval_id={approval_id} — "
@@ -89,25 +89,25 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "preview"
 
-    await db.record_pending_order(action)
+    await db.trades.record_pending_order(action)
     try:
         resp = await async_broker.place_order_from_action(action)
     except Exception as exc:                                   # noqa: BLE001
-        await db.record_order_response(action, {"errors": str(exc)})
-        await db.mark_approval_executed(
+        await db.trades.record_order_response(action, {"errors": str(exc)})
+        await db.approvals.mark_approval_executed(
             approval_id, success=False,
             notes=f"broker raised: {exc}",
         )
         log.exception("[C2] place_order_from_action raised for "
                       "approval id=%d: %s", approval_id, exc)
-        await db.write_log(
+        await db.logs.write_log(
             action.strategy_id,
             f"[C2 FAILED] {action.symbol} approval_id={approval_id} "
             f"broker raised: {exc}",
         )
         return "failed"
 
-    await db.record_order_response(action, resp)
+    await db.trades.record_order_response(action, resp)
 
     order = (resp or {}).get("order") if isinstance(resp, dict) else None
     order_status = ""
@@ -120,22 +120,22 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
 
     if rejected:
         # record_order_response already wrote [ORDER REJECTED].
-        await db.mark_approval_executed(
+        await db.approvals.mark_approval_executed(
             approval_id, success=False,
             notes=f"broker rejected: {resp}",
         )
         log.warning("[C2] broker rejected approval id=%d: %s",
                     approval_id, resp)
-        await db.write_log(
+        await db.logs.write_log(
             action.strategy_id,
             f"[C2 REJECTED] {action.symbol} approval_id={approval_id}",
         )
         return "rejected"
 
-    await db.mark_approval_executed(approval_id, success=True)
+    await db.approvals.mark_approval_executed(approval_id, success=True)
     log.info("[C2] Executed approved trade: %s %s strategy=%s id=%d",
              action.symbol, action.order_class, action.strategy_id, approval_id)
-    await db.write_log(
+    await db.logs.write_log(
         action.strategy_id,
         f"[C2 EXECUTED] {action.symbol} {action.order_class} "
         f"qty={action.quantity} approval_id={approval_id}",

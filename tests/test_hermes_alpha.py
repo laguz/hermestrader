@@ -106,7 +106,7 @@ async def test_universe_spans_all_strategy_watchlists():
     # NVDA is on CS75's watchlist only; the engine hands HermesAlpha nothing.
     # HermesAlpha must still be able to pick it from the desk-wide union.
     strat, _b, db = _build(_intent(symbol="NVDA", side="put"))
-    db.set_watchlist("CS75", ["NVDA"])
+    db.watchlist.set_watchlist("CS75", ["NVDA"])
     actions = await strat.execute_entries([])
     assert len(actions) == 1
     assert actions[0].symbol == "NVDA"
@@ -115,7 +115,7 @@ async def test_universe_spans_all_strategy_watchlists():
 async def test_pick_outside_any_watchlist_rejected():
     # GOOG is on no watchlist anywhere — out of universe, must be refused.
     strat, _b, db = _build(_intent(symbol="GOOG", side="put"))
-    db.set_watchlist("CS75", ["NVDA"])
+    db.watchlist.set_watchlist("CS75", ["NVDA"])
     assert await strat.execute_entries(["AAPL"]) == []
 
 

@@ -131,6 +131,7 @@ def test_spy_beta_residual_uses_returns_then_reindex():
 # #3 _load_models scope
 # ---------------------------------------------------------------------------
 from hermes.ml import persistence
+from ._stubs import RepoNamespaceMixin
 
 class _StubModel:
     def __init__(self, name: str) -> None:
@@ -199,7 +200,7 @@ def test_build_drops_inf_rows_from_halted_bars():
 # ---------------------------------------------------------------------------
 # History sync non-list response handling
 # ---------------------------------------------------------------------------
-class _StubDB:
+class _StubDB(RepoNamespaceMixin):
     def __init__(self) -> None:
         self.daily_bars_saved = {}
         self.intraday_bars_saved = {}

@@ -41,8 +41,8 @@ EXIT_MODE_KEY = "exit_policy_mode"
 
 @router.post("/api/agent/pause")
 async def pause_agent() -> Dict[str, Any]:
-    await db.set_setting(SETTING_PAUSED, "true")
-    await db.write_log("ENGINE", "[C2] Agent PAUSED by operator")
+    await db.settings.set_setting(SETTING_PAUSED, "true")
+    await db.logs.write_log("ENGINE", "[C2] Agent PAUSED by operator")
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
@@ -53,8 +53,8 @@ async def pause_agent() -> Dict[str, Any]:
 
 @router.post("/api/agent/resume")
 async def resume_agent() -> Dict[str, Any]:
-    await db.set_setting(SETTING_PAUSED, "false")
-    await db.write_log("ENGINE", "[C2] Agent RESUMED by operator")
+    await db.settings.set_setting(SETTING_PAUSED, "false")
+    await db.logs.write_log("ENGINE", "[C2] Agent RESUMED by operator")
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
@@ -66,8 +66,8 @@ async def resume_agent() -> Dict[str, Any]:
 @router.post("/api/ml/trigger")
 async def trigger_ml_predictor() -> Dict[str, Any]:
     """Force the XGBoost background thread to retrain and predict immediately."""
-    await db.set_setting("ml_force_run", "true")
-    await db.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
+    await db.settings.set_setting("ml_force_run", "true")
+    await db.logs.write_log("ENGINE", "[C2] XGBoost ML Predictor manual trigger activated")
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_TRIGGER_ML})
@@ -79,8 +79,8 @@ async def trigger_ml_predictor() -> Dict[str, Any]:
 @router.get("/api/agent/learning")
 async def get_learning() -> Dict[str, Any]:
     """Current outcome-driven learning modes (bandit entries + exit policy)."""
-    bandit = (await db.get_setting(BANDIT_MODE_KEY) or "off").strip().lower()
-    exit_mode = (await db.get_setting(EXIT_MODE_KEY) or "off").strip().lower()
+    bandit = (await db.settings.get_setting(BANDIT_MODE_KEY) or "off").strip().lower()
+    exit_mode = (await db.settings.get_setting(EXIT_MODE_KEY) or "off").strip().lower()
     return {
         "bandit_tuner_mode": bandit,
         "exit_policy_mode": exit_mode,
@@ -113,7 +113,7 @@ async def set_learning(body: LearningBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"{key} must be one of {sorted(LEARNING_MODES)}",
             )
-        await db.set_setting(key, m)
+        await db.settings.set_setting(key, m)
         updated[key] = m
 
     if not updated:
@@ -122,7 +122,7 @@ async def set_learning(body: LearningBody) -> Dict[str, Any]:
             detail="provide bandit_tuner_mode and/or exit_policy_mode",
         )
 
-    await db.write_log("ENGINE", f"[C2] Learning modes updated by operator: {updated}")
+    await db.logs.write_log("ENGINE", f"[C2] Learning modes updated by operator: {updated}")
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
@@ -143,8 +143,8 @@ async def set_mode(body: ModeBody) -> Dict[str, Any]:
             status_code=400,
             detail=f"mode must be one of {list(VALID_MODES)}",
         )
-    await db.set_setting(SETTING_MODE, m)
-    await db.write_log("ENGINE", f"[C2] Mode switched to {m}")
+    await db.settings.set_setting(SETTING_MODE, m)
+    await db.logs.write_log("ENGINE", f"[C2] Mode switched to {m}")
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})

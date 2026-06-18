@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ async def test_out_of_loop_bypasses_review():
     # 1. Setup engine with llm_out_of_loop = True
     broker_mock = MagicMock()
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     db_mock.active_veto.return_value = None
     strategy_mock = MagicMock()
     strategy_mock.PRIORITY = 1
@@ -61,6 +63,7 @@ async def test_risk_restrictions_filter_watchlist():
     # 1. Setup engine with llm_out_of_loop = True
     broker_mock = MagicMock()
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     strategy_mock = MagicMock()
     strategy_mock.PRIORITY = 1
     strategy_mock.mm = None
@@ -95,6 +98,7 @@ async def test_risk_restrictions_filter_watchlist():
 async def test_propose_risk_restrictions():
     # 1. Setup overseer with mocked db and llm
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     db_mock.list_all_watchlists.return_value = {"default": ["AAPL", "MSFT"]}
     db_mock.recent_logs.return_value = "AAPL looks volatile today"
     db_mock.get_setting.return_value = ""

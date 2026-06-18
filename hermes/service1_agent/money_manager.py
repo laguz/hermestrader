@@ -80,7 +80,7 @@ class MoneyManager:
         available = max(0.0, float(balances.get("option_buying_power", 0.0)))
         
         try:
-            reserve_val = await self.db.get_setting("obp_reserve")
+            reserve_val = await self.db.settings.get_setting("obp_reserve")
             if reserve_val:
                 reserve = float(str(reserve_val).strip())
                 available = max(0.0, available - reserve)
@@ -132,9 +132,9 @@ class MoneyManager:
         side = side.lower()
         symbol = symbol.upper()
         # 1. Check DB for filled contracts (status='OPEN') in this chain
-        open_qty = await self.db.count_open_contracts(strategy_id, symbol, side, expiry)
+        open_qty = await self.db.trades.count_open_contracts(strategy_id, symbol, side, expiry)
         # 2. Check DB for pending internal orders (pre-submission or approval queue) in this chain
-        pending = await self.db.count_pending_orders(strategy_id, symbol, side, expiry)
+        pending = await self.db.trades.count_pending_orders(strategy_id, symbol, side, expiry)
         # 3. Check cached broker-side active orders (resting limits) in this chain
         broker_qty = self._broker_order_counts.get(
             (strategy_id, symbol, side, expiry), 0)
@@ -192,7 +192,7 @@ class MoneyManager:
                 )
             else:
                 reason = f"bp_cap={bp_cap} side_cap={side_cap}"
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 strategy_id,
                 f"[MM] BLOCKED {symbol} {side.upper()}: {reason} — 0 lots available",
             )
@@ -201,7 +201,7 @@ class MoneyManager:
                 "[MM] Scaled %s/%s %s %d→%d (bp_cap=%d side_cap=%d)",
                 strategy_id, symbol, side, requested_lots, scaled, bp_cap, side_cap,
             )
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 strategy_id,
                 f"[MM] Scaled {symbol} {side.upper()} {requested_lots}→{scaled} lots "
                 f"(bp_cap={bp_cap} side_cap={side_cap})",
@@ -355,7 +355,7 @@ class MoneyManager:
                     "[MM-OPT] Allocated %d lots to %s (%s) — score=%.4f margin/lot=%.2f credit=%.2f remaining_bp=%.2f",
                     allocated_lots, action.symbol, action.strategy_id, score, margin_per_lot, credit, remaining_bp
                 )
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     action.strategy_id,
                     f"[MM-OPT] Allocated {allocated_lots} lots to {action.symbol} (requested {requested_lots}) "
                     f"via Kelly Optimizer (score={score:.2f}, margin/lot=${margin_per_lot:,.0f})"
@@ -366,7 +366,7 @@ class MoneyManager:
                     "[MM-OPT] Skipped %s (%s) — %s (score=%.4f target_lots=%d requested=%d remaining_bp=%.2f)",
                     action.symbol, action.strategy_id, reason, score, target_lots, requested_lots, remaining_bp
                 )
-                await self.db.write_log(
+                await self.db.logs.write_log(
                     action.strategy_id,
                     f"[MM-OPT] BLOCKED {action.symbol} entry: {reason} — 0 lots allocated"
                 )
@@ -426,7 +426,7 @@ class IronCondorBuilder:
         existing = {s.lower() for s in existing_sides}
         if {"put", "call"}.issubset(existing):
             # Both sides already open — nothing to do, log so operator can see.
-            await self.mm.db.write_log(
+            await self.mm.db.logs.write_log(
                 strategy_id,
                 f"[IC] {symbol} {expiry}: full IC already open on both sides; skip",
             )

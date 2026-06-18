@@ -14,6 +14,7 @@ import pytest
 
 from hermes.service1_agent.core import AbstractStrategy
 from hermes.service1_agent.main import _parse_iso as _parse_iso_main
+from ._stubs import RepoNamespaceMixin
 
 # The watcher's parse_iso lives in _app_state (it was extracted from
 # api.py during the router split — PR B). Importing _app_state requires
@@ -64,7 +65,7 @@ def test_parse_iso_returns_none_on_garbage(parser):
 # ---------------------------------------------------------------------------
 # find_active_ic_expiry deterministic ordering (#10)
 # ---------------------------------------------------------------------------
-class _StubDB:
+class _StubDB(RepoNamespaceMixin):
     def __init__(self, legs_by_call: List[Dict[str, Any]]):
         self._legs = legs_by_call
 

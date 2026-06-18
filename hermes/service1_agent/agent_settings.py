@@ -53,20 +53,20 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     Defaults pull from `conf` (env vars) the very first time so nothing
     surprising happens on first boot. After that, C2 panel writes win.
     """
-    autonomy = ((await db.get_setting(SETTING_AUTONOMY))
+    autonomy = ((await db.settings.get_setting(SETTING_AUTONOMY))
                 or conf.get("ai_autonomy") or "advisory").lower()
     if autonomy not in VALID_AUTONOMY:
         autonomy = "advisory"
-    soul = (await db.get_setting(SETTING_SOUL)) or ""
-    paused = ((await db.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
-    approval_mode = ((await db.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
-    llm_out_of_loop = ((await db.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
-    overseer_mode = ((await db.get_setting("overseer_mode")) or "monolithic").lower()
+    soul = (await db.settings.get_setting(SETTING_SOUL)) or ""
+    paused = ((await db.settings.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
+    approval_mode = ((await db.settings.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
+    llm_out_of_loop = ((await db.settings.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
+    overseer_mode = ((await db.settings.get_setting("overseer_mode")) or "monolithic").lower()
     if overseer_mode not in ("monolithic", "committee"):
         overseer_mode = "monolithic"
     # Per-strategy enable flags — default to enabled for all known strategies.
     strategy_enabled = {
-        sid: ((await db.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
+        sid: ((await db.settings.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
         for sid in STRATEGY_PRIORITIES
     }
     return {

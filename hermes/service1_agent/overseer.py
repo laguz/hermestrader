@@ -143,7 +143,7 @@ class HermesOverseer:
 
         try:
             if self.db is not None:
-                perf_metrics = await self.db.get_strategy_performance_metrics(days=30)
+                perf_metrics = await self.db.analytics.get_strategy_performance_metrics(days=30)
                 perf_lines = []
                 for strat, data in perf_metrics.items():
                     perf_lines.append(
@@ -167,12 +167,12 @@ class HermesOverseer:
     async def review(self, action: TradeAction) -> Optional[TradeAction]:
         if self.autonomy == "advisory":
             decision = await self._consult(action)
-            await self.db.write_ai_decision(action.strategy_id, action.symbol,
+            await self.db.decisions.write_ai_decision(action.strategy_id, action.symbol,
                                       "advisory", decision)
             return action
 
         decision = await self._consult(action)
-        await self.db.write_ai_decision(action.strategy_id, action.symbol,
+        await self.db.decisions.write_ai_decision(action.strategy_id, action.symbol,
                                   self.autonomy, decision)
 
         verdict = decision.get("verdict", "APPROVE").upper()
@@ -224,7 +224,7 @@ class HermesOverseer:
         if self.autonomy != "autonomous":
             return []
         try:
-            trades = await self.db.all_open_trades()
+            trades = await self.db.trades.all_open_trades()
         except Exception as exc:                                   # noqa: BLE001
             logger.warning("propose_closes: all_open_trades failed: %s", exc)
             return []
@@ -252,7 +252,7 @@ class HermesOverseer:
                 "expiry": str(exp) if exp else None, "dte": dte,
             })
 
-        recent_logs = await self.db.recent_logs(limit=200)
+        recent_logs = await self.db.logs.recent_logs(limit=200)
         if len(recent_logs) > self._MAX_LOG_CHARS:
             recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
 
@@ -303,7 +303,7 @@ class HermesOverseer:
 
         if actions:
             try:
-                await self.db.write_ai_decision(
+                await self.db.decisions.write_ai_decision(
                     "OVERSEER", "CLOSES", self.autonomy,
                     {"type": "propose_closes",
                      "trade_ids": [a.strategy_params.get("trade_id") for a in actions]},
@@ -365,7 +365,7 @@ class HermesOverseer:
         if not universe or self.llm is None:
             return None
 
-        recent_logs = await self.db.recent_logs(limit=200)
+        recent_logs = await self.db.logs.recent_logs(limit=200)
         if len(recent_logs) > self._MAX_LOG_CHARS:
             recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
 
@@ -402,7 +402,7 @@ class HermesOverseer:
             logger.info("propose_alpha_setup: %r not in universe; stand down", symbol)
             return None
         try:
-            await self.db.write_ai_decision("HermesAlpha", symbol, "autonomous",
+            await self.db.decisions.write_ai_decision("HermesAlpha", symbol, "autonomous",
                                             {"type": "alpha_setup", **data})
         except Exception:                                          # noqa: BLE001
             pass
@@ -448,7 +448,7 @@ class HermesOverseer:
         tunables = self._tunable_params()
         current: Dict[str, Any] = {}
         for key, (kind, lo, _hi) in tunables.items():
-            raw = await self.db.get_setting(key)
+            raw = await self.db.settings.get_setting(key)
             if raw is None:
                 # Surface the in-effect default so the LLM sees a real baseline.
                 from .entry_gate import DEFAULTS as GATE_DEFAULTS
@@ -502,9 +502,9 @@ class HermesOverseer:
             old = current.get(key)
             if str(old) == str(coerced):
                 continue                                # no-op; don't log churn
-            await self.db.set_setting(key, str(coerced))
+            await self.db.settings.set_setting(key, str(coerced))
             applied[key] = coerced
-            await self.db.write_log(
+            await self.db.logs.write_log(
                 "OVERSEER",
                 f"[PARAM-TUNE] {key}: {old} → {coerced} (goal-aligned)",
             )
@@ -513,7 +513,7 @@ class HermesOverseer:
             logger.info("[PARAM-TUNE] applied %s — %s", applied, rationale)
         result = {"applied": applied, "rationale": rationale, "skipped": skipped}
         try:
-            await self.db.write_ai_decision(
+            await self.db.decisions.write_ai_decision(
                 "OVERSEER", "PARAMS", self.autonomy,
                 {"type": "param_tuning", **result},
             )
@@ -532,7 +532,7 @@ class HermesOverseer:
         watchlist_syms = set()
         try:
             if self.db is not None:
-                all_wls = await self.db.list_all_watchlists()
+                all_wls = await self.db.watchlist.list_all_watchlists()
                 for syms in all_wls.values():
                     watchlist_syms.update(syms)
         except Exception as exc:
@@ -541,7 +541,7 @@ class HermesOverseer:
         if not watchlist_syms:
             return {"banned_symbols": [], "rationale": "watchlist is empty"}
 
-        recent_logs = await self.db.recent_logs(limit=200)
+        recent_logs = await self.db.logs.recent_logs(limit=200)
         if len(recent_logs) > self._MAX_LOG_CHARS:
             recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
 
@@ -576,12 +576,12 @@ class HermesOverseer:
         banned_set = {str(s).upper().strip() for s in banned} & {s.upper() for s in watchlist_syms}
         banned_list = sorted(list(banned_set))
 
-        old_banned = await self.db.get_setting("banned_symbols") or ""
+        old_banned = await self.db.settings.get_setting("banned_symbols") or ""
         new_banned_str = ",".join(banned_list)
 
         if old_banned != new_banned_str:
-            await self.db.set_setting("banned_symbols", new_banned_str)
-            await self.db.write_log(
+            await self.db.settings.set_setting("banned_symbols", new_banned_str)
+            await self.db.logs.write_log(
                 "OVERSEER",
                 f"[RISK-RESTRICT] Banned symbols list updated: {old_banned or '-'} -> {new_banned_str or '-'} — {rationale}",
             )
@@ -589,7 +589,7 @@ class HermesOverseer:
 
         result = {"banned_symbols": banned_list, "rationale": rationale}
         try:
-            await self.db.write_ai_decision(
+            await self.db.decisions.write_ai_decision(
                 "OVERSEER", "RISK", self.autonomy,
                 {"type": "risk_restrictions", **result},
             )
@@ -632,7 +632,7 @@ class HermesOverseer:
                 verdict  = analysis.get("outlook", "NEUTRAL").upper()
                 rationale = analysis.get("rationale", "")
                 self.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
-                await self.db.write_ai_decision(
+                await self.db.decisions.write_ai_decision(
                     "CHART", symbol, "vision",
                     {"type": "chart_analysis", **analysis},
                 )
@@ -677,7 +677,7 @@ class HermesOverseer:
             "Reply with JSON {verdict: APPROVE|VETO|MODIFY, rationale, modifications?}.\n"
             f"ACTION:\n{json.dumps(asdict(action), default=str)}\n"
         )
-        recent_logs = await self.db.recent_logs(limit=200)
+        recent_logs = await self.db.logs.recent_logs(limit=200)
         # Enforce token budget: truncate from the front (oldest entries dropped).
         if len(recent_logs) > self._MAX_LOG_CHARS:
             recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
@@ -698,8 +698,8 @@ class HermesOverseer:
             msg = await self._chat_with_retry(messages, images=images)
             # Clear any stored LLM error on success.
             try:
-                await self.db.set_setting("llm_last_error", "")
-                await self.db.set_setting(
+                await self.db.settings.set_setting("llm_last_error", "")
+                await self.db.settings.set_setting(
                     "llm_last_ok_ts",
                     datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 )
@@ -710,7 +710,7 @@ class HermesOverseer:
             logger.warning("Monolithic LLM call failed after %d attempts — passing action through: %s",
                            self._LLM_MAX_RETRIES, last_exc)
             try:
-                await self.db.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])
+                await self.db.settings.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])
             except Exception:                                              # noqa: BLE001
                 pass
             # Fail-safe: pass action through but flag so the operator can see it.
@@ -732,7 +732,7 @@ class HermesOverseer:
 
             recent_logs = ""
             if self.db is not None:
-                recent_logs = await self.db.recent_logs(limit=200)
+                recent_logs = await self.db.logs.recent_logs(limit=200)
                 if len(recent_logs) > self._MAX_LOG_CHARS:
                     recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
 
@@ -793,7 +793,7 @@ class HermesOverseer:
         perf_metrics_str = ""
         try:
             if self.db is not None:
-                perf_metrics = await self.db.get_strategy_performance_metrics(days=30)
+                perf_metrics = await self.db.analytics.get_strategy_performance_metrics(days=30)
                 perf_lines = []
                 for strat, data in perf_metrics.items():
                     perf_lines.append(
@@ -849,8 +849,8 @@ class HermesOverseer:
         res = self._safe_json(msg)
         # Clear any stored LLM error on success.
         try:
-            await self.db.set_setting("llm_last_error", "")
-            await self.db.set_setting(
+            await self.db.settings.set_setting("llm_last_error", "")
+            await self.db.settings.set_setting(
                 "llm_last_ok_ts",
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
@@ -929,7 +929,7 @@ class HermesOverseer:
 
             if self.db is not None:
                 try:
-                    pending = await self.db.fetch_pending_ai_review_actions()
+                    pending = await self.db.approvals.fetch_pending_ai_review_actions()
                     if pending:
                         logger.info("Found %d pending AI review(s) in database at startup; enqueuing...", len(pending))
                         from .core import TradeAction
@@ -976,7 +976,7 @@ class HermesOverseer:
                 
                 # Write to database (advisory/enforcing decision)
                 if self.db is not None:
-                    await self.db.write_ai_decision(
+                    await self.db.decisions.write_ai_decision(
                         action.strategy_id,
                         action.symbol,
                         self.autonomy,

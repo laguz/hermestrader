@@ -79,11 +79,11 @@ class TuningController:
         try:
             import time
             now = time.time()
-            last_raw = await self.db.get_setting("ai_last_param_tuning_ts")
+            last_raw = await self.db.settings.get_setting("ai_last_param_tuning_ts")
             last = float(last_raw) if last_raw else 0.0
             if now - last < interval:
                 return
-            await self.db.set_setting("ai_last_param_tuning_ts", str(now))
+            await self.db.settings.set_setting("ai_last_param_tuning_ts", str(now))
             await tuner()
 
             # Execute risk restrictions check (banned symbols list)
@@ -110,7 +110,7 @@ class TuningController:
         applied value can never escape the knob's tunable range.
         """
         try:
-            mode = (await self.db.get_setting("bandit_tuner_mode") or "off")
+            mode = (await self.db.settings.get_setting("bandit_tuner_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
@@ -118,18 +118,18 @@ class TuningController:
             import time
             interval = int(self.config.get("bandit_tuning_interval_s", 3600))
             now = time.time()
-            last_raw = await self.db.get_setting("bandit_last_run_ts")
+            last_raw = await self.db.settings.get_setting("bandit_last_run_ts")
             last = float(last_raw) if last_raw else 0.0
             if interval > 0 and now - last < interval:
                 return
-            await self.db.set_setting("bandit_last_run_ts", str(now))
+            await self.db.settings.set_setting("bandit_last_run_ts", str(now))
 
             from hermes.ml.bandit import propose_knob_updates, LEARNABLE_KNOBS
 
-            outcomes = await self.db.fetch_trade_outcomes()
+            outcomes = await self.db.trades.fetch_trade_outcomes()
             keys = [k for knobs in LEARNABLE_KNOBS.values() for k in knobs]
             current: Dict[str, Any] = {}
-            bulk = getattr(self.db, "get_settings", None)
+            bulk = getattr(self.db.settings, "get_settings", None)
             if callable(bulk):
                 current = await bulk(keys) or {}
 
@@ -144,9 +144,9 @@ class TuningController:
             applied: Dict[str, Any] = {}
             for p in proposals:
                 if can_apply and p["actionable"] and p["changed"]:
-                    await self.db.set_setting(p["key"], str(p["proposed"]))
+                    await self.db.settings.set_setting(p["key"], str(p["proposed"]))
                     applied[p["key"]] = p["proposed"]
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         "BANDIT",
                         f"[BANDIT-TUNE] {p['key']}: {p['current']} → "
                         f"{p['proposed']} (n={p['n_obs']}, mode={mode})",
@@ -155,7 +155,7 @@ class TuningController:
             if applied:
                 logger.info("[BANDIT-TUNE] applied %s", applied)
             try:
-                await self.db.write_ai_decision(
+                await self.db.decisions.write_ai_decision(
                     "BANDIT", "PARAMS", autonomy,
                     {"type": "bandit_tuning", "mode": mode,
                      "applied": applied, "proposals": proposals,
@@ -185,14 +185,14 @@ class TuningController:
         and writes telemetry. Best-effort: failures never break the tick.
         """
         try:
-            mode = (await self.db.get_setting("exit_policy_mode") or "off")
+            mode = (await self.db.settings.get_setting("exit_policy_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
-            open_trades = await self.db.all_open_trades()
+            open_trades = await self.db.trades.all_open_trades()
             if not open_trades:
                 return
 
@@ -230,7 +230,7 @@ class TuningController:
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
 
-            policy = train_exit_policy(await self.db.fetch_exit_ticks())
+            policy = train_exit_policy(await self.db.trades.fetch_exit_ticks())
             advice: List[Dict[str, Any]] = []
             acted: List[int] = []
 
@@ -250,7 +250,7 @@ class TuningController:
 
                 tid = tr.get("id")
                 action = "close" if tid in closing_ids else "hold"
-                await self.db.record_exit_tick(
+                await self.db.trades.record_exit_tick(
                     trade_id=tid, strategy_id=tr.get("strategy_id"),
                     symbol=tr.get("symbol"), dte=dte, unrealized_pnl_pct=pnl_pct,
                     debit=debit, entry_credit=float(entry_credit), action=action,
@@ -295,7 +295,7 @@ class TuningController:
                     )
                     await self.submit([close], action_type="management")
                     acted.append(tid)
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         "EXITPOLICY",
                         f"[EXIT-POLICY] closing trade {tid} {tr.get('symbol')} "
                         f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
@@ -305,7 +305,7 @@ class TuningController:
             if acted:
                 logger.info("[EXIT-POLICY] closed %s", acted)
             try:
-                await self.db.write_ai_decision(
+                await self.db.decisions.write_ai_decision(
                     "EXITPOLICY", "EXITS", autonomy,
                     {"type": "exit_policy", "mode": mode, "acted": acted,
                      "n_completed_trajectories": policy["n_completed_trajectories"],
@@ -319,12 +319,12 @@ class TuningController:
     async def _maybe_evaluate_reactive_exit(self, symbol: str, mgmt_actions) -> None:
         """Evaluate continuous exit model reactively on quote changes for a specific option symbol."""
         try:
-            mode = (await self.db.get_setting("exit_policy_mode") or "off")
+            mode = (await self.db.settings.get_setting("exit_policy_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
-            open_trades = await self.db.all_open_trades()
+            open_trades = await self.db.trades.all_open_trades()
             if not open_trades:
                 return
 
@@ -350,7 +350,7 @@ class TuningController:
                         if self.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
 
-            policy = train_exit_policy(await self.db.fetch_exit_ticks())
+            policy = train_exit_policy(await self.db.trades.fetch_exit_ticks())
             advice: List[Dict[str, Any]] = []
             acted: List[int] = []
 
@@ -429,7 +429,7 @@ class TuningController:
                     )
                     await self.submit([close], action_type="management")
                     acted.append(tid)
-                    await self.db.write_log(
+                    await self.db.logs.write_log(
                         "EXITPOLICY",
                         f"[REACTIVE-EXIT] closing trade {tid} {tr.get('symbol')} "
                         f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
@@ -439,7 +439,7 @@ class TuningController:
             if acted:
                 logger.info("[REACTIVE-EXIT] closed %s", acted)
                 try:
-                    await self.db.write_ai_decision(
+                    await self.db.decisions.write_ai_decision(
                         "EXITPOLICY", "REACTIVE-EXITS", autonomy,
                         {"type": "exit_policy_reactive", "mode": mode, "acted": acted,
                          "advice": advice},

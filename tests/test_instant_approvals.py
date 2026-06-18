@@ -1,4 +1,5 @@
 from __future__ import annotations
+from ._stubs import alias_db_namespaces
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -55,6 +56,7 @@ async def test_agent_loop_runs_approvals_immediately_on_trigger():
     from hermes.events.bus import ClockTickEvent
 
     db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
     async def mock_get_setting(key, default=None):
         if key == "mode":
             return "paper"

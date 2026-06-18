@@ -3,7 +3,7 @@
 Strategy tunables — one declarative catalog for every per-strategy parameter.
 
 Before this module, tunables were scattered across three sources with
-duplicated boilerplate: ``db.get_setting()`` (DTE windows), ``self.config``
+duplicated boilerplate: ``db.settings.get_setting()`` (DTE windows), ``self.config``
 / env (widths, deltas, lots) and bare hardcoded literals (POP targets,
 every TP/SL/time-exit threshold, the delta bounds). That made it impossible
 to see — let alone tune — the full parameter surface without reading four
@@ -220,12 +220,12 @@ async def resolve(db, env_config: Optional[Dict[str, Any]] = None,
     keys = [s.key for s in specs]
 
     overrides: Dict[str, Optional[str]] = {}
-    bulk = getattr(db, "get_settings", None)
+    bulk = getattr(db.settings, "get_settings", None)
     if callable(bulk):
         overrides = await bulk(keys) or {}
     else:                                                    # stub-DB fallback
         for k in keys:
-            overrides[k] = await db.get_setting(k)
+            overrides[k] = await db.settings.get_setting(k)
 
     values = {s.key: _resolve_one(s, overrides.get(s.key), env_config) for s in specs}
     return Tunables(values)

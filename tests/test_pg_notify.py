@@ -88,7 +88,7 @@ async def test_decide_approval_emits_notify():
             session_mock.execute.return_value = result_mock
             
             # Call decide_approval
-            ok = await db.decide_approval(approval_id=42, decision="APPROVED")
+            ok = await db.approvals.decide_approval(approval_id=42, decision="APPROVED")
             
             assert ok is True
             # Verify NOTIFY agent_commands text query was executed before commit

@@ -70,7 +70,7 @@ class HermesAlpha(AbstractStrategy):
         delta_tol = float(self.config.get("alpha_delta_tol", 0.10))
         min_credit_pct = float(self.config.get("alpha_min_credit_pct", 0.12))
 
-        open_trades = await self.db.open_trades(self.strategy_id)
+        open_trades = await self.db.trades.open_trades(self.strategy_id)
         if len(open_trades) >= max_positions:
             self._log(f"⏸ position cap reached ({len(open_trades)}/{max_positions}); stand down.")
             return []
@@ -81,7 +81,7 @@ class HermesAlpha(AbstractStrategy):
         # symbols (strip any ':lots' suffix) and deduped.
         raw_syms: List[str] = list(watchlist)
         try:
-            raw_syms += await self.db.all_watchlist_symbols()
+            raw_syms += await self.db.watchlist.all_watchlist_symbols()
         except Exception as exc:                                   # noqa: BLE001
             self._log(f"⚠️ all_watchlist_symbols failed ({exc}); engine watchlist only.")
         universe: List[str] = []
@@ -99,7 +99,7 @@ class HermesAlpha(AbstractStrategy):
         cooldown_seconds = int(self.config.get("reentry_cooldown_s", 1800))  # Default 30 mins
         now_naive = self.now().replace(tzinfo=None) if self.now().tzinfo else self.now()
         for symbol in universe:
-            last_closed = await self.db.latest_closed_trade_time(self.strategy_id, symbol)
+            last_closed = await self.db.trades.latest_closed_trade_time(self.strategy_id, symbol)
             if last_closed:
                 last_closed_naive = last_closed.replace(tzinfo=None) if last_closed.tzinfo else last_closed
                 time_since_close = (now_naive - last_closed_naive).total_seconds()
@@ -233,7 +233,7 @@ class HermesAlpha(AbstractStrategy):
         position this tick rather than firing a panic-priced close.
         """
         actions: List[TradeAction] = []
-        trades = await self.db.open_trades(self.strategy_id)
+        trades = await self.db.trades.open_trades(self.strategy_id)
         if not trades:
             return []
 

@@ -110,7 +110,7 @@ class HermesSettings(BaseSettings):
                 ("llm_timeout_s", "llm_timeout_s", float),
             ]
             for db_key, attr, cast in mappings:
-                val = await db.get_setting(db_key)
+                val = await db.settings.get_setting(db_key)
                 if val is not None and str(val).strip() != "":
                     try:
                         setattr(self, attr, cast(str(val).strip()))
@@ -118,7 +118,7 @@ class HermesSettings(BaseSettings):
                         logger.warning("Failed to cast setting %s=%s: %s", db_key, val, cast_err)
             
             # handle LLM API key decryption if present
-            raw_key = await db.get_setting("llm_api_key")
+            raw_key = await db.settings.get_setting("llm_api_key")
             if raw_key is not None and str(raw_key).strip() != "":
                 from hermes.utils import decrypt_value
                 decrypted = decrypt_value(str(raw_key).strip())
