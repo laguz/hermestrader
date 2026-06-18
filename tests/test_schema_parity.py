@@ -42,11 +42,10 @@ for _mod in ("hermes.ml.ledger", "hermes.ml.regime_weights"):
 SCHEMA_SQL = Path(__file__).resolve().parents[1] / "hermes" / "db" / "schema.sql"
 
 # Tables the ORM owns on BOTH backends via create_all, deliberately kept out of
-# schema.sql (which is the Postgres/Timescale baseline). event_ledger and
-# doctrine_embeddings are newer; doctrine_embeddings in particular needs the
-# pgvector extension on Postgres, so its DDL lives in the dialect-aware ORM
-# (SafeVector → vector/Text) rather than as static SQL.
-ORM_ONLY_TABLES = {"event_ledger", "doctrine_embeddings"}
+# schema.sql (which is the Postgres/Timescale baseline). doctrine_embeddings
+# needs the pgvector extension on Postgres, so its DDL lives in the dialect-aware
+# ORM (SafeVector → vector/Text) rather than as static SQL.
+ORM_ONLY_TABLES = {"doctrine_embeddings"}
 
 # Same idea, but defined in optional ML modules that only register their table
 # when their deps import. Allow-listed for the divergence check but not asserted
