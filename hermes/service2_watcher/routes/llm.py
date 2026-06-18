@@ -59,6 +59,9 @@ async def _read_llm_config() -> Dict[str, Any]:
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
     vision = (await db.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
+    overseer_mode = (await db.get_setting("overseer_mode") or "monolithic").lower()
+    if overseer_mode not in ("monolithic", "committee"):
+        overseer_mode = "monolithic"
     last_ok = parse_iso(await db.get_setting(SETTING_LLM_OK_TS))
     last_err = (await db.get_setting(SETTING_LLM_ERROR) or "").strip() or None
     return {
@@ -68,6 +71,7 @@ async def _read_llm_config() -> Dict[str, Any]:
         "temperature": temperature,
         "timeout_s": timeout_s,
         "vision": vision,
+        "overseer_mode": overseer_mode,
         "last_ok_age_s": seconds_since(last_ok),
         "last_error": last_err,
         "valid_providers": list(VALID_LLM_PROVIDERS),
@@ -87,6 +91,7 @@ class LLMConfigBody(BaseModel):
     temperature: Optional[float] = None
     vision: Optional[bool] = None
     timeout_s: Optional[float] = None
+    overseer_mode: Optional[str] = None
 
 
 @router.get("/api/llm")
@@ -128,6 +133,11 @@ async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
         if not (5.0 <= body.timeout_s <= 600.0):
             raise HTTPException(status_code=400, detail="timeout_s must be in [5, 600]")
         await db.set_setting(SETTING_LLM_TIMEOUT, str(body.timeout_s))
+    if body.overseer_mode is not None:
+        om = body.overseer_mode.lower().strip()
+        if om not in ("monolithic", "committee"):
+            raise HTTPException(status_code=400, detail="overseer_mode must be 'monolithic' or 'committee'")
+        await db.set_setting("overseer_mode", om)
     await db.set_setting(SETTING_LLM_ERROR, "")
     await db.write_log("ENGINE", "[C2] LLM config updated")
     return await _read_llm_config()
