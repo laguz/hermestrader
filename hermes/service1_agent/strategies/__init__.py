@@ -13,8 +13,9 @@ before lower-priority ones see the watchlist.
 Layout
 ------
 - ``_helpers.py`` — OCC parser + ``_nearest_strike`` (used by every strategy)
-- ``cs75.py``     — Priority 1, 39–45 DTE credit spreads
-- ``cs7.py``      — Priority 2, 7 DTE credit spreads
+- ``_credit_spread_base.py`` — shared POP-driven credit-spread engine for CS75/CS7
+- ``cs75.py``     — Priority 1, 39–45 DTE credit spreads (config + hooks)
+- ``cs7.py``      — Priority 2, 7 DTE credit spreads (config + hooks)
 - ``tt45.py``     — Priority 3, 16Δ short, 30–60 DTE
 - ``wheel.py``    — Priority 4, put → assignment → call wheel
 
