@@ -281,3 +281,82 @@ async def test_soul_skipped_when_empty():
     db = StubDB()
     o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy="advisory")
     assert "OPERATOR DOCTRINE" not in await o.get_system_prompt()
+
+
+# ── Multi-Agent Risk Committee Tests ─────────────────────────────────────────
+
+class _FakeCommitteeLLM:
+    def __init__(self):
+        self.chat_calls = []
+
+    def chat(self, messages, images=None):
+        self.chat_calls.append((messages, images))
+        content = " ".join([m.get("content", "") for m in messages])
+        if "Risk Officer" in content:
+            return '{"verdict": "APPROVE", "rationale": "approved by risk officer", "modifications": {}}'
+        elif "Macro Specialist" in content:
+            return '{"trend": "bullish", "support_resistance_analysis": "support holds", "technical_indicators": "RSI ok", "macro_risk_rating": "low", "rationale": "macro good"}'
+        elif "Strategy and Sizing Specialist" in content:
+            return '{"sizing_suitability": "appropriate", "parameter_suitability": "appropriate", "performance_context": "good winrate", "strategy_risk_rating": "low", "rationale": "strategy good"}'
+        return '{"verdict": "APPROVE", "rationale": "fallback"}'
+
+
+class _FakeCommitteeLLMModify:
+    def chat(self, messages, images=None):
+        content = " ".join([m.get("content", "") for m in messages])
+        if "Risk Officer" in content:
+            return '{"verdict": "MODIFY", "rationale": "modified pricing", "modifications": {"price": 1.25}}'
+        elif "Macro Specialist" in content:
+            return '{"trend": "neutral", "support_resistance_analysis": "resistance near", "technical_indicators": "RSI high", "macro_risk_rating": "medium", "rationale": "macro caution"}'
+        elif "Strategy and Sizing Specialist" in content:
+            return '{"sizing_suitability": "excessive", "parameter_suitability": "aggressive", "performance_context": "recent losses", "strategy_risk_rating": "high", "rationale": "trim lots"}'
+        return '{"verdict": "APPROVE", "rationale": "fallback"}'
+
+
+class _ExplodingMacroLLM:
+    def __init__(self):
+        self.monolithic_called = False
+
+    def chat(self, messages, images=None):
+        content = " ".join([m.get("content", "") for m in messages])
+        if "Macro Specialist" in content:
+            raise RuntimeError("macro LLM timeout")
+        if "quantitative options-trading overseer" in content:
+            self.monolithic_called = True
+            return '{"verdict": "VETO", "rationale": "monolithic veto fallback"}'
+        return '{"verdict": "APPROVE", "rationale": "risk officer fallback"}'
+
+
+async def test_committee_mode_approves_action():
+    db = StubDB()
+    llm = _FakeCommitteeLLM()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
+    a = _action()
+    out = await o.review(a)
+    assert out is a
+    assert not a.ai_authored
+    assert len(llm.chat_calls) == 3
+
+
+async def test_committee_mode_modifies_action():
+    db = StubDB()
+    llm = _FakeCommitteeLLMModify()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
+    a = _action()
+    out = await o.review(a)
+    assert out is a
+    assert a.price == 1.25
+    assert a.ai_authored is True
+    assert a.ai_rationale == "modified pricing"
+
+
+async def test_committee_mode_fallback_to_monolithic_on_specialist_failure():
+    db = StubDB()
+    llm = _ExplodingMacroLLM()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
+    a = _action()
+    out = await o.review(a)
+    # Specialist fails, falls back to monolithic which VETOs the trade.
+    assert out is None
+    assert llm.monolithic_called is True
+
