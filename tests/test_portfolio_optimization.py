@@ -164,7 +164,7 @@ async def test_cascading_engine_process_entries_optimized(monkeypatch):
     strat_1 = DummyStrategy("CS75", 1, "CS75", mm, db, [action_a])
     strat_2 = DummyStrategy("CS7", 2, "CS7", mm, db, [action_b])
 
-    engine = CascadingEngine(broker, db, [strat_1, strat_2], money_manager=mm, config=config)
+    engine = CascadingEngine(broker, db, [strat_1, strat_2], money_manager=mm, config=config, event_bus=None)
 
     count = await engine.process_entries(["AAPL", "TSLA"])
 

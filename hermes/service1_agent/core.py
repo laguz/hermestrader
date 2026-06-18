@@ -54,6 +54,9 @@ __all__ = [
 ]
 
 
+_DEFAULT_BUS = object()
+
+
 class CascadingEngine:
     """
     Pipeline order (per spec):
@@ -69,7 +72,7 @@ class CascadingEngine:
                  approval_mode: bool = False,
                  money_manager: Optional["MoneyManager"] = None,
                  config: Optional[Dict[str, Any]] = None,
-                 event_bus: Optional[EventBus] = None,
+                 event_bus: Optional[EventBus] = _DEFAULT_BUS,
                  llm_out_of_loop: bool = False,
                  clock: Optional[Clock] = None):
         self.clock = clock or RealClock()
@@ -89,16 +92,14 @@ class CascadingEngine:
         # capacity decisions run. Falls back to the first strategy's mm so
         # callers that haven't been updated yet still work.
         self.mm = money_manager or (strategies[0].mm if strategies else None)
-        self.event_bus = event_bus
+        if event_bus is _DEFAULT_BUS:
+            self.event_bus = EventBus()
+        else:
+            self.event_bus = event_bus
         self.llm_out_of_loop = llm_out_of_loop
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
-        self.queue = None
-        self.loop_task = None
         from hermes.ipc import ipc
         self.ipc_client = ipc
-        self._pending_futures: Dict[str, asyncio.Future] = {}
-        self._tracked_orders: Dict[str, Dict[str, Any]] = {}
-        self._order_monitor_task = None
         self.control_state = None
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
@@ -108,21 +109,61 @@ class CascadingEngine:
         # silently cancelled. Keep them here (mirrors scheduler._tasks /
         # overseer._worker_task) until they finish.
         self._bg_tasks: set[asyncio.Task] = set()
-        # Behaviour groups that used to be inherited mixins are now owned
-        # collaborators sharing the engine's hot tick state (see _engine_base).
-        # The thin delegators below keep the engine's call surface unchanged for
-        # the spine, the event bus, and the tests.
-        self.runtime = RuntimeController(self)
-        self.reactive = ReactiveController(self)
-        self.ai = AIController(self)
-        # Best-effort ML/tuning ticks live on an owned collaborator rather than
-        # a mixin, so the engine spine doesn't carry their state.
-        self.tuning = TuningController(self)
+
+        self.runtime = RuntimeController(
+            db=self.db,
+            broker=self.broker,
+            event_bus=self.event_bus,
+            config=self.config,
+            ipc_client=self.ipc_client,
+            clock=self.clock
+        )
+        self.reactive = ReactiveController(
+            db=self.db,
+            broker=self.broker,
+            event_bus=self.event_bus,
+            config=self.config,
+            strategies=self.strategies,
+            mm=self.mm,
+            quote_cache=self._quote_cache,
+            clock=self.clock
+        )
+        self.ai = AIController(
+            db=self.db,
+            broker=self.broker,
+            event_bus=self.event_bus,
+            config=self.config,
+            overseer=self.overseer,
+            mm=self.mm,
+            clock=self.clock
+        )
+        self.tuning = TuningController(
+            db=self.db,
+            broker=self.broker,
+            event_bus=self.event_bus,
+            config=self.config,
+            overseer=self.overseer,
+            clock=self.clock,
+            quote_cache=self._quote_cache
+        )
+
         if self.event_bus is not None:
-            self.event_bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
-            self.event_bus.subscribe(MarketDataEvent, self.handle_market_data)
-            self.event_bus.subscribe(OrderFillEvent, self.handle_order_fill)
-            self.event_bus.subscribe(ClockTickEvent, self.handle_clock_tick)
+            from hermes.events.bus import (
+                ExecuteTickCommand,
+                ExecuteClockTickCommand,
+                SubmitTradeActionsCommand,
+                SyncPositionsCommand,
+                ReconcileOrphansCommand,
+                ProcessManagementCommand,
+                ProcessEntriesCommand,
+            )
+            self.event_bus.subscribe(ExecuteTickCommand, self.handle_execute_tick)
+            self.event_bus.subscribe(ExecuteClockTickCommand, self.handle_execute_clock_tick)
+            self.event_bus.subscribe(SubmitTradeActionsCommand, self.handle_submit_trade_actions)
+            self.event_bus.subscribe(SyncPositionsCommand, self.handle_sync_positions)
+            self.event_bus.subscribe(ReconcileOrphansCommand, self.handle_reconcile_orphans)
+            self.event_bus.subscribe(ProcessManagementCommand, self.handle_process_management)
+            self.event_bus.subscribe(ProcessEntriesCommand, self.handle_process_entries)
 
     # ── delegators to the owned collaborators ────────────────────────────────
     # These forward the engine's public/cross-called surface to the collaborator
@@ -130,6 +171,8 @@ class CascadingEngine:
     # so the engine's API stays greppable and there's no delegation cycle with
     # _EngineCollaborator, which forwards the other direction.
     def _ensure_event_loop(self) -> None:
+        if self.event_bus is not None:
+            self.event_bus.start()
         return self.runtime._ensure_event_loop()
 
     def _ensure_order_monitor(self) -> None:
@@ -139,25 +182,207 @@ class CascadingEngine:
         return await self.runtime.publish_event(event_type, payload)
 
     async def handle_market_data(self, event):
-        return await self.reactive.handle_market_data(event)
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            if getattr(event, "future", None) is None:
+                event.future = asyncio.get_running_loop().create_future()
+            self.event_bus.emit(event)
+            await event.future
+        else:
+            await self.reactive._handle_market_data_internal(event)
 
     async def _handle_market_data_internal(self, event):
         return await self.reactive._handle_market_data_internal(event)
 
     async def handle_order_fill(self, event):
-        return await self.reactive.handle_order_fill(event)
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            if getattr(event, "future", None) is None:
+                event.future = asyncio.get_running_loop().create_future()
+            self.event_bus.emit(event)
+            await event.future
+        else:
+            await self.reactive._handle_order_fill_internal(event)
 
     async def _handle_order_fill_internal(self, event):
         return await self.reactive._handle_order_fill_internal(event)
 
     async def process_reactive_entries(self, symbol):
-        return await self.reactive.process_reactive_entries(symbol)
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            from hermes.events.bus import ProcessReactiveEntriesEvent
+            ev = ProcessReactiveEntriesEvent(symbol=symbol)
+            self.event_bus.emit(ev)
+            await ev.future
+        else:
+            await self.reactive.process_reactive_entries(symbol)
 
     async def handle_ai_approval(self, event):
-        return await self.ai.handle_ai_approval(event)
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            if getattr(event, "future", None) is None:
+                event.future = asyncio.get_running_loop().create_future()
+            self.event_bus.emit(event)
+            await event.future
+        else:
+            await self.ai._handle_ai_approval_internal(event)
 
     async def _handle_ai_approval_internal(self, event):
         return await self.ai._handle_ai_approval_internal(event)
+
+    # ── Command handlers for event-driven orchestration ──────────────────────
+    async def handle_execute_tick(self, command):
+        try:
+            res = await self._run_tick_internal(command.watchlist)
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_execute_clock_tick(self, command):
+        try:
+            res = await self._handle_clock_tick_internal(command.event)
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_submit_trade_actions(self, command):
+        try:
+            if command.execute_directly or command.approval_id is not None:
+                for a in command.actions:
+                    await self._execute_or_queue(a, command.action_type, approval_id=command.approval_id)
+            else:
+                await self.submit(command.actions, action_type=command.action_type)
+            if command.future and not command.future.done():
+                command.future.set_result(None)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_sync_positions(self, command):
+        try:
+            res = await self.sync_positions()
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_reconcile_orphans(self, command):
+        try:
+            await self.reconcile_orphans()
+            if command.future and not command.future.done():
+                command.future.set_result(None)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_process_management(self, command):
+        try:
+            res = await self.process_management()
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    async def handle_process_entries(self, command):
+        try:
+            res = await self.process_entries(command.watchlist)
+            if command.future and not command.future.done():
+                command.future.set_result(res)
+        except Exception as exc:
+            if command.future and not command.future.done():
+                command.future.set_exception(exc)
+            raise
+
+    @property
+    def queue(self):
+        return self.runtime.queue
+    @queue.setter
+    def queue(self, val):
+        self.runtime.queue = val
+
+    @property
+    def loop_task(self):
+        return self.runtime.loop_task
+    @loop_task.setter
+    def loop_task(self, val):
+        self.runtime.loop_task = val
+
+    @property
+    def _pending_futures(self):
+        return self.runtime._pending_futures
+    @_pending_futures.setter
+    def _pending_futures(self, val):
+        self.runtime._pending_futures = val
+
+    @property
+    def _tracked_orders(self):
+        return self.runtime._tracked_orders
+    @_tracked_orders.setter
+    def _tracked_orders(self, val):
+        self.runtime._tracked_orders = val
+
+    @property
+    def _order_monitor_task(self):
+        return self.runtime._order_monitor_task
+    @_order_monitor_task.setter
+    def _order_monitor_task(self, val):
+        self.runtime._order_monitor_task = val
+
+    @property
+    def ipc_client(self):
+        return self._ipc_client
+
+    @ipc_client.setter
+    def ipc_client(self, val):
+        self._ipc_client = val
+        if hasattr(self, "runtime"):
+            self.runtime.ipc_client = val
+
+    @property
+    def strategies(self):
+        return self._strategies
+
+    @strategies.setter
+    def strategies(self, val):
+        self._strategies = sorted(val, key=lambda s: s.PRIORITY)
+        if hasattr(self, "reactive"):
+            self.reactive.strategies = self._strategies
+
+    @property
+    def overseer(self):
+        return self._overseer
+
+    @overseer.setter
+    def overseer(self, val):
+        self._overseer = val
+        if hasattr(self, "ai"):
+            self.ai.overseer = val
+        if hasattr(self, "tuning"):
+            self.tuning.overseer = val
+
+    @property
+    def mm(self):
+        return self._mm
+
+    @mm.setter
+    def mm(self, val):
+        self._mm = val
+        if hasattr(self, "reactive"):
+            self.reactive.mm = val
+        if hasattr(self, "ai"):
+            self.ai.mm = val
 
     async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
         positions = await self.broker.get_positions() or []
@@ -399,6 +624,8 @@ class CascadingEngine:
 
     async def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
+        if self.event_bus is not None:
+            self._ensure_event_loop()
         # Defence-in-depth market-hours gate. Every broker round-trip
         # MUST go through this method (entries, managed closes, AI
         # actions) so a single check here keeps the bot from sending
@@ -644,7 +871,14 @@ class CascadingEngine:
             return set()
 
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
-        return await self.publish_event("TICK", {"watchlist": watchlist})
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            from hermes.events.bus import TickStartedEvent
+            event = TickStartedEvent(watchlist=list(watchlist))
+            self.event_bus.emit(event)
+            return await event.future
+        else:
+            return await self._run_tick_internal(watchlist)
 
     async def _run_tick_internal(self, watchlist: Sequence[str]) -> Dict[str, int]:
         res = await self.sync_positions()
@@ -715,7 +949,14 @@ class CascadingEngine:
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
 
     async def handle_clock_tick(self, event: ClockTickEvent) -> None:
-        await self.publish_event("CLOCK_TICK", {"event": event})
+        if self.event_bus is not None:
+            self._ensure_event_loop()
+            if getattr(event, "future", None) is None:
+                event.future = asyncio.get_running_loop().create_future()
+            self.event_bus.emit(event)
+            await event.future
+        else:
+            await self._handle_clock_tick_internal(event)
 
     async def _handle_clock_tick_internal(self, event: ClockTickEvent) -> None:
         from hermes.service1_agent.agent_risk import enforce_daily_loss_limit
