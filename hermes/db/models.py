@@ -104,42 +104,51 @@ class HermesDB(
                 await conn.exec_driver_sql(stmt + ";")
 
     # ------------------------------------------------------------------
-    # Schema migrations applied at agent/watcher boot. Every statement is
-    # idempotent (IF NOT EXISTS), so a freshly-pulled image self-heals a DB
-    # that predates a column/table — including ``create_all``-bootstrapped
-    # DBs, where create_all never alters existing tables. **When a new
-    # alembic migration adds a column or table, add the matching idempotent
-    # statement here too**, or the running instance breaks on image upgrade
-    # (this is exactly how trades.entry_features went missing).
+    # Boot-time schema self-heal, applied at agent/watcher startup.
+    #
+    # The ORM (``Base.metadata``) is the single source of truth for every table
+    # ``create_all`` owns, so this is *derived* from the models rather than a
+    # hand-maintained list of ALTER statements — a derived diff can never fall
+    # behind the models (the failure mode that took ``trades.entry_features``
+    # down on an image upgrade). Postgres/Timescale objects the ORM cannot
+    # express (hypertables, compression, the ``pnl_daily`` view) stay owned by
+    # ``schema.sql`` / Alembic; ``tests/test_schema_parity.py`` keeps the two
+    # sides honest.
     # ------------------------------------------------------------------
-    MIGRATIONS: tuple[str, ...] = (
-        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS broker_order_id TEXT",
-        "CREATE INDEX IF NOT EXISTS idx_trades_open_order_id "
-        "ON trades(broker_order_id) WHERE status = 'OPEN'",
-        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS tag TEXT",
-        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS close_tag TEXT",
-        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS exit_price NUMERIC(10,4)",
-        "ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
-        # Phase 0 — per-trade entry-feature snapshot for outcome learning.
-        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS entry_features JSONB",
-        # Phase 3 — per-tick exit-state trajectory capture.
-        "CREATE TABLE IF NOT EXISTS exit_ticks ("
-        "id BIGSERIAL PRIMARY KEY, "
-        "ts TIMESTAMPTZ NOT NULL DEFAULT now(), "
-        "trade_id BIGINT NOT NULL, "
-        "strategy_id TEXT NOT NULL, "
-        "symbol TEXT NOT NULL, "
-        "dte INT, "
-        "unrealized_pnl_pct DOUBLE PRECISION, "
-        "debit DOUBLE PRECISION, "
-        "entry_credit DOUBLE PRECISION, "
-        "action TEXT NOT NULL DEFAULT 'hold', "
-        "close_reason TEXT)",
-        "CREATE INDEX IF NOT EXISTS idx_exit_ticks_trade ON exit_ticks(trade_id, ts)",
-    )
-
     async def run_migrations(self) -> None:
-        from sqlalchemy import text as sa_text
+        """Bring the live DB up to the current ORM, idempotently, on either backend."""
         async with self.async_engine.begin() as conn:
-            for sql in self.MIGRATIONS:
-                await conn.execute(sa_text(sql))
+            await conn.run_sync(self._reconcile_orm_schema)
+
+    @staticmethod
+    def _reconcile_orm_schema(sync_conn) -> None:
+        """Add any missing ORM table or column to ``sync_conn``'s database.
+
+        Additive only — never drops or retypes a column, and adds every column
+        as NULLABLE so it is safe against an already-populated table. Runs on a
+        sync connection (via ``run_sync``) so the SQLAlchemy inspector and
+        ``create_all`` can be used directly.
+        """
+        from sqlalchemy import inspect as sa_inspect
+
+        # 1) Missing tables (+ their indexes) — create_all is idempotent.
+        Base.metadata.create_all(sync_conn, checkfirst=True)
+
+        # 2) Missing columns on existing tables — create_all never ALTERs, so
+        #    diff each ORM table against the live columns and add the gaps.
+        insp = sa_inspect(sync_conn)
+        dialect = sync_conn.dialect
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            live_cols = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in live_cols:
+                    continue
+                coltype = col.type.compile(dialect=dialect)
+                sync_conn.exec_driver_sql(
+                    f'ALTER TABLE "{table.name}" '
+                    f'ADD COLUMN "{col.name}" {coltype}'
+                )
+                logger.info("run_migrations: added missing column %s.%s (%s)",
+                            table.name, col.name, coltype)

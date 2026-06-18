@@ -18,7 +18,7 @@ from hermes.utils import utc_now
 
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index,
-    Integer, Numeric, Sequence, String, Text,
+    Integer, Numeric, Sequence, String, Text, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, reconstructor
@@ -96,6 +96,12 @@ class Trade(Base):
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
+        # Partial index used to look up the OPEN trade for a broker order id.
+        # ``postgresql_where`` is honored on Postgres and ignored on SQLite
+        # (which builds an ordinary index), so create_all owns it on both
+        # backends instead of a hand-written CREATE INDEX.
+        Index("idx_trades_open_order_id", "broker_order_id",
+              postgresql_where=text("status = 'OPEN'")),
     )
 
     STATES = ["PROPOSED", "PENDING_BROKER", "PARTIAL_FILL", "OPEN", "CLOSING", "CLOSED"]

@@ -76,38 +76,76 @@ def test_offline_upgrade_emits_full_schema():
 
 
 # ---------------------------------------------------------------------------
-# Boot-time self-heal migrations (HermesDB.run_migrations)
+# Boot-time self-heal (HermesDB.run_migrations)
 #
-# These run at agent/watcher boot and must bring an older DB up to the current
-# schema — including create_all-bootstrapped DBs, where create_all never alters
-# existing tables. Guards the exact regression that took the paper bot down: a
-# new column/table shipped in code but missing from MIGRATIONS, so the running
-# instance crashed on image upgrade (trades.entry_features).
+# run_migrations runs at agent/watcher boot and must bring an older DB up to the
+# current schema — including create_all-bootstrapped DBs, where create_all never
+# alters existing tables. It is now *derived* from the ORM (no hand-maintained
+# statement list), so instead of asserting on a static list we exercise the real
+# behavior: stand up a DB that predates several columns + a whole table, run the
+# reconciler, and confirm the gaps are healed. This guards the exact regression
+# that took the paper bot down (trades.entry_features missing on upgrade).
 # ---------------------------------------------------------------------------
-from hermes.db.models import HermesDB                              # noqa: E402
+import sqlite3                                                    # noqa: E402
 
-_MIGRATIONS = HermesDB.MIGRATIONS
+from sqlalchemy import create_engine, inspect                    # noqa: E402
 
-
-def test_every_self_heal_migration_is_idempotent():
-    for stmt in _MIGRATIONS:
-        assert "IF NOT EXISTS" in stmt, f"non-idempotent migration: {stmt}"
+from hermes.db.models import HermesDB                             # noqa: E402
 
 
-def test_phase0_entry_features_is_self_healed():
-    assert any("ADD COLUMN IF NOT EXISTS entry_features" in s for s in _MIGRATIONS), \
-        "trades.entry_features missing from run_migrations — Phase-0 capture breaks on upgrade"
+def _make_stale_db(path: str) -> None:
+    """Create a DB that predates entry_features/tag/.../expires_at + exit_ticks."""
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE strategies (
+            strategy_id TEXT PRIMARY KEY, priority INTEGER,
+            status TEXT, created_at TEXT
+        );
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY, opened_at TEXT, strategy_id TEXT,
+            symbol TEXT, side_type TEXT, lots INTEGER, status TEXT
+        );
+        CREATE TABLE pending_approvals (
+            id INTEGER PRIMARY KEY, created_at TEXT, strategy_id TEXT,
+            symbol TEXT, action_type TEXT, action_json TEXT, status TEXT
+        );
+        """
+    )
+    con.commit()
+    con.close()
 
 
-def test_phase3_exit_ticks_is_self_healed():
-    assert any("CREATE TABLE IF NOT EXISTS exit_ticks" in s for s in _MIGRATIONS), \
-        "exit_ticks missing from run_migrations — Phase-3 capture breaks on upgrade"
-    assert any("idx_exit_ticks_trade" in s for s in _MIGRATIONS), \
-        "exit_ticks index missing from run_migrations"
+async def test_run_migrations_self_heals_columns_and_tables(tmp_path):
+    db_file = tmp_path / "stale.db"
+    _make_stale_db(str(db_file))
+    dsn = f"sqlite:///{db_file}"
+
+    # __init__'s create_all skips the pre-existing (stale) tables via
+    # checkfirst; run_migrations is what must add the missing columns.
+    db = HermesDB(dsn)
+    await db.run_migrations()
+
+    eng = create_engine(dsn)
+    try:
+        insp = inspect(eng)
+        trade_cols = {c["name"] for c in insp.get_columns("trades")}
+        for col in ("broker_order_id", "tag", "close_tag", "exit_price",
+                    "entry_features"):
+            assert col in trade_cols, f"trades.{col} not self-healed on upgrade"
+
+        appr_cols = {c["name"] for c in insp.get_columns("pending_approvals")}
+        assert "expires_at" in appr_cols, "pending_approvals.expires_at not self-healed"
+
+        # A table absent from the stale DB is created (Phase-3 exit capture).
+        assert insp.has_table("exit_ticks"), "exit_ticks table not created on upgrade"
+    finally:
+        eng.dispose()
 
 
-def test_late_added_trade_columns_are_all_covered():
-    joined = " ".join(_MIGRATIONS)
-    for col in ("broker_order_id", "tag", "close_tag", "exit_price",
-                "entry_features"):
-        assert f"ADD COLUMN IF NOT EXISTS {col}" in joined, f"{col} not self-healed"
+async def test_run_migrations_is_idempotent(tmp_path):
+    """Second pass over an already-current DB is a clean no-op."""
+    dsn = f"sqlite:///{tmp_path / 'fresh.db'}"
+    db = HermesDB(dsn)
+    await db.run_migrations()
+    await db.run_migrations()    # must not raise

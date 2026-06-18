@@ -190,6 +190,9 @@ CREATE TABLE IF NOT EXISTS pending_approvals (
     decided_at   TIMESTAMPTZ,
     executed_at  TIMESTAMPTZ
 );
+-- TTL deadline; the agent auto-expires PENDING rows past this (see
+-- expire_stale_approvals). Added after the baseline, so self-heal older DBs.
+ALTER TABLE pending_approvals ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status
     ON pending_approvals(status, created_at DESC);
 
