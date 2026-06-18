@@ -224,7 +224,7 @@ class CascadingEngine:
         return task
 
     # 1
-    async def sync_positions(self) -> tuple[List[Dict[str, Any]], Set[str]]:
+    async def sync_positions(self) -> tuple[List[Dict[str, Any]], set[str]]:
         positions = await self.broker.get_positions() or []
         if not isinstance(positions, list):
             logger.warning("[ENGINE] get_positions returned non-list: %r", positions)
