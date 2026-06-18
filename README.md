@@ -12,14 +12,16 @@ Two-service options-trading ecosystem on a TimescaleDB backbone.
 ```
 hermes/
 ├── service1_agent/
-│   ├── core.py          # CascadingEngine (orchestrator); re-exports the primitives below
+│   ├── core.py          # CascadingEngine spine (orchestrator); re-exports the primitives below
+│   ├── _engine_*.py     # engine mixins — runtime, reactive, ai, tuning
 │   ├── trade_action.py  # TradeAction — canonical order envelope
 │   ├── broker_wrapper.py# AsyncBrokerWrapper — unified async broker + circuit breaker
 │   ├── money_manager.py # MoneyManager, IronCondorBuilder — capacity & sizing
-│   ├── strategy_base.py # AbstractStrategy — base class for the four strategies
-│   ├── strategies.py  # CS75 (P=1), CS7 (P=2), TT45 (P=3), Wheel (P=4)
-│   ├── overseer.py    # Hermes AI Overseer (Gemma 3 Flash / e4b)
-│   └── main.py        # entry point + tick loop
+│   ├── strategy_base.py # AbstractStrategy — base class for the strategies
+│   ├── strategies/    # CS75 (P=1), CS7 (P=2), TT45 (P=3), Wheel (P=4), HermesAlpha (P=5)
+│   ├── overseer.py    # Hermes AI Overseer — monolithic or multi-agent committee
+│   ├── agent_*.py     # run-loop helpers — settings, construction, risk, approvals
+│   └── main.py        # entry point + run loop
 ├── service2_watcher/
 │   ├── api.py         # FastAPI backend (read-only)
 │   └── static/dashboard.html
@@ -31,7 +33,8 @@ hermes/
 │   └── xgb_features.py  # 10-feature engineer + threaded XGB predictor + HV Rank
 └── db/
     ├── schema.sql     # TimescaleDB hypertables, compression, continuous aggregates
-    └── models.py      # SQLAlchemy ORM + HermesDB repository
+    ├── repositories/  # per-concern query mixins composed into HermesDB
+    └── models.py      # SQLAlchemy ORM + HermesDB (TimescaleDB or SQLite)
 ```
 
 ## Tradier broker

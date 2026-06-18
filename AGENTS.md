@@ -22,7 +22,7 @@ provider-agnostic (`hermes/llm/clients.py`).
 ## Ground rules
 
 1. **This system places real options orders.** Treat every change to
-   `core.py`, `strategies.py`, `tradier.py`, or `MoneyManager` as
+   `core.py`, `strategies/`, `tradier.py`, or `MoneyManager` as
    safety-critical. Add a regression test before fixing a bug.
 2. **Never disable `dry_run` defaults or add a code path that can place a
    live order without `approval_mode` honoring the operator's setting.**
@@ -99,11 +99,16 @@ require a live database — use the stub-broker / stub-DB pattern in
 ## Useful entry points for understanding the codebase
 
 - `hermes/service1_agent/core.py` — `CascadingEngine` (the orchestrator).
-  Read this first. The primitives it composes are split into siblings:
-  `trade_action.py` (`TradeAction`), `broker_wrapper.py` (`AsyncBrokerWrapper`),
-  `money_manager.py` (`MoneyManager`, `IronCondorBuilder`), and
-  `strategy_base.py` (`AbstractStrategy`). All are still re-exported from
-  `core.py` for backwards compatibility.
-- `hermes/service1_agent/strategies.py` — the four concrete strategies.
-- `hermes/service1_agent/main.py` — tick loop + config reconciliation.
+  Read this first. It holds the pipeline spine; the runtime/reactive/ai/tuning
+  method groups live in `_engine_*.py` mixins it inherits. The primitives it
+  composes are split into siblings: `trade_action.py` (`TradeAction`),
+  `broker_wrapper.py` (`AsyncBrokerWrapper`), `money_manager.py`
+  (`MoneyManager`, `IronCondorBuilder`), and `strategy_base.py`
+  (`AbstractStrategy`). All are still re-exported from `core.py` for
+  backwards compatibility.
+- `hermes/service1_agent/strategies/` — the five concrete strategies
+  (`cs75`, `cs7`, `tt45`, `wheel`, `hermes_alpha`).
+- `hermes/service1_agent/main.py` — run loop + config reconciliation; broker/
+  LLM/engine construction and helpers live in `agent_construction.py` and the
+  other `agent_*.py` modules it re-imports.
 - `hermes/service2_watcher/api.py` — operator API surface.
