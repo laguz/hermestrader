@@ -34,6 +34,7 @@ from ._engine_runtime import RuntimeController
 from ._engine_reactive import ReactiveController
 from ._engine_ai import AIController
 from ._engine_tuning import TuningController
+from .context import TickContext
 
 if TYPE_CHECKING:
     # Imported only for type checking — resolves the forward references to
@@ -158,14 +159,55 @@ class CascadingEngine:
     async def _handle_ai_approval_internal(self, event):
         return await self.ai._handle_ai_approval_internal(event)
 
-    async def _async_propose(self, watchlist):
-        return await self.ai._async_propose(watchlist)
+    async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
+        positions = await self.broker.get_positions() or []
+        active_legs = set()
+        try:
+            active_statuses = {"open", "partially_filled", "pending",
+                                "accepted", "calculated"}
+            orders = await self.broker.get_orders() or []
+            if isinstance(orders, list):
+                for o in orders:
+                    if str(o.get("status", "")).lower() not in active_statuses:
+                        continue
+                    legs = o.get("leg") or []
+                    if isinstance(legs, dict):
+                        legs = [legs]
+                    for leg in legs:
+                        sym = leg.get("option_symbol")
+                        if sym:
+                            active_legs.add(sym)
+                    top = o.get("option_symbol")
+                    if top:
+                        active_legs.add(top)
+        except Exception:                              # noqa: BLE001
+            logger.exception("[ENGINE] active-order leg fetch failed")
+        return TickContext(
+            timestamp=self.clock.utc_now(),
+            watchlist=list(watchlist or []),
+            positions=positions,
+            active_order_legs=active_legs,
+        )
 
-    async def _async_propose_closes(self):
-        return await self.ai._async_propose_closes()
+    async def _async_propose(self, watchlist_or_ctx):
+        if not isinstance(watchlist_or_ctx, TickContext):
+            ctx = await self._build_fallback_ctx(watchlist_or_ctx)
+        else:
+            ctx = watchlist_or_ctx
+        return await self.ai._async_propose(ctx)
 
-    async def _price_ai_closes(self, actions):
-        return await self.ai._price_ai_closes(actions)
+    async def _async_propose_closes(self, ctx=None):
+        if ctx is None:
+            ctx = await self._build_fallback_ctx()
+        return await self.ai._async_propose_closes(ctx)
+
+    async def _price_ai_closes(self, ctx_or_actions, actions=None):
+        if actions is None:
+            actions = ctx_or_actions
+            ctx = await self._build_fallback_ctx()
+        else:
+            ctx = ctx_or_actions
+        return await self.ai._price_ai_closes(ctx, actions)
 
     async def _gate_ai_actions(self, actions):
         return await self.ai._gate_ai_actions(actions)
@@ -182,7 +224,7 @@ class CascadingEngine:
         return task
 
     # 1
-    async def sync_positions(self) -> None:
+    async def sync_positions(self) -> tuple[List[Dict[str, Any]], Set[str]]:
         positions = await self.broker.get_positions() or []
         if not isinstance(positions, list):
             logger.warning("[ENGINE] get_positions returned non-list: %r", positions)
@@ -214,6 +256,7 @@ class CascadingEngine:
         except Exception:                              # noqa: BLE001
             logger.exception("[ENGINE] active-order leg fetch failed")
         await self.db.trades.upsert_positions(positions, active_order_legs=active_legs)
+        return positions, active_legs
 
     # 2
     async def reconcile_orphans(self) -> None:
@@ -604,7 +647,12 @@ class CascadingEngine:
         return await self.publish_event("TICK", {"watchlist": watchlist})
 
     async def _run_tick_internal(self, watchlist: Sequence[str]) -> Dict[str, int]:
-        await self.sync_positions()
+        res = await self.sync_positions()
+        if isinstance(res, tuple) and len(res) == 2:
+            positions, active_legs = res
+        else:
+            positions = []
+            active_legs = set()
         # Refresh real-time broker order counts to prevent duplicate entries.
         # mm may be None on legacy callers that haven't been updated yet;
         # skip rather than crash the entire tick.
@@ -619,6 +667,15 @@ class CascadingEngine:
 
         # Filter out banned symbols under out-of-loop governance
         banned = await self._read_banned_symbols()
+        
+        ctx = TickContext(
+            timestamp=self.clock.utc_now(),
+            watchlist=list(watchlist),
+            banned_symbols=banned,
+            positions=positions,
+            active_order_legs=active_legs
+        )
+
         if banned:
             original_len = len(watchlist)
             watchlist = [s for s in watchlist if s.upper() not in banned]
@@ -643,17 +700,17 @@ class CascadingEngine:
 
             if self.event_bus is not None:
                 # Asynchronously generate AI proposals without blocking the tick loop
-                self._spawn_bg(self._async_propose(watchlist))
+                self._spawn_bg(self._async_propose(ctx))
                 # Symmetric exit path: let the overseer unwind open positions
                 # too. Independent of the watchlist — closes act on the book.
-                self._spawn_bg(self._async_propose_closes())
+                self._spawn_bg(self._async_propose_closes(ctx))
             else:
                 ai_actions = await self.overseer.propose(watchlist)
                 ai_actions = await self._gate_ai_actions(ai_actions)
                 await self.submit(ai_actions, action_type="ai")
                 ai_count = len(ai_actions)
                 ai_closes = await self.overseer.propose_closes()
-                ai_closes = await self._price_ai_closes(ai_closes)
+                ai_closes = await self._price_ai_closes(ctx, ai_closes)
                 await self.submit(ai_closes, action_type="management")
         return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
 

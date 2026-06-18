@@ -3,26 +3,29 @@
 
 Split out of ``core.py`` to keep the engine's spine readable. ``AIController``
 is an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
-(``engine.ai``); it shares the engine's hot tick state via
-:class:`~hermes.service1_agent._engine_base._EngineCollaborator`, so ``self.X``
-reads/writes the engine. Not meant to be used standalone.
+(``engine.ai``); it shares the engine's hot tick state.
+Not meant to be used standalone.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Sequence
 
 from hermes.events.bus import AIApprovalEvent
 from .strategy_base import AbstractStrategy
 from .trade_action import TradeAction
 from ._engine_base import _EngineCollaborator
 
+if TYPE_CHECKING:
+    from .core import CascadingEngine
+    from .context import TickContext
+
 logger = logging.getLogger("hermes.agent.core")
 
 
 class AIController(_EngineCollaborator):
     async def handle_ai_approval(self, event: AIApprovalEvent) -> None:
-        await self.publish_event("AI_APPROVAL", {"event": event})
+        await self.engine.publish_event("AI_APPROVAL", {"event": event})
 
     async def _handle_ai_approval_internal(self, event: AIApprovalEvent) -> None:
         """Asynchronously executes or queues an action after AI approval."""
@@ -33,24 +36,24 @@ class AIController(_EngineCollaborator):
 
         if event.verdict == "VETO":
             logger.info("[AI VETOED] Strategy=%s symbol=%s - %s", event.strategy_id, event.symbol, event.rationale)
-            await self.db.logs.write_log(
+            await self.engine.db.logs.write_log(
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
             if event.approval_id is not None:
-                await self.db.approvals.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
+                await self.engine.db.approvals.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
             # Record a short-lived suppression so the rules engine stops
             # re-proposing this identical entry next tick (a veto consumes
             # no capacity, so without this it would brute-force the same
             # action and re-veto it every cycle). Best-effort: a failure
             # here must never block the tick.
-            ttl = int(self.config.get("veto_suppression_s", 1800))
+            ttl = int(self.engine.config.get("veto_suppression_s", 1800))
             if ttl > 0:
                 veto_side = (a.strategy_params or {}).get("side_type")
                 if veto_side and str(veto_side).lower() in {"buy", "sell"}:
                     veto_side = None
                 try:
-                    hits = await self.db.approvals.record_veto(
+                    hits = await self.engine.db.approvals.record_veto(
                         event.strategy_id, event.symbol, veto_side,
                         a.expiry, event.rationale, ttl)
                     logger.info("[VETO] suppression recorded for %s (hits=%d, ttl=%ds)",
@@ -72,73 +75,49 @@ class AIController(_EngineCollaborator):
         # dry-run guard as the synchronous submit() path. ``action_type`` is
         # carried through the event so a management close approved via the bus
         # is routed as a close, not re-queued as a fresh entry.
-        await self._execute_or_queue(a, getattr(event, "action_type", "entry"), approval_id=getattr(event, "approval_id", None))
+        await self.engine._execute_or_queue(a, getattr(event, "action_type", "entry"), approval_id=getattr(event, "approval_id", None))
 
-    async def _async_propose(self, watchlist: Sequence[str]) -> None:
+    async def _async_propose(self, ctx: TickContext) -> None:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""
         try:
-            ai_actions = await self.overseer.propose(watchlist)
+            ai_actions = await self.engine.overseer.propose(ctx.watchlist)
             ai_actions = await self._gate_ai_actions(ai_actions)
             if ai_actions:
-                await self.submit(ai_actions, action_type="ai")
+                await self.engine.submit(ai_actions, action_type="ai")
         except Exception as exc:
             logger.exception("Error in async propose: %s", exc)
 
-    async def _async_propose_closes(self) -> None:
+    async def _async_propose_closes(self, ctx: TickContext) -> None:
         """Asynchronously let the overseer close positions without blocking the tick."""
         try:
-            closes = await self.overseer.propose_closes()
-            closes = await self._price_ai_closes(closes)
+            closes = await self.engine.overseer.propose_closes()
+            closes = await self._price_ai_closes(ctx, closes)
             if closes:
-                await self.submit(closes, action_type="management")
+                await self.engine.submit(closes, action_type="management")
         except Exception as exc:                                   # noqa: BLE001
             logger.exception("Error in async propose_closes: %s", exc)
 
-    async def _broker_position_state(self) -> tuple[Dict[str, float], set]:
+    async def _broker_position_state(self, ctx: TickContext) -> tuple[Dict[str, float], set]:
         """Live broker holdings + legs already worked by a resting order.
 
         Returns ``(qty_by_option_symbol, active_order_legs)`` where the qty is
         net and signed (shorts negative). Used to gate AI closes against the
-        actual book: a DB trade is marked OPEN the instant Tradier *accepts*
-        the entry — before it fills — so the short may not exist yet, and a
-        close already resting at the broker must not be re-submitted. Both
-        cases otherwise draw Tradier's "Buy To Cover ... unless closing a
-        short position, please check open orders" rejection and leave orphans.
+        actual book. Reads directly from the cached tick context to avoid duplicate
+        outbound REST API calls.
         """
         qty: Dict[str, float] = {}
-        try:
-            for p in await self.broker.get_positions() or []:
-                sym = p.get("symbol")
-                if not sym:
-                    continue
-                try:
-                    qty[sym] = qty.get(sym, 0.0) + float(p.get("quantity") or 0)
-                except (TypeError, ValueError):
-                    continue
-        except Exception:                                          # noqa: BLE001
-            logger.exception("[AI-CLOSE] get_positions failed; treating book as empty")
-        active_legs: set = set()
-        try:
-            active_statuses = {"open", "partially_filled", "pending", "accepted", "calculated"}
-            for o in await self.broker.get_orders() or []:
-                if str(o.get("status", "")).lower() not in active_statuses:
-                    continue
-                legs = o.get("leg") or []
-                if isinstance(legs, dict):
-                    legs = [legs]
-                for leg in legs:
-                    s = leg.get("option_symbol")
-                    if s:
-                        active_legs.add(s)
-                top = o.get("option_symbol")
-                if top:
-                    active_legs.add(top)
-        except Exception:                                          # noqa: BLE001
-            logger.exception("[AI-CLOSE] get_orders failed; assuming no resting orders")
-        return qty, active_legs
+        for p in ctx.positions:
+            sym = p.get("symbol")
+            if not sym:
+                continue
+            try:
+                qty[sym] = qty.get(sym, 0.0) + float(p.get("quantity") or 0)
+            except (TypeError, ValueError):
+                continue
+        return qty, ctx.active_order_legs
 
     async def _price_ai_closes(
-        self, actions: Sequence[TradeAction]
+        self, ctx: TickContext, actions: Sequence[TradeAction]
     ) -> List[TradeAction]:
         """Price overseer-proposed closes against live quotes, gated on holdings.
 
@@ -158,7 +137,7 @@ class AIController(_EngineCollaborator):
         """
         if not actions:
             return []
-        qty_map, active_legs = await self._broker_position_state()
+        qty_map, active_legs = await self._broker_position_state(ctx)
         priced: List[TradeAction] = []
         for a in actions:
             try:
@@ -178,7 +157,7 @@ class AIController(_EngineCollaborator):
                 held = qty_map.get(short_sym, 0.0)
                 if held > -lots:
                     # Not short, or not short enough, to cover this close.
-                    await self.db.logs.write_log(
+                    await self.engine.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: broker holds "
                         f"{held:g} of {short_sym} (need short ≥ {lots}); skip — "
@@ -187,7 +166,7 @@ class AIController(_EngineCollaborator):
                     continue
                 long_sym = long_leg.get("option_symbol") if long_leg else None
                 if short_sym in active_legs or (long_sym and long_sym in active_legs):
-                    await self.db.logs.write_log(
+                    await self.engine.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: a resting order "
                         f"already works this position; skip — avoids duplicate cover",
@@ -195,14 +174,14 @@ class AIController(_EngineCollaborator):
                     continue
                 # ----------------------------------------------------------
 
-                quotes = await self.broker.get_quote(",".join(syms)) or []
+                quotes = await self.engine.broker.get_quote(",".join(syms)) or []
                 qmap = {q.get("symbol"): q for q in quotes}
                 sq = qmap.get(short_leg.get("option_symbol"))
                 if long_leg is not None:
                     lq = qmap.get(long_leg.get("option_symbol"))
                     debit, blocked, reason = AbstractStrategy.compute_close_debit(sq, lq, a.width)
                     if blocked:
-                        await self.db.logs.write_log(
+                        await self.engine.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol} trade_id="
                             f"{(a.strategy_params or {}).get('trade_id')}: "
@@ -212,7 +191,7 @@ class AIController(_EngineCollaborator):
                 else:
                     ask = float((sq or {}).get("ask") or 0)
                     if ask <= 0:
-                        await self.db.logs.write_log(
+                        await self.engine.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol}: stale ask on "
                             f"{short_leg.get('option_symbol')}; skip this tick",
@@ -223,7 +202,7 @@ class AIController(_EngineCollaborator):
                 logger.info("[AI-CLOSE] %s trade_id=%s debit=$%.2f — %s",
                             a.symbol, (a.strategy_params or {}).get("trade_id"),
                             a.price, a.ai_rationale)
-                await self.db.logs.write_log(
+                await self.engine.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-CLOSE] {a.symbol} trade_id="
                     f"{(a.strategy_params or {}).get('trade_id')} debit=${a.price:.2f} "
@@ -251,9 +230,9 @@ class AIController(_EngineCollaborator):
         """
         if not actions:
             return []
-        if self.mm is None:
+        if self.engine.mm is None:
             for a in actions:
-                await self.db.logs.write_log(
+                await self.engine.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — no MoneyManager wired; "
                     f"cannot validate capacity (fail-closed)",
@@ -266,19 +245,19 @@ class AIController(_EngineCollaborator):
         for a in actions:
             try:
                 validated, reason = await gate_ai_action(
-                    a, broker=self.broker, db=self.db, mm=self.mm)
+                    a, broker=self.engine.broker, db=self.engine.db, mm=self.engine.mm)
             except Exception as exc:                              # noqa: BLE001
                 logger.exception("[AI-GATE] error validating %s: %s", a.symbol, exc)
-                await self.db.logs.write_log(
+                await self.engine.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — validation error: {exc}",
                 )
                 continue
             if validated is None:
                 logger.info("[AI-GATE] REJECTED %s", reason)
-                await self.db.logs.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
+                await self.engine.db.logs.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
             else:
                 logger.info("[AI-GATE] %s", reason)
-                await self.db.logs.write_log(a.strategy_id, f"[AI-GATE] {reason}")
+                await self.engine.db.logs.write_log(a.strategy_id, f"[AI-GATE] {reason}")
                 gated.append(validated)
         return gated
