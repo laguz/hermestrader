@@ -77,7 +77,11 @@ and `backtest_engine.py`).
 │       owned collaborators in _engine_*.py — pipeline / reactive /│
 │       ai, not mixins. core.py is pure orchestration + wiring.)   │
 │    HermesOverseer           — LLM review of every TradeAction;   │
-│      single OR multi-agent committee (overseer.py)               │
+│      spine in overseer.py (prompt/transport, review, wiring);    │
+│      owned collaborators in overseer_*.py — single / committee   │
+│      review, proposers (origination + charts), governance        │
+│      (settings tuning), worker (event-bus). Same back-reference  │
+│      pattern as the engine collaborators, not mixins.            │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -239,7 +243,10 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
-| Change what the overseer asks the LLM (single or committee) | `hermes/service1_agent/overseer.py`    |
+| Change what the overseer asks the LLM (single or committee) | `overseer_single.py` / `overseer_committee.py` (spine + wiring in `overseer.py`) |
+| Change how the overseer originates trades / closes / chart reads | `overseer_proposers.py` |
+| Change the overseer's out-of-loop settings tuning (params, risk bans) | `overseer_governance.py` |
+| Change the overseer's event-bus review worker | `overseer_worker.py` |
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
 | Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |

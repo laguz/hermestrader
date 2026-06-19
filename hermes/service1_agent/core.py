@@ -105,7 +105,7 @@ class CascadingEngine:
         # holds a *weak* reference to a bare ``create_task`` result, so a task
         # whose handle is discarded can be garbage-collected mid-await and
         # silently cancelled. Keep them here (mirrors scheduler._tasks /
-        # overseer._worker_task) until they finish.
+        # overseer.worker._worker_task) until they finish.
         self._bg_tasks: set[asyncio.Task] = set()
 
         # Three owned collaborators, all on the same back-reference pattern:
