@@ -4,8 +4,40 @@ from ._stubs import alias_db_namespaces
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
+from hermes.service1_agent.agent_settings import _read_overseer_settings
+from hermes.service1_agent.control_state import ControlState
 from hermes.service1_agent.core import CascadingEngine, TradeAction
 from hermes.service1_agent.overseer import HermesOverseer
+
+
+@pytest.mark.anyio
+async def test_llm_out_of_loop_defaults_true_when_unset():
+    """The safe posture — LLM off the synchronous critical path — must be the
+    default when the operator has never set ``llm_out_of_loop``.
+
+    Both operational readers feed this value into the engine: ``main.py`` builds
+    and reconciles the engine from ``_read_overseer_settings`` (main.py:266/358),
+    and ``ControlState.load_from_db`` mirrors it for the reactive runtime. If a
+    refactor ever flips either default to False, review would silently move back
+    onto the synchronous submit loop. These assertions pin the default so that
+    regression is caught here rather than in production.
+    """
+    # _read_overseer_settings: every setting absent → llm_out_of_loop True.
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    db_mock.get_setting = AsyncMock(return_value=None)
+    cfg = await _read_overseer_settings(db_mock, conf={})
+    assert cfg["llm_out_of_loop"] is True
+
+    # ControlState.load_from_db: same default, even after being forced False.
+    cs_db = AsyncMock()
+    alias_db_namespaces(cs_db)
+    cs_db.get_settings = AsyncMock(return_value={})
+    cs_db.get_setting = AsyncMock(return_value=None)
+    cs = ControlState()
+    cs.llm_out_of_loop = False
+    await cs.load_from_db(cs_db, conf={})
+    assert cs.llm_out_of_loop is True
 
 
 @pytest.mark.anyio
