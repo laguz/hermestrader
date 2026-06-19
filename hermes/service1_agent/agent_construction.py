@@ -85,7 +85,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
             log.warning("ollama_cloud requires both model and api_key — falling back to MockLLM")
         else:
             try:
-                from hermes.llm.clients import OllamaCloudLLM
+                from hermes.llm import OllamaCloudLLM
                 client = OllamaCloudLLM(
                     model=model,
                     api_key=api_key,
