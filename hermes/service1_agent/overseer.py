@@ -9,13 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent
 from .core import TradeAction
 from .overseer_committee import CommitteeReviewer
+from .overseer_monolithic import MonolithicReviewer
 
 logger = logging.getLogger("hermes.agent.overseer")
 
@@ -55,10 +55,13 @@ class HermesOverseer:
         self.soul = (soul or "").strip()
         self.overseer_mode = overseer_mode
         self.event_bus = event_bus
-        # Multi-agent committee review path, owned and routed to from _consult
-        # when overseer_mode == "committee". It reads this overseer's state and
-        # reuses its LLM transport via a back-reference.
+        # The two review paths, owned and routed to from _consult per the
+        # overseer_mode setting. Both read this overseer's state and reuse its
+        # LLM transport via a back-reference: committee for the multi-agent
+        # path, monolithic for the single-LLM path (and the committee's own
+        # failure fallback).
         self.committee = CommitteeReviewer(self)
+        self.monolithic = MonolithicReviewer(self)
         self._queue: Optional[asyncio.Queue[ReviewRequestEvent]] = None
         self._worker_task: Optional[asyncio.Task] = None
 
@@ -612,60 +615,16 @@ class HermesOverseer:
         raise last_exc
 
     async def _consult(self, action: TradeAction) -> Dict[str, Any]:
-        """Routes review based on the overseer_mode setting."""
+        """Routes review to the owned reviewer for the active overseer_mode."""
         if self.overseer_mode == "committee":
             return await self.committee.consult(action)
-        return await self._consult_monolithic(action)
+        return await self.monolithic.consult(action)
 
     async def _consult_monolithic(self, action: TradeAction) -> Dict[str, Any]:
-        prompt = (
-            "Review this trade action against general market context, the recent "
-            "execution log, and (if attached) the underlying's chart. "
-            "Reply with JSON {verdict: APPROVE|VETO|MODIFY, rationale, modifications?}.\n"
-            f"ACTION:\n{json.dumps(asdict(action), default=str)}\n"
-        )
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        # Enforce token budget: truncate from the front (oldest entries dropped).
-        if len(recent_logs) > self._MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
-        prompt += f"RECENT_LOGS:\n{recent_logs}\n"
-        images = []
-        if self.vision_enabled and self.chart_provider is not None:
-            try:
-                img = await self.chart_provider.snapshot(action.symbol)
-                if img is not None:
-                    images.append(img)
-            except Exception:                                          # noqa: BLE001
-                pass
-
-        system_prompt = await self.get_system_prompt()
-        messages = [{"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": prompt}]
-        try:
-            msg = await self._chat_with_retry(messages, images=images)
-            # Clear any stored LLM error on success.
-            try:
-                await self.db.settings.set_setting("llm_last_error", "")
-                await self.db.settings.set_setting(
-                    "llm_last_ok_ts",
-                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
-            except Exception:                                      # noqa: BLE001
-                pass
-            return self._safe_json(msg)
-        except Exception as last_exc:
-            logger.warning("Monolithic LLM call failed after %d attempts — passing action through: %s",
-                           self._LLM_MAX_RETRIES, last_exc)
-            try:
-                await self.db.settings.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])
-            except Exception:                                              # noqa: BLE001
-                pass
-            # Fail-safe: pass action through but flag so the operator can see it.
-            return {
-                "verdict": "APPROVE",
-                "rationale": f"LLM unavailable after {self._LLM_MAX_RETRIES} attempts ({last_exc or repr(last_exc)}); defaulting to APPROVE.",
-                "llm_error_fallback": True,
-            }
+        """Thin delegator preserving the internal surface (the committee's
+        failure fallback calls this). The body now lives on
+        :class:`MonolithicReviewer`."""
+        return await self.monolithic.consult(action)
 
     async def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
         system_prompt = await self.get_system_prompt()

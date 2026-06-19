@@ -28,15 +28,12 @@ unaffected.
 from __future__ import annotations
 
 import logging
-import math
 import threading
 import time
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-import numpy as np
 import pandas as pd
 
 from hermes.ml import drift as drift_mod
@@ -47,71 +44,16 @@ from hermes.ml.calibration import load_calibrator
 # Pure feature-engineering layer — moved to its own module; re-exported below
 # so existing `from hermes.ml.xgb_features import FeatureEngineer` imports work.
 from hermes.ml.feature_engineer import FeatureRow, FeatureEngineer, hv_rank
-
-
-def run_maybe_async(func, *args, **kwargs):
-    """Run an async or sync function from a synchronous context."""
-    import asyncio
-    import inspect
-
-    if inspect.iscoroutinefunction(func):
-        return asyncio.run(func(*args, **kwargs))
-
-    res = func(*args, **kwargs)
-    if inspect.iscoroutine(res):
-        return asyncio.run(res)
-    return res
+# Live-tunable predictor config — moved to its own module; re-exported below so
+# existing `from hermes.ml.xgb_features import PredictorConfig` imports work.
+from hermes.ml.predictor_config import PredictorConfig, run_maybe_async
+# Training and inference concerns live in owned collaborators (back-reference to
+# this predictor); see predictor_training.py / predictor_inference.py.
+from hermes.ml.predictor_inference import PredictorInference
+from hermes.ml.predictor_training import PredictorTrainer
 
 
 logger = logging.getLogger("hermes.ml.xgb")
-
-
-# ---------------------------------------------------------------------------
-# Predictor configuration
-# ---------------------------------------------------------------------------
-@dataclass
-class PredictorConfig:
-    """Live-tunable configuration. Loaded from HermesDB.system_settings.
-
-    Defaults match the v1 cadence so silent regressions are bisectable.
-    """
-
-    horizons_dte: Tuple[int, ...] = (7, 21, 45)
-    quantiles: Tuple[float, ...] = (0.1, 0.5, 0.9)
-    predict_interval_s: float = 60 * 60          # hourly during session
-    retrain_interval_s: float = 7 * 24 * 3600    # weekly
-    calibrate_interval_s: float = 24 * 3600      # nightly
-    drift_alarm_threshold: float = 0.2
-    target_kind: str = "return"                  # "return" or "pnl"
-    use_pnl_target: bool = False                 # rec #18 toggle
-
-    @classmethod
-    def from_db(cls, db: Any) -> "PredictorConfig":
-        cfg = cls()
-        if db is None or not hasattr(db, "get_setting"):
-            return cfg
-
-        def _f(key: str, default: float) -> float:
-            try:
-                v = run_maybe_async(db.get_setting, key)
-                return float(v) if v not in (None, "") else default
-            except (TypeError, ValueError):
-                return default
-
-        def _s(key: str, default: str) -> str:
-            try:
-                v = run_maybe_async(db.get_setting, key)
-                return str(v) if v else default
-            except Exception:                     # noqa: BLE001
-                return default
-
-        cfg.predict_interval_s = _f("ml_predict_interval_s", cfg.predict_interval_s)
-        cfg.retrain_interval_s = _f("ml_retrain_interval_s", cfg.retrain_interval_s)
-        cfg.calibrate_interval_s = _f("ml_calibrate_interval_s", cfg.calibrate_interval_s)
-        cfg.drift_alarm_threshold = _f("ml_drift_threshold", cfg.drift_alarm_threshold)
-        cfg.target_kind = _s("ml_target_kind", cfg.target_kind)
-        cfg.use_pnl_target = (cfg.target_kind == "pnl")
-        return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +114,12 @@ class AsyncXGBPredictor:
         except OSError as exc:
             logger.warning("Cannot create model dir %s: %s", self._model_root, exc)
 
+        # Owned collaborators: training and inference read this predictor's
+        # state and mutate its shared caches (_models / _drift / _last_pred)
+        # through back-references. The scheduling loop below routes to them.
+        self.trainer = PredictorTrainer(self)
+        self.inference = PredictorInference(self)
+
     # -- public --------------------------------------------------------------
     def start(self, event_bus: Optional[Any] = None) -> None:
         self._load_models()
@@ -215,13 +163,13 @@ class AsyncXGBPredictor:
 
             warnings: List[str] = []
             if should_retrain:
-                warnings.extend(self._retrain_all())
+                warnings.extend(self.trainer.retrain_all())
                 self._last_train_ts = now
             if should_calibrate:
                 self._calibrate_all()
                 self._last_calibrate_ts = now
             if should_predict or should_retrain:
-                warnings.extend(self._predict_all())
+                warnings.extend(self.inference.predict_all())
 
             if force_run:
                 try:
@@ -290,13 +238,13 @@ class AsyncXGBPredictor:
 
                 warnings: List[str] = []
                 if should_retrain:
-                    warnings.extend(self._retrain_all())
+                    warnings.extend(self.trainer.retrain_all())
                     self._last_train_ts = now
                 if should_calibrate:
                     self._calibrate_all()
                     self._last_calibrate_ts = now
                 if should_predict or should_retrain:
-                    warnings.extend(self._predict_all())
+                    warnings.extend(self.inference.predict_all())
 
                 if force_run:
                     try:
@@ -426,98 +374,6 @@ class AsyncXGBPredictor:
                 logger.error("history sync failed for %s: %s", sym, exc)
         logger.info("history sync complete")
 
-    # -- training ------------------------------------------------------------
-    def _retrain_all(self) -> List[str]:
-        warnings: List[str] = []
-        try:
-            import xgboost as xgb                   # type: ignore
-        except ImportError:
-            msg = "xgboost not installed; skipping retrain"
-            logger.warning(msg)
-            return [msg]
-
-        trained = 0
-        for sym in self._get_active_symbols():
-            base_frame = self._feature_frame(sym)
-            if base_frame is None:
-                warnings.append(f"{sym}: no data")
-                continue
-            if len(base_frame) < 80:
-                warnings.append(f"{sym}: need 80 bars, got {len(base_frame)}")
-                continue
-
-            # Fit drift detector once per retrain cycle.
-            try:
-                detector = drift_mod.DriftDetector(
-                    feature_catalog.feature_names("equity"))
-                detector.fit(base_frame.drop(columns=["target"], errors="ignore"))
-                self._drift[sym] = detector
-            except Exception as exc:                # noqa: BLE001
-                logger.debug("drift fit failed for %s: %s", sym, exc)
-
-            # Train one (horizon × quantile) head per combination.
-            for horizon in self._cfg.horizons_dte:
-                frame = self._target_frame(sym, base_frame, horizon=horizon)
-                if frame is None or len(frame) < 60:
-                    warnings.append(
-                        f"{sym}: insufficient rows for {horizon}DTE")
-                    continue
-                X = frame.drop(columns=["target"])
-                y = frame["target"]
-                for q in self._cfg.quantiles:
-                    try:
-                        model = self._fit_quantile_model(xgb, X, y, q)
-                    except Exception as exc:        # noqa: BLE001
-                        warnings.append(f"{sym}: q{q} fit failed: {exc}")
-                        continue
-                    self._models.setdefault(sym, {})[(horizon, q)] = (
-                        model,
-                        persistence.save_model(
-                            model,
-                            symbol=sym,
-                            model_name=self._model_name(horizon, q),
-                            target=self._cfg.target_kind,
-                            sample_size=int(len(X)),
-                            schema_stage="equity",
-                            horizon_dte=horizon,
-                            quantile=q,
-                            metrics={"rmse": _rmse(model, X, y)},
-                            notes=f"v2 quantile head q={q}",
-                        ),
-                    )
-                    trained += 1
-
-        if trained == 0 and self.symbols:
-            warnings.insert(0, "No models trained")
-        else:
-            logger.info("retrain complete (%d heads)", trained)
-        return warnings
-
-    def _fit_quantile_model(self, xgb_mod, X: pd.DataFrame, y: pd.Series,
-                            quantile: float):
-        """Fit a single quantile-regression XGBoost head.
-
-        ``reg:quantileerror`` was added in XGBoost 1.7. Older versions
-        fall back to the legacy squared-error objective with a residual
-        offset so the existing test environment still trains.
-        """
-        try:
-            return _fit_with_objective(
-                xgb_mod, X, y,
-                objective="reg:quantileerror",
-                quantile_alpha=quantile,
-            )
-        except Exception:
-            offset = float(np.quantile(y, quantile) - np.quantile(y, 0.5))
-            model = xgb_mod.XGBRegressor(
-                n_estimators=400, max_depth=4, learning_rate=0.05,
-                subsample=0.85, colsample_bytree=0.8, n_jobs=2,
-                objective="reg:squarederror",
-            )
-            model.fit(X, y - offset)
-            model._hermes_offset = offset           # type: ignore[attr-defined]
-            return model
-
     # -- calibration ---------------------------------------------------------
     def _calibrate_all(self) -> None:
         """Refit isotonic calibrators against the prediction ledger.
@@ -553,117 +409,6 @@ class AsyncXGBPredictor:
                     set_meta_learner(sym, meta)
                 except Exception as exc:                # noqa: BLE001
                     logger.debug("meta-learner load failed for %s: %s", sym, exc)
-
-    # -- prediction ----------------------------------------------------------
-    def _predict_all(self) -> List[str]:
-        warnings: List[str] = []
-        active = self._get_active_symbols()
-        predicted = 0
-        for sym in active:
-            heads = self._models.get(sym, {})
-            if not heads:
-                continue
-            base_frame = self._feature_frame(sym, drop_target=True)
-            if base_frame is None or base_frame.empty:
-                continue
-
-            x_last = base_frame.iloc[[-1]]
-            spot = float(run_maybe_async(self.db.last_price, sym) or 0.0)
-
-            quantile_returns: Dict[float, float] = {}
-            quantile_probs: Dict[float, float] = {}
-            for (horizon, q), (model, _meta) in heads.items():
-                # Always score against the primary horizon for the
-                # surfaced point-prediction; we record other horizons
-                # in the ledger but only the default flows out.
-                if horizon != self._cfg.horizons_dte[0]:
-                    continue
-                yhat = float(model.predict(x_last)[0])
-                offset = float(getattr(model, "_hermes_offset", 0.0))
-                yhat += offset
-                quantile_returns[q] = yhat
-                quantile_probs[q] = self._return_to_prob(yhat, sym, horizon)
-
-            # Apply per-symbol calibrator to the median (q50) probability.
-            cal = self._calibrators.get(sym)
-            if cal is not None and 0.5 in quantile_probs:
-                quantile_probs[0.5] = float(
-                    cal.transform([quantile_probs[0.5]])[0])
-
-            yhat_med = quantile_returns.get(0.5, 0.0)
-            prob_med = quantile_probs.get(0.5, 0.5)
-            prob_lo = quantile_probs.get(self._cfg.quantiles[0])
-            prob_hi = quantile_probs.get(self._cfg.quantiles[-1])
-            if prob_lo is not None and prob_hi is not None and prob_lo > prob_hi:
-                prob_lo, prob_hi = prob_hi, prob_lo
-
-            predicted_price = round(spot * (1 + yhat_med), 4) if spot else 0.0
-
-            self._last_pred[sym] = {
-                "asof": datetime.now(timezone.utc),
-                "predicted_return": yhat_med,
-                "predicted_price": predicted_price,
-                "predicted_prob": prob_med,
-                "predicted_prob_lo": prob_lo,
-                "predicted_prob_hi": prob_hi,
-                "spot": spot,
-                "quantiles": {f"q{int(q*100):02d}": v
-                              for q, v in quantile_probs.items()},
-                "horizon_dte": self._cfg.horizons_dte[0],
-            }
-            try:
-                run_maybe_async(self.db.write_prediction, sym, yhat_med, predicted_price, spot)
-            except Exception:                       # noqa: BLE001
-                pass
-
-            self._write_ledger_row(sym, x_last, prob_med, prob_lo, prob_hi,
-                                   yhat_med, spot)
-            predicted += 1
-
-        if predicted == 0 and active:
-            warnings.append("No predictions produced")
-        return warnings
-
-    def _return_to_prob(self, yhat: float, symbol: str, horizon_dte: int) -> float:
-        """Convert a predicted return into a probability of finishing
-        OTM, using the symbol's own current realised vol so vol regimes
-        are respected (no more 0.5 + return*5)."""
-        try:
-            vol = float(run_maybe_async(self.db.get_setting, f"ml_current_vol__{symbol}") or 0.30)
-        except Exception:                           # noqa: BLE001
-            vol = 0.30
-        sigma_horizon = max(0.005, vol * math.sqrt(horizon_dte / 365.0))
-        z = float(yhat) / sigma_horizon
-        from scipy.stats import norm
-        return float(np.clip(norm.cdf(z), 0.01, 0.99))
-
-    def _write_ledger_row(self, symbol: str, x_last: pd.DataFrame,
-                          prob_med: float, prob_lo: Optional[float],
-                          prob_hi: Optional[float], yhat: float,
-                          spot: float) -> None:
-        try:
-            heads = self._models.get(symbol, {})
-            meta = next(iter(heads.values()))[1] if heads else None
-            feature_vec = (x_last.iloc[0].to_dict()
-                           if not x_last.empty else {})
-            run_maybe_async(ledger_mod.write_record, self.db, ledger_mod.LedgerRecord(
-                symbol=symbol,
-                model_name=self._model_name(self._cfg.horizons_dte[0], 0.5),
-                horizon_dte=self._cfg.horizons_dte[0],
-                model_hash=(meta.model_hash if meta else None),
-                schema_hash=(meta.schema_hash if meta else None),
-                schema_stage="equity",
-                predicted_prob=float(prob_med),
-                predicted_prob_lo=(float(prob_lo) if prob_lo is not None else None),
-                predicted_prob_hi=(float(prob_hi) if prob_hi is not None else None),
-                predicted_return=float(yhat),
-                spot=float(spot),
-                feature_vector={k: (float(v) if isinstance(v, (int, float)) else v)
-                                for k, v in feature_vec.items()
-                                if not isinstance(v, str)},
-            ))
-        except Exception as exc:                    # noqa: BLE001
-            logger.debug("ledger write failed for %s: %s", symbol, exc)
 
     # -- helpers -------------------------------------------------------------
     def _feature_frame(self, symbol: str, drop_target: bool = False,
@@ -749,28 +494,6 @@ class AsyncXGBPredictor:
                     logger.debug("drift summary failed for %s: %s", sym, exc)
             out["symbols"][sym] = sym_block
         return out
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-def _fit_with_objective(xgb_mod, X: pd.DataFrame, y: pd.Series, *,
-                        objective: str, quantile_alpha: float):
-    model = xgb_mod.XGBRegressor(
-        n_estimators=400, max_depth=4, learning_rate=0.05,
-        subsample=0.85, colsample_bytree=0.8, n_jobs=2,
-        objective=objective, quantile_alpha=quantile_alpha,
-    )
-    model.fit(X, y)
-    return model
-
-
-def _rmse(model, X: pd.DataFrame, y: pd.Series) -> float:
-    try:
-        yhat = model.predict(X)
-        return float(np.sqrt(np.mean((yhat - y.values) ** 2)))
-    except Exception:                               # noqa: BLE001
-        return float("nan")
 
 
 __all__ = [
