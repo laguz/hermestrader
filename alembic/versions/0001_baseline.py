@@ -15,10 +15,6 @@ Provisions a fresh database in two steps from the single source of truth:
    compression/retention policies, and the ``pnl_daily`` view — applied *after*
    the ORM tables exist.
 
-``doctrine_embeddings`` is intentionally excluded: it depends on the pgvector
-extension and is provisioned at runtime by ``HermesDB`` / ``run_migrations``,
-matching the pre-ORM baseline's table set.
-
 All statements are idempotent (``create_all(checkfirst=True)`` online,
 ``IF NOT EXISTS`` / ``if_not_exists => TRUE`` in the addendum), so this is safe
 to re-run against a fresh database. In Alembic *offline* (``--sql``) mode the
@@ -48,10 +44,6 @@ depends_on: Union[str, Sequence[str], None] = None
 # Repo root is three parents up: versions/ -> alembic/ -> repo root.
 SCHEMA_SQL = Path(__file__).resolve().parents[2] / "hermes" / "db" / "schema.sql"
 
-# Provisioned at runtime (needs the pgvector extension), not by the baseline —
-# keeps the baseline's table set identical to the pre-ORM schema.sql.
-RUNTIME_ONLY_TABLES = {"doctrine_embeddings"}
-
 
 def upgrade() -> None:
     from hermes.db.orm import Base
@@ -62,11 +54,7 @@ def upgrade() -> None:
     # 1) ORM tables — the authoritative catalog. Offline (--sql) has no live DB
     #    to reflect, so emit unconditionally; online, checkfirst keeps it
     #    idempotent on a partially-provisioned database.
-    tables = [
-        t for t in Base.metadata.sorted_tables
-        if t.name not in RUNTIME_ONLY_TABLES
-    ]
-    Base.metadata.create_all(bind, tables=tables, checkfirst=not offline)
+    Base.metadata.create_all(bind, checkfirst=not offline)
 
     # 2) TimescaleDB addendum — bars_* tables, hypertables, compression, view.
     #    schema.sql is plain DDL with no dollar-quoted bodies, so splitting on

@@ -4,8 +4,7 @@ HermesTrader is Postgres/Timescale-only — there is no SQLite fallback. Both th
 test suite and the simulation backtester need a *throwaway* database that is
 isolated from the live ``hermes`` database, created fresh and dropped when done.
 This module owns that lifecycle and the one-time extension setup the schema
-needs (``timescaledb`` for the hypertables, ``vector`` for the doctrine
-embeddings).
+needs (``timescaledb`` for the hypertables).
 
 A "server DSN" here is a normal SQLAlchemy DSN whose database component points
 at the maintenance database (``postgres``); the helpers create a uniquely-named
@@ -49,9 +48,8 @@ def create_ephemeral_db(server_dsn: str = DEFAULT_SERVER_DSN, *, prefix: str = "
                         apply_schema: bool = False) -> str:
     """Create a fresh, uniquely-named database and return its SQLAlchemy DSN.
 
-    The ``timescaledb`` and ``vector`` extensions are installed before any
-    caller builds the ORM tables, because the doctrine-embedding ``vector``
-    column and the hypertable conversions both depend on them. When
+    The ``timescaledb`` extension is installed before any caller builds the ORM
+    tables, because the hypertable conversions depend on it. When
     ``apply_schema`` is set, the ``schema.sql`` TimescaleDB addendum (raw
     ``bars_*`` tables, hypertables, compression, the ``pnl_daily`` view) is
     applied too — but note the ORM tables must already exist for the hypertable
@@ -66,7 +64,6 @@ def create_ephemeral_db(server_dsn: str = DEFAULT_SERVER_DSN, *, prefix: str = "
     new_dsn = _with_dbname(server_dsn, name)
     with psycopg.connect(_pq(new_dsn), autocommit=True) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
-        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     if apply_schema:
         apply_schema_addendum(new_dsn)
     return new_dsn

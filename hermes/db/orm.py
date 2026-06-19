@@ -293,24 +293,6 @@ class EventLedger(Base):
     )
 
 
-from pgvector.sqlalchemy import Vector as PGVector
-
-
-class SafeVector(PGVector):
-    """768-dim pgvector column. pgvector is a hard dependency — the DB is
-    Postgres/Timescale with the ``vector`` extension installed."""
-    cache_ok = True
-
-
-class DoctrineEmbedding(Base):
-    __tablename__ = "doctrine_embeddings"
-    id = Column(BigInteger, Sequence("doctrine_embeddings_id_seq"), primary_key=True,
-                autoincrement=True)
-    guideline_text = Column(Text, nullable=False)
-    embedding = Column(SafeVector(768), nullable=False)
-    metadata_json = Column(JSONB, nullable=False, default=dict)
-
-
 class AIDecision(Base):
     __tablename__ = "ai_decisions"
     ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
