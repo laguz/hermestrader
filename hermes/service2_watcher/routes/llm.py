@@ -21,6 +21,9 @@ from hermes.common import (
     DEFAULT_LLM_TIMEOUT_S,
     LLM_PROVIDER_BASE_URLS,
     VALID_LLM_PROVIDERS,
+    VALID_OVERSEER_MODES,
+    canonical_overseer_mode,
+    normalize_overseer_mode,
 )
 from hermes.utils import decrypt_value, encrypt_value
 
@@ -59,11 +62,7 @@ async def _read_llm_config() -> Dict[str, Any]:
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
     vision = (await db.settings.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
-    overseer_mode = (await db.settings.get_setting("overseer_mode") or "single").lower()
-    if overseer_mode == "monolithic":          # legacy alias → canonical
-        overseer_mode = "single"
-    if overseer_mode not in ("single", "committee"):
-        overseer_mode = "single"
+    overseer_mode = normalize_overseer_mode(await db.settings.get_setting("overseer_mode"))
     last_ok = parse_iso(await db.settings.get_setting(SETTING_LLM_OK_TS))
     last_err = (await db.settings.get_setting(SETTING_LLM_ERROR) or "").strip() or None
     return {
@@ -139,11 +138,12 @@ async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="timeout_s must be in [5, 600]")
         updates[SETTING_LLM_TIMEOUT] = str(body.timeout_s)
     if body.overseer_mode is not None:
-        om = body.overseer_mode.lower().strip()
-        if om == "monolithic":                 # legacy alias → canonical
-            om = "single"
-        if om not in ("single", "committee"):
-            raise HTTPException(status_code=400, detail="overseer_mode must be 'single' or 'committee'")
+        om = canonical_overseer_mode(body.overseer_mode)
+        if om is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"overseer_mode must be one of {list(VALID_OVERSEER_MODES)}",
+            )
         updates["overseer_mode"] = om
     updates[SETTING_LLM_ERROR] = ""
     await db.commands.enqueue_settings(updates)

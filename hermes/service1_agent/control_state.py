@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
-from hermes.common import STRATEGY_PRIORITIES
+from hermes.common import (
+    DEFAULT_OVERSEER_MODE,
+    STRATEGY_PRIORITIES,
+    normalize_overseer_mode,
+)
 from hermes.db.events import (
     BaseEvent,
     WatchlistChangedEvent,
@@ -33,7 +37,7 @@ class ControlState:
         self.soul = ""
         self.approval_mode = True
         self.llm_out_of_loop = True
-        self.overseer_mode = "single"
+        self.overseer_mode = DEFAULT_OVERSEER_MODE
         self.strategy_enabled = {sid: True for sid in STRATEGY_PRIORITIES}
         self.watchlist = {sid: [] for sid in STRATEGY_PRIORITIES}
         self.llm_config = {
@@ -92,7 +96,7 @@ class ControlState:
         elif key == "llm_out_of_loop":
             self.llm_out_of_loop = (value.lower() == "true")
         elif key == "overseer_mode":
-            self.overseer_mode = value.lower()
+            self.overseer_mode = normalize_overseer_mode(value)
         elif key == "max_daily_loss":
             try:
                 self.max_daily_loss = float(value) if value else None
@@ -137,7 +141,7 @@ class ControlState:
         self.autonomy = settings.get("agent_autonomy", "advisory").lower()
         self.approval_mode = settings.get("approval_mode", "true").lower() == "true"
         self.llm_out_of_loop = settings.get("llm_out_of_loop", "true").lower() == "true"
-        self.overseer_mode = settings.get("overseer_mode", "single").lower()
+        self.overseer_mode = normalize_overseer_mode(settings.get("overseer_mode"))
         
         try:
             self.max_daily_loss = float(settings["max_daily_loss"]) if settings.get("max_daily_loss") else None
