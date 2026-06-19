@@ -15,12 +15,11 @@ the safety net every later migration phase relies on.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime
 
 from sqlalchemy import select
 
-from hermes.db.models import HermesDB, Trade, PendingOrder, SystemSetting, StrategyWatchlist
+from hermes.db.models import Trade, PendingOrder, SystemSetting, StrategyWatchlist
 from hermes.db.events import (
     EventStoreManager,
     OrderSubmittedEvent,
@@ -35,12 +34,6 @@ from hermes.db.events import (
     PauseChangedEvent,
 )
 from hermes.db.repositories.projections import ProjectionsRepository
-
-
-def _fresh_db(path: str) -> HermesDB:
-    if os.path.exists(path):
-        os.remove(path)
-    return HermesDB(f"sqlite:///{path}")
 
 
 def _sample_lifecycle():
@@ -67,7 +60,7 @@ def _sample_lifecycle():
     ]
 
 
-async def _snapshot(db: HermesDB):
+async def _snapshot(db):
     """A comparable snapshot of the read-model tables."""
     async with db.AsyncSession() as s:
         trades = (await s.execute(select(Trade).order_by(Trade.id))).scalars().all()
@@ -82,9 +75,12 @@ async def _snapshot(db: HermesDB):
     )
 
 
-async def test_live_projection_matches_ledger_replay(tmp_path):
+async def test_live_projection_matches_ledger_replay(make_db):
     # (a) live: record_event appends to the ledger AND projects, atomically.
-    live = _fresh_db(str(tmp_path / "live.db"))
+    live = make_db()
+    # Postgres enforces the trades.strategy_id FK, so the strategies registry
+    # must exist before the projection inserts trades (production seeds it at boot).
+    await live.watchlist.ensure_strategies({"CS75": 1})
     async with live.AsyncSession() as s:
         for ev in _sample_lifecycle():
             await EventStoreManager.record_event(s, ev)
@@ -93,7 +89,8 @@ async def test_live_projection_matches_ledger_replay(tmp_path):
     # (b) replay: load the ledger and re-project onto a clean DB.
     async with live.AsyncSession() as s:
         events = await EventStoreManager.load_events(s)
-    replay = _fresh_db(str(tmp_path / "replay.db"))
+    replay = make_db()
+    await replay.watchlist.ensure_strategies({"CS75": 1})
     async with replay.AsyncSession() as s:
         for ev in events:
             await ProjectionsRepository.apply_event_projection(s, ev)
@@ -120,9 +117,10 @@ async def test_live_projection_matches_ledger_replay(tmp_path):
     assert watchlists == [("CS75", "AAPL"), ("CS75", "MSFT")]
 
 
-async def test_record_event_is_atomic_append_plus_projection(tmp_path):
+async def test_record_event_is_atomic_append_plus_projection(make_db):
     """One record_event call writes both the ledger row and its projection."""
-    db = _fresh_db(str(tmp_path / "atomic.db"))
+    db = make_db()
+    await db.watchlist.ensure_strategies({"CS75": 1})
     now = datetime.utcnow().isoformat()
     async with db.AsyncSession() as s:
         await EventStoreManager.record_event(
@@ -140,13 +138,14 @@ async def test_record_event_is_atomic_append_plus_projection(tmp_path):
     assert order is not None and order.status == "PENDING"
 
 
-async def test_read_models_recover_by_rebuilding_from_ledger(tmp_path):
+async def test_read_models_recover_by_rebuilding_from_ledger(make_db):
     """Crash recovery: wipe the order/trade read models, replay the immutable
     event_ledger, and the exact prior state returns — state is a pure function
     of the log. This is the defining property of the event-sourced persistence."""
     from sqlalchemy import delete
 
-    db = _fresh_db(str(tmp_path / "recover.db"))
+    db = make_db()
+    await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
         for ev in _sample_lifecycle():
             await EventStoreManager.record_event(s, ev)

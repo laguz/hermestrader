@@ -57,20 +57,6 @@ class HermesDB:
     """
 
     def __init__(self, dsn: str):
-        # Adapt schema dynamically for SQLite compatibility
-        if "sqlite" in dsn:
-            from sqlalchemy import JSON
-            from sqlalchemy.dialects.postgresql import JSONB
-            for table in Base.metadata.tables.values():
-                composite_pk = len(table.primary_key.columns) > 1
-                if composite_pk:
-                    for col in table.primary_key.columns:
-                        if col.autoincrement:
-                            col.autoincrement = False
-                for col in table.columns:
-                    if isinstance(col.type, JSONB):
-                        col.type = JSON()
-
         self.engine = create_engine(dsn, pool_pre_ping=True, future=True)
         self.Session = sessionmaker(self.engine, expire_on_commit=False, future=True)
 
@@ -128,7 +114,7 @@ class HermesDB:
     # sides honest.
     # ------------------------------------------------------------------
     async def run_migrations(self) -> None:
-        """Bring the live DB up to the current ORM, idempotently, on either backend."""
+        """Bring the live Postgres/Timescale DB up to the current ORM, idempotently."""
         async with self.async_engine.begin() as conn:
             await conn.run_sync(self._reconcile_orm_schema)
 

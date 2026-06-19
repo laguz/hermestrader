@@ -62,7 +62,7 @@ async def test_backtest_broker():
     assert "delta" in chain[0]["greeks"]
 
 @pytest.mark.asyncio
-async def test_backtest_controller_run():
+async def test_backtest_controller_run(pg_available):
     ts = DummyTimeSeriesEngine()
     start_date = datetime.date(2025, 1, 6) # Monday
     end_date = datetime.date(2025, 1, 20) # 2 weeks later
@@ -85,7 +85,7 @@ async def test_backtest_controller_run():
 
 
 @pytest.mark.asyncio
-async def test_backtest_clock_and_database():
+async def test_backtest_clock_and_database(pg_available):
     from hermes.utils import set_virtual_time, utc_now
     from hermes.db.models import Trade
     from sqlalchemy import select
@@ -128,7 +128,9 @@ async def test_backtest_clock_and_database():
         fetched = res.scalars().first()
         
         # Verify opened_at matches the virtual clock instead of system time!
-        assert fetched.opened_at == sim_dt
+        # Postgres TIMESTAMPTZ round-trips as tz-aware UTC; the virtual clock is
+        # naive UTC, so compare with the tzinfo stripped.
+        assert fetched.opened_at.replace(tzinfo=None) == sim_dt
 
     # Clean up virtual clock
     set_virtual_time(None)

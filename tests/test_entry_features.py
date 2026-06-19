@@ -13,12 +13,11 @@ Covers the data loop that turns each closed trade into a labelled
 """
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, timedelta
 
 import pytest
 
-from hermes.db.models import HermesDB, Trade
+from hermes.db.models import Trade
 from hermes.service1_agent.core import CascadingEngine, TradeAction
 from hermes.service1_agent.strategies._helpers import entry_feature_snapshot
 
@@ -26,17 +25,7 @@ from hermes.service1_agent.strategies._helpers import entry_feature_snapshot
 SHORT = "TSLA260717C00445000"
 LONG = "TSLA260717C00450000"
 
-
-@pytest.fixture
-def db():
-    db_file = "test_entry_features.db"
-    if os.path.exists(db_file):
-        os.remove(db_file)
-    inst = HermesDB(f"sqlite:///{db_file}")
-    yield inst
-    inst.engine.dispose()
-    if os.path.exists(db_file):
-        os.remove(db_file)
+# ``db`` fixture (fresh throwaway Timescale DB) is provided by tests/conftest.py.
 
 
 # --------------------------------------------------------------------------- #
@@ -77,10 +66,9 @@ def test_snapshot_handles_missing_inputs():
 async def _seed_open_trade(db, features: dict, *, trade_id: int = 1) -> int:
     """Insert an OPEN spread carrying ``entry_features``.
 
-    Sets ``id`` explicitly: the Postgres BIGSERIAL doesn't autoincrement under
-    SQLite, so the suite's real-DB tests seed ids by hand (see
-    test_close_lifecycle). This exercises the new column + close path + reader
-    without depending on the broker order-recording sequence.
+    Sets ``id`` explicitly so the close path + reader can target a known trade
+    without depending on the broker order-recording sequence (same pattern as
+    test_close_lifecycle).
     """
     await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:

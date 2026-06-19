@@ -34,7 +34,7 @@ hermes/
 └── db/
     ├── schema.sql     # TimescaleDB hypertables, compression, continuous aggregates
     ├── repositories/  # per-concern query mixins composed into HermesDB
-    └── models.py      # SQLAlchemy ORM + HermesDB (TimescaleDB or SQLite)
+    └── models.py      # SQLAlchemy ORM + HermesDB (TimescaleDB/Postgres only)
 ```
 
 ## Tradier broker

@@ -40,17 +40,9 @@ def _to_json_safe(val: Any) -> Any:
 
 
 async def _get_next_id(session, table_name: str, seq_name: str) -> int:
-    dialect_name = "sqlite"
-    if session.bind:
-        dialect_name = session.bind.dialect.name
-    if dialect_name == "sqlite":
-        from sqlalchemy import text
-        res = await session.execute(text(f"SELECT COALESCE(MAX(id), 0) FROM {table_name}"))
-        return (res.scalar() or 0) + 1
-    else:
-        from sqlalchemy import text
-        res = await session.execute(text(f"SELECT nextval('{seq_name}')"))
-        return res.scalar()
+    from sqlalchemy import text
+    res = await session.execute(text(f"SELECT nextval('{seq_name}')"))
+    return res.scalar()
 
 
 class TransactionManager:

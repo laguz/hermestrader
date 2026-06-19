@@ -1,8 +1,10 @@
-"""Alembic baseline — offline checks that need no live database.
+"""Alembic baseline + boot-time self-heal.
 
-CI runs these without Postgres: the baseline module is imported by path, and
-the migration is rendered in Alembic's *offline* (``--sql``) mode, which uses
-the dialect to emit SQL without ever opening a connection.
+The baseline checks are offline: the module is imported by path and the
+migration is rendered in Alembic's *offline* (``--sql``) mode, which emits SQL
+without opening a connection — so they need no server. The ``run_migrations``
+self-heal tests further down exercise the real reconciler against a live
+Timescale database and skip when no server is reachable.
 """
 from __future__ import annotations
 
@@ -87,41 +89,40 @@ def test_offline_upgrade_emits_full_schema():
 # behavior: stand up a DB that predates several columns + a whole table, run the
 # reconciler, and confirm the gaps are healed. This guards the exact regression
 # that took the paper bot down (trades.entry_features missing on upgrade).
+#
+# Unlike the offline checks above, these need a live Timescale server (they
+# skip via the ``pg_available``/``ephemeral_dsn`` fixtures when none is set).
 # ---------------------------------------------------------------------------
-import sqlite3                                                    # noqa: E402
+import psycopg                                                    # noqa: E402
 
 from sqlalchemy import create_engine, inspect                    # noqa: E402
 
 from hermes.db.models import HermesDB                             # noqa: E402
 
 
-def _make_stale_db(path: str) -> None:
-    """Create a DB that predates entry_features/tag/.../expires_at + exit_ticks."""
-    con = sqlite3.connect(path)
-    con.executescript(
-        """
-        CREATE TABLE strategies (
-            strategy_id TEXT PRIMARY KEY, priority INTEGER,
-            status TEXT, created_at TEXT
-        );
-        CREATE TABLE trades (
-            id INTEGER PRIMARY KEY, opened_at TEXT, strategy_id TEXT,
-            symbol TEXT, side_type TEXT, lots INTEGER, status TEXT
-        );
-        CREATE TABLE pending_approvals (
-            id INTEGER PRIMARY KEY, created_at TEXT, strategy_id TEXT,
-            symbol TEXT, action_type TEXT, action_json TEXT, status TEXT
-        );
-        """
-    )
-    con.commit()
-    con.close()
+def _make_stale_db(dsn: str) -> None:
+    """Create a stale schema that predates entry_features/tag/.../expires_at + exit_ticks."""
+    with psycopg.connect(dsn.replace("+psycopg", ""), autocommit=True) as con:
+        con.execute(
+            "CREATE TABLE strategies ("
+            "strategy_id TEXT PRIMARY KEY, priority INTEGER, "
+            "status TEXT, created_at TIMESTAMPTZ)"
+        )
+        con.execute(
+            "CREATE TABLE trades ("
+            "id BIGINT PRIMARY KEY, opened_at TIMESTAMPTZ, strategy_id TEXT, "
+            "symbol TEXT, side_type TEXT, lots INTEGER, status TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE pending_approvals ("
+            "id BIGINT PRIMARY KEY, created_at TIMESTAMPTZ, strategy_id TEXT, "
+            "symbol TEXT, action_type TEXT, action_json TEXT, status TEXT)"
+        )
 
 
-async def test_run_migrations_self_heals_columns_and_tables(tmp_path):
-    db_file = tmp_path / "stale.db"
-    _make_stale_db(str(db_file))
-    dsn = f"sqlite:///{db_file}"
+async def test_run_migrations_self_heals_columns_and_tables(ephemeral_dsn):
+    dsn = ephemeral_dsn()
+    _make_stale_db(dsn)
 
     # __init__'s create_all skips the pre-existing (stale) tables via
     # checkfirst; run_migrations is what must add the missing columns.
@@ -143,11 +144,10 @@ async def test_run_migrations_self_heals_columns_and_tables(tmp_path):
         assert insp.has_table("exit_ticks"), "exit_ticks table not created on upgrade"
     finally:
         eng.dispose()
+        db.engine.dispose()
 
 
-async def test_run_migrations_is_idempotent(tmp_path):
+async def test_run_migrations_is_idempotent(db):
     """Second pass over an already-current DB is a clean no-op."""
-    dsn = f"sqlite:///{tmp_path / 'fresh.db'}"
-    db = HermesDB(dsn)
     await db.run_migrations()
     await db.run_migrations()    # must not raise

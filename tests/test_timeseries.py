@@ -1,11 +1,9 @@
-import os
 import shutil
 import pytest
 import duckdb
 from datetime import datetime, timedelta
 import pandas as pd
 
-from hermes.db.models import HermesDB
 from hermes.db.timeseries import TimeSeriesEngine
 
 
@@ -19,22 +17,10 @@ def tmp_ts_dir(tmp_path):
 
 
 @pytest.fixture
-def test_db():
-    db_file = "test_ts_fallback.db"
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
-
-    db_instance = HermesDB(f"sqlite:///{db_file}")
-    yield db_instance
-    db_instance.engine.dispose()
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
+def test_db(make_db):
+    # schema=True provisions the raw bars_* tables / hypertables for the
+    # Postgres time-series fallback path.
+    return make_db(schema=True)
 
 
 async def test_save_and_load_daily_bars(tmp_ts_dir, test_db):

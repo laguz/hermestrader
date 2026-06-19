@@ -1,35 +1,21 @@
 from __future__ import annotations
 
-import os
 from datetime import datetime
 import pytest
 
-from hermes.db.models import HermesDB, PendingOrder, Trade, SystemSetting
+from hermes.db.models import PendingOrder, Trade, SystemSetting
 from hermes.service1_agent.transaction_manager import TransactionManager
 from hermes.db.events import EventStoreManager, OrderSubmittedEvent, OrderFilledEvent, CloseSubmittedEvent, CloseFilledEvent
 from hermes.db.repositories.projections import ProjectionsRepository
 
-
-@pytest.fixture
-def db():
-    db_file = "test_cqrs.db"
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
-    inst = HermesDB(f"sqlite:///{db_file}")
-    yield inst
-    inst.engine.dispose()
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
+# ``db`` / ``make_db`` fixtures (fresh throwaway Timescale DBs) come from
+# tests/conftest.py.
 
 
 @pytest.mark.asyncio
-async def test_cqrs_event_sourcing_flow_and_replay(db):
+async def test_cqrs_event_sourcing_flow_and_replay(db, make_db):
+    # Postgres enforces the trades.strategy_id FK; seed the registry first.
+    await db.watchlist.ensure_strategies({"CS75": 1})
     # 1. Test placing an order (OrderSubmittedEvent)
     async with db.AsyncSession() as s:
         po = await TransactionManager.place_order(
@@ -135,13 +121,8 @@ async def test_cqrs_event_sourcing_flow_and_replay(db):
         assert events[4].trade_id == trade.id
 
     # 4. Test Event Replay onto a clean database
-    replay_db_file = "test_cqrs_replay.db"
-    if os.path.exists(replay_db_file):
-        try:
-            os.remove(replay_db_file)
-        except OSError:
-            pass
-    replay_db = HermesDB(f"sqlite:///{replay_db_file}")
+    replay_db = make_db()
+    await replay_db.watchlist.ensure_strategies({"CS75": 1})
 
     try:
         # Apply the loaded events to the clean replay database session
@@ -178,9 +159,5 @@ async def test_cqrs_event_sourcing_flow_and_replay(db):
             assert t_rows[0].pnl == (1.25 - 0.25) * 500.0  # pnl = (credit - debit) * 100 * lots
 
     finally:
-        replay_db.engine.dispose()
-        if os.path.exists(replay_db_file):
-            try:
-                os.remove(replay_db_file)
-            except OSError:
-                pass
+        # The throwaway DB is disposed and dropped by the make_db fixture.
+        pass

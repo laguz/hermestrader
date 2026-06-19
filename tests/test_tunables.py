@@ -1,11 +1,8 @@
 """Tunables catalog + loader: precedence, coercion, and the DB bulk reader."""
 from __future__ import annotations
 
-import os
-
 import pytest
 
-from hermes.db.models import HermesDB
 from hermes.service1_agent.tunables import (
     TUNABLES,
     Tunables,
@@ -117,26 +114,9 @@ async def test_resolve_uses_per_key_getter_when_no_bulk_reader():
 
 
 # ---------------------------------------------------------------------------
-# Integration: real SQLite HermesDB get_settings + end-to-end override
+# Integration: real Timescale HermesDB get_settings + end-to-end override.
+# The ``db`` fixture (fresh throwaway Timescale DB) comes from tests/conftest.py.
 # ---------------------------------------------------------------------------
-@pytest.fixture
-def db():
-    db_file = "test_tunables_temp.db"
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
-    instance = HermesDB(f"sqlite:///{db_file}")
-    yield instance
-    instance.engine.dispose()
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
-
-
 async def test_get_settings_bulk_reads_only_existing_keys(db):
     await db.settings.set_setting("cs75_sl_mult", "2.8")
     await db.settings.set_setting("cs7_sl_mult", "3.3")

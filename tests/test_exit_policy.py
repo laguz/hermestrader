@@ -7,12 +7,11 @@ enforcing autonomy; off is a no-op).
 """
 from __future__ import annotations
 
-import os
 from datetime import date, timedelta
 
 import pytest
 
-from hermes.db.models import HermesDB, Trade
+from hermes.db.models import Trade
 from hermes.ml.exit_policy import recommend, state_key, train_exit_policy
 from hermes.service1_agent.core import CascadingEngine
 
@@ -77,16 +76,7 @@ def test_unseen_state_holds_and_is_not_confident():
 # --------------------------------------------------------------------------- #
 # engine integration
 # --------------------------------------------------------------------------- #
-@pytest.fixture
-def db():
-    f = "test_exit_policy.db"
-    if os.path.exists(f):
-        os.remove(f)
-    inst = HermesDB(f"sqlite:///{f}")
-    yield inst
-    inst.engine.dispose()
-    if os.path.exists(f):
-        os.remove(f)
+# ``db`` fixture (fresh throwaway Timescale DB) is provided by tests/conftest.py.
 
 
 class _StubOverseer:
@@ -171,8 +161,7 @@ async def test_shadow_captures_and_advises_without_acting(db):
 @pytest.mark.asyncio
 async def test_active_closes_confident_positions(db):
     # Spy on submit() to isolate the Phase-3 decision (decide + dispatch a
-    # close) from the broker/order-recording path — the real submit relies on a
-    # Postgres BIGSERIAL sequence that doesn't autoincrement under SQLite.
+    # close) from the broker/order-recording path.
     await _seed_open_trade(db)
     await _seed_close_recommending_trajectories(db)       # policy learns 'close'
     await db.settings.set_setting("exit_policy_mode", "active")

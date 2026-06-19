@@ -143,6 +143,34 @@
   - **Size:** S (decision) + M (sim gate, if chosen)
   - **NOTE:** This is the one item to discuss before building — see review notes.
 
+## 7. Commit to Postgres/Timescale — drop the SQLite dual-backend
+- [x] **Make Postgres/Timescale the only backend.**
+  *(Done — full suite green: 552 passed against a live Timescale; DB-backed
+  tests skip cleanly when no server is reachable.)*
+  - **Problem:** SQLite was a retrofitted second backend for dev/tests/sim,
+    carried by dialect branches scattered across the persistence layer
+    (`JSONB`→`JSON` swap, `max(id)+1` vs `BIGSERIAL`, `nextval` vs `MAX(id)+1`,
+    in-memory cosine vs pgvector, an `aiosqlite` URL rewrite). It hid real
+    Postgres semantics — FK enforcement and `TIMESTAMPTZ` tz-awareness both
+    surfaced only once tests ran on Timescale.
+  - **Why:** a "works on SQLite" test is not a test of production. Committing to
+    one backend deletes the dialect branches and makes the test suite exercise
+    the database the bot actually trades on.
+  - **What landed:**
+    - Deleted every SQLite/dialect branch in `models.py`, `events.py`,
+      `transaction_manager.py`, `repositories/rag.py`, `orm.py`; `pgvector` is
+      now a hard dependency.
+    - Added `hermes/db/provisioning.py` — create/drop throwaway Timescale
+      databases (with the `timescaledb` + `vector` extensions) for tests and sim.
+    - `tests/conftest.py` provides lazy `db` / `make_db` / `ephemeral_dsn`
+      fixtures that skip when no server is reachable; the 12 DB-backed test files
+      were moved off `sqlite:///` files.
+    - Simulation (`backtest_engine.py`) now runs on a throwaway Timescale DB
+      instead of a per-run `sqlite:///` file.
+    - CI runs the full suite against a Timescale service container.
+  - **Size:** L (touched the persistence layer, the sim DB lifecycle, ~12 test
+    files, CI, and the schema docs).
+
 ## 6. (Meta) Front-load structural decisions
 - [ ] **Capture the "start here next time" defaults.**
   - **Why:** Items 2–4 are all retrofits of "started as a mixin/flat/one-file and

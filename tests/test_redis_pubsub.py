@@ -4,7 +4,6 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
-from hermes.db.models import HermesDB
 from hermes.ipc import AsyncIPC
 
 
@@ -58,10 +57,8 @@ async def test_redis_pubsub_loop_receives_notify():
 
 
 @pytest.mark.asyncio
-async def test_decide_approval_emits_publish():
+async def test_decide_approval_emits_publish(db):
     """Verify that decide_approval publishes to IPC agent_commands when decision is made."""
-    db = HermesDB("sqlite+aiosqlite:///:memory:")
-    
     # Mock AsyncSession context to capture executes
     session_mock = AsyncMock()
     session_mock.__aenter__.return_value = session_mock
