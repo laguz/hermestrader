@@ -274,6 +274,36 @@ class BotLog(Base):
     )
 
 
+class OperatorCommand(Base):
+    """Durable command queue from Service-2 (watcher) to Service-1 (agent).
+
+    The watcher never writes canonical state directly; it appends an *intent*
+    here (the one table it owns as a writer) and the agent drains it, applying
+    each command in its own process via the normal event-sourced write path
+    (``record_event`` → ledger + projection). This keeps the single-writer
+    invariant intact — the agent is the sole writer of ``event_ledger`` and the
+    read models — while surviving agent downtime: a command issued while the
+    agent is offline is still ``PENDING`` and applied on the next drain.
+
+    ``status`` flows ``PENDING`` → ``APPLIED`` / ``FAILED``. Apply is idempotent
+    (settings are last-write-wins; ``decide_approval`` no-ops off PENDING), so a
+    crash between commit and ``mark_applied`` is safe to re-drain.
+    """
+    __tablename__ = "operator_commands"
+    id = Column(BigInteger, Sequence("operator_commands_id_seq"), primary_key=True,
+                autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now)
+    command_type = Column(String, nullable=False)
+    payload = Column(JSONB, nullable=False)
+    status = Column(String, nullable=False, default="PENDING")
+    applied_at = Column(DateTime(timezone=True))
+    error = Column(Text)
+
+    __table_args__ = (
+        Index("idx_operator_commands_status_id", "status", "id"),
+    )
+
+
 class EventLedger(Base):
     """Append-only event store — the source-of-truth log for event sourcing.
 

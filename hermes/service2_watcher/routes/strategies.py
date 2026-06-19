@@ -52,7 +52,7 @@ async def toggle_strategy(strategy_id: str, body: StrategyToggleBody) -> Dict[st
             status_code=404,
             detail=f"Unknown strategy {strategy_id!r}; valid: {list(STRATEGIES)}",
         )
-    await db.settings.set_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
+    await db.commands.enqueue_setting(strategy_enabled_key(sid), "true" if body.enabled else "false")
     await db.logs.write_log(
         "ENGINE",
         f"[C2] Strategy {sid} {'ENABLED' if body.enabled else 'DISABLED'}",
@@ -118,12 +118,12 @@ async def set_lots(body: LotBody) -> Dict[str, Any]:
     if body.target_lots is not None:
         if body.target_lots < 1 or body.target_lots > 100:
             raise HTTPException(status_code=400, detail="target_lots must be 1–100")
-        await db.settings.set_setting(spec["target"][0], str(body.target_lots))
+        await db.commands.enqueue_setting(spec["target"][0], str(body.target_lots))
         changed.append(f"target→{body.target_lots}")
     if body.max_lots is not None:
         if body.max_lots < 1 or body.max_lots > 100:
             raise HTTPException(status_code=400, detail="max_lots must be 1–100")
-        await db.settings.set_setting(spec["max"][0], str(body.max_lots))
+        await db.commands.enqueue_setting(spec["max"][0], str(body.max_lots))
         changed.append(f"max→{body.max_lots}")
     if changed:
         await db.logs.write_log("ENGINE", f"[C2] {sid} lots updated: {', '.join(changed)}")

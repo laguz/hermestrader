@@ -72,6 +72,6 @@ async def set_tunable(body: TunableBody) -> Dict[str, Any]:
     if spec.max is not None and value > spec.max:
         raise HTTPException(status_code=400, detail=f"{body.key} must be ≤ {spec.max}.")
 
-    await db.settings.set_setting(body.key, str(value))
+    await db.commands.enqueue_setting(body.key, str(value))
     await db.logs.write_log("ENGINE", f"[C2] Tunable {body.key} set to {value}")
     return {"key": body.key, "value": value, "group": spec.group}

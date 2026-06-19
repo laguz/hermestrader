@@ -52,8 +52,11 @@ async def test_set_learning_writes_both_modes():
             LearningBody(bandit_tuner_mode="shadow", exit_policy_mode="shadow"))
     assert out["updated"] == {"bandit_tuner_mode": "shadow",
                               "exit_policy_mode": "shadow"}
-    mock_db.set_setting.assert_any_call("bandit_tuner_mode", "shadow")
-    mock_db.set_setting.assert_any_call("exit_policy_mode", "shadow")
+    # The watcher enqueues operator intents; the agent applies them (single
+    # writer). It must not write system_settings directly anymore.
+    mock_db.enqueue_setting.assert_any_call("bandit_tuner_mode", "shadow")
+    mock_db.enqueue_setting.assert_any_call("exit_policy_mode", "shadow")
+    mock_db.set_setting.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -63,8 +66,8 @@ async def test_set_learning_updates_one_leaves_other_untouched():
     with patch.object(agent_routes, "db", mock_db):
         out = await set_learning(LearningBody(exit_policy_mode="off"))
     assert out["updated"] == {"exit_policy_mode": "off"}
-    # Only the exit key was written.
-    keys = [c.args[0] for c in mock_db.set_setting.call_args_list]
+    # Only the exit key was enqueued.
+    keys = [c.args[0] for c in mock_db.enqueue_setting.call_args_list]
     assert keys == ["exit_policy_mode"]
 
 
@@ -76,7 +79,7 @@ async def test_set_learning_rejects_invalid_mode():
         with pytest.raises(HTTPException) as exc:
             await set_learning(LearningBody(bandit_tuner_mode="on"))
     assert exc.value.status_code == 400
-    mock_db.set_setting.assert_not_called()
+    mock_db.enqueue_setting.assert_not_called()
 
 
 @pytest.mark.asyncio

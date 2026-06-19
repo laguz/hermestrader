@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 from hermes.common import (
+    IPC_ACTION_DRAIN_COMMANDS,
     IPC_ACTION_SYNC_SETTINGS,
     IPC_ACTION_TRIGGER_APPROVALS,
     IPC_ACTION_TRIGGER_ML,
@@ -129,6 +130,10 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
                 event_bus.emit(event)
             except Exception as exc:
                 log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
+    elif action == IPC_ACTION_DRAIN_COMMANDS:
+        log.info("[IPC] Received drain operator-commands signal reactively")
+        from hermes.events.bus import DrainOperatorCommandsCommand
+        event_bus.emit(DrainOperatorCommandsCommand())
     elif action == IPC_ACTION_TRIGGER_APPROVALS:
         log.info("[IPC] Received trigger approvals signal reactively")
         await control_state.refresh_approvals(db)

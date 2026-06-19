@@ -40,12 +40,13 @@ class ApprovalDecisionBody(BaseModel):
 async def approve_trade(approval_id: int,
                   body: ApprovalDecisionBody = ApprovalDecisionBody()
                   ) -> Dict[str, Any]:
-    ok = await db.approvals.decide_approval(approval_id, "APPROVED", notes=body.notes)
-    if not ok:
+    row = await db.approvals.get_approval(approval_id)
+    if row is None or row["status"] != "PENDING":
         raise HTTPException(
             status_code=404,
             detail=f"Approval {approval_id} not found or not PENDING",
         )
+    await db.commands.enqueue_decision(approval_id, "APPROVED", notes=body.notes)
     await db.logs.write_log(
         "ENGINE",
         f"[C2] Trade approval_id={approval_id} APPROVED by operator",
@@ -63,12 +64,13 @@ async def approve_trade(approval_id: int,
 async def reject_trade(approval_id: int,
                  body: ApprovalDecisionBody = ApprovalDecisionBody()
                  ) -> Dict[str, Any]:
-    ok = await db.approvals.decide_approval(approval_id, "REJECTED", notes=body.notes)
-    if not ok:
+    row = await db.approvals.get_approval(approval_id)
+    if row is None or row["status"] != "PENDING":
         raise HTTPException(
             status_code=404,
             detail=f"Approval {approval_id} not found or not PENDING",
         )
+    await db.commands.enqueue_decision(approval_id, "REJECTED", notes=body.notes)
     await db.logs.write_log(
         "ENGINE",
         f"[C2] Trade approval_id={approval_id} REJECTED by operator"
@@ -94,8 +96,8 @@ async def bulk_decide(body: BulkDecisionBody) -> Dict[str, Any]:
     pending = await db.approvals.list_approvals(status="PENDING", limit=500)
     count = 0
     for item in pending:
-        if await db.approvals.decide_approval(item["id"], status, notes=body.notes):
-            count += 1
+        await db.commands.enqueue_decision(item["id"], status, notes=body.notes)
+        count += 1
     await db.logs.write_log(
         "ENGINE",
         f"[C2] Bulk {status} — {count} trades by operator"
@@ -117,7 +119,7 @@ class ApprovalModeBody(BaseModel):
 
 @router.put("/api/approval-mode")
 async def set_approval_mode(body: ApprovalModeBody) -> Dict[str, Any]:
-    await db.settings.set_setting(SETTING_APPROVAL_MODE, "true" if body.enabled else "false")
+    await db.commands.enqueue_setting(SETTING_APPROVAL_MODE, "true" if body.enabled else "false")
     await db.logs.write_log(
         "ENGINE",
         f"[C2] Approval mode {'ENABLED' if body.enabled else 'DISABLED'}",

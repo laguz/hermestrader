@@ -10,23 +10,25 @@ so it can never silently rot back into a free-for-all.
 What is genuinely shared — and why it is safe to share — is narrow and
 deliberate:
 
-- ``system_settings`` — a key/value store with last-write-wins semantics and no
-  cross-row invariants. Both services write it; shared keys (mode, autonomy,
-  pause, learning modes) use read-before-seed discipline at boot
-  (``main.py`` reads the operator's last value before writing it back).
+- ``operator_commands`` — the watcher's **one** write of canonical intent. The
+  watcher appends a PENDING command (``enqueue_*``); the agent drains it and
+  performs the real write in its own process. Operator toggles (mode, autonomy,
+  pause, learning, lots, LLM config, tunables) and approval decisions now flow
+  through here instead of the watcher writing ``system_settings`` /
+  ``pending_approvals`` directly.
 - ``bot_logs``        — append-only audit; multiple appenders never contend on a
   row.
 - ``strategy_watchlists`` — Service-2 is the *sole* writer; the agent only reads
   it. (Listed as "both" in older docs — that was wrong; this test pins it.)
 - ``strategies``      — an idempotent registry seed (``ensure_strategies``,
   upsert-on-conflict); either side may seed it harmlessly.
-- ``pending_approvals`` — a status-transition handoff: the operator owns the
-  PENDING -> APPROVED/REJECTED transition (``decide_approval``); the agent owns
-  insert, -> EXECUTED, and veto -> REJECTED. Disjoint transitions, not a race.
 
 The dangerous tables — ``trades``, ``pending_orders``, positions,
-``predictions``, ``ai_decisions``, ``bars_*``, ``event_ledger`` — have exactly
-one writer (the agent), and the watcher must never reach them with a write.
+``predictions``, ``ai_decisions``, ``bars_*``, ``event_ledger``,
+``system_settings``, ``pending_approvals`` — have exactly one writer (the
+agent), and the watcher must never reach them with a write. ``system_settings``
+and ``pending_approvals`` used to be watcher-writable; they are now agent-only,
+applied from ``operator_commands`` (see ``CascadingEngine.drain_operator_commands``).
 
 This guard enforces that by scanning the watcher's source:
 
@@ -37,6 +39,12 @@ This guard enforces that by scanning the watcher's source:
 2. **No raw write SQL.** The watcher's only raw SQL is read queries; an
    ``INSERT INTO`` / ``DELETE FROM`` / ``UPDATE … SET`` issued from the watcher
    would bypass the repository layer and is forbidden outright.
+3. **No event-sourced writes.** ``record_event`` / ``append_event`` /
+   ``apply_event_projection`` write ``event_ledger`` and the read models — the
+   agent's exclusively. The old allowlisted ``set_setting`` / ``decide_approval``
+   called these *transitively*, so test (1) — which only sees the outer method
+   name — could not catch it. This pins that the watcher never reaches the
+   event-sourcing write path by any name.
 """
 from __future__ import annotations
 
@@ -49,21 +57,30 @@ WATCHER_DIR = Path(__file__).resolve().parents[1] / "hermes" / "service2_watcher
 # to a table the watcher legitimately owns or shares (see the module docstring);
 # anything else that looks like a write is a violation.
 OPERATOR_ALLOWED_WRITES = {
-    "set_setting",       # system_settings  — KV, last-write-wins
+    "enqueue_command",   # operator_commands — the watcher's one canonical write
+    "enqueue_setting",   # operator_commands — single-key SET_SETTING intent
+    "enqueue_settings",  # operator_commands — multi-key SET_SETTING intent
+    "enqueue_decision",  # operator_commands — DECIDE_APPROVAL intent
     "write_log",         # bot_logs         — append-only audit
     "set_watchlist",     # strategy_watchlists — Service-2 is sole writer
     "add_to_watchlist",  # strategy_watchlists — (same table; not used today)
     "ensure_strategies", # strategies       — idempotent registry seed
-    "decide_approval",   # pending_approvals — operator-owned status transition
 }
 
 # A method name "looks like a write" if it starts with one of these verbs. This
 # is intentionally broad: better to force a new mutating method onto the
 # allowlist above (a deliberate, reviewed act) than to miss one.
 _WRITE_VERB_RE = re.compile(
-    r"^(set_|write_|record_|save_|upsert_|mark_|update_|delete_|add_"
+    r"^(set_|write_|record_|save_|upsert_|mark_|update_|delete_|add_|enqueue_"
     r"|flag_|decide_|apply_|rebuild|ensure_|clear_|prune_|purge_|seed_)"
 )
+
+# The event-sourcing write path: appending to ``event_ledger`` and applying its
+# projection. These are the agent's exclusively. The watcher must not call them
+# under any name (the breach that ``set_setting`` / ``decide_approval`` hid by
+# calling ``record_event`` internally).
+_EVENT_WRITE_RE = re.compile(
+    r"\b(record_event|append_event|apply_event_projection)\s*\(")
 
 # `db.<repo>.<method>(` — the only DB access shape the watcher uses (it talks to
 # the module-level `db` singleton from `_app_state`).
@@ -112,4 +129,27 @@ def test_watcher_issues_no_raw_write_sql():
         "Service-2 (watcher) issued raw write SQL, bypassing single-writer "
         "ownership. Canonical state is the agent's to write. Offenders:\n"
         + "\n".join(offenders)
+    )
+
+
+def test_watcher_never_touches_event_sourcing_write_path():
+    """The watcher must not append to event_ledger or run a projection.
+
+    These are the agent's exclusively. The old watcher writes (``set_setting`` /
+    ``decide_approval``) called ``record_event`` internally, so the name-based
+    allowlist test above could not see the breach. Operator intent now goes
+    through ``operator_commands`` and the agent applies it; the watcher should
+    contain no reference to the event-sourcing write functions at all.
+    """
+    offenders: list[str] = []
+    for path in _watcher_py_files():
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if _EVENT_WRITE_RE.search(line):
+                rel = str(path.relative_to(WATCHER_DIR.parents[1]))
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "Service-2 (watcher) reached the event-sourcing write path "
+        "(record_event/append_event/apply_event_projection), which writes "
+        "event_ledger + read models — the agent's exclusively. Enqueue an "
+        "operator_commands intent instead. Offenders:\n" + "\n".join(offenders)
     )

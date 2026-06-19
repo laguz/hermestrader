@@ -176,6 +176,19 @@ class ApprovalsRepository(Repository):
                 for r in rows
             ]
 
+    async def get_approval(self, approval_id: int) -> Optional[Dict[str, Any]]:
+        """Read a single approval row (id/status/…) or None. Read-only —
+        used by the watcher to validate an operator decision before enqueueing
+        it onto the command channel (the agent owns the actual transition)."""
+        async with self.AsyncSession() as s:
+            result = await s.execute(
+                select(PendingApproval).filter_by(id=approval_id).limit(1))
+            r = result.scalars().first()
+            if r is None:
+                return None
+            return {"id": r.id, "status": r.status, "strategy_id": r.strategy_id,
+                    "symbol": r.symbol, "action_type": r.action_type}
+
     async def decide_approval(self, approval_id: int, decision: str,
                         notes: Optional[str] = None) -> bool:
         decision = decision.upper()

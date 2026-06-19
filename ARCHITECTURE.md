@@ -208,20 +208,26 @@ matter:
 | `bars_daily`       | Service-1   | both         | Hypertable; populated by `_sync_history` |
 | `bars_intraday`    | Service-1   | both         | Hypertable; intraday OHLCV               |
 | `event_ledger`     | Service-1   | both         | Append-only event log; projects the read models above |
+| `system_settings`  | Service-1   | both         | Key/value, last-write-wins; written only via the event-sourced path. Operator changes arrive as `operator_commands` |
+| `pending_approvals`| Service-1   | both         | Agent owns every transition; operator decisions arrive as `operator_commands` (DECIDE_APPROVAL) |
 | `strategy_watchlists` | **Service-2** | both    | Operator's symbol lists; agent reads only |
-| `pending_approvals`| both *(partitioned)* | both | Operator owns PENDING→APPROVED/REJECTED; agent owns insert, →EXECUTED, veto→REJECTED |
-| `system_settings`  | both *(KV)* | both         | Key/value, last-write-wins; shared keys (mode, autonomy, pause, learning) are read-before-seeded at boot |
+| `operator_commands`| **Service-2** | Service-1  | Durable command queue: watcher appends a PENDING intent, agent drains + applies it. The watcher's one canonical write |
 | `bot_logs`         | both *(append)* | both     | Append-only audit; appenders never contend on a row |
 | `strategies`       | both *(seed)* | both       | Idempotent registry (`ensure_strategies`, upsert-on-conflict); FK target for `strategy_watchlists` |
 
-**Single-writer invariant.** The top block — the event-sourced read models, the
-ledger, and the time series — has **exactly one writer, Service-1**. Service-2
-(the watcher) is strictly read-only against them; its only writes are the four
-deliberately-shared tables below the rule, each safe for two writers for the
-reason in its Notes (sole-writer, status-partitioned, last-write-wins KV, or
-append-only). This is not a convention to remember — `tests/test_writer_ownership.py`
-scans the watcher's source and fails if it ever calls a mutating repository
-method outside the operator allowlist or issues raw write SQL.
+**Single-writer invariant.** The event-sourced read models, the ledger, the time
+series — **and now `system_settings` / `pending_approvals`** — have **exactly one
+writer, Service-1**. Service-2 (the watcher) is strictly read-only against them.
+Its only writes are `operator_commands` (the durable command queue), the
+sole-writer `strategy_watchlists`, the append-only `bot_logs`, and the idempotent
+`strategies` seed. Operator toggles and approval decisions no longer mutate
+canonical state from the watcher: the watcher enqueues an intent and
+`CascadingEngine.drain_operator_commands` applies it in the agent process at the
+start of each tick (and on an IPC nudge). This is not a convention to remember —
+`tests/test_writer_ownership.py` scans the watcher's source and fails if it ever
+calls a mutating repository method outside the operator allowlist, issues raw
+write SQL, or reaches the event-sourcing write path (`record_event` /
+`apply_event_projection`) under any name.
 
 **The ORM (`hermes/db/orm.py`) is the single source of truth for tables and
 columns.** There is no second hand-maintained catalog to drift against:

@@ -163,6 +163,16 @@ class ProcessEntriesCommand(Event):
     watchlist: List[str]
 
 
+@dataclass
+class DrainOperatorCommandsCommand(Event):
+    """Apply any PENDING rows in the durable ``operator_commands`` queue.
+
+    Emitted by the IPC callback when the watcher nudges the agent; the tick loop
+    also drains directly at its start so a missed nudge still applies next tick.
+    """
+    pass
+
+
 E = TypeVar("E", bound=Event)
 EventHandler = Callable[[E], Awaitable[None]]
 

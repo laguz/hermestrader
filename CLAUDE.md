@@ -29,8 +29,13 @@ Persistence: TimescaleDB via SQLAlchemy (`hermes/db/`). Broker: Tradier REST
    orders → reconcile orphans → manage exits → entries in priority order →
    overseer proposals. Don't reorder it.
 4. **Single-writer invariant**: only Service-1 writes the event-sourced read
-   models, ledger, and time series. Service-2 is read-only except the four
-   deliberately-shared tables. `tests/test_writer_ownership.py` enforces this.
+   models, ledger, time series, **and `system_settings` / `pending_approvals`**.
+   Service-2 is read-only except `operator_commands` (the durable queue it
+   appends operator intents to), `strategy_watchlists`, `bot_logs`, and the
+   `strategies` seed. Operator toggles/approvals flow through `operator_commands`,
+   which `CascadingEngine.drain_operator_commands` applies in the agent process —
+   never write `system_settings`/`pending_approvals` from the watcher.
+   `tests/test_writer_ownership.py` enforces this.
 5. Order tags round-trip as both `HERMES_<STRAT>` and `HERMES-<STRAT>`
    (Tradier rewrites `_`→`-`). Any new matcher must accept both forms.
 

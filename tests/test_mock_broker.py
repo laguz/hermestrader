@@ -30,6 +30,9 @@ class _StubDB(RepoNamespaceMixin):
     async def flag_orphans(self, *_a, **_kw):
         pass
 
+    async def fetch_pending(self, *_a, **_kw):
+        return []
+
 
 
 async def test_mock_broker_get_orders_returns_empty_list():

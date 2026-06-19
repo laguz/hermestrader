@@ -58,6 +58,9 @@ IPC_CHANNEL_AGENT_COMMANDS = "agent_commands"
 IPC_ACTION_TRIGGER_APPROVALS = "trigger_approvals"
 IPC_ACTION_SYNC_SETTINGS = "sync_settings"
 IPC_ACTION_TRIGGER_ML = "trigger_ml"
+# Nudge the agent to drain the durable ``operator_commands`` queue now. The row
+# is the source of truth; this signal only shortens the latency to apply.
+IPC_ACTION_DRAIN_COMMANDS = "drain_commands"
 
 # ---------------------------------------------------------------------------
 # OCC option symbol regex — shared between MoneyManager broker-order parsing,
