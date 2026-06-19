@@ -33,8 +33,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Protocol
 
+from hermes.common import VALID_OVERSEER_MODES, normalize_overseer_mode
 from hermes.events.bus import EventBus, ReviewRequestEvent
 from .core import TradeAction
 from .overseer_context import OverseerContext
@@ -45,6 +46,20 @@ from .overseer_single import SingleReviewer
 from .overseer_worker import ReviewWorker
 
 logger = logging.getLogger("hermes.agent.overseer")
+
+
+class Reviewer(Protocol):
+    """The contract both review paths honor.
+
+    :class:`~.overseer_single.SingleReviewer` and
+    :class:`~.overseer_committee.CommitteeReviewer` each expose exactly this:
+    one async ``consult`` returning a verdict dict shaped
+    ``{"verdict": "APPROVE"|"VETO"|"MODIFY", "rationale": str,
+    "modifications"?: dict, ...}``. :meth:`HermesOverseer.review` consumes only
+    that shape, so the two paths stay interchangeable.
+    """
+
+    async def consult(self, action: TradeAction) -> Dict[str, Any]: ...
 
 
 class HermesOverseer:
@@ -91,6 +106,19 @@ class HermesOverseer:
         #                      needs the bus + the mode-aware review dispatch)
         self.single = SingleReviewer(self.ctx)
         self.committee = CommitteeReviewer(self.ctx, self.single)
+        # Single selection point: ``_consult`` normalizes the live overseer_mode
+        # (via hermes.common) and dispatches through this registry. Keys are the
+        # canonical modes; the guard fails loudly if the registry ever drifts
+        # from the vocabulary in hermes.common (e.g. a new mode added there but
+        # left unwired here).
+        self._reviewers: Dict[str, Reviewer] = {
+            "single": self.single,
+            "committee": self.committee,
+        }
+        assert set(self._reviewers) == set(VALID_OVERSEER_MODES), (
+            "overseer reviewer registry out of sync with VALID_OVERSEER_MODES: "
+            f"{sorted(self._reviewers)} != {sorted(VALID_OVERSEER_MODES)}"
+        )
         self.proposers = OverseerProposers(self.ctx)
         self.governor = OverseerGovernor(self.ctx)
         self.worker = ReviewWorker(self.ctx, self.event_bus, self._consult)
@@ -213,10 +241,16 @@ class HermesOverseer:
         return await self.ctx.chat_with_retry(messages, images=images)
 
     async def _consult(self, action: TradeAction) -> Dict[str, Any]:
-        """Routes review to the owned reviewer for the active overseer_mode."""
-        if self.overseer_mode == "committee":
-            return await self.committee.consult(action)
-        return await self.single.consult(action)
+        """Routes review to the reviewer for the active overseer_mode.
+
+        The live mode is normalized through ``hermes.common`` (lowercase, legacy
+        ``monolithic`` alias, unknown → default) so the routing layer — not just
+        the settings readers — is authoritative; a stray or typo'd mode resolves
+        deterministically here rather than silently picking a path.
+        """
+        mode = normalize_overseer_mode(self.overseer_mode)
+        reviewer = self._reviewers.get(mode, self.single)
+        return await reviewer.consult(action)
 
     async def _consult_single(self, action: TradeAction) -> Dict[str, Any]:
         """Thin delegator preserving the internal surface (the committee's

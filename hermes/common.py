@@ -28,6 +28,36 @@ VALID_LLM_PROVIDERS: tuple[str, ...] = (
 )
 VALID_AUTONOMY: tuple[str, ...] = ("advisory", "enforcing", "autonomous")
 
+# Overseer review path: ``single`` (one LLM call) or ``committee`` (multi-agent
+# risk committee). Both reviewers share the same verdict contract; this is the
+# vocabulary the selector routes on. ``monolithic`` is the pre-rename name of
+# ``single`` and is kept as a backward-compatible alias for values already
+# stored in ``system_settings``. The two helpers below are the *single* place
+# that knows this vocabulary — settings reads, the watcher API, and the review
+# router all route through them so the mode handling can't drift apart.
+VALID_OVERSEER_MODES: tuple[str, ...] = ("single", "committee")
+DEFAULT_OVERSEER_MODE = "single"
+_OVERSEER_MODE_ALIASES: dict[str, str] = {"monolithic": "single"}
+
+
+def canonical_overseer_mode(value):
+    """Resolve ``value`` to a canonical overseer mode, or ``None`` if unknown.
+
+    Lowercases/trims and applies legacy aliases (``monolithic`` → ``single``).
+    Returns ``None`` for empty or unrecognised values so callers that want to
+    reject bad input (e.g. the watcher API) can; callers that want a safe
+    default should use :func:`normalize_overseer_mode`.
+    """
+    mode = (value or "").strip().lower()
+    mode = _OVERSEER_MODE_ALIASES.get(mode, mode)
+    return mode if mode in VALID_OVERSEER_MODES else None
+
+
+def normalize_overseer_mode(value) -> str:
+    """Canonical overseer mode, falling back to :data:`DEFAULT_OVERSEER_MODE`
+    for empty/unknown values. Use for settings reads and the review router."""
+    return canonical_overseer_mode(value) or DEFAULT_OVERSEER_MODE
+
 # Default OpenAI-compatible base URLs for hosted providers. Ollama Cloud,
 # Gemini and Claude all expose an OpenAI `/chat/completions` shim, so the
 # agent reuses the OpenAICompatibleLLM client by pointing it at these

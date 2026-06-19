@@ -447,6 +447,29 @@ async def test_legacy_monolithic_mode_routes_to_single_reviewer():
     assert llm.single_called is True
 
 
+async def test_unknown_mode_routes_to_single_at_the_router():
+    """The router — not just the settings readers — is authoritative: a typo'd
+    or unknown mode normalizes to the default (single) path here, so it can't
+    silently fall through to an unintended reviewer."""
+    db = StubDB()
+    llm = _ExplodingMacroLLM()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="comittee")
+    await o.review(_action())
+    assert llm.single_called is True
+
+
+async def test_live_mode_alias_is_resolved_at_the_router():
+    """Modes set live after construction (control_state / main.py path) also
+    resolve through the router: switching the live attribute to the legacy
+    alias still takes the single path."""
+    db = StubDB()
+    llm = _ExplodingMacroLLM()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
+    o.overseer_mode = "monolithic"   # legacy value assigned live
+    await o.review(_action())
+    assert llm.single_called is True
+
+
 class _FakeCommitteeLLMVeto:
     """A committee whose Risk Officer (Chairman) returns a VETO."""
 
