@@ -1,31 +1,12 @@
 from __future__ import annotations
 
-import os
 from datetime import date, datetime, timedelta
 import pytest
 import pandas as pd
 
-from hermes.db.models import HermesDB, Trade
+from hermes.db.models import Trade
 
-
-@pytest.fixture
-def db():
-    db_file = "test_temp.db"
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
-        
-    db_instance = HermesDB(f"sqlite:///{db_file}")
-    yield db_instance
-    
-    db_instance.engine.dispose()
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
+# ``db`` fixture (fresh throwaway Timescale DB) is provided by tests/conftest.py.
 
 
 async def test_pnl_metrics_option_spreads(db):

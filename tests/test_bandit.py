@@ -7,13 +7,12 @@ and gated by autonomy).
 """
 from __future__ import annotations
 
-import os
 import random
 from datetime import date, datetime, timedelta
 
 import pytest
 
-from hermes.db.models import HermesDB, Trade
+from hermes.db.models import Trade
 from hermes.ml.bandit import (
     KnobBandit,
     LEARNABLE_KNOBS,
@@ -105,16 +104,7 @@ def test_proposal_ranks_the_profitable_setting_highest():
 # --------------------------------------------------------------------------- #
 # engine integration: shadow vs active
 # --------------------------------------------------------------------------- #
-@pytest.fixture
-def db():
-    f = "test_bandit.db"
-    if os.path.exists(f):
-        os.remove(f)
-    inst = HermesDB(f"sqlite:///{f}")
-    yield inst
-    inst.engine.dispose()
-    if os.path.exists(f):
-        os.remove(f)
+# ``db`` fixture (fresh throwaway Timescale DB) is provided by tests/conftest.py.
 
 
 class _StubOverseer:

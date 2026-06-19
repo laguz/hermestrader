@@ -7,36 +7,16 @@ close goes OPEN → CLOSING on acceptance, and the position-sync reconciler
 (``upsert_positions``) finalizes CLOSED on broker-flat, or reopens the trade
 if the close never took.
 
-Uses a real sqlite-backed HermesDB (same pattern as test_pnl_metrics).
+Uses a real Timescale-backed HermesDB (the ``db`` fixture from conftest.py).
 """
 from __future__ import annotations
 
-import os
 from datetime import date, timedelta
 
-import pytest
+import pytest  # noqa: F401
 
-from hermes.db.models import HermesDB, Trade
+from hermes.db.models import Trade
 from hermes.service1_agent.core import TradeAction
-
-
-@pytest.fixture
-def db():
-    db_file = "test_close_lifecycle.db"
-    for _ in (1,):
-        if os.path.exists(db_file):
-            try:
-                os.remove(db_file)
-            except OSError:
-                pass
-    inst = HermesDB(f"sqlite:///{db_file}")
-    yield inst
-    inst.engine.dispose()
-    if os.path.exists(db_file):
-        try:
-            os.remove(db_file)
-        except OSError:
-            pass
 
 
 SHORT = "TSLA260717C00445000"
@@ -46,7 +26,7 @@ LONG = "TSLA260717C00450000"
 async def _open_trade(db, *, lots=3, entry_credit=1.50, width=5.0) -> int:
     await db.watchlist.ensure_strategies({"CS75": 1})
     async with db.AsyncSession() as s:
-        # Explicit id: the Postgres BIGSERIAL doesn't autoincrement under sqlite.
+        # Explicit id so the close actions below can target a known trade.
         t = Trade(id=1, strategy_id="CS75", symbol="TSLA", side_type="call",
                   short_leg=SHORT, long_leg=LONG, width=width, lots=lots,
                   entry_credit=entry_credit, expiry=date.today() + timedelta(days=40),

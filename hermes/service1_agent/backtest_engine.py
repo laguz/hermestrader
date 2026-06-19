@@ -5,7 +5,6 @@ import datetime
 import logging
 import math
 import os
-import uuid
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -24,6 +23,7 @@ from hermes.broker.models import (
     OrderPlacementResult,
 )
 from hermes.db.models import HermesDB, SystemSetting, Strategy, StrategyWatchlist, Trade
+from hermes.db.provisioning import apply_schema_addendum, create_ephemeral_db, drop_ephemeral_db
 from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
 from hermes.utils import set_virtual_time
 from hermes.clock import SimulatedClock
@@ -559,9 +559,15 @@ class BacktestController:
         end_date: datetime.date,
         start_balance: float = 100000.0,
     ):
-        os.makedirs(".hermes", exist_ok=True)
-        self.db_file = f".hermes/backtest_{uuid.uuid4().hex}.db"
-        self.db = HermesDB(f"sqlite:///{self.db_file}")
+        # Simulation runs against a throwaway Timescale database on the same
+        # server as the live agent (HERMES_DSN), isolated from the real data and
+        # dropped in cleanup_sync(). HermesTrader is Postgres/Timescale-only.
+        server_dsn = os.environ.get(
+            "HERMES_DSN", "postgresql+psycopg://hermes:hermes@localhost:5433/postgres"
+        )
+        self.db_dsn = create_ephemeral_db(server_dsn, prefix="hermes_backtest")
+        self.db = HermesDB(self.db_dsn)
+        apply_schema_addendum(self.db_dsn)
         
         # Populate settings, strategies, and watchlists synchronously
         from hermes.common import STRATEGY_PRIORITIES
@@ -634,11 +640,12 @@ class BacktestController:
             except Exception:
                 pass
             self.db = None
-        if hasattr(self, "db_file") and self.db_file and os.path.exists(self.db_file):
+        if getattr(self, "db_dsn", None):
             try:
-                os.remove(self.db_file)
-            except OSError:
+                drop_ephemeral_db(self.db_dsn)
+            except Exception:  # noqa: BLE001 — teardown is best-effort
                 pass
+            self.db_dsn = None
 
     def __del__(self) -> None:
         self.cleanup_sync()

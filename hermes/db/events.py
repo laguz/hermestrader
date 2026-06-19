@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 # Import EventLedger from its defining module (orm), not the re-exporter
 # (models). models pulls in the repository mixins, one of which imports
@@ -189,20 +189,9 @@ class EventStoreManager:
             raise ValueError(f"Unknown event class: {event.__class__}")
             
         payload = event.model_dump(exclude={"event_id", "created_at"})
-        
-        dialect_name = "sqlite"
-        if session.bind:
-            dialect_name = session.bind.dialect.name
-            
-        row_id = None
-        if dialect_name == "sqlite":
-            q = select(func.max(EventLedger.id))
-            res = await session.execute(q)
-            max_id = res.scalar() or 0
-            row_id = max_id + 1
 
+        # ``id`` is BIGSERIAL — Postgres assigns it on flush.
         row = EventLedger(
-            id=row_id,
             event_type=event_type,
             payload=payload
         )
@@ -224,9 +213,8 @@ class EventStoreManager:
         can never diverge from it on a partial failure. The caller owns the
         commit (so several events can be recorded atomically before one commit).
 
-        Global ordering is carried by ``EventLedger.id`` — ``BIGSERIAL`` on
-        Postgres, and ``max(id)+1`` under SQLite, whose serialized write
-        transactions make that increment safe for the dev/test/sim backend.
+        Global ordering is carried by ``EventLedger.id`` — a Postgres
+        ``BIGSERIAL`` the database assigns on flush.
         """
         # Imported here, not at module scope: projections.py imports the event
         # classes from this module, so a top-level import would be circular.
@@ -239,7 +227,6 @@ class EventStoreManager:
     @staticmethod
     async def load_events(session, start_id: int = 0) -> List[BaseEvent]:
         """Load and deserialize events from the EventLedger sorted by ID."""
-        from sqlalchemy import select
         q = select(EventLedger).where(EventLedger.id >= start_id).order_by(EventLedger.id.asc())
         result = await session.execute(q)
         rows = result.scalars().all()

@@ -11,6 +11,27 @@ jobs:
     name: Run Linter and Tests
     runs-on: ubuntu-latest
 
+    # HermesTrader is Postgres/Timescale-only. The DB-backed tests create
+    # throwaway databases on this service; the stub-based tests ignore it.
+    services:
+      timescaledb:
+        image: timescale/timescaledb:latest-pg15
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: hermes
+          POSTGRES_PASSWORD: hermes
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hermes"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      HERMES_TEST_DSN: postgresql+psycopg://hermes:hermes@localhost:5432/postgres
+      HERMES_DSN: postgresql+psycopg://hermes:hermes@localhost:5432/postgres
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

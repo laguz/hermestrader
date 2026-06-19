@@ -6,11 +6,11 @@ This module holds the declarative ``Base``, every table class, and the pure
 ``hermes.db.repositories`` or ``hermes.db.models`` so the repository mixins
 can import their ORM types from here without a circular import.
 
-The ORM is the **single source of truth** for table/column structure on *both*
-backends: ``create_all`` provisions every table here on SQLite and Postgres
-alike, the Alembic baseline generates its tables from this metadata, and the
-boot-time reconciler (``HermesDB.run_migrations``) derives its column self-heal
-from it. The only schema that lives outside the ORM is the irreducible
+The ORM is the **single source of truth** for table/column structure:
+``create_all`` provisions every table here on Postgres/Timescale, the Alembic
+baseline generates its tables from this metadata, and the boot-time reconciler
+(``HermesDB.run_migrations``) derives its column self-heal from it. The only
+schema that lives outside the ORM is the irreducible
 TimescaleDB layer the ORM cannot express — hypertables, compression policies,
 the ``pnl_daily`` view, and the two raw ``bars_*`` tables — which lives in
 ``schema.sql`` and is applied *after* ``create_all``. ``tests/test_schema_parity.py``
@@ -111,10 +111,9 @@ class Trade(Base):
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),
-        # Partial index used to look up the OPEN trade for a broker order id.
-        # ``postgresql_where`` is honored on Postgres and ignored on SQLite
-        # (which builds an ordinary index), so create_all owns it on both
-        # backends instead of a hand-written CREATE INDEX.
+        # Partial index used to look up the OPEN trade for a broker order id —
+        # ``postgresql_where`` lets create_all own it instead of a hand-written
+        # CREATE INDEX.
         Index("idx_trades_open_order_id", "broker_order_id",
               postgresql_where=text("status = 'OPEN'")),
     )
@@ -170,8 +169,7 @@ class ExitTick(Base):
     ``(entry_credit - spread_mid) / entry_credit``.
 
     PK is a plain autoincrement Integer (not the BIGSERIAL/Sequence the other
-    hypertables use) so the SQLite create_all path autoincrements without
-    explicit ids; on Postgres SQLAlchemy maps it to ``BIGSERIAL`` automatically.
+    hypertables use); SQLAlchemy maps it to ``BIGSERIAL`` on Postgres.
     """
 
     __tablename__ = "exit_ticks"
@@ -280,8 +278,7 @@ class EventLedger(Base):
     """Append-only event store — the source-of-truth log for event sourcing.
 
     Read models (trades, pending_orders, system_settings, …) are projections
-    of this log; global event order is carried by ``id``. ``create_all``
-    provisions this table identically on SQLite and Postgres.
+    of this log; global event order is carried by ``id`` (a Postgres BIGSERIAL).
     """
     __tablename__ = "event_ledger"
     id = Column(BigInteger, Sequence("event_ledger_id_seq"), primary_key=True,
@@ -296,43 +293,13 @@ class EventLedger(Base):
     )
 
 
-from sqlalchemy.types import TypeDecorator
-
-try:
-    from pgvector.sqlalchemy import Vector as PGVector
-except ImportError:
-    PGVector = None
+from pgvector.sqlalchemy import Vector as PGVector
 
 
-class SafeVector(TypeDecorator):
-    impl = Text
+class SafeVector(PGVector):
+    """768-dim pgvector column. pgvector is a hard dependency — the DB is
+    Postgres/Timescale with the ``vector`` extension installed."""
     cache_ok = True
-    
-    def __init__(self, dim: int):
-        super().__init__()
-        self.dim = dim
-        
-    def load_dialect_impl(self, dialect):
-        if dialect.name == "postgresql" and PGVector is not None:
-            return dialect.type_descriptor(PGVector(self.dim))
-        else:
-            return dialect.type_descriptor(Text())
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return None
-        if dialect.name == "postgresql" and PGVector is not None:
-            return value
-        import json
-        return json.dumps(value)
-
-    def process_result_value(self, value, dialect):
-        if value is None:
-            return None
-        if dialect.name == "postgresql" and PGVector is not None:
-            return value
-        import json
-        return json.loads(value)
 
 
 class DoctrineEmbedding(Base):
@@ -437,10 +404,6 @@ def _compute_realized_pnl(*, entry_credit, entry_debit,
 
 
 def sync_to_async_dsn(dsn: str) -> str:
-    if dsn.startswith("sqlite:///"):
-        return dsn.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
-    if dsn.startswith("sqlite://"):
-        return dsn.replace("sqlite://", "sqlite+aiosqlite://", 1)
     if dsn.startswith("postgresql://"):
         return dsn.replace("postgresql://", "postgresql+psycopg://", 1)
     return dsn

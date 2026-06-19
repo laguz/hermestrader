@@ -11,14 +11,16 @@ view. It is applied *after* the ORM tables exist.
 
 Schema application by environment:
 
-* **Postgres / TimescaleDB** — Alembic owns it. ``alembic upgrade head``
-  applies the baseline (``alembic/versions/0001_baseline.py``), which creates
-  the tables from ``Base.metadata`` and then applies the ``schema.sql``
-  addendum. On an already-populated DB, ``alembic stamp 0001`` instead.
-  Future schema changes are new migrations, not ad-hoc edits.
-* **SQLite / dev / tests** — ``models.HermesDB.__init__`` calls
-  ``create_all(checkfirst=True)`` so plain SQLAlchemy CRUD works without
-  Timescale; the hypertable/compression DDL simply doesn't apply there.
+* **Production** — Alembic owns it. ``alembic upgrade head`` applies the
+  baseline (``alembic/versions/0001_baseline.py``), which creates the tables
+  from ``Base.metadata`` and then applies the ``schema.sql`` addendum. On an
+  already-populated DB, ``alembic stamp 0001`` instead. Future schema changes
+  are new migrations, not ad-hoc edits.
+* **Throwaway DBs (tests / simulation)** — ``hermes/db/provisioning.py`` creates
+  a fresh Timescale database, installs the ``timescaledb`` + ``vector``
+  extensions, and lets ``models.HermesDB.__init__`` run
+  ``create_all(checkfirst=True)``; the ``schema.sql`` addendum is applied on top
+  when the bars_*/hypertable layer is needed. There is no SQLite fallback.
 
 ``tests/test_schema_parity.py`` guards the one remaining seam: every
 hypertable-backed ORM table has its ``create_hypertable`` line, and

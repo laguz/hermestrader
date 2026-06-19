@@ -51,9 +51,12 @@ panel: approve queued trades, edit the operator's "soul" doctrine, toggle
 paper/live mode, see live P&L, etc.
 
 Both services share one SQLAlchemy database as their single source of truth —
-**TimescaleDB (Postgres)** in production, or **SQLite** for dev, tests, and the
-unified simulation mode (a virtual clock replays history against the same code
-paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
+**TimescaleDB (Postgres)** everywhere: production, dev, tests, and the unified
+simulation mode. There is no SQLite fallback. Tests and simulation each run
+against a *throwaway* Timescale database created and dropped on the fly (see
+`hermes/db/provisioning.py`); simulation also drives a virtual clock that
+replays history against the same code paths (`hermes/utils.py::set_virtual_time`
+and `backtest_engine.py`).
 
 ## Layers (top-down)
 
@@ -107,7 +110,7 @@ paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
 │    query methods come from 8 repository mixins in                 │
 │    hermes/db/repositories/ (logs, trades, approvals, settings,   │
 │    decisions, timeseries, analytics, watchlist)                  │
-│    SQLAlchemy ORM over TimescaleDB (Postgres) or SQLite          │
+│    SQLAlchemy ORM over TimescaleDB (Postgres)                    │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -201,9 +204,9 @@ matter:
 
 **The ORM (`hermes/db/orm.py`) is the single source of truth for tables and
 columns.** There is no second hand-maintained catalog to drift against:
-`create_all` provisions every table from `Base.metadata` on both backends, the
-Alembic baseline generates its tables from the same metadata, and the boot-time
-reconciler (`HermesDB.run_migrations`) derives its column self-heal from it too.
+`create_all` provisions every table from `Base.metadata`, the Alembic baseline
+generates its tables from the same metadata, and the boot-time reconciler
+(`HermesDB.run_migrations`) derives its column self-heal from it too.
 
 `schema.sql` is **not** a table catalog — it is the irreducible TimescaleDB
 *addendum* the ORM cannot express: the two raw `bars_*` price tables,
@@ -216,11 +219,11 @@ baseline (`alembic/versions/0001_baseline.py`), which calls
 addendum; on an already-populated DB, `alembic stamp 0001` marks it migrated.
 Future schema changes are new migrations.
 
-`models.py` keeps a defensive `Base.metadata.create_all(checkfirst=True)` so
-plain SQLAlchemy CRUD works on **SQLite** without Timescale — used for dev,
-tests, **and the unified simulation mode** (HermesDB swaps `JSONB` for portable
-`JSON` when the DSN is SQLite); the hypertable/compression DDL simply doesn't
-apply there. `tests/test_schema_parity.py` guards the one remaining seam —
+`models.py` keeps a defensive `Base.metadata.create_all(checkfirst=True)` so a
+freshly-created Timescale database (e.g. the throwaway DBs tests and simulation
+provision via `hermes/db/provisioning.py`) has its ORM tables before the first
+query; the `schema.sql` addendum is applied on top for the hypertable/`bars_*`
+layer when needed. `tests/test_schema_parity.py` guards the one remaining seam —
 every hypertable-backed ORM table has its `create_hypertable` line, and
 `schema.sql` never re-declares an ORM table.
 
@@ -249,17 +252,22 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 ```
 pip install -r requirements.txt
 pip install pytest ruff
+export HERMES_TEST_DSN="postgresql+psycopg://hermes:hermes@localhost:5433/postgres"
 pytest tests -q
 ruff check --select E9,F63,F7,F82 hermes tests
 ```
 
-CI (`.github/workflows/ci.yml`) runs the same on every push and PR for
-Python 3.11 and 3.12.
+Most tests use the stub-broker / stub-DB pattern and need **no** database — see
+`tests/test_money_manager_sync.py`. The remaining DB-backed tests run against a
+real Timescale: point `HERMES_TEST_DSN` at a server's maintenance database
+(default: the docker-compose `db` on host port 5433) and each gets a fresh
+throwaway database via the `db` / `make_db` fixtures in `tests/conftest.py`. When
+no server is reachable those tests **skip** (they never fail for lack of a DB),
+so the stub suite still runs anywhere. CI (`.github/workflows/ci.yml`) runs the
+full suite against a Timescale service container on every push and PR.
 
-Tests must not require a live database — see
-`tests/test_money_manager_sync.py` for the stub-broker / stub-DB pattern.
-For tests that need parts of `hermes/db/models.py` without the full
-SQLAlchemy stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
+For tests that need parts of `hermes/db/models.py` without the full SQLAlchemy
+stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
 
 ## Glossary
 
@@ -282,5 +290,6 @@ SQLAlchemy stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
 - **Approval mode** — When on, every proposed trade goes to a human queue
   before reaching the broker.
 - **Simulation mode** — Replays history against the real code paths on a
-  SQLite DB, driven by a virtual clock (`set_virtual_time`) so
-  `utc_now()`/`date_today()` advance through the backtest window.
+  throwaway Timescale database (created/dropped per run via
+  `hermes/db/provisioning.py`), driven by a virtual clock (`set_virtual_time`)
+  so `utc_now()`/`date_today()` advance through the backtest window.
