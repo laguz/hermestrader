@@ -98,19 +98,21 @@ RAW_EQUITY_FEATURES: Tuple[FeatureSpec, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Options-derived features (iv_surface.IVCache)
+# Options-derived features
 # ---------------------------------------------------------------------------
-OPTIONS_FEATURES: Tuple[FeatureSpec, ...] = (
-    FeatureSpec("iv_atm_30d", "annualized_vol", "IVCache.atm_iv", "daily",
-                description="ATM implied vol at the 30-day expiry"),
-    FeatureSpec("iv_rank_365d", "pct", "IVCache.iv_rank", "daily",
-                description="IV percentile in the rolling 365-day window"),
-    FeatureSpec("iv_term_structure", "ratio", "IVCache.term_structure", "daily",
-                nullable=True,
-                description="Front-month ATM IV divided by 90-day ATM IV"),
-    FeatureSpec("iv_skew_25d", "ratio", "IVCache.skew_25d", "daily", nullable=True,
-                description="25-delta put IV minus 25-delta call IV"),
-)
+# Intentionally empty. These specs (iv_atm_30d / iv_rank_365d /
+# iv_term_structure / iv_skew_25d) were all sourced from the IVCache in
+# hermes/ml/iv_surface.py, which was never wired into the predictor: the live
+# XGB pipeline trains and infers on the "equity" stage only (see
+# predictor_training.py / predictor_inference.py), so the options stage fed no
+# real columns into any model. The unused IVCache module and these orphaned
+# specs were removed together. Re-add concrete FeatureSpec rows here once an
+# options-IV feed is actually connected to FeatureEngineer.
+#
+# NOTE: the live meta-learner input named "iv_rank_365d" is unrelated to these
+# specs — it is populated at runtime from pop_engine.FeatureVector.iv_rank and
+# lives in META_FEATURES below, not here.
+OPTIONS_FEATURES: Tuple[FeatureSpec, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +144,8 @@ META_FEATURES: Tuple[FeatureSpec, ...] = (
     FeatureSpec("protection_score", "score", "pop_engine.calculate_strike_protection",
                 "decision-time",
                 description=">=1.0 — S/R-derived strike protection multiplier"),
-    FeatureSpec("iv_rank_365d", "pct", "IVCache.iv_rank", "daily",
-                description="Same IV rank, surfaced for the meta-learner"),
+    FeatureSpec("iv_rank_365d", "pct", "FeatureVector.iv_rank", "daily",
+                description="IV rank passed in by strategies for the meta-learner"),
     FeatureSpec("vol_ratio", "ratio", "FeatureVector.vol_ratio", "decision-time",
                 description="Current vol divided by 21-day SMA of vol"),
 )
