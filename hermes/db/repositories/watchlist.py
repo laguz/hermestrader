@@ -137,17 +137,10 @@ class WatchlistRepository(Repository):
                 "event_type": "WatchlistChangedEvent",
                 "payload": ev.model_dump(mode="json")
             }
-            if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
-                from sqlalchemy import text as sa_text
-                escaped_payload = json.dumps(payload).replace("'", "''")
-                await s.execute(sa_text(f"NOTIFY {IPC_CHANNEL_AGENT_COMMANDS}, '{escaped_payload}'"))
-                
             await s.commit()
-            
-            if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
-                try:
-                    from hermes.ipc import ipc
-                    await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-                except Exception:
-                    pass
+            try:
+                from hermes.ipc import ipc
+                await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
+            except Exception:
+                pass
         return clean
