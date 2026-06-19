@@ -43,9 +43,11 @@ async def test_consult_falls_back_on_timeout():
     alias_db_namespaces(db_mock)
     overseer = HermesOverseer(llm_client=llm, db=db_mock, vision_enabled=False)
     
-    # We patch _LLM_MAX_RETRIES to 2 to keep the test fast
-    with patch.object(overseer, "_LLM_MAX_RETRIES", 2), \
-         patch.object(overseer, "get_system_prompt", AsyncMock(return_value="system")):
+    # We patch LLM_MAX_RETRIES to 2 to keep the test fast. The retry budget and
+    # the system-prompt builder live on the shared OverseerContext, so patch
+    # there (the overseer just proxies to it).
+    with patch.object(overseer.ctx, "LLM_MAX_RETRIES", 2), \
+         patch.object(overseer.ctx, "get_system_prompt", AsyncMock(return_value="system")):
          
         action = TradeAction(
             strategy_id="CS75", symbol="AAPL", order_class="option",

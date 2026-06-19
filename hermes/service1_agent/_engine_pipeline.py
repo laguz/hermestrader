@@ -10,12 +10,15 @@ cleanup, approved-action execution, the market-hours gate, weekly chart-vision
 analysis, and live status writes.
 
 ``PipelineController`` is an owned collaborator of
-:class:`~hermes.service1_agent.core.CascadingEngine` (``engine.pipeline``). It holds
-a typed back-reference to the engine and reaches mutable engine state
-(``mm`` / ``overseer`` / ``control_state`` / ``risk_engine`` / ``approval_mode``)
-*through* it, so there is no second copy to keep in sync. Cross-phase calls also
-route through ``self.engine`` (e.g. ``self.engine.submit``) so the engine-level
-method remains the single seam tests monkeypatch.
+:class:`~hermes.service1_agent.core.CascadingEngine` (``engine.pipeline``). It
+reads the shared dependency surface
+(``mm`` / ``overseer`` / ``control_state`` / ``risk_engine`` / ``approval_mode`` /
+``db`` / ``broker`` / ``config`` …) off the
+:class:`~hermes.service1_agent.engine_context.EngineContext` (``self.ctx``), and
+keeps ``self.engine`` for the cross-phase orchestration calls it routes through
+the engine spine (``submit`` / ``sync_positions`` / ``_execute_or_queue`` …,
+which stay the single seam tests monkeypatch) and the engine's circuit-breaker
+counters.
 """
 from __future__ import annotations
 
@@ -47,15 +50,18 @@ class PipelineController:
 
     def __init__(self, engine: "CascadingEngine") -> None:
         self.engine = engine
+        # Shared dependency surface read through the context; ``self.engine`` is
+        # kept for cross-phase orchestration calls + circuit-breaker counters.
+        self.ctx = engine.ctx
 
     async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
-        engine = self.engine
-        positions = await engine.broker.get_positions() or []
+        ctx = self.ctx
+        positions = await ctx.broker.get_positions() or []
         active_legs = set()
         try:
             active_statuses = {"open", "partially_filled", "pending",
                                 "accepted", "calculated"}
-            orders = await engine.broker.get_orders() or []
+            orders = await ctx.broker.get_orders() or []
             if isinstance(orders, list):
                 for o in orders:
                     if str(o.get("status", "")).lower() not in active_statuses:
@@ -73,7 +79,7 @@ class PipelineController:
         except Exception:                              # noqa: BLE001
             logger.exception("[ENGINE] active-order leg fetch failed")
         return TickContext(
-            timestamp=engine.clock.utc_now(),
+            timestamp=ctx.clock.utc_now(),
             watchlist=list(watchlist or []),
             positions=positions,
             active_order_legs=active_legs,
@@ -81,8 +87,8 @@ class PipelineController:
 
     # 1
     async def sync_positions(self) -> tuple[List[Dict[str, Any]], set[str]]:
-        engine = self.engine
-        positions = await engine.broker.get_positions() or []
+        ctx = self.ctx
+        positions = await ctx.broker.get_positions() or []
         if not isinstance(positions, list):
             logger.warning("[ENGINE] get_positions returned non-list: %r", positions)
             positions = []
@@ -93,7 +99,7 @@ class PipelineController:
         try:
             active_statuses = {"open", "partially_filled", "pending",
                                 "accepted", "calculated"}
-            orders = await engine.broker.get_orders() or []
+            orders = await ctx.broker.get_orders() or []
             if not isinstance(orders, list):
                 logger.warning("[ENGINE] get_orders returned non-list: %r", orders)
                 orders = []
@@ -112,22 +118,22 @@ class PipelineController:
                     active_legs.add(top)
         except Exception:                              # noqa: BLE001
             logger.exception("[ENGINE] active-order leg fetch failed")
-        await engine.db.trades.upsert_positions(positions, active_order_legs=active_legs)
+        await ctx.db.trades.upsert_positions(positions, active_order_legs=active_legs)
         return positions, active_legs
 
     # 2
     async def reconcile_orphans(self) -> None:
         """Flag broker positions not tied to any strategy as MANUAL_ORPHAN."""
-        engine = self.engine
-        tracked = await engine.db.trades.tracked_option_symbols()
-        live = {p["symbol"] for p in await engine.broker.get_positions() or []}
+        ctx = self.ctx
+        tracked = await ctx.db.trades.tracked_option_symbols()
+        live = {p["symbol"] for p in await ctx.broker.get_positions() or []}
         orphans = live - tracked
         if orphans:
-            await engine.db.logs.flag_orphans(orphans)
+            await ctx.db.logs.flag_orphans(orphans)
 
     # 3
     async def process_management(self) -> List[TradeAction]:
-        engine = self.engine
+        ctx = self.ctx
 
         async def _run_strategy_management(s):
             try:
@@ -136,7 +142,7 @@ class PipelineController:
                 logger.exception("Management failure in %s: %s", s.NAME, exc)
                 return []
 
-        results = await asyncio.gather(*[_run_strategy_management(s) for s in engine.strategies])
+        results = await asyncio.gather(*[_run_strategy_management(s) for s in ctx.strategies])
         actions: List[TradeAction] = []
         for res in results:
             actions.extend(res)
@@ -145,8 +151,8 @@ class PipelineController:
     # 4
     async def _watchlist_for(self, strategy_id: str, default: Sequence[str]) -> List[str]:
         """Per-strategy watchlist with fallback to the engine-level default."""
-        engine = self.engine
-        getter = getattr(engine.db.watchlist, "list_watchlist", None)
+        ctx = self.ctx
+        getter = getattr(ctx.db.watchlist, "list_watchlist", None)
         if getter is None:
             return list(default)
         try:
@@ -168,8 +174,9 @@ class PipelineController:
         Returns total number of entry actions planned.
         """
         engine = self.engine
+        ctx = self.ctx
         unique_watchlist = list(dict.fromkeys(watchlist))
-        max_per_tick = int(engine.config.get("max_orders_per_tick", 5))
+        max_per_tick = int(ctx.config.get("max_orders_per_tick", 5))
 
         # Gather proposed actions across all strategies concurrently
         async def _run_strategy_entries(s):
@@ -180,7 +187,7 @@ class PipelineController:
                 logger.exception("Entry proposal failure in %s: %s", s.NAME, exc)
                 return s, []
 
-        results = await asyncio.gather(*[_run_strategy_entries(s) for s in engine.strategies])
+        results = await asyncio.gather(*[_run_strategy_entries(s) for s in ctx.strategies])
 
         all_proposed_actions = []
         for s, actions in results:
@@ -192,11 +199,11 @@ class PipelineController:
         # config dict, so push them across here before evaluation. Without this,
         # risk_engine falls back to a hard-coded 1-lot cap and the bot silently
         # under-trades, ignoring cs*/tt*/wheel _max_lots entirely.
-        if engine.control_state is not None:
-            engine.config.update(engine.control_state.lot_settings)
+        if ctx.control_state is not None:
+            ctx.config.update(ctx.control_state.lot_settings)
 
         # Delegate validation, scaling, and risk filtering to risk engine
-        validated_actions = await engine.risk_engine.evaluate_and_scale(all_proposed_actions)
+        validated_actions = await ctx.risk_engine.evaluate_and_scale(all_proposed_actions)
 
         # Cap to max per tick
         if len(validated_actions) > max_per_tick:
@@ -205,7 +212,7 @@ class PipelineController:
                 len(validated_actions), max_per_tick, max_per_tick,
             )
             for a in validated_actions[max_per_tick:]:
-                await engine.db.logs.write_log(
+                await ctx.db.logs.write_log(
                     a.strategy_id,
                     f"[GUARD] {a.symbol} entry trimmed due to max_orders_per_tick={max_per_tick}"
                 )
@@ -215,8 +222,8 @@ class PipelineController:
         await engine.submit(validated_actions, action_type="entry")
 
         # Sync broker orders
-        if validated_actions and engine.mm is not None:
-            await engine.mm.sync_broker_orders()
+        if validated_actions and ctx.mm is not None:
+            await ctx.mm.sync_broker_orders()
 
         return len(validated_actions)
 
@@ -229,7 +236,7 @@ class PipelineController:
         broker path and the approval-queue round-trip (``dataclasses.asdict``),
         and is persisted by ``record_order_response``.
         """
-        engine = self.engine
+        ctx = self.ctx
         try:
             from .tunables import resolve as _resolve_tunables
             from .strategies._helpers import entry_feature_snapshot
@@ -239,7 +246,7 @@ class PipelineController:
                 return
             try:
                 knobs = (await _resolve_tunables(
-                    engine.db, engine.config, group=a.strategy_id)).as_dict()
+                    ctx.db, ctx.config, group=a.strategy_id)).as_dict()
             except Exception:                                  # noqa: BLE001
                 knobs = None
 
@@ -263,7 +270,8 @@ class PipelineController:
     async def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
         engine = self.engine
-        if engine.event_bus is not None:
+        ctx = self.ctx
+        if ctx.event_bus is not None:
             engine._ensure_event_loop()
         # Defence-in-depth market-hours gate. Every broker round-trip
         # MUST go through this method (entries, managed closes, AI
@@ -277,7 +285,7 @@ class PipelineController:
         if blocked:
             actions = list(actions)
             for a in actions:
-                await engine.db.logs.write_log(
+                await ctx.db.logs.write_log(
                     a.strategy_id,
                     f"[OFF-HOURS BLOCKED] {a.symbol} {action_type} "
                     f"qty={a.quantity} — {reason}; not sent to broker",
@@ -299,12 +307,12 @@ class PipelineController:
             # brute-forcing the same action through review every tick. Only
             # entries are suppressed — management closes/rolls must always be
             # allowed through, and AI-authored actions bypass review anyway.
-            if engine.overseer is not None and action_type == "entry":
+            if ctx.overseer is not None and action_type == "entry":
                 veto_side = (a.strategy_params or {}).get("side_type")
                 if veto_side and str(veto_side).lower() in {"buy", "sell"}:
                     veto_side = None
                 try:
-                    veto_reason = await engine.db.approvals.active_veto(
+                    veto_reason = await ctx.db.approvals.active_veto(
                         a.strategy_id, a.symbol, veto_side, a.expiry)
                 except Exception:                                  # noqa: BLE001
                     logger.exception("[VETO] active_veto lookup failed for %s", a.symbol)
@@ -312,7 +320,7 @@ class PipelineController:
                 if veto_reason:
                     logger.info("[VETO-SUPPRESSED] %s %s side=%s expiry=%s",
                                 a.strategy_id, a.symbol, veto_side, a.expiry)
-                    await engine.db.logs.write_log(
+                    await ctx.db.logs.write_log(
                         a.strategy_id,
                         f"[VETO-SUPPRESSED] {a.symbol} {veto_side or ''} "
                         f"expiry={a.expiry} — skipped re-proposal "
@@ -320,16 +328,16 @@ class PipelineController:
                     )
                     continue
 
-            if engine.llm_out_of_loop:
+            if ctx.llm_out_of_loop:
                 await engine._execute_or_queue(a, action_type)
                 continue
 
-            if engine.event_bus is not None:
-                if (engine.overseer is not None and action_type != "ai"
+            if ctx.event_bus is not None:
+                if (ctx.overseer is not None and action_type != "ai"
                         and not getattr(a, "ai_authored", False)):
                     # Queue for AI review in the database
                     action_dict = dataclasses.asdict(a)
-                    approval_id = await engine.db.approvals.queue_for_approval(
+                    approval_id = await ctx.db.approvals.queue_for_approval(
                         action_dict, action_type=action_type, status="PENDING_AI_REVIEW"
                     )
                     # Yield to AI Overseer asynchronously
@@ -340,7 +348,7 @@ class PipelineController:
                         action_type=action_type,
                         approval_id=approval_id,
                     )
-                    engine.event_bus.emit(event)
+                    ctx.event_bus.emit(event)
                 else:
                     # Bypasses AI review (either no overseer, or action is already AI-authored)
                     event = AIApprovalEvent(
@@ -351,7 +359,7 @@ class PipelineController:
                         original_action=a,
                         action_type=action_type,
                     )
-                    engine.event_bus.emit(event)
+                    ctx.event_bus.emit(event)
                 continue
 
             # AI override hook — overseer may VETO, MODIFY, or APPROVE the action.
@@ -359,8 +367,8 @@ class PipelineController:
             # VETO/MODIFY verdicts are silently dropped on this non-event-bus path.
             # AI-authored actions (e.g. overseer-proposed closes) skip review —
             # the overseer must not re-review its own decision.
-            if engine.overseer is not None and not getattr(a, "ai_authored", False):
-                a = await engine.overseer.review(a)
+            if ctx.overseer is not None and not getattr(a, "ai_authored", False):
+                a = await ctx.overseer.review(a)
                 if a is None:
                     continue
 
@@ -382,22 +390,23 @@ class PipelineController:
         the original Trade row instead of inserting a ghost OPEN.
         """
         engine = self.engine
+        ctx = self.ctx
         side_type = (a.strategy_params or {}).get("side_type")
 
-        if engine.approval_mode:
+        if ctx.approval_mode:
             if approval_id is None:
                 # Dedup guard: never re-queue a trade that already has a PENDING
                 # approval for the same (strategy, symbol, side, expiry). Without
                 # this, every tick re-generates and re-queues the same spread
                 # because the approval hasn't been actioned yet.
-                if await engine.db.approvals.has_pending_approval(a.strategy_id, a.symbol,
+                if await ctx.db.approvals.has_pending_approval(a.strategy_id, a.symbol,
                                                       side_type, a.expiry):
                     logger.info(
                         "[C2] Skipping duplicate — already PENDING: %s %s "
                         "side=%s expiry=%s",
                         a.strategy_id, a.symbol, side_type, a.expiry,
                     )
-                    await engine.db.logs.write_log(
+                    await ctx.db.logs.write_log(
                         a.strategy_id,
                         f"[DEDUP] {a.symbol} {side_type} expiry={a.expiry} "
                         f"already PENDING approval — skipped",
@@ -406,16 +415,16 @@ class PipelineController:
 
                 # Queue for human review instead of firing directly.
                 action_dict = dataclasses.asdict(a)
-                await engine.db.approvals.queue_for_approval(action_dict, action_type=action_type)
+                await ctx.db.approvals.queue_for_approval(action_dict, action_type=action_type)
             else:
                 # Transition the existing PENDING_AI_REVIEW row to PENDING
-                await engine.db.approvals.update_approval_status(approval_id, "PENDING")
+                await ctx.db.approvals.update_approval_status(approval_id, "PENDING")
 
             logger.info(
                 "[C2] Trade queued for approval: %s %s strategy=%s side=%s expiry=%s",
                 a.symbol, a.order_class, a.strategy_id, side_type, a.expiry,
             )
-            await engine.db.logs.write_log(
+            await ctx.db.logs.write_log(
                 a.strategy_id,
                 f"[APPROVAL REQUIRED] {a.symbol} {a.order_class} "
                 f"side={side_type} expiry={a.expiry} "
@@ -423,7 +432,7 @@ class PipelineController:
             )
             return
 
-        await engine.db.trades.record_pending_order(a)
+        await ctx.db.trades.record_pending_order(a)
         # Management actions whose legs are all *_to_close represent the close
         # of an existing trade, not a new entry. Route them to
         # ``close_trade_from_action`` which UPDATES the original Trade row
@@ -440,16 +449,16 @@ class PipelineController:
             and all("to_open" not in (leg.get("side") or "").lower()
                     for leg in a.legs)
         )
-        close_method = getattr(engine.db.trades, "close_trade_from_action", None)
-        if getattr(engine.broker, "dry_run", False):
+        close_method = getattr(ctx.db.trades, "close_trade_from_action", None)
+        if getattr(ctx.broker, "dry_run", False):
             if approval_id is not None:
-                await engine.db.approvals.mark_approval_executed(
+                await ctx.db.approvals.mark_approval_executed(
                     approval_id, success=False,
                     notes="dry_run=True — no broker order placed",
                 )
             return
         try:
-            resp = await engine.broker.place_order_from_action(a)
+            resp = await ctx.broker.place_order_from_action(a)
         except Exception as exc:                           # noqa: BLE001
             # Broker raised before we got an order id. Free the PENDING row so
             # capacity recovers; a Trade row was never written, nothing to roll
@@ -457,9 +466,9 @@ class PipelineController:
             if is_pure_close and close_method is not None:
                 await close_method(a, {"errors": str(exc)})
             else:
-                await engine.db.trades.record_order_response(a, {"errors": str(exc)})
+                await ctx.db.trades.record_order_response(a, {"errors": str(exc)})
             if approval_id is not None:
-                await engine.db.approvals.mark_approval_executed(
+                await ctx.db.approvals.mark_approval_executed(
                     approval_id, success=False,
                     notes=f"broker raised: {exc}",
                 )
@@ -468,7 +477,7 @@ class PipelineController:
             if is_pure_close and close_method is not None:
                 await close_method(a, resp)
             else:
-                await engine.db.trades.record_order_response(a, resp)
+                await ctx.db.trades.record_order_response(a, resp)
             if approval_id is not None:
                 order = (resp or {}).get("order") if isinstance(resp, dict) else None
                 order_status = ""
@@ -480,12 +489,12 @@ class PipelineController:
                     or order_status in _REJECTED_ORDER_STATUSES
                 )
                 if rejected:
-                    await engine.db.approvals.mark_approval_executed(
+                    await ctx.db.approvals.mark_approval_executed(
                         approval_id, success=False,
                         notes=f"broker rejected: {resp}",
                     )
                 else:
-                    await engine.db.approvals.mark_approval_executed(approval_id, success=True)
+                    await ctx.db.approvals.mark_approval_executed(approval_id, success=True)
             if resp and isinstance(resp, dict):
                 oid = str(resp.get("order_id") or resp.get("id") or "")
                 if oid:
@@ -498,11 +507,11 @@ class PipelineController:
                     engine._ensure_order_monitor()
 
     async def _read_banned_symbols(self) -> set[str]:
-        engine = self.engine
-        if not engine.db:
+        ctx = self.ctx
+        if not ctx.db:
             return set()
         try:
-            raw = await engine.db.settings.get_setting("banned_symbols")
+            raw = await ctx.db.settings.get_setting("banned_symbols")
             if not raw:
                 return set()
             return {s.strip().upper() for s in raw.split(",") if s.strip()}
@@ -517,13 +526,14 @@ class PipelineController:
     # those remain the single seams tests monkeypatch.
     async def handle_clock_tick_internal(self, event: ClockTickEvent) -> None:
         engine = self.engine
+        ctx = self.ctx
         from hermes.service1_agent.agent_risk import enforce_daily_loss_limit
         from hermes.service1_agent.agent_approvals import _execute_approved_action
         from hermes.market_hours import market_session, next_open
         from datetime import datetime, timezone
         import time
 
-        if not engine.control_state:
+        if not ctx.control_state:
             logger.warning("[ENGINE] handle_clock_tick: control_state is not set on the engine.")
             return
 
@@ -547,66 +557,66 @@ class PipelineController:
             # self-heals. Throttled by last_sync_ts so IPC-triggered ticks (which
             # already reloaded) don't re-read needlessly.
             from hermes.service1_agent.control_state import CONTROL_STATE_BACKSTOP_S
-            _last = engine.control_state.last_sync_ts
+            _last = ctx.control_state.last_sync_ts
             if _last is None or (
                 datetime.now(timezone.utc) - _last
             ).total_seconds() >= CONTROL_STATE_BACKSTOP_S:
                 try:
-                    await engine.control_state.load_from_db(engine.db, engine.config)
+                    await ctx.control_state.load_from_db(ctx.db, ctx.config)
                 except Exception as exc:                          # noqa: BLE001
                     logger.warning("[ENGINE] control_state backstop reload failed: %s", exc)
 
             # 2. Pause check
-            if engine.control_state.paused:
-                logger.info("[ENGINE] heartbeat tick PAUSED mode=%s", engine.control_state.mode)
-                await engine.db.logs.write_log("ENGINE", f"heartbeat tick PAUSED mode={engine.control_state.mode}")
+            if ctx.control_state.paused:
+                logger.info("[ENGINE] heartbeat tick PAUSED mode=%s", ctx.control_state.mode)
+                await ctx.db.logs.write_log("ENGINE", f"heartbeat tick PAUSED mode={ctx.control_state.mode}")
                 return
 
             # 3. Daily loss check
             from hermes.service1_agent.agent_risk import resolve_max_daily_loss
-            _max_daily_loss = resolve_max_daily_loss(engine.control_state.max_daily_loss)
+            _max_daily_loss = resolve_max_daily_loss(ctx.control_state.max_daily_loss)
             if await enforce_daily_loss_limit(
-                engine.db, _max_daily_loss,
-                currently_paused=engine.control_state.paused, broker=engine.broker.broker,
+                ctx.db, _max_daily_loss,
+                currently_paused=ctx.control_state.paused, broker=ctx.broker.broker,
             ):
-                engine.control_state.paused = True
+                ctx.control_state.paused = True
                 return
 
             # 4. Clean stale pending orders & approvals
             try:
-                expired = await engine.db.trades.expire_stale_pending_orders(engine.control_state.pending_order_ttl_s)
+                expired = await ctx.db.trades.expire_stale_pending_orders(ctx.control_state.pending_order_ttl_s)
                 if expired:
                     logger.info("Expired %d stale PENDING order(s)", expired)
-                    await engine.db.logs.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
+                    await ctx.db.logs.write_log("ENGINE", f"expired {expired} stale PENDING order(s)")
             except Exception as exc:
                 logger.warning("expire_stale_pending_orders failed: %s", exc)
 
             try:
-                expired_approvals = await engine.db.approvals.expire_stale_approvals()
+                expired_approvals = await ctx.db.approvals.expire_stale_approvals()
                 if expired_approvals:
                     logger.info("Auto-expired %d stale approval(s)", expired_approvals)
-                    await engine.db.logs.write_log("ENGINE", f"auto-expired {expired_approvals} stale approval(s) past deadline")
+                    await ctx.db.logs.write_log("ENGINE", f"auto-expired {expired_approvals} stale approval(s) past deadline")
             except Exception as exc:
                 logger.warning("expire_stale_approvals failed: %s", exc)
 
             # 5. Execute approved actions
             try:
-                approved_actions = await engine.db.approvals.fetch_approved_actions()
+                approved_actions = await ctx.db.approvals.fetch_approved_actions()
                 for item in approved_actions:
-                    await _execute_approved_action(item, broker=engine.broker.broker, db=engine.db)
+                    await _execute_approved_action(item, broker=ctx.broker.broker, db=ctx.db)
             except Exception as exc:
                 logger.warning("Executing approved actions failed: %s", exc)
 
             # 6. Heartbeat and Market-hours gate
             mkt = market_session()
-            await engine.db.logs.write_log(
+            await ctx.db.logs.write_log(
                 "ENGINE",
-                f"heartbeat tick start mode={engine.control_state.mode} market={mkt['session']} open={mkt['is_open']}"
+                f"heartbeat tick start mode={ctx.control_state.mode} market={mkt['session']} open={mkt['is_open']}"
             )
 
             if not mkt["trading_day"]:
                 nxt = next_open()
-                await engine.db.logs.write_log(
+                await ctx.db.logs.write_log(
                     "ENGINE",
                     f"market CLOSED — next open {nxt.strftime('%Y-%m-%d %H:%M ET')} ({mkt['et_date']} is not a trading day)"
                 )
@@ -614,9 +624,9 @@ class PipelineController:
 
             # 7. Execute entries/management tick loop
             unique_syms = set()
-            for syms in engine.control_state.watchlist.values():
+            for syms in ctx.control_state.watchlist.values():
                 unique_syms.update(syms)
-            current_watchlist = sorted(list(unique_syms | set(engine.config.get("watchlist", []))))
+            current_watchlist = sorted(list(unique_syms | set(ctx.config.get("watchlist", []))))
 
             if mkt["is_open"]:
                 stats = await engine._run_tick_internal(current_watchlist)
@@ -629,11 +639,11 @@ class PipelineController:
             _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
             _CHART_ANALYSIS_INTERVAL_DAYS = 7
             db_watchlist = sorted(list(set(current_watchlist)))
-            if engine.overseer is not None and db_watchlist:
+            if ctx.overseer is not None and db_watchlist:
                 _should_run_charts = False
                 _age_days: float = 0.0
                 try:
-                    _recent_decisions = await engine.db.decisions.recent_ai_decisions(
+                    _recent_decisions = await ctx.db.decisions.recent_ai_decisions(
                         strategy_id="CHART",
                         limit=max(len(db_watchlist) * 2, 20)
                     )
@@ -644,7 +654,7 @@ class PipelineController:
                         _should_run_charts = True
                         logger.info("Forcing chart analysis: some symbols in watchlist are missing analysis.")
                     else:
-                        _last_chart_ts_raw = await engine.db.settings.get_setting(_CHART_ANALYSIS_KEY)
+                        _last_chart_ts_raw = await ctx.db.settings.get_setting(_CHART_ANALYSIS_KEY)
                         if _last_chart_ts_raw:
                             def _parse_iso(s: Optional[str]) -> Optional[datetime]:
                                 if not s:
@@ -672,9 +682,9 @@ class PipelineController:
                 if _should_run_charts:
                     logger.info("Running chart vision analysis for %d symbols", len(db_watchlist))
                     try:
-                        await engine.overseer.analyze_charts(db_watchlist)
-                        await engine.db.settings.set_setting(_CHART_ANALYSIS_KEY, datetime.now(timezone.utc).isoformat())
-                        await engine.db.logs.write_log(
+                        await ctx.overseer.analyze_charts(db_watchlist)
+                        await ctx.db.settings.set_setting(_CHART_ANALYSIS_KEY, datetime.now(timezone.utc).isoformat())
+                        await ctx.db.logs.write_log(
                             "ENGINE",
                             f"chart vision: analysed {len(db_watchlist)} symbols (7-month daily bars, next run in 7 days)"
                         )
@@ -685,11 +695,11 @@ class PipelineController:
                     logger.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
 
             # 9. Update live status indicators
-            await engine.db.settings.set_setting("tradier_last_ok_ts", datetime.now(timezone.utc).isoformat())
-            await engine.db.settings.set_setting("tradier_last_error", "")
-            await engine.db.settings.set_setting("market_session", mkt["session"])
+            await ctx.db.settings.set_setting("tradier_last_ok_ts", datetime.now(timezone.utc).isoformat())
+            await ctx.db.settings.set_setting("tradier_last_error", "")
+            await ctx.db.settings.set_setting("market_session", mkt["session"])
             logger.info("tick complete: %s", stats)
-            await engine.db.logs.write_log("ENGINE", f"heartbeat tick complete: {stats}")
+            await ctx.db.logs.write_log("ENGINE", f"heartbeat tick complete: {stats}")
             engine._cb_fail_count = 0
 
         except Exception as exc:
@@ -699,7 +709,7 @@ class PipelineController:
             logger.exception("tick failed: %s", exc)
             try:
                 exc_str = str(exc)[:500]
-                await engine.db.settings.set_setting("tradier_last_error", exc_str)
-                await engine.db.logs.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
+                await ctx.db.settings.set_setting("tradier_last_error", exc_str)
+                await ctx.db.logs.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:
                 pass

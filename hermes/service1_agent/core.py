@@ -33,6 +33,7 @@ from ._engine_reactive import ReactiveController
 from ._engine_ai import AIController
 from ._engine_pipeline import PipelineController
 from .context import TickContext
+from .engine_context import EngineContext
 
 if TYPE_CHECKING:
     # Imported only for type checking — resolves the forward references to
@@ -73,47 +74,54 @@ class CascadingEngine:
                  event_bus: Optional[EventBus] = _DEFAULT_BUS,
                  llm_out_of_loop: bool = False,
                  clock: Optional[Clock] = None):
-        self.clock = clock or RealClock()
-        self.broker = AsyncBrokerWrapper(broker, db)
-        self.db = db
-        self.config = config or {}
         from .risk_engine import PortfolioRiskEngine
-        self.risk_engine = PortfolioRiskEngine(broker, db, self.config)
-        # Sort by declared PRIORITY (1 highest)
-        self.strategies = sorted(strategies, key=lambda s: s.PRIORITY)
-        self.overseer = overseer
-        # When True, submit() queues trades for human approval instead of
-        # sending them to the broker directly.
-        self.approval_mode = approval_mode
+        from hermes.ipc import ipc
+        clock = clock or RealClock()
+        config = config or {}
         # MoneyManager is shared across strategies; the engine also holds a
         # reference so tick() can refresh broker-side order counts before
         # capacity decisions run. Falls back to the first strategy's mm so
         # callers that haven't been updated yet still work.
-        self.mm = money_manager or (strategies[0].mm if strategies else None)
-        if event_bus is _DEFAULT_BUS:
-            self.event_bus = EventBus()
-        else:
-            self.event_bus = event_bus
-        self.llm_out_of_loop = llm_out_of_loop
-        self._quote_cache: Dict[str, Dict[str, Any]] = {}
-        from hermes.ipc import ipc
-        self.ipc_client = ipc
-        self.control_state = None
+        mm = money_manager or (strategies[0].mm if strategies else None)
+        event_bus = EventBus() if event_bus is _DEFAULT_BUS else event_bus
+
+        # Single source of truth for the shared dependency surface (db / broker /
+        # mm / event_bus / config / clock / ipc_client / overseer / strategies /
+        # risk_engine / control_state / approval_mode / llm_out_of_loop /
+        # quote_cache). The engine and all three collaborators read these through
+        # ``self.ctx``; the ``engine.<dep>`` proxy properties below keep external
+        # call-sites (main.py / tests reassigning overseer/mm/control_state/…)
+        # working and single-source.
+        self.ctx = EngineContext(
+            db=db,
+            broker=AsyncBrokerWrapper(broker, db),
+            config=config,
+            clock=clock,
+            event_bus=event_bus,
+            ipc_client=ipc,
+            overseer=overseer,
+            mm=mm,
+            risk_engine=PortfolioRiskEngine(broker, db, config),
+            strategies=strategies,
+            # When True, submit() queues trades for human approval instead of
+            # sending them to the broker directly.
+            approval_mode=approval_mode,
+            llm_out_of_loop=llm_out_of_loop,
+        )
+        # Engine-only per-run runtime state (not shared via ctx): circuit-breaker
+        # counters, plus strong references to fire-and-forget background tasks.
+        # asyncio only holds a *weak* reference to a bare ``create_task`` result,
+        # so a task whose handle is discarded can be garbage-collected mid-await
+        # and silently cancelled. Keep them here (mirrors scheduler._tasks /
+        # overseer.worker._worker_task) until they finish.
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
-        # Strong references to fire-and-forget background tasks. asyncio only
-        # holds a *weak* reference to a bare ``create_task`` result, so a task
-        # whose handle is discarded can be garbage-collected mid-await and
-        # silently cancelled. Keep them here (mirrors scheduler._tasks /
-        # overseer.worker._worker_task) until they finish.
         self._bg_tasks: set[asyncio.Task] = set()
 
-        # Three owned collaborators, all on the same back-reference pattern:
-        # each holds a typed reference to the engine and reads mutable engine
-        # state (db / broker / event_bus / config / mm / overseer / strategies /
-        # ipc_client / _quote_cache) *through* it, so there is no second copy to
-        # keep in sync. Cross-phase calls route through the engine's own methods,
-        # which stay the single seam tests monkeypatch.
+        # Three owned collaborators. Each reads the shared dependency surface
+        # through ``engine.ctx`` and keeps the engine reference only for the few
+        # orchestration callbacks (submit / sync_positions / sibling phases) and
+        # the circuit-breaker counters above.
         #   * pipeline — tick phase bodies + slow heartbeat guard tick
         #   * reactive — event-loop/IPC/order-monitor runtime + reactive handlers
         #   * ai       — overseer proposals/closes/gating + bandit/exit tuning
@@ -317,15 +325,123 @@ class CascadingEngine:
     def _order_monitor_task(self, val):
         self.reactive._order_monitor_task = val
 
+    # ── shared dependency surface proxied to EngineContext ────────────────────
+    # The live values live on ``self.ctx`` (single source). These read/write
+    # proxies keep ``engine.<dep>`` working for external call-sites (main.py and
+    # tests reassign overseer / mm / control_state / approval_mode / …) and for
+    # the engine's own pure-orchestration bodies, without a second copy to sync.
+    @property
+    def db(self):
+        return self.ctx.db
+
+    @db.setter
+    def db(self, val):
+        self.ctx.db = val
+
+    @property
+    def broker(self):
+        return self.ctx.broker
+
+    @broker.setter
+    def broker(self, val):
+        self.ctx.broker = val
+
+    @property
+    def config(self):
+        return self.ctx.config
+
+    @config.setter
+    def config(self, val):
+        self.ctx.config = val
+
+    @property
+    def clock(self):
+        return self.ctx.clock
+
+    @clock.setter
+    def clock(self, val):
+        self.ctx.clock = val
+
+    @property
+    def event_bus(self):
+        return self.ctx.event_bus
+
+    @event_bus.setter
+    def event_bus(self, val):
+        self.ctx.event_bus = val
+
+    @property
+    def ipc_client(self):
+        return self.ctx.ipc_client
+
+    @ipc_client.setter
+    def ipc_client(self, val):
+        self.ctx.ipc_client = val
+
+    @property
+    def overseer(self):
+        return self.ctx.overseer
+
+    @overseer.setter
+    def overseer(self, val):
+        self.ctx.overseer = val
+
+    @property
+    def mm(self):
+        return self.ctx.mm
+
+    @mm.setter
+    def mm(self, val):
+        self.ctx.mm = val
+
+    @property
+    def risk_engine(self):
+        return self.ctx.risk_engine
+
+    @risk_engine.setter
+    def risk_engine(self, val):
+        self.ctx.risk_engine = val
+
+    @property
+    def approval_mode(self):
+        return self.ctx.approval_mode
+
+    @approval_mode.setter
+    def approval_mode(self, val):
+        self.ctx.approval_mode = val
+
+    @property
+    def llm_out_of_loop(self):
+        return self.ctx.llm_out_of_loop
+
+    @llm_out_of_loop.setter
+    def llm_out_of_loop(self, val):
+        self.ctx.llm_out_of_loop = val
+
+    @property
+    def control_state(self):
+        return self.ctx.control_state
+
+    @control_state.setter
+    def control_state(self, val):
+        self.ctx.control_state = val
+
+    @property
+    def _quote_cache(self):
+        return self.ctx.quote_cache
+
+    @_quote_cache.setter
+    def _quote_cache(self, val):
+        self.ctx.quote_cache = val
+
     @property
     def strategies(self):
-        return self._strategies
+        return self.ctx.strategies
 
     @strategies.setter
     def strategies(self, val):
-        # Collaborators read ``engine.strategies`` directly; this setter only
-        # preserves the PRIORITY sort invariant.
-        self._strategies = sorted(val, key=lambda s: s.PRIORITY)
+        # ctx.strategies preserves the PRIORITY sort invariant.
+        self.ctx.strategies = val
 
     async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
         return await self.pipeline._build_fallback_ctx(watchlist)

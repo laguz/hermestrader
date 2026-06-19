@@ -75,13 +75,20 @@ and `backtest_engine.py`).
 │      (spine in core.py; the tick-phase bodies + heartbeat, the   │
 │       reactive runtime, and the overseer/ML tuning concerns are  │
 │       owned collaborators in _engine_*.py — pipeline / reactive /│
-│       ai, not mixins. core.py is pure orchestration + wiring.)   │
+│       ai. They read the shared dependency surface off an         │
+│       EngineContext (engine_context.py) — db / broker / mm /     │
+│       event_bus / config / overseer / strategies / quote_cache — │
+│       not the whole engine, so ai needs no engine back-ref at    │
+│       all and pipeline/reactive keep one only for orchestration  │
+│       callbacks. core.py is pure orchestration + wiring.)        │
 │    HermesOverseer           — LLM review of every TradeAction;   │
-│      spine in overseer.py (prompt/transport, review, wiring);    │
-│      owned collaborators in overseer_*.py — single / committee   │
-│      review, proposers (origination + charts), governance        │
-│      (settings tuning), worker (event-bus). Same back-reference  │
-│      pattern as the engine collaborators, not mixins.            │
+│      spine in overseer.py (review + wiring); the live state and  │
+│      LLM transport (prompt/chat/json) live on an OverseerContext │
+│      (overseer_context.py) shared by the collaborators in        │
+│      overseer_*.py — single / committee review, proposers        │
+│      (origination + charts), governance (settings tuning),       │
+│      worker (event-bus). Same shared-context pattern as the      │
+│      engine: collaborators depend on the context, not the spine. │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │

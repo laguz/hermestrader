@@ -6,11 +6,11 @@ the periodic, out-of-loop adjustments it makes to live ``system_settings``
 (goal-aware parameter tuning and risk-driven symbol bans) — from the per-action
 review path and the trade-origination proposers.
 
-:class:`OverseerGovernor` is an injected collaborator owned by
-:class:`~hermes.service1_agent.overseer.HermesOverseer`: it reads the overseer's
-state (autonomy, db) and reuses its LLM transport (``get_system_prompt`` /
-``_chat_with_timeout`` / ``_safe_json``) through a back-reference, so the method
-bodies moved out of the overseer unchanged.
+:class:`OverseerGovernor` takes the shared
+:class:`~hermes.service1_agent.overseer_context.OverseerContext` (``self.ctx``)
+and reads the live state (autonomy, db) and LLM transport (``get_system_prompt``
+/ ``chat_with_timeout`` / ``safe_json``) through it — one source of truth, no
+per-collaborator forwarding.
 
 Both methods are hard-bounded: every parameter change is clamped to an
 allow-listed range, and banned symbols are intersected with the active
@@ -25,7 +25,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .overseer import HermesOverseer
+    from .overseer_context import OverseerContext
 
 logger = logging.getLogger("hermes.agent.overseer")
 
@@ -33,39 +33,13 @@ logger = logging.getLogger("hermes.agent.overseer")
 class OverseerGovernor:
     """Owns the overseer's out-of-loop settings-tuning paths.
 
-    Reads overseer state via ``self._ov``; the forwarding properties below let
-    the method bodies keep reading ``self.db`` / ``self.autonomy`` /
-    ``self._safe_json`` etc. unchanged, so the extraction was a move, not a
-    rewrite.
+    Reads live state and the LLM transport off the shared
+    :class:`~hermes.service1_agent.overseer_context.OverseerContext`
+    (``self.ctx``), so there is one source of truth and no forwarding.
     """
 
-    def __init__(self, overseer: "HermesOverseer") -> None:
-        self._ov = overseer
-
-    # ── forwarded overseer handles (single source of truth on the overseer) ──
-    @property
-    def autonomy(self):
-        return self._ov.autonomy
-
-    @property
-    def db(self):
-        return self._ov.db
-
-    @property
-    def _MAX_LOG_CHARS(self):
-        return self._ov._MAX_LOG_CHARS
-
-    @property
-    def _chat_with_timeout(self):
-        return self._ov._chat_with_timeout
-
-    @property
-    def _safe_json(self):
-        return self._ov._safe_json
-
-    @property
-    def get_system_prompt(self):
-        return self._ov.get_system_prompt
+    def __init__(self, ctx: "OverseerContext") -> None:
+        self.ctx = ctx
 
     # -- goal-aware parameter tuning -----------------------------------------
     # Allow-list of live-tunable settings the overseer may adjust toward the
@@ -101,13 +75,13 @@ class OverseerGovernor:
         to its declared type before it is written; out-of-list keys are ignored.
         Returns ``{"applied": {...}, "rationale": str, "skipped": [...]}``.
         """
-        if self.autonomy not in ("enforcing", "autonomous"):
+        if self.ctx.autonomy not in ("enforcing", "autonomous"):
             return {"applied": {}, "rationale": "advisory mode — no changes", "skipped": []}
 
         tunables = self._tunable_params()
         current: Dict[str, Any] = {}
         for key, (kind, lo, _hi) in tunables.items():
-            raw = await self.db.settings.get_setting(key)
+            raw = await self.ctx.db.settings.get_setting(key)
             if raw is None:
                 # Surface the in-effect default so the LLM sees a real baseline.
                 from .entry_gate import DEFAULTS as GATE_DEFAULTS
@@ -117,7 +91,7 @@ class OverseerGovernor:
         bounds_desc = {
             k: f"{kind}[{lo}..{hi}]" for k, (kind, lo, hi) in tunables.items()
         }
-        system_prompt = await self.get_system_prompt()
+        system_prompt = await self.ctx.get_system_prompt()
         prompt = (
             "Review recent strategy performance against the operator doctrine "
             "and propose adjustments to the TUNABLE PARAMETERS that move the "
@@ -131,7 +105,7 @@ class OverseerGovernor:
             "Only include keys you want to change. Omit anything you'd leave as-is."
         )
         try:
-            msg = await self._chat_with_timeout(
+            msg = await self.ctx.chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user", "content": prompt}],
                 images=[],
@@ -140,7 +114,7 @@ class OverseerGovernor:
             logger.warning("Parameter-tuning LLM call failed: %s", exc)
             return {"applied": {}, "rationale": f"LLM error: {exc}", "skipped": []}
 
-        decision = self._safe_json(msg)
+        decision = self.ctx.safe_json(msg)
         adjustments = decision.get("adjustments") or {}
         rationale = decision.get("rationale", "")
         applied: Dict[str, Any] = {}
@@ -161,9 +135,9 @@ class OverseerGovernor:
             old = current.get(key)
             if str(old) == str(coerced):
                 continue                                # no-op; don't log churn
-            await self.db.settings.set_setting(key, str(coerced))
+            await self.ctx.db.settings.set_setting(key, str(coerced))
             applied[key] = coerced
-            await self.db.logs.write_log(
+            await self.ctx.db.logs.write_log(
                 "OVERSEER",
                 f"[PARAM-TUNE] {key}: {old} → {coerced} (goal-aligned)",
             )
@@ -172,8 +146,8 @@ class OverseerGovernor:
             logger.info("[PARAM-TUNE] applied %s — %s", applied, rationale)
         result = {"applied": applied, "rationale": rationale, "skipped": skipped}
         try:
-            await self.db.decisions.write_ai_decision(
-                "OVERSEER", "PARAMS", self.autonomy,
+            await self.ctx.db.decisions.write_ai_decision(
+                "OVERSEER", "PARAMS", self.ctx.autonomy,
                 {"type": "param_tuning", **result},
             )
         except Exception:                                          # noqa: BLE001
@@ -185,13 +159,13 @@ class OverseerGovernor:
 
         Only runs in 'enforcing' or 'autonomous' modes — advisory never mutates settings.
         """
-        if self.autonomy not in ("enforcing", "autonomous"):
+        if self.ctx.autonomy not in ("enforcing", "autonomous"):
             return {"banned_symbols": [], "rationale": "advisory mode — no changes"}
 
         watchlist_syms = set()
         try:
-            if self.db is not None:
-                all_wls = await self.db.watchlist.list_all_watchlists()
+            if self.ctx.db is not None:
+                all_wls = await self.ctx.db.watchlist.list_all_watchlists()
                 for syms in all_wls.values():
                     watchlist_syms.update(syms)
         except Exception as exc:
@@ -200,11 +174,11 @@ class OverseerGovernor:
         if not watchlist_syms:
             return {"banned_symbols": [], "rationale": "watchlist is empty"}
 
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self._MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+        recent_logs = await self.ctx.db.logs.recent_logs(limit=200)
+        if len(recent_logs) > self.ctx.MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self.ctx.MAX_LOG_CHARS:]
 
-        system_prompt = await self.get_system_prompt()
+        system_prompt = await self.ctx.get_system_prompt()
         prompt = (
             "Review recent strategy performance, operator doctrine, and the active watchlist.\n"
             f"ACTIVE WATCHLIST: {list(watchlist_syms)}\n"
@@ -216,7 +190,7 @@ class OverseerGovernor:
             "Reply with strict JSON: {banned_symbols: [string, ...], rationale}."
         )
         try:
-            msg = await self._chat_with_timeout(
+            msg = await self.ctx.chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[],
@@ -225,7 +199,7 @@ class OverseerGovernor:
             logger.warning("Risk-restrictions LLM call failed: %s", exc)
             return {"banned_symbols": [], "rationale": f"LLM error: {exc}"}
 
-        decision = self._safe_json(msg)
+        decision = self.ctx.safe_json(msg)
         banned = decision.get("banned_symbols") or []
         rationale = decision.get("rationale", "")
         if not isinstance(banned, list):
@@ -235,12 +209,12 @@ class OverseerGovernor:
         banned_set = {str(s).upper().strip() for s in banned} & {s.upper() for s in watchlist_syms}
         banned_list = sorted(list(banned_set))
 
-        old_banned = await self.db.settings.get_setting("banned_symbols") or ""
+        old_banned = await self.ctx.db.settings.get_setting("banned_symbols") or ""
         new_banned_str = ",".join(banned_list)
 
         if old_banned != new_banned_str:
-            await self.db.settings.set_setting("banned_symbols", new_banned_str)
-            await self.db.logs.write_log(
+            await self.ctx.db.settings.set_setting("banned_symbols", new_banned_str)
+            await self.ctx.db.logs.write_log(
                 "OVERSEER",
                 f"[RISK-RESTRICT] Banned symbols list updated: {old_banned or '-'} -> {new_banned_str or '-'} — {rationale}",
             )
@@ -248,8 +222,8 @@ class OverseerGovernor:
 
         result = {"banned_symbols": banned_list, "rationale": rationale}
         try:
-            await self.db.decisions.write_ai_decision(
-                "OVERSEER", "RISK", self.autonomy,
+            await self.ctx.db.decisions.write_ai_decision(
+                "OVERSEER", "RISK", self.ctx.autonomy,
                 {"type": "risk_restrictions", **result},
             )
         except Exception:                                          # noqa: BLE001

@@ -11,10 +11,12 @@ an owned collaborator of :class:`~hermes.service1_agent.core.CascadingEngine`
   parameter/risk adjustments, and the exit-policy capture/advise loop (both the
   per-tick and the reactive-quote variants).
 
-It holds a typed back-reference to the engine and reaches engine state
-(``db`` / ``broker`` / ``event_bus`` / ``config`` / ``overseer`` / ``mm`` /
-``clock`` / ``_quote_cache``) *through* it, so there is no second copy to keep in
-sync.
+It reads everything it needs — the shared dependency surface (``db`` /
+``broker`` / ``event_bus`` / ``config`` / ``overseer`` / ``mm`` / ``clock`` /
+``quote_cache``) — off the
+:class:`~hermes.service1_agent.engine_context.EngineContext` (``self.ctx``) and
+emits its results back onto the event bus, so it needs no back-reference to the
+engine at all.
 """
 from __future__ import annotations
 
@@ -42,11 +44,13 @@ class AIController:
     """Overseer AI proposals/closes/gating + bandit/exit-policy tuning."""
 
     def __init__(self, engine: "CascadingEngine") -> None:
-        self.engine = engine
+        # AIController depends only on the shared dependency surface, not on the
+        # engine spine — it reads ``self.ctx`` and emits back onto the event bus.
+        self.ctx = engine.ctx
 
-        if self.engine.event_bus is not None:
-            self.engine.event_bus.subscribe(ExecuteAIApprovalCommand, self.handle_execute_ai_approval)
-            self.engine.event_bus.subscribe(EvaluateReactiveExitEvent, self.handle_evaluate_reactive_exit)
+        if self.ctx.event_bus is not None:
+            self.ctx.event_bus.subscribe(ExecuteAIApprovalCommand, self.handle_execute_ai_approval)
+            self.ctx.event_bus.subscribe(EvaluateReactiveExitEvent, self.handle_evaluate_reactive_exit)
 
     # ── overseer AI proposals / closes / gating ──────────────────────────────
     async def handle_execute_ai_approval(self, command: ExecuteAIApprovalCommand) -> None:
@@ -68,20 +72,20 @@ class AIController:
 
         if event.verdict == "VETO":
             logger.info("[AI VETOED] Strategy=%s symbol=%s - %s", event.strategy_id, event.symbol, event.rationale)
-            await self.engine.db.logs.write_log(
+            await self.ctx.db.logs.write_log(
                 event.strategy_id,
                 f"[AI VETOED] {event.symbol} — {event.rationale}"
             )
             if event.approval_id is not None:
-                await self.engine.db.approvals.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
+                await self.ctx.db.approvals.update_approval_status(event.approval_id, "REJECTED", notes=event.rationale)
 
-            ttl = int(self.engine.config.get("veto_suppression_s", 1800))
+            ttl = int(self.ctx.config.get("veto_suppression_s", 1800))
             if ttl > 0:
                 veto_side = (a.strategy_params or {}).get("side_type")
                 if veto_side and str(veto_side).lower() in {"buy", "sell"}:
                     veto_side = None
                 try:
-                    hits = await self.engine.db.approvals.record_veto(
+                    hits = await self.ctx.db.approvals.record_veto(
                         event.strategy_id, event.symbol, veto_side,
                         a.expiry, event.rationale, ttl)
                     logger.info("[VETO] suppression recorded for %s (hits=%d, ttl=%ds)",
@@ -104,17 +108,17 @@ class AIController:
             approval_id=getattr(event, "approval_id", None),
             execute_directly=True
         )
-        self.engine.event_bus.emit(cmd)
+        self.ctx.event_bus.emit(cmd)
         await cmd.future
 
     async def _async_propose(self, ctx: "TickContext") -> None:
         """Asynchronously triggers the overseer to propose actions without blocking the tick loop."""
         try:
-            ai_actions = await self.engine.overseer.propose(ctx.watchlist)
+            ai_actions = await self.ctx.overseer.propose(ctx.watchlist)
             ai_actions = await self._gate_ai_actions(ai_actions)
             if ai_actions:
                 cmd = SubmitTradeActionsCommand(actions=ai_actions, action_type="ai")
-                self.engine.event_bus.emit(cmd)
+                self.ctx.event_bus.emit(cmd)
                 await cmd.future
         except Exception as exc:
             logger.exception("Error in async propose: %s", exc)
@@ -122,11 +126,11 @@ class AIController:
     async def _async_propose_closes(self, ctx: "TickContext") -> None:
         """Asynchronously let the overseer close positions without blocking the tick."""
         try:
-            closes = await self.engine.overseer.propose_closes()
+            closes = await self.ctx.overseer.propose_closes()
             closes = await self._price_ai_closes(ctx, closes)
             if closes:
                 cmd = SubmitTradeActionsCommand(actions=closes, action_type="management")
-                self.engine.event_bus.emit(cmd)
+                self.ctx.event_bus.emit(cmd)
                 await cmd.future
         except Exception as exc:
             logger.exception("Error in async propose_closes: %s", exc)
@@ -168,7 +172,7 @@ class AIController:
                 trade_id = (a.strategy_params or {}).get("trade_id")
                 held = qty_map.get(short_sym, 0.0)
                 if held > -lots:
-                    await self.engine.db.logs.write_log(
+                    await self.ctx.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: broker holds "
                         f"{held:g} of {short_sym} (need short ≥ {lots}); skip — "
@@ -177,21 +181,21 @@ class AIController:
                     continue
                 long_sym = long_leg.get("option_symbol") if long_leg else None
                 if short_sym in active_legs or (long_sym and long_sym in active_legs):
-                    await self.engine.db.logs.write_log(
+                    await self.ctx.db.logs.write_log(
                         a.strategy_id,
                         f"[AI-CLOSE] {a.symbol} trade_id={trade_id}: a resting order "
                         f"already works this position; skip — avoids duplicate cover",
                     )
                     continue
 
-                quotes = await self.engine.broker.get_quote(",".join(syms)) or []
+                quotes = await self.ctx.broker.get_quote(",".join(syms)) or []
                 qmap = {q.get("symbol"): q for q in quotes}
                 sq = qmap.get(short_leg.get("option_symbol"))
                 if long_leg is not None:
                     lq = qmap.get(long_leg.get("option_symbol"))
                     debit, blocked, reason = AbstractStrategy.compute_close_debit(sq, lq, a.width)
                     if blocked:
-                        await self.engine.db.logs.write_log(
+                        await self.ctx.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol} trade_id="
                             f"{(a.strategy_params or {}).get('trade_id')}: "
@@ -201,7 +205,7 @@ class AIController:
                 else:
                     ask = float((sq or {}).get("ask") or 0)
                     if ask <= 0:
-                        await self.engine.db.logs.write_log(
+                        await self.ctx.db.logs.write_log(
                             a.strategy_id,
                             f"[AI-CLOSE] {a.symbol}: stale ask on "
                             f"{short_leg.get('option_symbol')}; skip this tick",
@@ -212,7 +216,7 @@ class AIController:
                 logger.info("[AI-CLOSE] %s trade_id=%s debit=$%.2f — %s",
                             a.symbol, (a.strategy_params or {}).get("trade_id"),
                             a.price, a.ai_rationale)
-                await self.engine.db.logs.write_log(
+                await self.ctx.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-CLOSE] {a.symbol} trade_id="
                     f"{(a.strategy_params or {}).get('trade_id')} debit=${a.price:.2f} "
@@ -229,9 +233,9 @@ class AIController:
         """Run AI-originated proposals through the mechanical entry gate."""
         if not actions:
             return []
-        if self.engine.mm is None:
+        if self.ctx.mm is None:
             for a in actions:
-                await self.engine.db.logs.write_log(
+                await self.ctx.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — no MoneyManager wired; "
                     f"cannot validate capacity (fail-closed)",
@@ -244,20 +248,20 @@ class AIController:
         for a in actions:
             try:
                 validated, reason = await gate_ai_action(
-                    a, broker=self.engine.broker, db=self.engine.db, mm=self.engine.mm)
+                    a, broker=self.ctx.broker, db=self.ctx.db, mm=self.ctx.mm)
             except Exception as exc:
                 logger.exception("[AI-GATE] error validating %s: %s", a.symbol, exc)
-                await self.engine.db.logs.write_log(
+                await self.ctx.db.logs.write_log(
                     a.strategy_id,
                     f"[AI-GATE] {a.symbol}: rejected — validation error: {exc}",
                 )
                 continue
             if validated is None:
                 logger.info("[AI-GATE] REJECTED %s", reason)
-                await self.engine.db.logs.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
+                await self.ctx.db.logs.write_log(a.strategy_id, f"[AI-GATE] REJECTED {reason}")
             else:
                 logger.info("[AI-GATE] %s", reason)
-                await self.engine.db.logs.write_log(a.strategy_id, f"[AI-GATE] {reason}")
+                await self.ctx.db.logs.write_log(a.strategy_id, f"[AI-GATE] {reason}")
                 gated.append(validated)
         return gated
 
@@ -274,22 +278,22 @@ class AIController:
 
     async def _maybe_tune_parameters(self) -> None:
         """Run the overseer's goal-aware parameter tuning, throttled by interval."""
-        interval = int(self.engine.config.get("param_tuning_interval_s", 3600))
+        interval = int(self.ctx.config.get("param_tuning_interval_s", 3600))
         if interval <= 0:
             return
-        tuner = getattr(self.engine.overseer, "propose_parameter_adjustments", None)
+        tuner = getattr(self.ctx.overseer, "propose_parameter_adjustments", None)
         if tuner is None:
             return
         try:
             now = time.time()
-            last_raw = await self.engine.db.settings.get_setting("ai_last_param_tuning_ts")
+            last_raw = await self.ctx.db.settings.get_setting("ai_last_param_tuning_ts")
             last = float(last_raw) if last_raw else 0.0
             if now - last < interval:
                 return
-            await self.engine.db.settings.set_setting("ai_last_param_tuning_ts", str(now))
+            await self.ctx.db.settings.set_setting("ai_last_param_tuning_ts", str(now))
             await tuner()
 
-            risk_tuner = getattr(self.engine.overseer, "propose_risk_restrictions", None)
+            risk_tuner = getattr(self.ctx.overseer, "propose_risk_restrictions", None)
             if risk_tuner is not None:
                 await risk_tuner()
         except Exception as exc:
@@ -298,42 +302,42 @@ class AIController:
     async def _maybe_run_bandit_tuner(self) -> None:
         """Run the Thompson-bandit knob tuner, throttled and mode-gated."""
         try:
-            mode = (await self.engine.db.settings.get_setting("bandit_tuner_mode") or "off")
+            mode = (await self.ctx.db.settings.get_setting("bandit_tuner_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
-            interval = int(self.engine.config.get("bandit_tuning_interval_s", 3600))
+            interval = int(self.ctx.config.get("bandit_tuning_interval_s", 3600))
             now = time.time()
-            last_raw = await self.engine.db.settings.get_setting("bandit_last_run_ts")
+            last_raw = await self.ctx.db.settings.get_setting("bandit_last_run_ts")
             last = float(last_raw) if last_raw else 0.0
             if interval > 0 and now - last < interval:
                 return
-            await self.engine.db.settings.set_setting("bandit_last_run_ts", str(now))
+            await self.ctx.db.settings.set_setting("bandit_last_run_ts", str(now))
 
             from hermes.ml.bandit import propose_knob_updates, LEARNABLE_KNOBS
 
-            outcomes = await self.engine.db.trades.fetch_trade_outcomes()
+            outcomes = await self.ctx.db.trades.fetch_trade_outcomes()
             keys = [k for knobs in LEARNABLE_KNOBS.values() for k in knobs]
             current: Dict[str, Any] = {}
-            bulk = getattr(self.engine.db.settings, "get_settings", None)
+            bulk = getattr(self.ctx.db.settings, "get_settings", None)
             if callable(bulk):
                 current = await bulk(keys) or {}
 
-            min_obs = int(self.engine.config.get("bandit_min_observations", 20))
+            min_obs = int(self.ctx.config.get("bandit_min_observations", 20))
             proposals = propose_knob_updates(
                 outcomes, current, min_observations=min_obs)
 
-            autonomy = (getattr(self.engine.overseer, "autonomy", "advisory")
-                        if self.engine.overseer is not None else "advisory")
+            autonomy = (getattr(self.ctx.overseer, "autonomy", "advisory")
+                        if self.ctx.overseer is not None else "advisory")
             can_apply = mode == "active" and autonomy in ("enforcing", "autonomous")
 
             applied: Dict[str, Any] = {}
             for p in proposals:
                 if can_apply and p["actionable"] and p["changed"]:
-                    await self.engine.db.settings.set_setting(p["key"], str(p["proposed"]))
+                    await self.ctx.db.settings.set_setting(p["key"], str(p["proposed"]))
                     applied[p["key"]] = p["proposed"]
-                    await self.engine.db.logs.write_log(
+                    await self.ctx.db.logs.write_log(
                         "BANDIT",
                         f"[BANDIT-TUNE] {p['key']}: {p['current']} → "
                         f"{p['proposed']} (n={p['n_obs']}, mode={mode})",
@@ -342,7 +346,7 @@ class AIController:
             if applied:
                 logger.info("[BANDIT-TUNE] applied %s", applied)
             try:
-                await self.engine.db.decisions.write_ai_decision(
+                await self.ctx.db.decisions.write_ai_decision(
                     "BANDIT", "PARAMS", autonomy,
                     {"type": "bandit_tuning", "mode": mode,
                      "applied": applied, "proposals": proposals,
@@ -356,14 +360,14 @@ class AIController:
     async def _maybe_capture_and_advise_exits(self, mgmt_actions) -> None:
         """Capture exit-state trajectories and run the advisory exit policy."""
         try:
-            mode = (await self.engine.db.settings.get_setting("exit_policy_mode") or "off")
+            mode = (await self.ctx.db.settings.get_setting("exit_policy_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
-            open_trades = await self.engine.db.trades.all_open_trades()
+            open_trades = await self.ctx.db.trades.all_open_trades()
             if not open_trades:
                 return
 
@@ -380,7 +384,7 @@ class AIController:
                         legs.add(tr[k])
             quotes: Dict[str, Any] = {}
             if legs:
-                raw = await self.engine.broker.get_quote(",".join(sorted(legs))) or []
+                raw = await self.ctx.broker.get_quote(",".join(sorted(legs))) or []
                 quotes = {q["symbol"]: q for q in raw if "symbol" in q}
 
             def _mid(sym):
@@ -391,12 +395,12 @@ class AIController:
                     return None
                 return (bid + ask) / 2.0 if ask > 0 and bid >= 0 else None
 
-            today = self.engine.clock.utc_now().date()
-            autonomy = (getattr(self.engine.overseer, "autonomy", "advisory")
-                        if self.engine.overseer is not None else "advisory")
+            today = self.ctx.clock.utc_now().date()
+            autonomy = (getattr(self.ctx.overseer, "autonomy", "advisory")
+                        if self.ctx.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
 
-            policy = train_exit_policy(await self.engine.db.trades.fetch_exit_ticks())
+            policy = train_exit_policy(await self.ctx.db.trades.fetch_exit_ticks())
             advice: List[Dict[str, Any]] = []
             acted: List[int] = []
 
@@ -416,7 +420,7 @@ class AIController:
 
                 tid = tr.get("id")
                 action = "close" if tid in closing_ids else "hold"
-                await self.engine.db.trades.record_exit_tick(
+                await self.ctx.db.trades.record_exit_tick(
                     trade_id=tid, strategy_id=tr.get("strategy_id"),
                     symbol=tr.get("symbol"), dte=dte, unrealized_pnl_pct=pnl_pct,
                     debit=debit, entry_credit=float(entry_credit), action=action,
@@ -454,10 +458,10 @@ class AIController:
                         ai_authored=True,
                     )
                     cmd = SubmitTradeActionsCommand(actions=[close], action_type="management")
-                    self.engine.event_bus.emit(cmd)
+                    self.ctx.event_bus.emit(cmd)
                     await cmd.future
                     acted.append(tid)
-                    await self.engine.db.logs.write_log(
+                    await self.ctx.db.logs.write_log(
                         "EXITPOLICY",
                         f"[EXIT-POLICY] closing trade {tid} {tr.get('symbol')} "
                         f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
@@ -467,7 +471,7 @@ class AIController:
             if acted:
                 logger.info("[EXIT-POLICY] closed %s", acted)
             try:
-                await self.engine.db.decisions.write_ai_decision(
+                await self.ctx.db.decisions.write_ai_decision(
                     "EXITPOLICY", "EXITS", autonomy,
                     {"type": "exit_policy", "mode": mode, "acted": acted,
                      "n_completed_trajectories": policy["n_completed_trajectories"],
@@ -481,12 +485,12 @@ class AIController:
     async def _maybe_evaluate_reactive_exit(self, symbol: str, mgmt_actions) -> None:
         """Evaluate continuous exit model reactively on quote changes for a specific option symbol."""
         try:
-            mode = (await self.engine.db.settings.get_setting("exit_policy_mode") or "off")
+            mode = (await self.ctx.db.settings.get_setting("exit_policy_mode") or "off")
             mode = str(mode).strip().lower()
             if mode not in ("shadow", "active"):
                 return
 
-            open_trades = await self.engine.db.trades.all_open_trades()
+            open_trades = await self.ctx.db.trades.all_open_trades()
             if not open_trades:
                 return
 
@@ -505,12 +509,12 @@ class AIController:
 
             from hermes.ml.exit_policy import train_exit_policy, recommend
 
-            today = self.engine.clock.utc_now().date()
-            autonomy = (getattr(self.engine.overseer, "autonomy", "advisory")
-                        if self.engine.overseer is not None else "advisory")
+            today = self.ctx.clock.utc_now().date()
+            autonomy = (getattr(self.ctx.overseer, "autonomy", "advisory")
+                        if self.ctx.overseer is not None else "advisory")
             can_act = mode == "active" and autonomy in ("enforcing", "autonomous")
 
-            policy = train_exit_policy(await self.engine.db.trades.fetch_exit_ticks())
+            policy = train_exit_policy(await self.ctx.db.trades.fetch_exit_ticks())
             advice: List[Dict[str, Any]] = []
             acted: List[int] = []
 
@@ -528,8 +532,8 @@ class AIController:
                     continue
 
                 short_mid = None
-                if short_leg in self.engine._quote_cache:
-                    q = self.engine._quote_cache[short_leg]
+                if short_leg in self.ctx.quote_cache:
+                    q = self.ctx.quote_cache[short_leg]
                     try:
                         short_mid = (float(q.get("bid")) + float(q.get("ask"))) / 2.0
                     except (TypeError, ValueError):
@@ -537,8 +541,8 @@ class AIController:
 
                 long_mid = 0.0
                 if long_leg:
-                    if long_leg in self.engine._quote_cache:
-                        q = self.engine._quote_cache[long_leg]
+                    if long_leg in self.ctx.quote_cache:
+                        q = self.ctx.quote_cache[long_leg]
                         try:
                             long_mid = (float(q.get("bid")) + float(q.get("ask"))) / 2.0
                         except (TypeError, ValueError):
@@ -587,10 +591,10 @@ class AIController:
                         ai_authored=True,
                     )
                     cmd = SubmitTradeActionsCommand(actions=[close], action_type="management")
-                    self.engine.event_bus.emit(cmd)
+                    self.ctx.event_bus.emit(cmd)
                     await cmd.future
                     acted.append(tid)
-                    await self.engine.db.logs.write_log(
+                    await self.ctx.db.logs.write_log(
                         "EXITPOLICY",
                         f"[REACTIVE-EXIT] closing trade {tid} {tr.get('symbol')} "
                         f"pnl%={pnl_pct} dte={dte} (q_close={rec['q_close']} "
@@ -600,7 +604,7 @@ class AIController:
             if acted:
                 logger.info("[REACTIVE-EXIT] closed %s", acted)
                 try:
-                    await self.engine.db.decisions.write_ai_decision(
+                    await self.ctx.db.decisions.write_ai_decision(
                         "EXITPOLICY", "REACTIVE-EXITS", autonomy,
                         {"type": "exit_policy_reactive", "mode": mode, "acted": acted,
                          "advice": advice},

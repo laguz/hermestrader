@@ -7,11 +7,11 @@ analysis) from the review path (:mod:`overseer_single` /
 :mod:`overseer_committee`), the out-of-loop governance tuning
 (:mod:`overseer_governance`), and the event-bus worker (:mod:`overseer_worker`).
 
-:class:`OverseerProposers` is an injected collaborator owned by
-:class:`~hermes.service1_agent.overseer.HermesOverseer`: it reads the overseer's
-state (autonomy, db, vision/chart, llm) and reuses its LLM transport
-(``get_system_prompt`` / ``_chat_with_timeout`` / ``_safe_json``) through a
-back-reference, so the method bodies moved out of the overseer unchanged.
+:class:`OverseerProposers` takes the shared
+:class:`~hermes.service1_agent.overseer_context.OverseerContext` (``self.ctx``)
+and reads the live state (autonomy, db, vision/chart, llm) and LLM transport
+(``get_system_prompt`` / ``chat_with_timeout`` / ``safe_json``) through it — one
+source of truth, no per-collaborator forwarding.
 
 Like every proposer here, the LLM never authors raw legs or prices — it picks
 *which* trades to open or close, and the engine fills price from live quotes.
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 from .core import TradeAction
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .overseer import HermesOverseer
+    from .overseer_context import OverseerContext
 
 logger = logging.getLogger("hermes.agent.overseer")
 
@@ -34,59 +34,21 @@ logger = logging.getLogger("hermes.agent.overseer")
 class OverseerProposers:
     """Owns the overseer's autonomous-origination and chart-analysis paths.
 
-    Reads overseer state via ``self._ov``; the forwarding properties below let
-    the method bodies keep reading ``self.db`` / ``self.autonomy`` /
-    ``self._safe_json`` etc. unchanged, so the extraction was a move, not a
-    rewrite.
+    Reads live state and the LLM transport off the shared
+    :class:`~hermes.service1_agent.overseer_context.OverseerContext`
+    (``self.ctx``), so there is one source of truth and no forwarding.
     """
 
-    def __init__(self, overseer: "HermesOverseer") -> None:
-        self._ov = overseer
-
-    # ── forwarded overseer handles (single source of truth on the overseer) ──
-    @property
-    def autonomy(self):
-        return self._ov.autonomy
-
-    @property
-    def db(self):
-        return self._ov.db
-
-    @property
-    def llm(self):
-        return self._ov.llm
-
-    @property
-    def vision_enabled(self):
-        return self._ov.vision_enabled
-
-    @property
-    def chart_provider(self):
-        return self._ov.chart_provider
-
-    @property
-    def _MAX_LOG_CHARS(self):
-        return self._ov._MAX_LOG_CHARS
-
-    @property
-    def _chat_with_timeout(self):
-        return self._ov._chat_with_timeout
-
-    @property
-    def _safe_json(self):
-        return self._ov._safe_json
-
-    @property
-    def get_system_prompt(self):
-        return self._ov.get_system_prompt
+    def __init__(self, ctx: "OverseerContext") -> None:
+        self.ctx = ctx
 
     # -- propose new actions (vision-driven) ---------------------------------
     async def propose(self, watchlist: Iterable[str]) -> List[TradeAction]:
-        if self.autonomy != "autonomous":
+        if self.ctx.autonomy != "autonomous":
             return []
         proposed: List[TradeAction] = []
         for symbol in watchlist:
-            chart = await self.chart_provider.snapshot(symbol) if self.chart_provider else None
+            chart = await self.ctx.chart_provider.snapshot(symbol) if self.ctx.chart_provider else None
             payload = await self._propose_for(symbol, chart)
             if not payload:
                 continue
@@ -115,10 +77,10 @@ class OverseerProposers:
         debit-to-close — so only option positions (those carrying a short
         leg) are offered as candidates.
         """
-        if self.autonomy != "autonomous":
+        if self.ctx.autonomy != "autonomous":
             return []
         try:
-            trades = await self.db.trades.all_open_trades()
+            trades = await self.ctx.db.trades.all_open_trades()
         except Exception as exc:                                   # noqa: BLE001
             logger.warning("propose_closes: all_open_trades failed: %s", exc)
             return []
@@ -146,11 +108,11 @@ class OverseerProposers:
                 "expiry": str(exp) if exp else None, "dte": dte,
             })
 
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self._MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+        recent_logs = await self.ctx.db.logs.recent_logs(limit=200)
+        if len(recent_logs) > self.ctx.MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self.ctx.MAX_LOG_CHARS:]
 
-        system_prompt = await self.get_system_prompt()
+        system_prompt = await self.ctx.get_system_prompt()
         prompt = (
             "Review the currently OPEN option positions below against market "
             "context and the recent execution log. Decide which, if any, to "
@@ -163,7 +125,7 @@ class OverseerProposers:
             "{closes: [{trade_id: int, rationale: str}, ...]}."
         )
         try:
-            msg = await self._chat_with_timeout(
+            msg = await self.ctx.chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[],
@@ -172,7 +134,7 @@ class OverseerProposers:
             logger.warning("propose_closes LLM call failed: %s", exc)
             return []
 
-        decision = self._safe_json(msg)
+        decision = self.ctx.safe_json(msg)
         closes = decision.get("closes")
         if not isinstance(closes, list):
             return []
@@ -197,8 +159,8 @@ class OverseerProposers:
 
         if actions:
             try:
-                await self.db.decisions.write_ai_decision(
-                    "OVERSEER", "CLOSES", self.autonomy,
+                await self.ctx.db.decisions.write_ai_decision(
+                    "OVERSEER", "CLOSES", self.ctx.autonomy,
                     {"type": "propose_closes",
                      "trade_ids": [a.strategy_params.get("trade_id") for a in actions]},
                 )
@@ -256,14 +218,14 @@ class OverseerProposers:
         itself the authorisation to let Hermes trade his own book.
         """
         universe = [str(s).upper().strip() for s in (universe or []) if str(s).strip()]
-        if not universe or self.llm is None:
+        if not universe or self.ctx.llm is None:
             return None
 
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self._MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+        recent_logs = await self.ctx.db.logs.recent_logs(limit=200)
+        if len(recent_logs) > self.ctx.MAX_LOG_CHARS:
+            recent_logs = "[...truncated...]\n" + recent_logs[-self.ctx.MAX_LOG_CHARS:]
 
-        system_prompt = await self.get_system_prompt()
+        system_prompt = await self.ctx.get_system_prompt()
         prompt = (
             "You are running the HermesAlpha book — your own self-directed "
             "options strategy. Choose ONE credit spread to SELL now, or stand "
@@ -279,7 +241,7 @@ class OverseerProposers:
             "target_delta, dte, width, lots, rationale}. Use PASS to hold fire."
         )
         try:
-            msg = await self._chat_with_timeout(
+            msg = await self.ctx.chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[],
@@ -288,7 +250,7 @@ class OverseerProposers:
             logger.warning("propose_alpha_setup LLM call failed: %s", exc)
             return None
 
-        data = self._safe_json(msg)
+        data = self.ctx.safe_json(msg)
         if not isinstance(data, dict) or str(data.get("verdict", "")).upper() == "PASS":
             return None
         symbol = str(data.get("symbol", "")).upper().strip()
@@ -296,7 +258,7 @@ class OverseerProposers:
             logger.info("propose_alpha_setup: %r not in universe; stand down", symbol)
             return None
         try:
-            await self.db.decisions.write_ai_decision("HermesAlpha", symbol, "autonomous",
+            await self.ctx.db.decisions.write_ai_decision("HermesAlpha", symbol, "autonomous",
                                             {"type": "alpha_setup", **data})
         except Exception:                                          # noqa: BLE001
             pass
@@ -309,13 +271,13 @@ class OverseerProposers:
         Runs regardless of autonomy level — purely informational.  Results are
         stored back on the chart_provider so the C2 API can surface them.
         """
-        if not self.vision_enabled or self.chart_provider is None:
+        if not self.ctx.vision_enabled or self.ctx.chart_provider is None:
             return
         for symbol in watchlist:
-            chart = await self.chart_provider.snapshot(symbol)
+            chart = await self.ctx.chart_provider.snapshot(symbol)
             if chart is None:
                 continue
-            system_prompt = await self.get_system_prompt()
+            system_prompt = await self.ctx.get_system_prompt()
             prompt = (
                 f"Analyse this price chart for {symbol}. "
                 "Identify the current trend, key support/resistance levels, "
@@ -328,16 +290,16 @@ class OverseerProposers:
                 "outlook, rationale} — all string values."
             )
             try:
-                msg = await self._chat_with_timeout(
+                msg = await self.ctx.chat_with_timeout(
                     [{"role": "system", "content": system_prompt},
                      {"role": "user",   "content": prompt}],
                     images=[chart],
                 )
-                analysis = self._safe_json(msg)
+                analysis = self.ctx.safe_json(msg)
                 verdict  = analysis.get("outlook", "NEUTRAL").upper()
                 rationale = analysis.get("rationale", "")
-                self.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
-                await self.db.decisions.write_ai_decision(
+                self.ctx.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
+                await self.ctx.db.decisions.write_ai_decision(
                     "CHART", symbol, "vision",
                     {"type": "chart_analysis", **analysis},
                 )
@@ -346,13 +308,13 @@ class OverseerProposers:
                 logger.warning("Chart analysis failed for %s: %s", symbol, exc)
 
     async def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
-        system_prompt = await self.get_system_prompt()
+        system_prompt = await self.ctx.get_system_prompt()
         prompt = (
             f"Propose ONE high-conviction options TradeAction for {symbol} or null. "
             "Use only fields from the dataclass schema. JSON only."
         )
         try:
-            msg = await self._chat_with_timeout(
+            msg = await self.ctx.chat_with_timeout(
                 [{"role": "system", "content": system_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[chart] if chart is not None else [],
@@ -360,7 +322,7 @@ class OverseerProposers:
         except Exception as exc:                                       # noqa: BLE001
             logger.warning("LLM propose failed for %s: %s", symbol, exc)
             return None
-        data = self._safe_json(msg)
+        data = self.ctx.safe_json(msg)
         if not data or data.get("verdict") == "PASS":
             return None
         return data.get("action")

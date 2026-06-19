@@ -4,10 +4,12 @@ A local LLM (Gemma 3 Flash / Gemma 4 e4b) reviews proposed TradeActions, may VET
 or MODIFY them, and may PROPOSE new ones from chart-image analysis. The class is
 provider-agnostic — `LLMClient` is any object with `.chat(messages, images=...)`.
 
-``overseer.py`` is the spine: it owns construction + wiring, the shared prompt /
-LLM transport (``get_system_prompt`` / ``_chat_with_timeout`` /
-``_chat_with_retry`` / ``_safe_json``), and the per-action ``review`` path. The
-heavier concerns are owned collaborators, each in its own module:
+``overseer.py`` is the spine: it owns construction + wiring and the per-action
+``review`` path. The shared, operator-tunable state and the LLM transport
+(``get_system_prompt`` / ``chat_with_timeout`` / ``chat_with_retry`` /
+``safe_json``) live on an :class:`~.overseer_context.OverseerContext`, held here
+as ``self.ctx``. The heavier concerns are owned collaborators, each in its own
+module:
 
 - review verdict  → :class:`~.overseer_single.SingleReviewer` /
   :class:`~.overseer_committee.CommitteeReviewer`
@@ -17,21 +19,25 @@ heavier concerns are owned collaborators, each in its own module:
   → :class:`~.overseer_governance.OverseerGovernor`
 - event-bus background worker → :class:`~.overseer_worker.ReviewWorker`
 
-Each collaborator takes a back-reference to this overseer and reuses its state
-and transport, so the public method surface (``propose``, ``propose_closes``,
+Each collaborator takes the **shared context** (not a back-reference to this
+overseer) and reads the live state / transport through it, so there is one
+source of truth even though ``main.py`` reconfigures ``autonomy`` / ``soul`` /
+``vision_enabled`` / ``overseer_mode`` / ``llm`` live each tick. The public
+method surface (``review``, ``propose``, ``propose_closes``,
 ``propose_alpha_setup``, ``analyze_charts``, ``propose_parameter_adjustments``,
-``propose_risk_restrictions``, ``start``, ``stop``) is preserved here as thin
-delegators.
+``propose_risk_restrictions``, ``start``, ``stop``) is preserved here, and the
+operator-tunable attributes are proxied onto ``self.ctx`` so existing call-sites
+(``overseer.autonomy = ...``) keep working unchanged.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 from hermes.events.bus import EventBus, ReviewRequestEvent
 from .core import TradeAction
+from .overseer_context import OverseerContext
 from .overseer_committee import CommitteeReviewer
 from .overseer_governance import OverseerGovernor
 from .overseer_proposers import OverseerProposers
@@ -44,19 +50,11 @@ logger = logging.getLogger("hermes.agent.overseer")
 class HermesOverseer:
     """Visual + statistical override layer above the rules engine."""
 
-    BASE_SYSTEM_PROMPT = (
-        "You are HERMES, a quantitative options-trading overseer. "
-        "You review trade actions produced by rule-based strategies and decide: "
-        "APPROVE / VETO / MODIFY. You also propose new trades when chart context "
-        "shows superior setups or imminent risks the rules missed. "
-        "Output strict JSON."
-    )
-
-    # Token budget for log context: ~2 000 tokens ≈ 8 000 chars. Keeps cheap
-    # local LLMs from overflowing their context window on vision prompts.
-    _MAX_LOG_CHARS = 8_000
-    # Retry policy for transient LLM failures (network blip, timeout).
-    _LLM_MAX_RETRIES = 3
+    # Kept as class attributes for backward-compatible external/test access;
+    # the live values used by the transport live on :class:`OverseerContext`.
+    BASE_SYSTEM_PROMPT = OverseerContext.BASE_SYSTEM_PROMPT
+    _MAX_LOG_CHARS = OverseerContext.MAX_LOG_CHARS
+    _LLM_MAX_RETRIES = OverseerContext.LLM_MAX_RETRIES
 
     def __init__(self, llm_client, db, *, vision_enabled: bool = True,
                  chart_provider=None, autonomy: str = "advisory",
@@ -74,75 +72,96 @@ class HermesOverseer:
               the overseer is shaped by both the base instructions and the
               operator's current preferences without anyone touching code.
         """
-        self.llm = llm_client
-        self.db = db
-        self.vision_enabled = vision_enabled
-        self.chart_provider = chart_provider
-        self.autonomy = autonomy
-        self.soul = (soul or "").strip()
-        self.overseer_mode = overseer_mode
+        # Single source of truth for the live, operator-tunable state and the
+        # LLM transport. The operator-tunable attributes below are properties
+        # that read/write straight through to this object.
+        self.ctx = OverseerContext(
+            llm_client, db, vision_enabled=vision_enabled,
+            chart_provider=chart_provider, autonomy=autonomy, soul=soul,
+            overseer_mode=overseer_mode,
+        )
         self.event_bus = event_bus
-        # Owned collaborators, routed to from the thin delegators below. Each
-        # reads this overseer's state and reuses its LLM transport via a
-        # back-reference (see the module docstring for the split):
+        # Owned collaborators. Each takes the shared context (not ``self``) and
+        # reads live state + transport through it:
         #   committee/single — the two review paths (single is also the
-        #                      committee's own failure fallback)
+        #                      committee's own failure fallback, injected below)
         #   proposers        — autonomous origination + chart reads
         #   governor         — out-of-loop settings tuning
-        #   worker           — the event-bus background review worker
-        self.committee = CommitteeReviewer(self)
-        self.single = SingleReviewer(self)
-        self.proposers = OverseerProposers(self)
-        self.governor = OverseerGovernor(self)
-        self.worker = ReviewWorker(self)
+        #   worker           — the event-bus background review worker (also
+        #                      needs the bus + the mode-aware review dispatch)
+        self.single = SingleReviewer(self.ctx)
+        self.committee = CommitteeReviewer(self.ctx, self.single)
+        self.proposers = OverseerProposers(self.ctx)
+        self.governor = OverseerGovernor(self.ctx)
+        self.worker = ReviewWorker(self.ctx, self.event_bus, self._consult)
 
+    # ── operator-tunable state proxied to the shared context ──────────────────
+    # main.py reconfigures these live each tick; routing them through ctx keeps
+    # the collaborators (which read ctx.*) seeing the same single source.
+    @property
+    def llm(self):
+        return self.ctx.llm
+
+    @llm.setter
+    def llm(self, val):
+        self.ctx.llm = val
+
+    @property
+    def db(self):
+        return self.ctx.db
+
+    @db.setter
+    def db(self, val):
+        self.ctx.db = val
+
+    @property
+    def vision_enabled(self):
+        return self.ctx.vision_enabled
+
+    @vision_enabled.setter
+    def vision_enabled(self, val):
+        self.ctx.vision_enabled = val
+
+    @property
+    def chart_provider(self):
+        return self.ctx.chart_provider
+
+    @chart_provider.setter
+    def chart_provider(self, val):
+        self.ctx.chart_provider = val
+
+    @property
+    def autonomy(self):
+        return self.ctx.autonomy
+
+    @autonomy.setter
+    def autonomy(self, val):
+        self.ctx.autonomy = val
+
+    @property
+    def soul(self):
+        return self.ctx.soul
+
+    @soul.setter
+    def soul(self, val):
+        self.ctx.soul = val
+
+    @property
+    def overseer_mode(self):
+        return self.ctx.overseer_mode
+
+    @overseer_mode.setter
+    def overseer_mode(self, val):
+        self.ctx.overseer_mode = val
+
+    # ── transport delegators (bodies live on OverseerContext) ─────────────────
+    # Preserved so existing call-sites / tests that reach the overseer's
+    # transport surface keep working; the single implementation is on ctx.
     async def _chat_with_timeout(self, messages: List[Dict[str, str]], images: List[Any] = None) -> str:
-        """Call the LLM with a strict timeout gate to prevent hanging."""
-        timeout_val = getattr(self.llm, "timeout_s", 15.0)
-        # Safeguard: if self.llm is a MagicMock, getattr returns a mock object, which is not a float/int
-        if not isinstance(timeout_val, (int, float)):
-            timeout_s = 15.0
-        else:
-            timeout_s = timeout_val or 15.0
-
-        return await asyncio.wait_for(
-            asyncio.to_thread(self.llm.chat, messages, images=images or []),
-            timeout=timeout_s
-        )
+        return await self.ctx.chat_with_timeout(messages, images=images)
 
     async def get_system_prompt(self) -> str:
-        """Base instructions + market session context + operator doctrine + strategy metrics."""
-        try:
-            from hermes.market_hours import session_label
-            mkt_line = session_label()
-        except Exception:                                        # noqa: BLE001
-            mkt_line = ""
-
-        parts = [self.BASE_SYSTEM_PROMPT]
-        if mkt_line:
-            parts.append(f"\nCURRENT MARKET STATUS: {mkt_line}")
-
-        try:
-            if self.db is not None:
-                perf_metrics = await self.db.analytics.get_strategy_performance_metrics(days=30)
-                perf_lines = []
-                for strat, data in perf_metrics.items():
-                    perf_lines.append(
-                        f"- {strat}: status={data['status']}, closed={data['closed_trades']}, "
-                        f"passed={data['passed']}, failed={data['failed']}, total_pnl=${data['total_pnl']:.2f}"
-                    )
-                perf_str = "\n".join(perf_lines)
-                parts.append(f"\nRECENT STRATEGY PERFORMANCE (30-DAY WINDOW):\n{perf_str}")
-        except Exception as exc:
-            logger.warning("Failed to fetch performance metrics for SYSTEM_PROMPT: %s", exc)
-
-        if self.soul:
-            parts.append(
-                "\n--- OPERATOR DOCTRINE (soul.md) ---\n"
-                f"{self.soul}\n"
-                "--- END DOCTRINE ---"
-            )
-        return "\n".join(parts)
+        return await self.ctx.get_system_prompt()
 
     # -- review existing rule-driven actions ---------------------------------
     async def review(self, action: TradeAction) -> Optional[TradeAction]:
@@ -191,21 +210,7 @@ class HermesOverseer:
 
     # -- LLM I/O -------------------------------------------------------------
     async def _chat_with_retry(self, messages: List[Dict[str, str]], images: List[Any] = None) -> str:
-        """Call the LLM with a strict timeout and automatic retry logic."""
-        last_exc: Exception = RuntimeError("no attempts made")
-        for attempt in range(self._LLM_MAX_RETRIES):
-            try:
-                return await self._chat_with_timeout(messages, images=images)
-            except (asyncio.TimeoutError, Exception) as exc:
-                last_exc = exc
-                if attempt < self._LLM_MAX_RETRIES - 1:
-                    wait_s = 2 ** attempt          # 1 s, 2 s
-                    logger.warning(
-                        "LLM attempt %d/%d failed/timed out; retrying in %ds: %s",
-                        attempt + 1, self._LLM_MAX_RETRIES, wait_s, exc,
-                    )
-                    await asyncio.sleep(wait_s)
-        raise last_exc
+        return await self.ctx.chat_with_retry(messages, images=images)
 
     async def _consult(self, action: TradeAction) -> Dict[str, Any]:
         """Routes review to the owned reviewer for the active overseer_mode."""
@@ -219,38 +224,9 @@ class HermesOverseer:
         :class:`SingleReviewer`."""
         return await self.single.consult(action)
 
-    @staticmethod
-    def _safe_json(text: str) -> Dict[str, Any]:
-        if isinstance(text, dict):
-            return text
-        if not isinstance(text, str):
-            return {"verdict": "APPROVE", "rationale": "Non-string LLM reply; defaulting."}
-
-        clean_text = text.strip()
-        if "```" in clean_text:
-            parts = clean_text.split("```")
-            for i in range(1, len(parts), 2):
-                block = parts[i].strip()
-                if block.startswith("json"):
-                    block = block[4:].strip()
-                start, end = block.find("{"), block.rfind("}")
-                if start >= 0 and end > start:
-                    try:
-                        return json.loads(block[start:end + 1])
-                    except Exception:                                  # noqa: BLE001
-                        pass
-
-        try:
-            return json.loads(clean_text)
-        except Exception:                                              # noqa: BLE001
-            # Try to find a JSON block embedded in prose
-            start, end = clean_text.find("{"), clean_text.rfind("}")
-            if start >= 0 and end > start:
-                try:
-                    return json.loads(clean_text[start:end + 1])
-                except Exception:                                      # noqa: BLE001
-                    pass
-        return {"verdict": "APPROVE", "rationale": "Unparseable LLM reply; defaulting."}
+    # JSON-reply parsing is stateless; the implementation lives on the context.
+    # Exposed here (class-callable) for backward-compatible test/external access.
+    _safe_json = staticmethod(OverseerContext.safe_json)
 
     # -- autonomous background worker (→ ReviewWorker) -----------------------
     @property

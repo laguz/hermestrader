@@ -2,11 +2,10 @@
 [Service-1: Hermes-Agent-Core] — Multi-Agent Risk Committee reviewer.
 
 Split out of ``overseer.py`` to separate the committee review path from the
-single-LLM path. :class:`CommitteeReviewer` is an injected
-collaborator owned by :class:`~hermes.service1_agent.overseer.HermesOverseer`:
-it reads the overseer's state (db, soul, vision/chart) and reuses its LLM
-transport (``_chat_with_retry`` / ``_safe_json``) through a back-reference, so
-the four method bodies moved out of the overseer unchanged.
+single-LLM path. :class:`CommitteeReviewer` takes the shared
+:class:`~hermes.service1_agent.overseer_context.OverseerContext` (live state +
+LLM transport) and the sibling :class:`~.overseer_single.SingleReviewer` it falls
+back to, so there is one source of truth and no per-collaborator forwarding.
 
 Flow: the Macro Specialist and the Strategy Specialist run in parallel, then the
 Risk Officer synthesises their findings into the final APPROVE / VETO / MODIFY
@@ -24,7 +23,8 @@ from typing import TYPE_CHECKING, Any, Dict, List
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .core import TradeAction
-    from .overseer import HermesOverseer
+    from .overseer_context import OverseerContext
+    from .overseer_single import SingleReviewer
 
 logger = logging.getLogger("hermes.agent.overseer")
 
@@ -32,10 +32,10 @@ logger = logging.getLogger("hermes.agent.overseer")
 class CommitteeReviewer:
     """Owns the overseer's multi-agent committee review path.
 
-    Reads overseer state via ``self._ov``; the forwarding properties below let
-    the method bodies keep reading ``self.db`` / ``self.soul`` / ``self._safe_json``
-    etc. unchanged, so the extraction from the inline committee was a move, not a
-    rewrite. The three specialist prompts live here because nothing else uses
+    Reads live state and the LLM transport off the shared
+    :class:`~hermes.service1_agent.overseer_context.OverseerContext`
+    (``self.ctx``), and falls back to the sibling :class:`SingleReviewer` on any
+    failure. The three specialist prompts live here because nothing else uses
     them.
     """
 
@@ -97,41 +97,9 @@ class CommitteeReviewer:
         "}"
     )
 
-    def __init__(self, overseer: "HermesOverseer") -> None:
-        self._ov = overseer
-
-    # ── forwarded overseer handles (single source of truth on the overseer) ──
-    @property
-    def db(self):
-        return self._ov.db
-
-    @property
-    def soul(self):
-        return self._ov.soul
-
-    @property
-    def vision_enabled(self):
-        return self._ov.vision_enabled
-
-    @property
-    def chart_provider(self):
-        return self._ov.chart_provider
-
-    @property
-    def _MAX_LOG_CHARS(self):
-        return self._ov._MAX_LOG_CHARS
-
-    @property
-    def _chat_with_retry(self):
-        return self._ov._chat_with_retry
-
-    @property
-    def _safe_json(self):
-        return self._ov._safe_json
-
-    @property
-    def _consult_single(self):
-        return self._ov._consult_single
+    def __init__(self, ctx: "OverseerContext", single: "SingleReviewer") -> None:
+        self.ctx = ctx
+        self._single = single
 
     async def consult(self, action: "TradeAction") -> Dict[str, Any]:
         """Decomposes review into a Multi-Agent Committee: Macro + Strategy Specialists (parallel) -> Risk Officer."""
@@ -144,15 +112,15 @@ class CommitteeReviewer:
                 pass
 
             recent_logs = ""
-            if self.db is not None:
-                recent_logs = await self.db.logs.recent_logs(limit=200)
-                if len(recent_logs) > self._MAX_LOG_CHARS:
-                    recent_logs = "[...truncated...]\n" + recent_logs[-self._MAX_LOG_CHARS:]
+            if self.ctx.db is not None:
+                recent_logs = await self.ctx.db.logs.recent_logs(limit=200)
+                if len(recent_logs) > self.ctx.MAX_LOG_CHARS:
+                    recent_logs = "[...truncated...]\n" + recent_logs[-self.ctx.MAX_LOG_CHARS:]
 
             images = []
-            if self.vision_enabled and self.chart_provider is not None:
+            if self.ctx.vision_enabled and self.ctx.chart_provider is not None:
                 try:
-                    img = await self.chart_provider.snapshot(action.symbol)
+                    img = await self.ctx.chart_provider.snapshot(action.symbol)
                     if img is not None:
                         images.append(img)
                 except Exception:                                      # noqa: BLE001
@@ -175,7 +143,7 @@ class CommitteeReviewer:
 
         except Exception as exc:
             logger.warning("Committee execution failed: %s; falling back to single-LLM review.", exc)
-            return await self._consult_single(action)
+            return await self._single.consult(action)
 
     async def _run_macro_specialist(self, action: "TradeAction", mkt_line: str, recent_logs: str, images: List[Any]) -> Dict[str, Any]:
         sys_prompt = self.MACRO_SPECIALIST_PROMPT
@@ -187,12 +155,12 @@ class CommitteeReviewer:
             f"RECENT_LOGS:\n{recent_logs}\n"
         )
         try:
-            msg = await self._chat_with_retry(
+            msg = await self.ctx.chat_with_retry(
                 [{"role": "system", "content": sys_prompt},
                  {"role": "user",   "content": prompt}],
                 images=images
             )
-            res = self._safe_json(msg)
+            res = self.ctx.safe_json(msg)
             logger.info("Macro Specialist: trend=%s risk=%s rationale=%s",
                         res.get("trend"), res.get("macro_risk_rating"), res.get("rationale"))
             return res
@@ -205,8 +173,8 @@ class CommitteeReviewer:
 
         perf_metrics_str = ""
         try:
-            if self.db is not None:
-                perf_metrics = await self.db.analytics.get_strategy_performance_metrics(days=30)
+            if self.ctx.db is not None:
+                perf_metrics = await self.ctx.db.analytics.get_strategy_performance_metrics(days=30)
                 perf_lines = []
                 for strat, data in perf_metrics.items():
                     perf_lines.append(
@@ -225,12 +193,12 @@ class CommitteeReviewer:
         prompt += f"RECENT_LOGS:\n{recent_logs}\n"
 
         try:
-            msg = await self._chat_with_retry(
+            msg = await self.ctx.chat_with_retry(
                 [{"role": "system", "content": sys_prompt},
                  {"role": "user",   "content": prompt}],
                 images=[]
             )
-            res = self._safe_json(msg)
+            res = self.ctx.safe_json(msg)
             logger.info("Strategy Specialist: parameter=%s risk=%s rationale=%s",
                         res.get("parameter_suitability"), res.get("strategy_risk_rating"), res.get("rationale"))
             return res
@@ -242,10 +210,10 @@ class CommitteeReviewer:
         sys_prompt = self.RISK_OFFICER_PROMPT
         if mkt_line:
             sys_prompt += f"\nCURRENT MARKET STATUS: {mkt_line}"
-        if self.soul:
+        if self.ctx.soul:
             sys_prompt += (
                 "\n--- OPERATOR DOCTRINE (soul.md) ---\n"
-                f"{self.soul}\n"
+                f"{self.ctx.soul}\n"
                 "--- END DOCTRINE ---"
             )
 
@@ -254,16 +222,16 @@ class CommitteeReviewer:
             f"MACRO SPECIALIST REVIEW:\n{json.dumps(macro_res, indent=2)}\n\n"
             f"STRATEGY SPECIALIST REVIEW:\n{json.dumps(strategy_res, indent=2)}\n"
         )
-        msg = await self._chat_with_retry(
+        msg = await self.ctx.chat_with_retry(
             [{"role": "system", "content": sys_prompt},
              {"role": "user",   "content": prompt}],
             images=[]
         )
-        res = self._safe_json(msg)
+        res = self.ctx.safe_json(msg)
         # Clear any stored LLM error on success.
         try:
-            await self.db.settings.set_setting("llm_last_error", "")
-            await self.db.settings.set_setting(
+            await self.ctx.db.settings.set_setting("llm_last_error", "")
+            await self.ctx.db.settings.set_setting(
                 "llm_last_ok_ts",
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
