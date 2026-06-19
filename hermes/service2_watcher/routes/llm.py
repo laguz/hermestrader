@@ -59,9 +59,11 @@ async def _read_llm_config() -> Dict[str, Any]:
     except ValueError:
         timeout_s = DEFAULT_LLM_TIMEOUT_S
     vision = (await db.settings.get_setting(SETTING_LLM_VISION) or "true").lower() != "false"
-    overseer_mode = (await db.settings.get_setting("overseer_mode") or "monolithic").lower()
-    if overseer_mode not in ("monolithic", "committee"):
-        overseer_mode = "monolithic"
+    overseer_mode = (await db.settings.get_setting("overseer_mode") or "single").lower()
+    if overseer_mode == "monolithic":          # legacy alias → canonical
+        overseer_mode = "single"
+    if overseer_mode not in ("single", "committee"):
+        overseer_mode = "single"
     last_ok = parse_iso(await db.settings.get_setting(SETTING_LLM_OK_TS))
     last_err = (await db.settings.get_setting(SETTING_LLM_ERROR) or "").strip() or None
     return {
@@ -135,8 +137,10 @@ async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
         await db.settings.set_setting(SETTING_LLM_TIMEOUT, str(body.timeout_s))
     if body.overseer_mode is not None:
         om = body.overseer_mode.lower().strip()
-        if om not in ("monolithic", "committee"):
-            raise HTTPException(status_code=400, detail="overseer_mode must be 'monolithic' or 'committee'")
+        if om == "monolithic":                 # legacy alias → canonical
+            om = "single"
+        if om not in ("single", "committee"):
+            raise HTTPException(status_code=400, detail="overseer_mode must be 'single' or 'committee'")
         await db.settings.set_setting("overseer_mode", om)
     await db.settings.set_setting(SETTING_LLM_ERROR, "")
     await db.logs.write_log("ENGINE", "[C2] LLM config updated")

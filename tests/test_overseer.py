@@ -315,15 +315,15 @@ class _FakeCommitteeLLMModify:
 
 class _ExplodingMacroLLM:
     def __init__(self):
-        self.monolithic_called = False
+        self.single_called = False
 
     def chat(self, messages, images=None):
         content = " ".join([m.get("content", "") for m in messages])
         if "Macro Specialist" in content:
             raise RuntimeError("macro LLM timeout")
         if "quantitative options-trading overseer" in content:
-            self.monolithic_called = True
-            return '{"verdict": "VETO", "rationale": "monolithic veto fallback"}'
+            self.single_called = True
+            return '{"verdict": "VETO", "rationale": "single veto fallback"}'
         return '{"verdict": "APPROVE", "rationale": "risk officer fallback"}'
 
 
@@ -350,13 +350,26 @@ async def test_committee_mode_modifies_action():
     assert a.ai_rationale == "modified pricing"
 
 
-async def test_committee_mode_fallback_to_monolithic_on_specialist_failure():
+async def test_committee_mode_fallback_to_single_on_specialist_failure():
     db = StubDB()
     llm = _ExplodingMacroLLM()
     o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
     a = _action()
     out = await o.review(a)
-    # Specialist fails, falls back to monolithic which VETOs the trade.
+    # Specialist fails, falls back to single-LLM review which VETOs the trade.
     assert out is None
-    assert llm.monolithic_called is True
+    assert llm.single_called is True
+
+
+async def test_legacy_monolithic_mode_routes_to_single_reviewer():
+    """The renamed mode keeps a backward-compatible alias: a stored
+    ``overseer_mode='monolithic'`` must still take the single-LLM path
+    (one review call), not the committee path (three)."""
+    db = StubDB()
+    llm = _ExplodingMacroLLM()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="monolithic")
+    await o.review(_action())
+    # Single path makes exactly one overseer review call; committee would
+    # have invoked the two specialists first.
+    assert llm.single_called is True
 

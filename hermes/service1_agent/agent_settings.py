@@ -61,9 +61,11 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     paused = ((await db.settings.get_setting(SETTING_PAUSED)) or "false").lower() == "true"
     approval_mode = ((await db.settings.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
     llm_out_of_loop = ((await db.settings.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
-    overseer_mode = ((await db.settings.get_setting("overseer_mode")) or "monolithic").lower()
-    if overseer_mode not in ("monolithic", "committee"):
-        overseer_mode = "monolithic"
+    overseer_mode = ((await db.settings.get_setting("overseer_mode")) or "single").lower()
+    if overseer_mode == "monolithic":          # legacy alias → canonical
+        overseer_mode = "single"
+    if overseer_mode not in ("single", "committee"):
+        overseer_mode = "single"
     # Per-strategy enable flags — default to enabled for all known strategies.
     strategy_enabled = {
         sid: ((await db.settings.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"

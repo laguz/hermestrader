@@ -33,7 +33,7 @@ class ControlState:
         self.soul = ""
         self.approval_mode = True
         self.llm_out_of_loop = True
-        self.overseer_mode = "monolithic"
+        self.overseer_mode = "single"
         self.strategy_enabled = {sid: True for sid in STRATEGY_PRIORITIES}
         self.watchlist = {sid: [] for sid in STRATEGY_PRIORITIES}
         self.llm_config = {
@@ -137,7 +137,7 @@ class ControlState:
         self.autonomy = settings.get("agent_autonomy", "advisory").lower()
         self.approval_mode = settings.get("approval_mode", "true").lower() == "true"
         self.llm_out_of_loop = settings.get("llm_out_of_loop", "true").lower() == "true"
-        self.overseer_mode = settings.get("overseer_mode", "monolithic").lower()
+        self.overseer_mode = settings.get("overseer_mode", "single").lower()
         
         try:
             self.max_daily_loss = float(settings["max_daily_loss"]) if settings.get("max_daily_loss") else None

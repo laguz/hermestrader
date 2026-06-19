@@ -73,10 +73,10 @@
   - **Size:** M–L
 
 ## 3. Decompose `overseer.py` (817 lines)
-- [x] **Separate monolithic vs committee review paths.**
+- [x] **Separate single vs committee review paths.**
   *(Done — the committee path was already in `overseer_committee.py`
   (`CommitteeReviewer`); the single-LLM path now mirrors it in
-  `overseer_monolithic.py` (`MonolithicReviewer`). Both are owned collaborators
+  `overseer_single.py` (`SingleReviewer`). Both are owned collaborators
   with a back-reference to the overseer, routed to from `_consult` per
   `overseer_mode`, behind the unchanged `HermesOverseer.review` facade.
   `core.py`-style thin delegator kept for the committee's failure fallback.
@@ -84,7 +84,7 @@
   - **Problem:** Both LLM-review modes live in one 817-line module.
   - **Why:** They're independent code paths sharing a file; splitting clarifies
     which one a change touches and shrinks the blast radius.
-  - **Definition of Done:** Monolithic and committee paths live in separate
+  - **Definition of Done:** Single and committee paths live in separate
     modules behind a thin `HermesOverseer.review` facade; the committee's
     Macro / Strategy / Risk-Officer roles are individually testable. Existing
     overseer tests still pass.
@@ -94,7 +94,7 @@
     (`propose`, `propose_closes`, `propose_alpha_setup`,
     `propose_parameter_adjustments`, `propose_risk_restrictions`,
     `analyze_charts`). Splitting those into an `OverseerGovernance` collaborator
-    is a separate, optional follow-up — not part of the monolithic/committee DoD.
+    is a separate, optional follow-up — not part of the single/committee DoD.
 
 ## 4. Split the ML feature surface (`xgb_features.py`, 782 lines)
 - [x] **Decompose the predictor (the file's real god-class).**

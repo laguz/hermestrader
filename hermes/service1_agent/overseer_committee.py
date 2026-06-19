@@ -2,7 +2,7 @@
 [Service-1: Hermes-Agent-Core] — Multi-Agent Risk Committee reviewer.
 
 Split out of ``overseer.py`` to separate the committee review path from the
-single-LLM (monolithic) path. :class:`CommitteeReviewer` is an injected
+single-LLM path. :class:`CommitteeReviewer` is an injected
 collaborator owned by :class:`~hermes.service1_agent.overseer.HermesOverseer`:
 it reads the overseer's state (db, soul, vision/chart) and reuses its LLM
 transport (``_chat_with_retry`` / ``_safe_json``) through a back-reference, so
@@ -10,8 +10,8 @@ the four method bodies moved out of the overseer unchanged.
 
 Flow: the Macro Specialist and the Strategy Specialist run in parallel, then the
 Risk Officer synthesises their findings into the final APPROVE / VETO / MODIFY
-verdict. On any failure the whole path falls back to the overseer's monolithic
-review, so committee mode never fails closed differently from monolithic mode.
+verdict. On any failure the whole path falls back to the overseer's single-LLM
+review, so committee mode never fails closed differently from single mode.
 """
 from __future__ import annotations
 
@@ -130,8 +130,8 @@ class CommitteeReviewer:
         return self._ov._safe_json
 
     @property
-    def _consult_monolithic(self):
-        return self._ov._consult_monolithic
+    def _consult_single(self):
+        return self._ov._consult_single
 
     async def consult(self, action: "TradeAction") -> Dict[str, Any]:
         """Decomposes review into a Multi-Agent Committee: Macro + Strategy Specialists (parallel) -> Risk Officer."""
@@ -174,8 +174,8 @@ class CommitteeReviewer:
             return decision
 
         except Exception as exc:
-            logger.warning("Committee execution failed: %s; falling back to monolithic review.", exc)
-            return await self._consult_monolithic(action)
+            logger.warning("Committee execution failed: %s; falling back to single-LLM review.", exc)
+            return await self._consult_single(action)
 
     async def _run_macro_specialist(self, action: "TradeAction", mkt_line: str, recent_logs: str, images: List[Any]) -> Dict[str, Any]:
         sys_prompt = self.MACRO_SPECIALIST_PROMPT

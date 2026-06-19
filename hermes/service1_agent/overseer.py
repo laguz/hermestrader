@@ -15,7 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from hermes.events.bus import EventBus, ReviewRequestEvent, AIApprovalEvent
 from .core import TradeAction
 from .overseer_committee import CommitteeReviewer
-from .overseer_monolithic import MonolithicReviewer
+from .overseer_single import SingleReviewer
 
 logger = logging.getLogger("hermes.agent.overseer")
 
@@ -34,7 +34,7 @@ class HermesOverseer:
     def __init__(self, llm_client, db, *, vision_enabled: bool = True,
                  chart_provider=None, autonomy: str = "advisory",
                  soul: Optional[str] = None,
-                 overseer_mode: str = "monolithic",
+                 overseer_mode: str = "single",
                  event_bus: Optional[EventBus] = None):
         """
         autonomy: 'advisory'  → log decisions, never block (default for new deployments)
@@ -58,10 +58,10 @@ class HermesOverseer:
         # The two review paths, owned and routed to from _consult per the
         # overseer_mode setting. Both read this overseer's state and reuse its
         # LLM transport via a back-reference: committee for the multi-agent
-        # path, monolithic for the single-LLM path (and the committee's own
+        # path, single for the single-LLM path (and the committee's own
         # failure fallback).
         self.committee = CommitteeReviewer(self)
-        self.monolithic = MonolithicReviewer(self)
+        self.single = SingleReviewer(self)
         self._queue: Optional[asyncio.Queue[ReviewRequestEvent]] = None
         self._worker_task: Optional[asyncio.Task] = None
 
@@ -618,13 +618,13 @@ class HermesOverseer:
         """Routes review to the owned reviewer for the active overseer_mode."""
         if self.overseer_mode == "committee":
             return await self.committee.consult(action)
-        return await self.monolithic.consult(action)
+        return await self.single.consult(action)
 
-    async def _consult_monolithic(self, action: TradeAction) -> Dict[str, Any]:
+    async def _consult_single(self, action: TradeAction) -> Dict[str, Any]:
         """Thin delegator preserving the internal surface (the committee's
         failure fallback calls this). The body now lives on
-        :class:`MonolithicReviewer`."""
-        return await self.monolithic.consult(action)
+        :class:`SingleReviewer`."""
+        return await self.single.consult(action)
 
     async def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
         system_prompt = await self.get_system_prompt()

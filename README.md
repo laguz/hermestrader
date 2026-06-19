@@ -19,7 +19,7 @@ hermes/
 │   ├── money_manager.py # MoneyManager, IronCondorBuilder — capacity & sizing
 │   ├── strategy_base.py # AbstractStrategy — base class for the strategies
 │   ├── strategies/    # CS75 (P=1), CS7 (P=2), TT45 (P=3), Wheel (P=4), HermesAlpha (P=5)
-│   ├── overseer.py    # Hermes AI Overseer — monolithic or multi-agent committee
+│   ├── overseer.py    # Hermes AI Overseer — single or multi-agent committee
 │   ├── agent_*.py     # run-loop helpers — settings, construction, risk, approvals
 │   └── main.py        # entry point + run loop
 ├── service2_watcher/
