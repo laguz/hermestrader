@@ -44,7 +44,7 @@ LLM_PROVIDER_BASE_URLS: dict[str, str] = {
 DEFAULT_LLM_TIMEOUT_S: float = 120.0
 
 # ---------------------------------------------------------------------------
-# Cross-service IPC (PostgreSQL LISTEN/NOTIFY) contract
+# Cross-service IPC (Redis pub/sub) contract
 # ---------------------------------------------------------------------------
 # One multiplexed channel carries signals from the watcher (service-2,
 # publisher) to the agent (service-1, subscriber). Two payload shapes ride it:

@@ -3,7 +3,7 @@
 
 These are the two largest, fully self-contained reactive handlers from
 ``main._run_async``: the quote/chain cache pre-warm (fired by ``CacheWarmTick``)
-and the IPC command callback (fired by Postgres ``NOTIFY`` on the agent-commands
+and the IPC command callback (fired by Redis pub/sub on the agent-commands
 channel). Both read their dependencies through explicit parameters and mutate no
 run-loop state, so the bodies moved out of the run loop unchanged — ``main``
 keeps a thin closure that forwards to them.

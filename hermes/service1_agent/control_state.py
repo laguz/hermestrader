@@ -20,7 +20,7 @@ logger = logging.getLogger("hermes.service1_agent.control_state")
 
 # How stale (seconds) control state may get before the clock-tick backstop
 # re-hydrates it from the DB. Settings normally arrive as events; this is the
-# safety net for a dropped Postgres NOTIFY, so it runs on the slow clock cadence
+# safety net for a dropped Redis pub/sub message, so it runs on the slow clock cadence
 # rather than on every reactive tick.
 CONTROL_STATE_BACKSTOP_S = 60
 
