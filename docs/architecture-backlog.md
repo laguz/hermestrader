@@ -65,7 +65,14 @@
   - **Size:** M–L
 
 ## 3. Decompose `overseer.py` (817 lines)
-- [ ] **Separate monolithic vs committee review paths.**
+- [x] **Separate monolithic vs committee review paths.**
+  *(Done — the committee path was already in `overseer_committee.py`
+  (`CommitteeReviewer`); the single-LLM path now mirrors it in
+  `overseer_monolithic.py` (`MonolithicReviewer`). Both are owned collaborators
+  with a back-reference to the overseer, routed to from `_consult` per
+  `overseer_mode`, behind the unchanged `HermesOverseer.review` facade.
+  `core.py`-style thin delegator kept for the committee's failure fallback.
+  `overseer.py` 818 → 776 lines. Full suite green: 542 passed.)*
   - **Problem:** Both LLM-review modes live in one 817-line module.
   - **Why:** They're independent code paths sharing a file; splitting clarifies
     which one a change touches and shrinks the blast radius.
@@ -74,17 +81,44 @@
     Macro / Strategy / Risk-Officer roles are individually testable. Existing
     overseer tests still pass.
   - **Size:** M
+  - **NOTE — remaining largeness is a *different* concern:** `overseer.py` is
+    still ~776 lines because of the out-of-loop governance/origination methods
+    (`propose`, `propose_closes`, `propose_alpha_setup`,
+    `propose_parameter_adjustments`, `propose_risk_restrictions`,
+    `analyze_charts`). Splitting those into an `OverseerGovernance` collaborator
+    is a separate, optional follow-up — not part of the monolithic/committee DoD.
 
 ## 4. Split the ML feature surface (`xgb_features.py`, 782 lines)
-- [ ] **Turn the feature file into a small package.**
-  - **Problem:** Even after the pure feature-engineering extraction, one file
-    holds the whole feature surface.
-  - **Why:** Feature families (price/vol/IV/calendar/etc.) change independently;
-    a package with per-family modules is easier to test and extend.
-  - **Definition of Done:** `hermes/ml/features/` package with per-family modules
-    and a thin assembler; no single module > ~250 lines. ML backtest output
-    unchanged on a fixed seed/fixture.
+- [x] **Decompose the predictor (the file's real god-class).**
+  *(Done — but the original premise was stale, so the item was re-scoped. The
+  pure feature surface was already extracted to `hermes/ml/feature_engineer.py`
+  (164 lines, one method per family: gap / momentum / beta-residual / vwap /
+  range / volume / realized-vol / seasonality / hv_rank); that file is small and
+  cohesive, so exploding it into a `features/` package of ~10-line modules would
+  be over-engineering. The 782-line `xgb_features.py` was **not** a feature
+  surface — it was the predictor (`AsyncXGBPredictor`). Split into:*
+    - *`predictor_config.py` (71) — `PredictorConfig` + `run_maybe_async`.*
+    - *`predictor_training.py` (186) — `PredictorTrainer.retrain_all` +
+      quantile-fit helpers.*
+    - *`predictor_inference.py` (179) — `PredictorInference.predict_all` +
+      `_return_to_prob` / `_write_ledger_row`.*
+  *`xgb_features.py` 782 → 505. Training/inference are owned collaborators with a
+  back-reference to the predictor; they mutate the shared caches (`_models` /
+  `_drift` / `_last_pred`) through read-only forwarding properties that return
+  the live dict objects, so the method bodies moved unchanged. `_run_ml_cycle` /
+  `_loop` route to `self.trainer` / `self.inference`. Scheduling, history sync,
+  calibration, feature frames, and diagnostics stay on the predictor. Full suite
+  green: 542 passed.)*
+  - **Why:** Feature families change independently; the predictor's concerns
+    (train vs. predict vs. schedule) change independently too.
+  - **Definition of Done:** the predictor's training and inference concerns live
+    in their own modules behind `AsyncXGBPredictor`; no single module > ~300
+    lines; ML output unchanged (full ML suite green on the same fixtures).
   - **Size:** M
+  - **NOTE — optional follow-up:** scheduling (`_loop` / `_run_ml_cycle` /
+    `_should_predict` / `_record_status`) and history sync (`_sync_history`)
+    could move to a `PredictorScheduler` if `xgb_features.py` keeps growing; not
+    needed at 505 lines.
 
 ## 5. Make autonomous trade-origination opt-in, not load-bearing
 - [ ] **Gate LLM-originated trades behind proven-in-sim.**
