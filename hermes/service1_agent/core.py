@@ -117,6 +117,10 @@ class CascadingEngine:
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
         self._bg_tasks: set[asyncio.Task] = set()
+        # Serializes the two operator-command drain triggers (IPC nudge vs
+        # tick-start) so a command can't be applied twice concurrently. The bus
+        # dispatches handlers as independent tasks, so they really can overlap.
+        self._cmd_drain_lock = asyncio.Lock()
 
         # Three owned collaborators. Each reads the shared dependency surface
         # through ``engine.ctx`` and keeps the engine reference only for the few
@@ -138,6 +142,7 @@ class CascadingEngine:
                 ReconcileOrphansCommand,
                 ProcessManagementCommand,
                 ProcessEntriesCommand,
+                DrainOperatorCommandsCommand,
             )
             self.event_bus.subscribe(ExecuteTickCommand, self.handle_execute_tick)
             self.event_bus.subscribe(ExecuteClockTickCommand, self.handle_execute_clock_tick)
@@ -146,6 +151,7 @@ class CascadingEngine:
             self.event_bus.subscribe(ReconcileOrphansCommand, self.handle_reconcile_orphans)
             self.event_bus.subscribe(ProcessManagementCommand, self.handle_process_management)
             self.event_bus.subscribe(ProcessEntriesCommand, self.handle_process_entries)
+            self.event_bus.subscribe(DrainOperatorCommandsCommand, self.handle_drain_operator_commands)
 
     # ── delegators to the owned collaborators ────────────────────────────────
     # These forward the engine's public/cross-called surface to the collaborator
@@ -222,6 +228,42 @@ class CascadingEngine:
             if command.future and not command.future.done():
                 command.future.set_exception(exc)
             raise
+
+    async def handle_drain_operator_commands(self, command):
+        await self.drain_operator_commands()
+
+    async def drain_operator_commands(self) -> int:
+        """Apply PENDING operator commands, in submission order, in-process.
+
+        This is the agent-side half of the single-writer command channel: the
+        watcher only *enqueues* intents; here the agent applies each through the
+        normal write path (``set_setting`` / ``decide_approval`` → ``record_event``
+        → ledger + projection), so the agent stays the sole writer of canonical
+        state. Apply is idempotent, so a row left PENDING by a crash between the
+        write and ``mark_applied`` is safely re-applied on the next drain.
+        """
+        async with self._cmd_drain_lock:
+            applied = 0
+            for cmd in await self.db.commands.fetch_pending():
+                cid = cmd["id"]
+                try:
+                    ctype = cmd["command_type"]
+                    payload = cmd["payload"] or {}
+                    if ctype == "SET_SETTING":
+                        for key, value in (payload.get("settings") or {}).items():
+                            await self.db.settings.set_setting(key, str(value))
+                    elif ctype == "DECIDE_APPROVAL":
+                        await self.db.approvals.decide_approval(
+                            int(payload["approval_id"]), payload["decision"],
+                            notes=payload.get("notes"))
+                    else:
+                        raise ValueError(f"unknown command_type {ctype!r}")
+                    await self.db.commands.mark_applied(cid)
+                    applied += 1
+                except Exception as exc:                        # noqa: BLE001
+                    logger.exception("[CMD] operator command %d failed: %s", cid, exc)
+                    await self.db.commands.mark_failed(cid, str(exc))
+            return applied
 
     async def handle_execute_clock_tick(self, command):
         try:
@@ -523,6 +565,10 @@ class CascadingEngine:
             return await self._run_tick_internal(watchlist)
 
     async def _run_tick_internal(self, watchlist: Sequence[str]) -> Dict[str, int]:
+        # Apply any operator commands (pause/mode/approvals/settings) before the
+        # order-sensitive trading pipeline runs, so this tick acts on the latest
+        # operator intent. Prepended ahead of the pipeline, not interleaved.
+        await self.drain_operator_commands()
         res = await self.sync_positions()
         if isinstance(res, tuple) and len(res) == 2:
             positions, active_legs = res

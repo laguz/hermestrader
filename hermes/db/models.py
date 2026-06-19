@@ -25,15 +25,15 @@ from sqlalchemy.orm import sessionmaker
 
 # Re-exported so ``from hermes.db.models import Base, Trade, ...`` keeps working.
 from hermes.db.orm import (  # noqa: F401
-    AIDecision, Base, BotLog, EventLedger, ExitTick, PendingApproval, PendingOrder,
-    Prediction, Strategy, StrategyWatchlist, SystemSetting, Trade,
-    VetoSuppression, _close_reason_from_tag, _compute_realized_pnl,
-    sync_to_async_dsn,
+    AIDecision, Base, BotLog, EventLedger, ExitTick, OperatorCommand,
+    PendingApproval, PendingOrder, Prediction, Strategy, StrategyWatchlist,
+    SystemSetting, Trade, VetoSuppression, _close_reason_from_tag,
+    _compute_realized_pnl, sync_to_async_dsn,
 )
 from hermes.db.repositories import (
-    AnalyticsRepository, ApprovalsRepository, DecisionsRepository,
-    LogsRepository, SettingsRepository, TimeSeriesRepository,
-    TradesRepository, WatchlistRepository,
+    AnalyticsRepository, ApprovalsRepository, CommandsRepository,
+    DecisionsRepository, LogsRepository, SettingsRepository,
+    TimeSeriesRepository, TradesRepository, WatchlistRepository,
 )
 
 logger = logging.getLogger("hermes.db")
@@ -41,7 +41,7 @@ logger = logging.getLogger("hermes.db")
 __all__ = [
     "Base", "Strategy", "StrategyWatchlist", "Trade", "PendingOrder",
     "PendingApproval", "VetoSuppression", "BotLog", "EventLedger", "AIDecision", "Prediction",
-    "SystemSetting", "ExitTick", "HermesDB", "sync_to_async_dsn",
+    "SystemSetting", "OperatorCommand", "ExitTick", "HermesDB", "sync_to_async_dsn",
     "_close_reason_from_tag", "_compute_realized_pnl",
 ]
 
@@ -74,6 +74,7 @@ class HermesDB:
         self.trades = TradesRepository(self)
         self.watchlist = WatchlistRepository(self)
         self.approvals = ApprovalsRepository(self)
+        self.commands = CommandsRepository(self)
         self.settings = SettingsRepository(self)
         self.timeseries = TimeSeriesRepository(self)
         self.analytics = AnalyticsRepository(self)

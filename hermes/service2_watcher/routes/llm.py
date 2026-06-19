@@ -103,6 +103,9 @@ async def get_llm() -> Dict[str, Any]:
 
 @router.put("/api/llm")
 async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
+    # Validate everything first, accumulate the writes, then enqueue them as one
+    # command so the agent applies the whole config change in a single drain.
+    updates: Dict[str, str] = {}
     if body.provider is not None:
         p = body.provider.lower().strip()
         if p not in VALID_LLM_PROVIDERS:
@@ -110,38 +113,39 @@ async def set_llm(body: LLMConfigBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"provider must be one of {list(VALID_LLM_PROVIDERS)}",
             )
-        await db.settings.set_setting(SETTING_LLM_PROVIDER, p)
+        updates[SETTING_LLM_PROVIDER] = p
         # Pre-fill the canonical endpoint when switching to a hosted provider
         # (ollama_cloud / gemini / claude) so the agent can connect even if the
         # operator didn't explicitly set base_url.
         if p in LLM_PROVIDER_BASE_URLS and not (body.base_url or "").strip():
-            await db.settings.set_setting(SETTING_LLM_BASE_URL, LLM_PROVIDER_BASE_URLS[p])
+            updates[SETTING_LLM_BASE_URL] = LLM_PROVIDER_BASE_URLS[p]
     if body.base_url is not None:
         url = body.base_url.strip()
         if url and not (url.startswith("http://") or url.startswith("https://")):
             raise HTTPException(status_code=400, detail="base_url must start with http(s)://")
-        await db.settings.set_setting(SETTING_LLM_BASE_URL, url)
+        updates[SETTING_LLM_BASE_URL] = url
     if body.model is not None:
-        await db.settings.set_setting(SETTING_LLM_MODEL, body.model.strip())
+        updates[SETTING_LLM_MODEL] = body.model.strip()
     if body.api_key is not None:
-        await db.settings.set_setting(SETTING_LLM_API_KEY, encrypt_value(body.api_key.strip()))
+        updates[SETTING_LLM_API_KEY] = encrypt_value(body.api_key.strip())
     if body.temperature is not None:
         if not (0.0 <= body.temperature <= 2.0):
             raise HTTPException(status_code=400, detail="temperature must be in [0.0, 2.0]")
-        await db.settings.set_setting(SETTING_LLM_TEMPERATURE, str(body.temperature))
+        updates[SETTING_LLM_TEMPERATURE] = str(body.temperature)
     if body.vision is not None:
-        await db.settings.set_setting(SETTING_LLM_VISION, "true" if body.vision else "false")
+        updates[SETTING_LLM_VISION] = "true" if body.vision else "false"
     if body.timeout_s is not None:
         if not (5.0 <= body.timeout_s <= 600.0):
             raise HTTPException(status_code=400, detail="timeout_s must be in [5, 600]")
-        await db.settings.set_setting(SETTING_LLM_TIMEOUT, str(body.timeout_s))
+        updates[SETTING_LLM_TIMEOUT] = str(body.timeout_s)
     if body.overseer_mode is not None:
         om = body.overseer_mode.lower().strip()
         if om == "monolithic":                 # legacy alias → canonical
             om = "single"
         if om not in ("single", "committee"):
             raise HTTPException(status_code=400, detail="overseer_mode must be 'single' or 'committee'")
-        await db.settings.set_setting("overseer_mode", om)
-    await db.settings.set_setting(SETTING_LLM_ERROR, "")
+        updates["overseer_mode"] = om
+    updates[SETTING_LLM_ERROR] = ""
+    await db.commands.enqueue_settings(updates)
     await db.logs.write_log("ENGINE", "[C2] LLM config updated")
     return await _read_llm_config()

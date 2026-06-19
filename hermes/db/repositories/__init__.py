@@ -11,6 +11,7 @@ use the namespaced form throughout (``db.logs.write_log(...)``).
 from .analytics import AnalyticsRepository
 from .approvals import ApprovalsRepository
 from .base import Repository
+from .commands import CommandsRepository
 from .decisions import DecisionsRepository
 from .logs import LogsRepository
 from .settings import SettingsRepository
@@ -22,6 +23,7 @@ __all__ = [
     "Repository",
     "AnalyticsRepository",
     "ApprovalsRepository",
+    "CommandsRepository",
     "DecisionsRepository",
     "LogsRepository",
     "SettingsRepository",

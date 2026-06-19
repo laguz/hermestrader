@@ -153,7 +153,7 @@ class _DictNSView(dict):
 
 _REPO_NS_NAMES = frozenset({
     "logs", "decisions", "trades", "watchlist",
-    "approvals", "settings", "timeseries", "analytics",
+    "approvals", "settings", "timeseries", "analytics", "commands",
 })
 
 
@@ -205,6 +205,7 @@ class StubDB:
         self.decisions = _NSView(self)
         self.timeseries = _NSView(self)
         self.analytics = _NSView(self)
+        self.commands = _NSView(self)
 
         self.pending_orders: List[Any] = []
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
@@ -317,6 +318,11 @@ class StubDB:
                         and app_side == side and a_dict.get("expiry") == expiry):
                     return True
         return False
+
+    async def fetch_pending(self, limit: int = 100) -> List[Dict[str, Any]]:
+        # No operator commands queued by default; the agent's tick-start drain
+        # is a no-op for stub-driven tick tests.
+        return []
 
     async def get_setting(self, key: str, default: Optional[str] = None):
         return self.settings.get(key, default)

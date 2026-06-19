@@ -59,7 +59,7 @@ async def set_soul(body: SoulBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"Soul exceeds {MAX_SOUL_BYTES // 1024}KB limit",
             )
-        await db.settings.set_setting(SETTING_SOUL, body.soul)
+        await db.commands.enqueue_setting(SETTING_SOUL, body.soul)
         await db.logs.write_log("ENGINE", f"[C2] Soul updated ({len(body.soul.encode())}B)")
         import os
         soul_path = os.environ.get("HERMES_SOUL_PATH", "/app/soul.md")
@@ -113,7 +113,7 @@ async def set_soul(body: SoulBody) -> Dict[str, Any]:
                 status_code=400,
                 detail=f"autonomy must be one of {list(VALID_AUTONOMY)}",
             )
-        await db.settings.set_setting(SETTING_AUTONOMY, a)
+        await db.commands.enqueue_setting(SETTING_AUTONOMY, a)
         await db.logs.write_log("ENGINE", f"[C2] Autonomy set to {a}")
 
     return await get_soul()

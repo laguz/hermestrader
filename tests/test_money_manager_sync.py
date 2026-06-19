@@ -41,6 +41,9 @@ class _StubDB(RepoNamespaceMixin):
 
     async def flag_orphans(self, *_args, **_kwargs):
         pass
+
+    async def fetch_pending(self, *_args, **_kwargs):
+        return []
 from hermes.service1_agent.core import AsyncBrokerWrapper
 
 def _mm() -> MoneyManager:
