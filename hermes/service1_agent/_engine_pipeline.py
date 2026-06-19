@@ -541,7 +541,7 @@ class PipelineController:
 
         try:
             # 0. Backstop re-sync. Control state is normally updated by settings
-            # events, but Postgres NOTIFY is fire-and-forget — a dropped one
+            # events, but Redis pub/sub is fire-and-forget — a dropped one
             # could leave us trading on stale pause / kill-switch / lot state.
             # Re-hydrate from the DB on the slow clock cadence so a missed event
             # self-heals. Throttled by last_sync_ts so IPC-triggered ticks (which
