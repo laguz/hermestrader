@@ -71,3 +71,59 @@ IPC_ACTION_DRAIN_COMMANDS = "drain_commands"
 # ---------------------------------------------------------------------------
 import re as _re
 OCC_RE = _re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
+
+# ---------------------------------------------------------------------------
+# Order tag contract — the single place that knows the ``HERMES`` tag shape
+# and the Tradier ``_``↔``-`` sanitiser quirk.
+#
+# Hermes tags every order it places: entries as ``HERMES_<STRAT>`` and closes
+# as ``HERMES_<STRAT>_CLOSE_<REASON>`` (e.g. ``HERMES_CS75_CLOSE_TP-50``).
+# Tradier's tag sanitiser rewrites ``_`` to ``-`` on the wire, so the same tag
+# round-trips back as ``HERMES-<STRAT>`` / ``HERMES-<STRAT>-CLOSE-<REASON>``.
+# Every matcher MUST go through the helpers below so no call-site re-derives
+# the separator handling and silently forgets a form. See CLAUDE.md safety
+# rule #5.
+# ---------------------------------------------------------------------------
+from typing import Optional as _Optional
+
+HERMES_TAG_PREFIX = "HERMES"
+
+
+def strategy_id_from_tag(tag: _Optional[str]) -> _Optional[str]:
+    """Extract the strategy id from a Hermes order tag.
+
+    Accepts either separator form (``HERMES_CS75`` or ``HERMES-CS75``) since
+    Tradier rewrites ``_``→``-`` on the round-trip. Returns ``None`` for empty
+    tags, non-Hermes tags, or a bare ``HERMES`` prefix with no strategy.
+    """
+    if not tag:
+        return None
+    normalised = str(tag).replace("_", "-")
+    prefix = HERMES_TAG_PREFIX + "-"
+    if not normalised.startswith(prefix):
+        return None
+    strategy_id = normalised[len(prefix):].split("-", 1)[0]
+    return strategy_id or None
+
+
+def is_hermes_tag(tag: _Optional[str]) -> bool:
+    """True if ``tag`` is a Hermes-placed order tag (either separator form)."""
+    return strategy_id_from_tag(tag) is not None
+
+
+def close_reason_from_tag(tag: _Optional[str]) -> _Optional[str]:
+    """Recover the close reason a strategy embedded in a close-order tag.
+
+    Closes are tagged ``HERMES_<STRAT>_CLOSE_<REASON>``; accept either
+    separator around the ``CLOSE`` marker for the Tradier round-trip. Returns
+    ``None`` when the tag carries no close reason (e.g. an entry tag).
+    """
+    if not tag:
+        return None
+    norm = str(tag).replace("-", "_")
+    marker = "_CLOSE_"
+    idx = norm.find(marker)
+    if idx == -1:
+        return None
+    suffix = norm[idx + len(marker):].strip()
+    return suffix or None

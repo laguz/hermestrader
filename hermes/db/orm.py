@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Optional
+from hermes.common import close_reason_from_tag
 from hermes.utils import utc_now
 
 from sqlalchemy import (
@@ -367,19 +368,11 @@ class SystemSetting(Base):
 def _close_reason_from_tag(tag: Optional[str]) -> Optional[str]:
     """Recover the close reason that a strategy embedded in its order tag.
 
-    Strategies tag closing orders ``HERMES_<STRAT>_CLOSE_<REASON>`` (e.g.
-    ``HERMES_CS75_CLOSE_TP-50``). Tradier sanitises ``_`` to ``-`` on the
-    wire, so accept either separator on the round-trip.
+    Thin re-export of the canonical tag matcher in ``hermes.common`` so the
+    ``HERMES_<STRAT>_CLOSE_<REASON>`` shape and the Tradier ``_``↔``-`` quirk
+    live in exactly one place (CLAUDE.md safety rule #5).
     """
-    if not tag:
-        return None
-    norm = str(tag).replace("-", "_")
-    marker = "_CLOSE_"
-    idx = norm.find(marker)
-    if idx == -1:
-        return None
-    suffix = norm[idx + len(marker):].strip()
-    return suffix or None
+    return close_reason_from_tag(tag)
 
 
 def _compute_realized_pnl(*, entry_credit, entry_debit,

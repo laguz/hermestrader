@@ -368,7 +368,7 @@ class AsyncBrokerWrapper:
             
         normalized = []
         active_statuses = {"open", "partially_filled", "pending", "calculated", "accepted"}
-        from hermes.common import OCC_RE
+        from hermes.common import OCC_RE, strategy_id_from_tag
         
         for o in orders:
             if not isinstance(o, dict):
@@ -377,13 +377,7 @@ class AsyncBrokerWrapper:
             if status not in active_statuses:
                 continue
 
-            tag = str(o.get("tag", "") or "")
-            # Tradier's tag sanitiser converts '_' to '-' so 'HERMES_CS75'
-            # arrives back as 'HERMES-CS75'. Normalise to hyphens/underscores for matching.
-            normalised_tag = tag.replace("_", "-")
-            if not normalised_tag.startswith("HERMES-"):
-                continue
-            strategy_id = normalised_tag[len("HERMES-"):].split("-", 1)[0]
+            strategy_id = strategy_id_from_tag(o.get("tag"))
             if not strategy_id:
                 continue
             symbol = str(o.get("symbol", "")).upper()
