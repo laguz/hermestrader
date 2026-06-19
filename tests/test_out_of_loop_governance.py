@@ -1,7 +1,6 @@
 from __future__ import annotations
 from ._stubs import alias_db_namespaces
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -124,3 +123,25 @@ async def test_propose_risk_restrictions():
     db_mock.set_setting.assert_called_once_with("banned_symbols", "AAPL")
     db_mock.write_log.assert_called_once()
     db_mock.write_ai_decision.assert_called_once()
+
+
+@pytest.mark.anyio
+async def test_propose_risk_restrictions_advisory_is_noop():
+    """Banning a symbol mutates live settings — a governance action reserved for
+    enforcing/autonomous. Advisory must short-circuit before touching the LLM or
+    the settings store, the same safety boundary as the parameter tuner."""
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    llm_mock = MagicMock()
+
+    overseer = HermesOverseer(
+        llm_client=llm_mock,
+        db=db_mock,
+        autonomy="advisory",
+    )
+
+    res = await overseer.propose_risk_restrictions()
+
+    assert res["banned_symbols"] == []
+    db_mock.set_setting.assert_not_called()
+    llm_mock.chat.assert_not_called()

@@ -49,6 +49,25 @@ def _action(symbol: str = "AAPL") -> TradeAction:
     )
 
 
+class _CapturingDB(StubDB):
+    """StubDB that records every ``write_ai_decision`` call.
+
+    The base StubDB swallows decision writes; these tests assert on the
+    *audit trail* the overseer leaves — which authority level acted and what
+    verdict it recorded — so we keep the calls instead of dropping them.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.ai_decisions: List[Dict[str, Any]] = []
+
+    async def write_ai_decision(self, strategy_id, symbol, label, decision, *a, **kw):
+        self.ai_decisions.append(
+            {"strategy_id": strategy_id, "symbol": symbol,
+             "label": label, "decision": decision}
+        )
+
+
 # ── advisory: never modifies ─────────────────────────────────────────────────
 async def test_advisory_passes_action_through_unchanged():
     db = StubDB()
@@ -107,6 +126,60 @@ async def test_enforcing_modify_ignores_unknown_attrs():
     await o.review(a)
     assert a.price == 2.0
     assert not hasattr(a, "made_up_field")
+
+
+# ── autonomous: enforces review verdicts too (it is enforcing + propose) ──────
+# `autonomous` is the highest-trust level: it adds trade *origination* on top of
+# enforcing. These pin that it still applies VETO/MODIFY on review — the
+# "enforcing" half — so a regression that let autonomous skip enforcement would
+# be caught, not just the propose half (covered elsewhere).
+async def test_autonomous_veto_drops_action():
+    db = StubDB()
+    o = HermesOverseer(_FakeLLM('{"verdict":"VETO","rationale":"too risky"}'),
+                       db, vision_enabled=False, autonomy="autonomous")
+    assert await o.review(_action()) is None
+
+
+async def test_autonomous_modify_mutates_action():
+    db = StubDB()
+    o = HermesOverseer(
+        _FakeLLM('{"verdict":"MODIFY","rationale":"trim price","modifications":{"price":1.10}}'),
+        db, vision_enabled=False, autonomy="autonomous",
+    )
+    a = _action()
+    out = await o.review(a)
+    assert out is a
+    assert a.price == 1.10
+    assert a.ai_authored is True
+
+
+# ── advisory: still consults + records, but acts on nothing ──────────────────
+async def test_advisory_consults_and_records_would_be_verdict():
+    """Advisory's whole purpose is the dry-run audit trail: it must still call
+    the LLM and record what it *would* have done, while leaving the action
+    untouched. (A passthrough that skipped the LLM would record nothing.)"""
+    db = _CapturingDB()
+    llm = _FakeLLM('{"verdict":"VETO","rationale":"would block"}')
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="advisory")
+    a = _action()
+    out = await o.review(a)
+    assert out is a                       # never blocks
+    assert not a.ai_authored              # never modifies
+    assert llm.last_messages is not None  # but the LLM was consulted
+    assert len(db.ai_decisions) == 1
+    rec = db.ai_decisions[0]
+    assert rec["label"] == "advisory"
+    assert rec["decision"]["verdict"] == "VETO"   # would-be verdict preserved
+
+
+async def test_recorded_decision_label_matches_autonomy_mode():
+    """Every review writes its decision under the acting authority level, so the
+    operator's audit log says *who* decided. All three levels are pinned here."""
+    for autonomy in ("advisory", "enforcing", "autonomous"):
+        db = _CapturingDB()
+        o = HermesOverseer(_FakeLLM(), db, vision_enabled=False, autonomy=autonomy)
+        await o.review(_action())
+        assert [d["label"] for d in db.ai_decisions] == [autonomy]
 
 
 # ── LLM unreachable: fail-safe APPROVE ───────────────────────────────────────
@@ -372,4 +445,46 @@ async def test_legacy_monolithic_mode_routes_to_single_reviewer():
     # Single path makes exactly one overseer review call; committee would
     # have invoked the two specialists first.
     assert llm.single_called is True
+
+
+class _FakeCommitteeLLMVeto:
+    """A committee whose Risk Officer (Chairman) returns a VETO."""
+
+    def __init__(self):
+        self.chat_calls = []
+
+    def chat(self, messages, images=None):
+        self.chat_calls.append((messages, images))
+        content = " ".join([m.get("content", "") for m in messages])
+        if "Risk Officer" in content:
+            return '{"verdict": "VETO", "rationale": "committee rejects", "modifications": {}}'
+        elif "Macro Specialist" in content:
+            return '{"trend": "bearish", "support_resistance_analysis": "breakdown", "technical_indicators": "RSI weak", "macro_risk_rating": "high", "rationale": "macro bad"}'
+        elif "Strategy and Sizing Specialist" in content:
+            return '{"sizing_suitability": "excessive", "parameter_suitability": "aggressive", "performance_context": "recent losses", "strategy_risk_rating": "high", "rationale": "too risky"}'
+        return '{"verdict": "APPROVE", "rationale": "fallback"}'
+
+
+async def test_committee_mode_vetoes_action():
+    """A committee VETO (Chairman's verdict) drops the action in enforcing mode,
+    same contract as a single-LLM VETO. The two specialists run first, so all
+    three LLM calls fire."""
+    db = StubDB()
+    llm = _FakeCommitteeLLMVeto()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
+    assert await o.review(_action()) is None
+    assert len(llm.chat_calls) == 3
+
+
+async def test_advisory_committee_runs_full_committee_but_acts_on_nothing():
+    """The autonomy gate sits above the mode router: advisory must run the whole
+    committee (for the audit trail) yet never block, even on a VETO."""
+    db = StubDB()
+    llm = _FakeCommitteeLLMVeto()
+    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="advisory", overseer_mode="committee")
+    a = _action()
+    out = await o.review(a)
+    assert out is a                  # advisory never blocks ...
+    assert not a.ai_authored
+    assert len(llm.chat_calls) == 3  # ... but the committee still fully ran
 
