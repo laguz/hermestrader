@@ -24,9 +24,12 @@ can evolve independently:
 - ``ledger``           — long-running PredictionLedger ORM table that
   records every published prediction tagged with model_hash and
   schema_hash for postmortem replay.
-- ``iv_surface``       — Tradier-backed IV cache + IV-rank computation.
 - ``backtester``       — reality-check walk-forward POP backtester
   with cost-model commissions and slippage.
+
+The options-IV feature stage (``feature_catalog.OPTIONS_FEATURES``) is
+currently empty: it was sourced from an IV cache that was never wired into
+the predictor. Re-add it once a real options-IV feed is connected.
 
 Optional dependencies: xgboost, scikit-learn, pandas, joblib. Without
 them the agent runs without ML predictions; strategies fall back to
