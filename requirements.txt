@@ -8,8 +8,6 @@ watchfiles==1.2.0
 # Database — Postgres/Timescale only (no SQLite fallback)
 sqlalchemy==2.0.49
 psycopg[binary]==3.3.4
-pgvector==0.4.2   # doctrine-embedding vector column + cosine search
-duckdb==1.5.3
 alembic==1.13.3   # Postgres/Timescale schema migrations (see alembic/)
 
 # Security

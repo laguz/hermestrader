@@ -129,7 +129,10 @@ async def test_pnl_metrics_cs75_and_tt45(db):
     assert metrics["TT45"]["status"] == "FAIL"
 
 
-async def test_pnl_metrics_wheel(db):
+async def test_pnl_metrics_wheel(make_db):
+    # Needs the Timescale bars_* addendum: the test writes daily bars used to
+    # value assigned legs at expiry.
+    db = make_db(schema=True)
     await db.watchlist.ensure_strategies({
         "CS7": 1,
         "CS75": 2,
