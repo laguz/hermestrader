@@ -13,6 +13,10 @@
 .hermes-paper/
 .hermes-live/
 
+# ── Stray SQLite files ─────────────────────────────────────────────────
+# The project is Postgres/Timescale only; no SQLite db should ever be tracked.
+*.db
+
 # ── Python ─────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
