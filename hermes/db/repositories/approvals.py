@@ -201,19 +201,12 @@ class ApprovalsRepository(Repository):
                 "event_type": "ApprovalDecidedEvent",
                 "payload": ev.model_dump(mode="json")
             }
-            if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
-                from sqlalchemy import text as sa_text
-                escaped_payload = json.dumps(payload).replace("'", "''")
-                await s.execute(sa_text(f"NOTIFY {IPC_CHANNEL_AGENT_COMMANDS}, '{escaped_payload}'"))
-            
             await s.commit()
-            
-            if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
-                try:
-                    from hermes.ipc import ipc
-                    await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-                except Exception:
-                    pass
+            try:
+                from hermes.ipc import ipc
+                await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
+            except Exception:
+                pass
             return True
 
     async def fetch_approved_actions(self) -> List[Dict[str, Any]]:
@@ -250,19 +243,12 @@ class ApprovalsRepository(Repository):
                     "event_type": "ApprovalDecidedEvent",
                     "payload": ev.model_dump(mode="json")
                 }
-                if hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name:
-                    from sqlalchemy import text as sa_text
-                    escaped_payload = json.dumps(payload).replace("'", "''")
-                    await s.execute(sa_text(f"NOTIFY {IPC_CHANNEL_AGENT_COMMANDS}, '{escaped_payload}'"))
-                
                 await s.commit()
-                
-                if not (hasattr(self, "async_engine") and "postgresql" in self.async_engine.dialect.name):
-                    try:
-                        from hermes.ipc import ipc
-                        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-                    except Exception:
-                        pass
+                try:
+                    from hermes.ipc import ipc
+                    await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
+                except Exception:
+                    pass
 
     async def list_approvals_async(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         return await self.list_approvals(status, limit)
