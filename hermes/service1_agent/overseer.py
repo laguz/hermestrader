@@ -243,10 +243,10 @@ class HermesOverseer:
     async def _consult(self, action: TradeAction) -> Dict[str, Any]:
         """Routes review to the reviewer for the active overseer_mode.
 
-        The live mode is normalized through ``hermes.common`` (lowercase, legacy
-        ``monolithic`` alias, unknown → default) so the routing layer — not just
-        the settings readers — is authoritative; a stray or typo'd mode resolves
-        deterministically here rather than silently picking a path.
+        The live mode is normalized through ``hermes.common`` (lowercase,
+        unknown → default) so the routing layer — not just the settings readers
+        — is authoritative; a stray or typo'd mode resolves deterministically
+        here rather than silently picking a path.
         """
         mode = normalize_overseer_mode(self.overseer_mode)
         reviewer = self._reviewers.get(mode, self.single)

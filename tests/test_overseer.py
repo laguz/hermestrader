@@ -435,9 +435,10 @@ async def test_committee_mode_fallback_to_single_on_specialist_failure():
 
 
 async def test_legacy_monolithic_mode_routes_to_single_reviewer():
-    """The renamed mode keeps a backward-compatible alias: a stored
-    ``overseer_mode='monolithic'`` must still take the single-LLM path
-    (one review call), not the committee path (three)."""
+    """The pre-rename value ``monolithic`` is retired: a stored
+    ``overseer_mode='monolithic'`` is now unrecognised, so the router resolves
+    it to the default single-LLM path (one review call), not the committee
+    path (three). Legacy DB rows keep working without a dedicated alias."""
     db = StubDB()
     llm = _ExplodingMacroLLM()
     o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="monolithic")
@@ -458,14 +459,14 @@ async def test_unknown_mode_routes_to_single_at_the_router():
     assert llm.single_called is True
 
 
-async def test_live_mode_alias_is_resolved_at_the_router():
+async def test_live_unknown_mode_is_resolved_at_the_router():
     """Modes set live after construction (control_state / main.py path) also
-    resolve through the router: switching the live attribute to the legacy
-    alias still takes the single path."""
+    resolve through the router: switching the live attribute to a retired or
+    unrecognised value still takes the default single path."""
     db = StubDB()
     llm = _ExplodingMacroLLM()
     o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
-    o.overseer_mode = "monolithic"   # legacy value assigned live
+    o.overseer_mode = "monolithic"   # retired value assigned live
     await o.review(_action())
     assert llm.single_called is True
 

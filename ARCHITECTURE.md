@@ -173,8 +173,7 @@ before it reaches `submit()`. Review runs in one of two modes (the
 `overseer_mode` setting): **single** (one LLM call) or **committee** — a
 Macro Specialist and a Strategy/Sizing Specialist run in parallel and a Risk
 Officer (Chairman) synthesizes their findings into the final verdict, falling
-back to single-LLM review if the committee call fails. (The legacy value
-`monolithic` is still accepted as an alias for `single`.)
+back to single-LLM review if the committee call fails.
 
 ## A single watcher request (Service-2)
 
