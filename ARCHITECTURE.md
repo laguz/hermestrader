@@ -74,7 +74,7 @@ paths; see `hermes/utils.py::set_virtual_time` and `backtest_engine.py`).
 │       owned collaborators in _engine_*.py — pipeline / reactive /│
 │       ai, not mixins. core.py is pure orchestration + wiring.)   │
 │    HermesOverseer           — LLM review of every TradeAction;   │
-│      monolithic OR multi-agent committee (overseer.py)           │
+│      single OR multi-agent committee (overseer.py)               │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -156,10 +156,11 @@ intent against the live chain like any other strategy.
 
 The `HermesOverseer.review` hook can VETO, MODIFY, or APPROVE every action
 before it reaches `submit()`. Review runs in one of two modes (the
-`overseer_mode` setting): **monolithic** (one LLM call) or **committee** — a
+`overseer_mode` setting): **single** (one LLM call) or **committee** — a
 Macro Specialist and a Strategy/Sizing Specialist run in parallel and a Risk
 Officer (Chairman) synthesizes their findings into the final verdict, falling
-back to monolithic if the committee call fails.
+back to single-LLM review if the committee call fails. (The legacy value
+`monolithic` is still accepted as an alias for `single`.)
 
 ## A single watcher request (Service-2)
 
@@ -235,7 +236,7 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
-| Change what the overseer asks the LLM (monolithic or committee) | `hermes/service1_agent/overseer.py`    |
+| Change what the overseer asks the LLM (single or committee) | `hermes/service1_agent/overseer.py`    |
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
 | Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |
@@ -272,7 +273,7 @@ SQLAlchemy stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
   HermesAlpha=5); higher-priority strategies consume capacity first.
 - **HermesAlpha** — The rule-free strategy (priority 5): the overseer picks a
   credit-spread intent and the strategy resolves/prices it against the chain.
-- **Overseer modes** — `monolithic` (single LLM review) or `committee`
+- **Overseer modes** — `single` (one LLM review) or `committee`
   (Macro + Strategy specialists run in parallel → Risk Officer synthesizes).
 - **Soul** — The operator's free-text doctrine appended to the LLM
   overseer's system prompt.

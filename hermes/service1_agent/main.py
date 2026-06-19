@@ -264,7 +264,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                    approval_mode=current_overseer_cfg["approval_mode"],
                    strategy_enabled=current_overseer_cfg["strategy_enabled"],
                    llm_out_of_loop=current_overseer_cfg["llm_out_of_loop"],
-                   overseer_mode=current_overseer_cfg.get("overseer_mode", "monolithic"),
+                   overseer_mode=current_overseer_cfg.get("overseer_mode", "single"),
                    event_bus=event_bus)
 
     engine.control_state = control_state
@@ -353,7 +353,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         new_overseer_cfg = await _read_overseer_settings(db, conf)
         engine.overseer.autonomy = new_overseer_cfg["autonomy"]
         engine.overseer.soul = new_overseer_cfg["soul"]
-        engine.overseer.overseer_mode = new_overseer_cfg.get("overseer_mode", "monolithic")
+        engine.overseer.overseer_mode = new_overseer_cfg.get("overseer_mode", "single")
         engine.approval_mode = new_overseer_cfg["approval_mode"]
         engine.llm_out_of_loop = new_overseer_cfg["llm_out_of_loop"]
 

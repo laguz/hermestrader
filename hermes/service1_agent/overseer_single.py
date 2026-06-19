@@ -1,8 +1,8 @@
 """
-[Service-1: Hermes-Agent-Core] — Single-LLM (monolithic) reviewer.
+[Service-1: Hermes-Agent-Core] — Single-LLM reviewer.
 
 Split out of ``overseer.py`` to separate the single-LLM review path from the
-multi-agent committee path (:mod:`overseer_committee`). :class:`MonolithicReviewer`
+multi-agent committee path (:mod:`overseer_committee`). :class:`SingleReviewer`
 is an injected collaborator owned by
 :class:`~hermes.service1_agent.overseer.HermesOverseer`: it reads the overseer's
 state (db, vision/chart) and reuses its LLM transport (``get_system_prompt`` /
@@ -31,13 +31,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 logger = logging.getLogger("hermes.agent.overseer")
 
 
-class MonolithicReviewer:
-    """Owns the overseer's single-LLM (monolithic) review path.
+class SingleReviewer:
+    """Owns the overseer's single-LLM review path.
 
     Reads overseer state via ``self._ov``; the forwarding properties below let
     the method body keep reading ``self.db`` / ``self.vision_enabled`` /
     ``self._safe_json`` etc. unchanged, so the extraction from the inline
-    ``_consult_monolithic`` was a move, not a rewrite.
+    ``_consult_single`` was a move, not a rewrite.
     """
 
     def __init__(self, overseer: "HermesOverseer") -> None:
@@ -113,7 +113,7 @@ class MonolithicReviewer:
                 pass
             return self._safe_json(msg)
         except Exception as last_exc:
-            logger.warning("Monolithic LLM call failed after %d attempts — passing action through: %s",
+            logger.warning("Single-LLM call failed after %d attempts — passing action through: %s",
                            self._LLM_MAX_RETRIES, last_exc)
             try:
                 await self.db.settings.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])

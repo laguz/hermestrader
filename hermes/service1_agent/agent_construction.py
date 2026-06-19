@@ -154,7 +154,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           approval_mode: bool = True,
           strategy_enabled: Optional[Dict[str, bool]] = None,
           llm_out_of_loop: bool = False,
-          overseer_mode: str = "monolithic",
+          overseer_mode: str = "single",
           event_bus = None) -> CascadingEngine:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
