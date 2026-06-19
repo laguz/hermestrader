@@ -192,19 +192,29 @@ matter:
 
 ## Where the data lives
 
-| Table              | Owner       | Read by      | Notes                                    |
+| Table              | Writer(s)   | Read by      | Notes                                    |
 |--------------------|-------------|--------------|------------------------------------------|
-| `strategies`       | both        | both         | Registry; FK target for `strategy_watchlists` |
-| `strategy_watchlists` | both     | both         | Per-strategy symbol lists                |
 | `trades`           | Service-1   | both         | Filled positions; hypertable on `opened_at` |
 | `pending_orders`   | Service-1   | both         | Submitted but not filled                 |
-| `pending_approvals`| Service-1   | both         | Awaiting operator decision               |
-| `bot_logs`         | both        | both         | Tick heartbeat + free-form audit log     |
-| `ai_decisions`     | Service-1   | both         | Every overseer review (advisory or otherwise) |
 | `predictions`      | Service-1   | both         | XGBoost next-bar forecasts               |
+| `ai_decisions`     | Service-1   | both         | Every overseer review (advisory or otherwise) |
 | `bars_daily`       | Service-1   | both         | Hypertable; populated by `_sync_history` |
 | `bars_intraday`    | Service-1   | both         | Hypertable; intraday OHLCV               |
-| `system_settings`  | both        | both         | KV store: mode, autonomy, soul.md, etc.  |
+| `event_ledger`     | Service-1   | both         | Append-only event log; projects the read models above |
+| `strategy_watchlists` | **Service-2** | both    | Operator's symbol lists; agent reads only |
+| `pending_approvals`| both *(partitioned)* | both | Operator owns PENDING→APPROVED/REJECTED; agent owns insert, →EXECUTED, veto→REJECTED |
+| `system_settings`  | both *(KV)* | both         | Key/value, last-write-wins; shared keys (mode, autonomy, pause, learning) are read-before-seeded at boot |
+| `bot_logs`         | both *(append)* | both     | Append-only audit; appenders never contend on a row |
+| `strategies`       | both *(seed)* | both       | Idempotent registry (`ensure_strategies`, upsert-on-conflict); FK target for `strategy_watchlists` |
+
+**Single-writer invariant.** The top block — the event-sourced read models, the
+ledger, and the time series — has **exactly one writer, Service-1**. Service-2
+(the watcher) is strictly read-only against them; its only writes are the four
+deliberately-shared tables below the rule, each safe for two writers for the
+reason in its Notes (sole-writer, status-partitioned, last-write-wins KV, or
+append-only). This is not a convention to remember — `tests/test_writer_ownership.py`
+scans the watcher's source and fails if it ever calls a mutating repository
+method outside the operator allowlist or issues raw write SQL.
 
 **The ORM (`hermes/db/orm.py`) is the single source of truth for tables and
 columns.** There is no second hand-maintained catalog to drift against:
