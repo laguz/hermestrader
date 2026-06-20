@@ -41,9 +41,10 @@ These are mirrored from `AGENTS.md` because they catch people most often:
   `sync_positions` → `mm.sync_broker_orders` → `reconcile_orphans`
   → `process_management` → `process_entries` → `overseer.propose`.
   Don't reorder.
-- **Strategy `PRIORITY` order is contractual.** CS75=1, CS7=2, TT45=3,
-  WHEEL=4. Higher-priority strategies consume capacity first. If you add
-  a strategy, pick a priority ≥5.
+- **Strategy `PRIORITY` order is contractual.** CS75=1 (runs first),
+  HermesAlpha=5 (runs last). Higher-priority strategies consume capacity
+  first. A reinstated or new strategy takes the priority slot its place in
+  the cascade dictates (see `STRATEGY_PRIORITIES` in `common.py`).
 - **Never disable `dry_run` defaults**, and never add a code path that can
   place a live order without `approval_mode` honoring the operator's
   setting.

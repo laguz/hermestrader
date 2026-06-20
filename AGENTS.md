@@ -9,7 +9,8 @@ HermesTrader is a two-service Python trading system:
 
 - **Service-1 (`hermes/service1_agent/`)** — the agent itself. Runs a
   `CascadingEngine` that ticks every `HERMES_TICK_INTERVAL` seconds and drives
-  four credit-spread strategies (CS75, CS7, TT45, Wheel). Writes through a
+  two strategies: the rules-driven credit-spread core **CS75** (priority 1) and
+  the LLM-originated **HermesAlpha** (priority 5). Writes through a
   `MoneyManager` that enforces buying-power and side-aware capacity limits.
 - **Service-2 (`hermes/service2_watcher/`)** — FastAPI C2 (command & control)
   panel for human oversight. Approves trades, edits the agent's "soul"
@@ -112,8 +113,8 @@ require a live database — use the stub-broker / stub-DB pattern in
   (`MoneyManager`, `IronCondorBuilder`), and `strategy_base.py`
   (`AbstractStrategy`). All are still re-exported from `core.py` for
   backwards compatibility.
-- `hermes/service1_agent/strategies/` — the five concrete strategies
-  (`cs75`, `cs7`, `tt45`, `wheel`, `hermes_alpha`).
+- `hermes/service1_agent/strategies/` — the two concrete strategies
+  (`cs75`, `hermes_alpha`).
 - `hermes/service1_agent/main.py` — run loop + config reconciliation; broker/
   LLM/engine construction and helpers live in `agent_construction.py` and the
   other `agent_*.py` modules it re-imports.

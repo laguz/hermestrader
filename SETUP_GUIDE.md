@@ -175,33 +175,21 @@ Burn-in criteria (full detail in `promote_to_live.md`):
 If any criterion fails, the PR is not opened — Hermes notifies you
 with the specific failed condition.
 
-### Prediction-algorithm changes get an extra gate
+### Changes to the POP gate
 
-Anything in `hermes/ml/**` (pop_engine, xgb_features, calibration,
-meta_learner, regime_weights, drift, ledger, iv_surface, backtester,
-or feature_catalog) is treated as **behaviour-changing live-bound
-code**. Even if a paper deployment looks fine, the live promotion PR
-**must** include the seven-day Brier-score parity proof:
+The only ML surface left is `hermes/ml/pop_engine.py` — a deterministic,
+chain-only probability-of-profit gate (short-leg delta + S/R protection +
+vol regime, with a static regime-weight fallback). It has **no trained
+model**. Treat changes to it as safety-critical, live-bound code under the
+repo's standing rule: add a regression test before the change, and
+paper-validate before promoting to live.
 
-1. Run `GET /api/ml/diagnostics` against the paper instance every day
-   for seven consecutive trading sessions and log the per-symbol
-   Brier score and reliability curve.
-2. Run `POST /api/ml/backtest?symbol=…` for at least three watchlist
-   names against the same window. The backtester must report a
-   non-NaN Brier and an AUC ≥ baseline (the previous live model run
-   over the same window).
-3. The candidate's mean Brier across the seven-day window must be
-   **less than or equal to** the production live model's Brier over
-   the previous seven days. Equivalent calibration, not just better
-   point accuracy, is the bar.
-4. Drift alarms (`/api/ml/diagnostics → predictor.symbols.*.drift`)
-   must be empty at the time the PR opens.
-
-Hermes' `promote_to_live.md` skill enforces (1)–(4) automatically and
-will refuse to open the PR otherwise. Operators may override the gate
-manually only by setting the `ml_promotion_override_reason` system
-setting (operator-only path) — the override is logged and reviewed at
-the next weekly retrospective.
+The old XGB/Brier promotion gate — the seven-day `/api/ml/diagnostics`
+Brier-parity proof, the `/api/ml/backtest` AUC check, the drift alarms, and
+the `promote_to_live.md` automation — was **retired in the Phase-0 strip**
+(see [`REBUILD.md`](REBUILD.md)) along with the predictor stack it
+calibrated. There is no learned model to calibrate anymore, so that proof no
+longer applies.
 
 ---
 

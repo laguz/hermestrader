@@ -4,7 +4,7 @@ Two-service options-trading ecosystem on a TimescaleDB backbone.
 
 | Service | Role | Writes orders? |
 |---|---|---|
-| **Hermes Agent** (`hermes/service1_agent/`) | Autonomous execution engine. Cascading priority: CS75 → CS7 → TastyTrade45 → Wheel. Capital-efficient Iron Condor builder. Gemma-driven Hermes Overseer for veto / modify / propose. | Yes |
+| **Hermes Agent** (`hermes/service1_agent/`) | Autonomous execution engine. Cascading priority: CS75 → HermesAlpha. Capital-efficient Iron Condor builder. Provider-agnostic LLM Hermes Overseer for veto / modify, and HermesAlpha intent origination. | Yes |
 | **Human Watcher** (`hermes/service2_watcher/`) | FastAPI dashboard with live logs, daily PnL, open positions, AI-enhanced entry-points. | **No (read-only)** |
 
 ## Layout
@@ -18,7 +18,7 @@ hermes/
 │   ├── broker_wrapper.py# AsyncBrokerWrapper — unified async broker + circuit breaker
 │   ├── money_manager.py # MoneyManager, IronCondorBuilder — capacity & sizing
 │   ├── strategy_base.py # AbstractStrategy — base class for the strategies
-│   ├── strategies/    # CS75 (P=1), CS7 (P=2), TT45 (P=3), Wheel (P=4), HermesAlpha (P=5)
+│   ├── strategies/    # CS75 (P=1), HermesAlpha (P=5)
 │   ├── overseer.py    # HermesOverseer — one class: transport, review, origination, governance, worker
 │   ├── agent_*.py     # run-loop helpers — settings, construction, risk, approvals
 │   └── main.py        # entry point + run loop
@@ -30,7 +30,7 @@ hermes/
 ├── mcp/
 │   └── server.py      # MCP server exposing TradierBroker tools (FastMCP, stdio)
 ├── ml/
-│   └── xgb_features.py  # 10-feature engineer + threaded XGB predictor + HV Rank
+│   └── pop_engine.py    # chain-only POP gate (delta + S/R protection + vol regime)
 └── db/
     ├── schema.sql     # TimescaleDB hypertables, compression, continuous aggregates
     ├── repositories/  # per-concern query mixins composed into HermesDB
@@ -101,7 +101,7 @@ alembic upgrade head          # fresh DB
 # alembic stamp 0001          # ...or mark an already-populated DB as migrated
 
 # 2. Install runtime deps
-pip install fastapi uvicorn sqlalchemy psycopg[binary] xgboost pandas numpy
+pip install fastapi uvicorn sqlalchemy psycopg[binary] pandas numpy
 
 # 3. Run the watcher
 export HERMES_DSN="postgresql+psycopg://hermes:hermes@localhost:5432/hermes"
@@ -116,10 +116,8 @@ python -m hermes.service1_agent.main
 
 ## Strategy rules at a glance
 
-- **CS75** — 39-45 DTE entry; 25 % credit-to-width for 30-45 DTE, 20 % for 14-29 DTE; TP @ 50 % (DTE 21-45) or 75 % (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE.
-- **CS7** — 7 DTE; min credit ≥ 12 % width; TP debit ≤ 2 % width; SL @ 3× credit.
-- **TastyTrade45** — 16 Δ shorts, 30-60 DTE entry, hard exit at 21 DTE, neutralize side when |Δ_short| > 0.30.
-- **Wheel** — Cash-secured puts → assignment → covered calls; calls + puts balanced to `max_lots`; roll ITM if DTE < 7 (rolls ignore `max_lots`).
+- **CS75** (P=1) — 39-45 DTE entry; 25 % credit-to-width for 30-45 DTE, 20 % for 14-29 DTE; TP @ 50 % (DTE 21-45) or 75 % (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE.
+- **HermesAlpha** (P=5) — rule-free LLM-directed credit spread, live only when `autonomy=='autonomous'`. The overseer originates the intent (`propose_intent`) and chooses exits (`decide_exit`); the chain prices every structure deterministically, `PortfolioRiskEngine` still gates it, and `alpha_killswitch.py` bounds it. The no-human live path also requires the default-OFF `alpha_autonomous_live` switch.
 
 ## Money management
 
@@ -130,19 +128,15 @@ python -m hermes.service1_agent.main
 - Side-aware sizing per (symbol, side): `max_lots − (open + pending)`.
 - Iron Condor margin = single riskiest side × 100 × lots.
 
-## XGBoost feature set
+## POP gate
 
-The 10-feature spec (`hermes/ml/xgb_features.py`):
+The only ML surface is `hermes/ml/pop_engine.py` — a chain-only
+probability-of-profit gate. `predict_pop` is a log-odds combiner over short-leg
+delta, support/resistance protection, and the volatility regime (with a static
+regime-weight fallback). It blocks AI-selected strikes below `ai_gate_min_pop`
+and degrades safely: there is no learned model to load.
 
-1. Overnight gap
-2. Vol-normalised 5-day momentum
-3. SPY beta residual (60-day rolling β)
-4. Intraday return
-5. VWAP distance at 3:59 pm
-6. Range position
-7. Volume z-score (20d)
-8. Last-30-min volume %
-9. Realised vol (5d, annualised)
-10. Seasonality (day-of-week + month)
-
-Predictor runs in a daemon thread so the UI stays responsive. HV Rank is computed over a 365-day rolling window as the IV Rank proxy.
+The XGB predictor stack, learned regime weights, the bandit/exit-policy tuners,
+and the ML diagnostics were removed in the Phase-0 strip (see
+[`REBUILD.md`](REBUILD.md)); any of them earns its way back only through that
+doc's promotion gate.
