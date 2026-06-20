@@ -16,8 +16,8 @@ VALID_MODES = ("paper", "live")
 # Strategy registry — order defines cascading priority (1 = highest).
 # Must stay in sync with the strategies registered in service1_agent/main.py.
 # ---------------------------------------------------------------------------
-STRATEGIES: tuple[str, ...] = ("CS75",)
-STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1}
+STRATEGIES: tuple[str, ...] = ("CS75", "HERMESALPHA")
+STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1, "HERMESALPHA": 5}
 
 # ---------------------------------------------------------------------------
 # LLM / Overseer

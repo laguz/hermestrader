@@ -24,7 +24,15 @@ Persistence: TimescaleDB via SQLAlchemy (`hermes/db/`). Broker: Tradier REST
 1. Treat `core.py`, `strategies/`, `tradier.py`, and `MoneyManager` as
    safety-critical. **Add a regression test before fixing a bug** in them.
 2. Never weaken `dry_run` defaults or add a path that places a live order
-   without honoring the operator's `approval_mode` setting.
+   without honoring the operator's `approval_mode` setting. **One scoped
+   exception** (the only no-human-in-the-loop path): an autonomous **HermesAlpha**
+   entry skips the human approval queue when — and only when —
+   `autonomy=='autonomous'` **and** the default-OFF `alpha_autonomous_live`
+   switch is armed. Even then `dry_run`, the paper/live toggle, the off-hours
+   gate, and `PortfolioRiskEngine` still apply, and every other strategy keeps
+   honoring `approval_mode`. The carve-out lives in
+   `_engine_pipeline._execute_or_queue`; don't widen it to another strategy or
+   remove the `alpha_autonomous_live` gate.
 3. The tick pipeline is **order-sensitive**: sync positions → sync broker
    orders → reconcile orphans → manage exits → entries in priority order →
    overseer proposals. Don't reorder it.

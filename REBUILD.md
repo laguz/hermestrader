@@ -88,7 +88,7 @@ Ordered roughly by how cheaply each earns its keep.
 | **CS7** (7 DTE) | CS75 is filling reliably and there's a demonstrated short-DTE opportunity CS75's 39–45 DTE window misses. Cross-strategy position isolation is intentional ([`cross-strategy-isolation`](.)) — design it in from this point, not bolted on. |
 | **TT45** (16Δ, 30–60 DTE) | A distinct vol/term-structure regime shows edge the credit-spread strategies don't capture. Shares `_credit_spread_base` machinery, so cost is low once CS7 exists. |
 | **Wheel** | You actually intend to take assignment / run covered calls — it's a different lifecycle (put→assignment→call), not another spread. Don't build the assignment-handling code until that's the plan. |
-| **HermesAlpha** | Last. It's the rule-free strategy: the overseer *originates* an intent. It depends on (a) a trusted overseer and (b) `autonomy=='autonomous'` being a mode you'll actually run. Until both are true it's a research toy in the live path. |
+| **HermesAlpha** | **Promoted (autonomous-only).** The rule-free strategy: the overseer *originates* an intent (`propose_intent`) and chooses exits (`decide_exit`), live only when `autonomy=='autonomous'`. Kill condition wired (`alpha_killswitch.py`): disabled for the week on loss-rate ≥60% (min-sample), realized loss ≥2% of equity, or CS75 underperformance-while-negative. Degrades safely — LLM errors fail to *no trade* / *hold*, the chain prices every structure, `PortfolioRiskEngine` still gates it, and the no-human live path needs the default-OFF `alpha_autonomous_live` switch (CLAUDE.md rule #2). |
 
 ### Overseer
 

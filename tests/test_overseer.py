@@ -6,8 +6,9 @@ that each have a different contract with ``CascadingEngine.submit``:
 
 - ``advisory``  — log the decision, never modify or block.
 - ``enforcing`` — APPROVE / VETO / MODIFY the action.
-- ``autonomous``— reserved; reviews exactly like ``enforcing`` in Phase 0
-  (autonomous trade origination was deferred — see ``REBUILD.md``).
+- ``autonomous``— reviews exactly like ``enforcing`` here, and additionally
+  unlocks HermesAlpha origination/exits (``propose_intent`` / ``decide_exit``;
+  covered in ``test_hermes_alpha.py``). These tests pin the review behaviour.
 
 Both LLM clients (``OpenAICompatibleLLM`` and ``OllamaCloudLLM``) are
 external HTTP — these tests use a fake client to keep the suite

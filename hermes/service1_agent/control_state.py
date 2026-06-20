@@ -36,6 +36,10 @@ class ControlState:
         self.autonomy = "advisory"
         self.soul = ""
         self.approval_mode = True
+        # Default-OFF gate for the no-human-in-the-loop autonomous HermesAlpha
+        # live path. Even at autonomy=='autonomous', Alpha entries only skip the
+        # human approval queue when this is explicitly ON (see CLAUDE.md rule #2).
+        self.alpha_autonomous_live = False
         self.llm_out_of_loop = True
         self.overseer_mode = DEFAULT_OVERSEER_MODE
         self.strategy_enabled = {sid: True for sid in STRATEGY_PRIORITIES}
@@ -93,6 +97,8 @@ class ControlState:
             self.autonomy = value.lower()
         elif key == "approval_mode":
             self.approval_mode = (value.lower() == "true")
+        elif key == "alpha_autonomous_live":
+            self.alpha_autonomous_live = (value.lower() == "true")
         elif key == "llm_out_of_loop":
             self.llm_out_of_loop = (value.lower() == "true")
         elif key == "overseer_mode":
@@ -132,6 +138,7 @@ class ControlState:
     async def load_from_db(self, db, conf: Dict[str, Any]) -> None:
         settings = await db.settings.get_settings(
             ["hermes_mode", "agent_paused", "agent_autonomy", "approval_mode",
+             "alpha_autonomous_live",
              "llm_out_of_loop", "overseer_mode", "max_daily_loss", "pending_order_ttl_s"]
             + list(self.lot_settings.keys())
             + [f"strategy_{sid.lower()}_enabled" for sid in STRATEGY_PRIORITIES]
@@ -140,6 +147,7 @@ class ControlState:
         self.paused = settings.get("agent_paused", "false").lower() == "true"
         self.autonomy = settings.get("agent_autonomy", "advisory").lower()
         self.approval_mode = settings.get("approval_mode", "true").lower() == "true"
+        self.alpha_autonomous_live = settings.get("alpha_autonomous_live", "false").lower() == "true"
         self.llm_out_of_loop = settings.get("llm_out_of_loop", "true").lower() == "true"
         self.overseer_mode = normalize_overseer_mode(settings.get("overseer_mode"))
         

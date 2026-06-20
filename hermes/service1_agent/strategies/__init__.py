@@ -26,7 +26,9 @@ Adding a strategy: subclass ``AbstractStrategy`` from ``..core``, give it a
 from __future__ import annotations
 
 from .cs75 import CreditSpreads75
+from .hermes_alpha import HermesAlpha
 
 __all__ = [
     "CreditSpreads75",
+    "HermesAlpha",
 ]

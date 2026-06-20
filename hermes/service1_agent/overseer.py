@@ -72,8 +72,10 @@ class HermesOverseer:
         """
         autonomy: 'advisory'  → log decisions, never block (default for new deployments)
                   'enforcing' → veto/modify takes effect
-                  'autonomous'→ reserved; reviews exactly like 'enforcing' in
-                                Phase 0 (autonomous origination is deferred)
+                  'autonomous'→ reviews like 'enforcing' AND unlocks HermesAlpha
+                                origination: ``propose_intent`` / ``decide_exit``
+                                let the overseer originate + exit Alpha trades.
+                                Both fail SAFE (no trade / hold on LLM error).
 
         soul: free-text operator doctrine (typically the contents of a
               soul.md the user maintains in the watcher). When non-empty it
@@ -304,6 +306,81 @@ class HermesOverseer:
                 "rationale": f"LLM unavailable after {self.LLM_MAX_RETRIES} attempts ({last_exc or repr(last_exc)}); defaulting to APPROVE.",
                 "llm_error_fallback": True,
             }
+
+    # ── autonomous origination (HermesAlpha, autonomy=='autonomous' only) ─────
+    # These are the *only* origination paths. They are driven exclusively by the
+    # HermesAlpha strategy, which gates every call on ``autonomy=='autonomous'``;
+    # the overseer never originates against any other strategy. Both fail SAFE:
+    # ``propose_intent`` returns ``None`` (no trade) and ``decide_exit`` returns
+    # ``hold`` on any LLM error, so a dead/garbled LLM can never open or force a
+    # position. Pricing/execution stay deterministic in the strategy + risk
+    # engine — these only name a structure / pick close-vs-hold.
+    async def propose_intent(self, symbol: str,
+                             context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Ask the LLM to originate a credit-spread *intent* for ``symbol``.
+
+        Returns ``{side, target_delta, dte_min, dte_max, width?, rationale}`` or
+        ``None`` to skip (explicit ``no_trade``, an invalid reply, or any error).
+        """
+        prompt = (
+            "You are originating a NEW options credit-spread trade for the given "
+            "underlying. Use the market context. If there is no high-quality "
+            "setup, decline. Reply with strict JSON: "
+            '{"action": "trade"|"no_trade", "side": "put"|"call", '
+            '"target_delta": 0.10-0.30, "dte_min": int, "dte_max": int, '
+            '"width": int, "rationale": str}.\n'
+            f"CONTEXT:\n{json.dumps(context, default=str)}\n"
+        )
+        messages = [{"role": "system", "content": await self.get_system_prompt()},
+                    {"role": "user", "content": prompt}]
+        try:
+            decision = self._safe_json(await self._chat_with_retry(messages))
+        except Exception as exc:                                       # noqa: BLE001
+            logger.warning("propose_intent LLM call failed for %s — skipping: %s", symbol, exc)
+            return None
+
+        try:
+            await self.db.decisions.write_ai_decision("HERMESALPHA", symbol, "autonomous", decision)
+        except Exception:                                              # noqa: BLE001
+            pass
+
+        if str(decision.get("action") or "").lower() != "trade":
+            return None
+        if str(decision.get("side") or "").lower() not in ("put", "call"):
+            return None
+        return decision
+
+    async def decide_exit(self, trade: Dict[str, Any],
+                          context: Dict[str, Any]) -> Dict[str, Any]:
+        """Ask the LLM whether to close an open Alpha position now.
+
+        Returns ``{"action": "close"|"hold", "rationale": str}``. Fails to
+        ``hold`` — the strategy's deterministic backstop still forces max-loss /
+        time exits, so holding on an LLM error never strands a losing position.
+        """
+        prompt = (
+            "Decide whether to CLOSE or HOLD this open credit spread now. The "
+            "close debit shown is the live broker price. Reply with strict JSON: "
+            '{"action": "close"|"hold", "rationale": str}.\n'
+            f"POSITION:\n{json.dumps({'symbol': trade.get('symbol'), **context}, default=str)}\n"
+        )
+        messages = [{"role": "system", "content": await self.get_system_prompt()},
+                    {"role": "user", "content": prompt}]
+        try:
+            decision = self._safe_json(await self._chat_with_retry(messages))
+        except Exception as exc:                                       # noqa: BLE001
+            logger.warning("decide_exit LLM call failed for %s — holding: %s",
+                           trade.get("symbol"), exc)
+            return {"action": "hold", "rationale": f"LLM error: {exc}"}
+
+        try:
+            await self.db.decisions.write_ai_decision(
+                "HERMESALPHA", trade.get("symbol", ""), "autonomous", decision)
+        except Exception:                                              # noqa: BLE001
+            pass
+
+        action = "close" if str(decision.get("action") or "").lower() == "close" else "hold"
+        return {"action": action, "rationale": decision.get("rationale", "")}
 
     # ── vision chart reads ────────────────────────────────────────────────────
     # Informational only — the overseer renders each watchlist symbol's chart and
