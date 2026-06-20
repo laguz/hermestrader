@@ -44,6 +44,39 @@ class AnalyticsRepository(Repository):
             row = result.fetchone()
         return float(row[0]) if row and row[0] is not None else 0.0
 
+    async def strategy_window_stats(self, days: int = 7) -> Dict[str, Dict[str, Any]]:
+        """Per-strategy closed-trade stats over the trailing ``days`` (by close).
+
+        Returns ``{strategy_id: {"closed": int, "losers": int,
+        "realized_pnl": float}}`` for trades CLOSED with a realized ``pnl`` in
+        the window. Powers the HermesAlpha weekly kill switch (loss-rate /
+        realized-loss / vs-CS75 comparison). Window is keyed on ``closed_at`` so
+        it measures what actually resolved this week, not what merely opened.
+        """
+        sql = """
+          SELECT strategy_id,
+                 COUNT(*) AS closed,
+                 COUNT(*) FILTER (WHERE pnl < 0) AS losers,
+                 COALESCE(SUM(pnl), 0) AS realized_pnl
+          FROM trades
+          WHERE status = 'CLOSED'
+            AND pnl IS NOT NULL
+            AND closed_at IS NOT NULL
+            AND closed_at >= now() - (%s || ' days')::interval
+          GROUP BY strategy_id
+        """
+        async with self.async_engine.connect() as conn:
+            result = await conn.exec_driver_sql(sql, (days,))
+            rows = result.fetchall()
+        return {
+            r._mapping["strategy_id"]: {
+                "closed": int(r._mapping["closed"]),
+                "losers": int(r._mapping["losers"]),
+                "realized_pnl": float(r._mapping["realized_pnl"]),
+            }
+            for r in rows
+        }
+
     async def get_strategy_performance_metrics(self, days: int = 30) -> Dict[str, Any]:
         """Calculate recent trading performance (PASS/FAIL/NEUTRAL) for each strategy."""
         cutoff = datetime.utcnow() - timedelta(days=days)

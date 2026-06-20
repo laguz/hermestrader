@@ -361,7 +361,21 @@ class PipelineController:
         ctx = self.ctx
         side_type = (a.strategy_params or {}).get("side_type")
 
-        if ctx.approval_mode:
+        # Scoped no-human-in-the-loop carve-out (CLAUDE.md safety rule #2): an
+        # autonomous HermesAlpha action skips the human approval queue ONLY when
+        # the operator has explicitly armed the default-OFF ``alpha_autonomous_live``
+        # switch *and* autonomy is 'autonomous'. Every other gate — dry_run,
+        # paper/live, off-hours, PortfolioRiskEngine — still applies; CS75 and all
+        # other strategies keep honoring approval_mode unchanged.
+        cs = ctx.control_state
+        alpha_live_bypass = (
+            a.strategy_id == "HERMESALPHA"
+            and cs is not None
+            and str(getattr(cs, "autonomy", "")).lower() == "autonomous"
+            and bool(getattr(cs, "alpha_autonomous_live", False))
+        )
+
+        if ctx.approval_mode and not alpha_live_bypass:
             if approval_id is None:
                 # Dedup guard: never re-queue a trade that already has a PENDING
                 # approval for the same (strategy, symbol, side, expiry). Without
@@ -399,6 +413,14 @@ class PipelineController:
                 f"qty={a.quantity} — awaiting human approval",
             )
             return
+
+        if alpha_live_bypass and ctx.approval_mode:
+            await ctx.db.logs.write_log(
+                a.strategy_id,
+                f"[ALPHA-AUTONOMOUS] {a.symbol} {a.order_class} side={side_type} "
+                f"expiry={a.expiry} qty={a.quantity} — approval_mode bypassed "
+                f"(autonomous + alpha_autonomous_live); routing to broker",
+            )
 
         await ctx.db.trades.record_pending_order(a)
         # Management actions whose legs are all *_to_close represent the close
@@ -536,6 +558,17 @@ class PipelineController:
             ):
                 ctx.control_state.paused = True
                 return
+
+            # 3b. HermesAlpha weekly kill switch — disables autonomous Alpha when
+            # its trailing-week performance breaches a bound. Runs on the slow
+            # heartbeat (not every reactive tick); never blocks the rest of the
+            # tick on failure.
+            try:
+                from hermes.service1_agent.alpha_killswitch import enforce_alpha_killswitch
+                await enforce_alpha_killswitch(
+                    ctx.db, ctx.broker.broker, ctx.control_state, ctx.config)
+            except Exception as exc:                              # noqa: BLE001
+                logger.warning("[ENGINE] alpha kill switch check failed: %s", exc)
 
             # 4. Clean stale pending orders & approvals
             try:

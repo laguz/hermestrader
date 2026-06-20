@@ -85,9 +85,10 @@ and `backtest_engine.py`).
 │      one cohesive class in overseer.py — live operator-tunable   │
 │      state + LLM transport (prompt/chat/json), the single-mode   │
 │      review path, informational vision chart reads, and the      │
-│      event-bus review worker. Phase 0 is review-only — no        │
-│      trade origination or out-of-loop settings tuning; a         │
-│      second review mode (committee) earns a reviewer here.       │
+│      event-bus review worker, plus the autonomous-HermesAlpha    │
+│      origination hooks (propose_intent / decide_exit), live only │
+│      when autonomy=='autonomous'. A committee review mode still  │
+│      earns its reviewer here.                                    │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -149,15 +150,22 @@ also owns the slow operator-guard heartbeat that wraps it
 3. reconcile_orphans()        ← flag broker positions Hermes doesn't own
 4. process_management()       ← every strategy's manage_positions() runs
    → submit(actions, "management")
-5. process_entries(watchlist) ← strategies in PRIORITY order. Phase 0 ships
-                                 CS75 only; the cascade is preserved so a
-                                 promoted strategy drains the watchlist after
-                                 CS75 and sees fresh capacity.
+5. process_entries(watchlist) ← strategies in PRIORITY order. CS75 (P1) is the
+                                 rules-driven core; HermesAlpha (P5) is the
+                                 LLM-originated strategy and runs last, draining
+                                 only its own watchlist after CS75 sees capacity.
 ```
 
-Phase 0 has **no overseer origination pass** (the old step 6). The overseer's
-only path to the order flow is `review` — it trims or vetoes the rules-driven
-actions; it never originates a trade.
+For every **rules-driven** strategy (CS75) the overseer's only path to the order
+flow is `review` — it trims or vetoes, never originates. The single exception is
+**HermesAlpha** when `autonomy=='autonomous'`: its `execute_entries` asks the
+overseer to *originate* a credit-spread intent (`propose_intent`) and its
+`manage_positions` asks the overseer when to exit (`decide_exit`). Even then the
+chain prices the structure deterministically, the action still passes
+`PortfolioRiskEngine`, and the close debit is taken from the live broker quote —
+the LLM names a structure and picks close-vs-hold; it never sets a price. A
+deterministic backstop (max-loss / time-exit) and a weekly kill switch
+(`alpha_killswitch.py`) bound it.
 
 `submit()` either:
 - Queues the action in `pending_approvals` (when `approval_mode=true`), or
@@ -304,9 +312,11 @@ stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
   is deferred behind the promotion gate (see `REBUILD.md`).
 - **Soul** — The operator's free-text doctrine appended to the LLM
   overseer's system prompt.
-- **Autonomy levels** — `advisory` (log only) and `enforcing` (LLM may
-  veto/modify). `autonomous` is reserved and reviews like `enforcing` in
-  Phase 0 — trade origination is deferred.
+- **Autonomy levels** — `advisory` (log only), `enforcing` (LLM may
+  veto/modify), and `autonomous` (reviews like `enforcing` **and** unlocks
+  HermesAlpha origination + LLM exits). The no-human-in-the-loop live path for
+  autonomous Alpha is separately gated by the default-OFF `alpha_autonomous_live`
+  switch (see CLAUDE.md safety rule #2).
 - **Approval mode** — When on, every proposed trade goes to a human queue
   before reaching the broker.
 - **Simulation mode** — Replays history against the real code paths on a
