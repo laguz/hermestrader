@@ -16,9 +16,8 @@ VALID_MODES = ("paper", "live")
 # Strategy registry — order defines cascading priority (1 = highest).
 # Must stay in sync with the strategies registered in service1_agent/main.py.
 # ---------------------------------------------------------------------------
-STRATEGIES: tuple[str, ...] = ("CS75", "CS7", "TT45", "WHEEL", "HermesAlpha")
-STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4,
-                                       "HermesAlpha": 5}
+STRATEGIES: tuple[str, ...] = ("CS75",)
+STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1}
 
 # ---------------------------------------------------------------------------
 # LLM / Overseer
@@ -28,15 +27,15 @@ VALID_LLM_PROVIDERS: tuple[str, ...] = (
 )
 VALID_AUTONOMY: tuple[str, ...] = ("advisory", "enforcing", "autonomous")
 
-# Overseer review path: ``single`` (one LLM call) or ``committee`` (multi-agent
-# risk committee). Both reviewers share the same verdict contract; this is the
-# vocabulary the selector routes on. The two helpers below are the *single*
-# place that knows this vocabulary — settings reads, the watcher API, and the
-# review router all route through them so the mode handling can't drift apart.
-# Any legacy value still stored in ``system_settings`` (e.g. the pre-rename
-# ``monolithic``) is unrecognised here and resolves to ``DEFAULT_OVERSEER_MODE``
-# (``single``) via :func:`normalize_overseer_mode` on read.
-VALID_OVERSEER_MODES: tuple[str, ...] = ("single", "committee")
+# Overseer review path. Phase 0 ships a single review mode (``single`` — one LLM
+# call); the multi-agent committee mode is admitted only once single review
+# shows a measurable blind spot (see REBUILD.md). The two helpers below are the
+# *single* place that knows this vocabulary — settings reads, the watcher API,
+# and the review router all route through them so the mode handling can't drift
+# apart. Any other value still stored in ``system_settings`` (e.g. a retired
+# ``committee`` / ``monolithic`` row) is unrecognised here and resolves to
+# ``DEFAULT_OVERSEER_MODE`` (``single``) via :func:`normalize_overseer_mode`.
+VALID_OVERSEER_MODES: tuple[str, ...] = ("single",)
 DEFAULT_OVERSEER_MODE = "single"
 
 

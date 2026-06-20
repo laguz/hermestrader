@@ -6,8 +6,6 @@ from typing import Any, Dict, List
 from zoneinfo import ZoneInfo
 
 from hermes.service1_agent.strategies.cs75 import CreditSpreads75
-from hermes.service1_agent.strategies.cs7 import CreditSpreads7
-from hermes.service1_agent.strategies.hermes_alpha import HermesAlpha
 from hermes.service1_agent.core import MoneyManager, IronCondorBuilder
 from tests._stubs import StubBroker, StubDB, make_trade, make_chain
 

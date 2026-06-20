@@ -356,35 +356,9 @@ async def test_soul_skipped_when_empty():
     assert "OPERATOR DOCTRINE" not in await o.get_system_prompt()
 
 
-# ── Multi-Agent Risk Committee Tests ─────────────────────────────────────────
-
-class _FakeCommitteeLLM:
-    def __init__(self):
-        self.chat_calls = []
-
-    def chat(self, messages, images=None):
-        self.chat_calls.append((messages, images))
-        content = " ".join([m.get("content", "") for m in messages])
-        if "Risk Officer" in content:
-            return '{"verdict": "APPROVE", "rationale": "approved by risk officer", "modifications": {}}'
-        elif "Macro Specialist" in content:
-            return '{"trend": "bullish", "support_resistance_analysis": "support holds", "technical_indicators": "RSI ok", "macro_risk_rating": "low", "rationale": "macro good"}'
-        elif "Strategy and Sizing Specialist" in content:
-            return '{"sizing_suitability": "appropriate", "parameter_suitability": "appropriate", "performance_context": "good winrate", "strategy_risk_rating": "low", "rationale": "strategy good"}'
-        return '{"verdict": "APPROVE", "rationale": "fallback"}'
-
-
-class _FakeCommitteeLLMModify:
-    def chat(self, messages, images=None):
-        content = " ".join([m.get("content", "") for m in messages])
-        if "Risk Officer" in content:
-            return '{"verdict": "MODIFY", "rationale": "modified pricing", "modifications": {"price": 1.25}}'
-        elif "Macro Specialist" in content:
-            return '{"trend": "neutral", "support_resistance_analysis": "resistance near", "technical_indicators": "RSI high", "macro_risk_rating": "medium", "rationale": "macro caution"}'
-        elif "Strategy and Sizing Specialist" in content:
-            return '{"sizing_suitability": "excessive", "parameter_suitability": "aggressive", "performance_context": "recent losses", "strategy_risk_rating": "high", "rationale": "trim lots"}'
-        return '{"verdict": "APPROVE", "rationale": "fallback"}'
-
+# ── Overseer-mode router tests ───────────────────────────────────────────────
+# Phase 0 ships a single review mode; these guard that any unknown or retired
+# mode resolves to the single review path at the router rather than crashing.
 
 class _ExplodingMacroLLM:
     def __init__(self):
@@ -398,40 +372,6 @@ class _ExplodingMacroLLM:
             self.single_called = True
             return '{"verdict": "VETO", "rationale": "single veto fallback"}'
         return '{"verdict": "APPROVE", "rationale": "risk officer fallback"}'
-
-
-async def test_committee_mode_approves_action():
-    db = StubDB()
-    llm = _FakeCommitteeLLM()
-    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
-    a = _action()
-    out = await o.review(a)
-    assert out is a
-    assert not a.ai_authored
-    assert len(llm.chat_calls) == 3
-
-
-async def test_committee_mode_modifies_action():
-    db = StubDB()
-    llm = _FakeCommitteeLLMModify()
-    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
-    a = _action()
-    out = await o.review(a)
-    assert out is a
-    assert a.price == 1.25
-    assert a.ai_authored is True
-    assert a.ai_rationale == "modified pricing"
-
-
-async def test_committee_mode_fallback_to_single_on_specialist_failure():
-    db = StubDB()
-    llm = _ExplodingMacroLLM()
-    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
-    a = _action()
-    out = await o.review(a)
-    # Specialist fails, falls back to single-LLM review which VETOs the trade.
-    assert out is None
-    assert llm.single_called is True
 
 
 async def test_legacy_monolithic_mode_routes_to_single_reviewer():
@@ -469,46 +409,4 @@ async def test_live_unknown_mode_is_resolved_at_the_router():
     o.overseer_mode = "monolithic"   # retired value assigned live
     await o.review(_action())
     assert llm.single_called is True
-
-
-class _FakeCommitteeLLMVeto:
-    """A committee whose Risk Officer (Chairman) returns a VETO."""
-
-    def __init__(self):
-        self.chat_calls = []
-
-    def chat(self, messages, images=None):
-        self.chat_calls.append((messages, images))
-        content = " ".join([m.get("content", "") for m in messages])
-        if "Risk Officer" in content:
-            return '{"verdict": "VETO", "rationale": "committee rejects", "modifications": {}}'
-        elif "Macro Specialist" in content:
-            return '{"trend": "bearish", "support_resistance_analysis": "breakdown", "technical_indicators": "RSI weak", "macro_risk_rating": "high", "rationale": "macro bad"}'
-        elif "Strategy and Sizing Specialist" in content:
-            return '{"sizing_suitability": "excessive", "parameter_suitability": "aggressive", "performance_context": "recent losses", "strategy_risk_rating": "high", "rationale": "too risky"}'
-        return '{"verdict": "APPROVE", "rationale": "fallback"}'
-
-
-async def test_committee_mode_vetoes_action():
-    """A committee VETO (Chairman's verdict) drops the action in enforcing mode,
-    same contract as a single-LLM VETO. The two specialists run first, so all
-    three LLM calls fire."""
-    db = StubDB()
-    llm = _FakeCommitteeLLMVeto()
-    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="enforcing", overseer_mode="committee")
-    assert await o.review(_action()) is None
-    assert len(llm.chat_calls) == 3
-
-
-async def test_advisory_committee_runs_full_committee_but_acts_on_nothing():
-    """The autonomy gate sits above the mode router: advisory must run the whole
-    committee (for the audit trail) yet never block, even on a VETO."""
-    db = StubDB()
-    llm = _FakeCommitteeLLMVeto()
-    o = HermesOverseer(llm, db, vision_enabled=False, autonomy="advisory", overseer_mode="committee")
-    a = _action()
-    out = await o.review(a)
-    assert out is a                  # advisory never blocks ...
-    assert not a.ai_authored
-    assert len(llm.chat_calls) == 3  # ... but the committee still fully ran
 

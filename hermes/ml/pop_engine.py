@@ -13,9 +13,9 @@ What changed from v1
   thin shim so existing strategies (cs7/cs75/wheel/tt45) keep working
   while they migrate.
 - The 0.5 + return*5 magic mapping that used to live in
-  ``augment_levels_with_pop`` is gone. We now ask either:
-    a) the meta-learner (when one is fitted), or
-    b) the legacy log-odds combiner with database-backed regime weights.
+  ``augment_levels_with_pop`` is gone. POP is the log-odds combiner over
+  delta, S/R protection, and the vol regime, weighted by the regime
+  weights (static fallback, or a DB-backed lookup if one is wired).
 - Confidence bands (``pop_lo`` / ``pop_hi``) propagate quantile-head
   predictions through the same combiner so the dashboard can render
   uncertainty (rec #20).
@@ -34,8 +34,6 @@ import pandas as pd
 from scipy.signal import argrelextrema
 from scipy.stats import norm
 from sklearn.cluster import KMeans
-
-from hermes.ml.meta_learner import MetaLearner
 
 logger = logging.getLogger("hermes.ml.pop")
 
@@ -110,33 +108,6 @@ class FeatureVector:
             "iv_rank_365d": float(self.iv_rank),
             "vol_ratio": float(self.current_vol) / max(float(self.avg_vol), 1e-5),
         }
-
-
-# ---------------------------------------------------------------------------
-# Active meta-learners — settable by the watcher; maps symbol -> MetaLearner.
-# ---------------------------------------------------------------------------
-_meta_learners: Dict[str, MetaLearner] = {}
-
-
-def set_meta_learner(model: Optional[MetaLearner], symbol: str = "DEFAULT") -> None:
-    """Install a fitted meta-learner for a specific symbol. Pass None to disable stacking."""
-    global _meta_learners
-    key = symbol.upper()
-    if model is None:
-        if key in _meta_learners:
-            del _meta_learners[key]
-    else:
-        _meta_learners[key] = model
-
-
-def get_meta_learner(symbol: str = "DEFAULT") -> MetaLearner:
-    return _meta_learners.get(symbol.upper(), MetaLearner())
-
-
-def clear_meta_learners() -> None:
-    """Clear all installed meta-learners."""
-    global _meta_learners
-    _meta_learners.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -271,17 +242,13 @@ def _legacy_combiner(fv: FeatureVector) -> float:
 # Public API — feature-vector form
 # ---------------------------------------------------------------------------
 def predict_pop(fv: FeatureVector) -> float:
-    """Score a single FeatureVector.
+    """Score a single FeatureVector via the log-odds combiner.
 
-    When a fitted meta-learner is installed, we delegate to it; the
-    meta-learner has already absorbed the equivalent of the legacy
-    weights through training. When the meta-learner is the cold-start
-    identity, we fall through to the legacy log-odds combiner so the
-    transition is bisectable and behaviour-preserving.
+    Phase 0 ships chain-only POP: the combiner over delta, S/R protection,
+    and the vol regime (weighted by the regime weights). No XGB / meta-learner
+    refinement — those are admitted only once chain-only POP is live and a
+    refinement is shown to improve real entries (see REBUILD.md).
     """
-    meta = get_meta_learner(fv.symbol)
-    if meta.weights:
-        return float(meta.predict(fv.to_meta_dict()))
     return _legacy_combiner(fv)
 
 
@@ -508,9 +475,6 @@ __all__ = [
     "DEFAULT_REGIME_WEIGHTS",
     "set_regime_weight_lookup",
     "regime_weights",
-    "set_meta_learner",
-    "get_meta_learner",
-    "clear_meta_learners",
     "find_key_levels",
     "calculate_strike_protection",
     "calculate_log_odds",

@@ -583,9 +583,6 @@ class CascadingEngine:
         await self.reconcile_orphans()
         mgmt = await self.process_management()
         await self.submit(mgmt, action_type="management")
-        # Exit-timing trajectory capture + advisory (Phase 3). Off by default;
-        # only runs when exit_policy_mode is shadow/active. Best-effort.
-        await self.ai._maybe_capture_and_advise_exits(mgmt)
 
         # Filter out banned symbols under out-of-loop governance
         banned = await self._read_banned_symbols()
@@ -606,9 +603,6 @@ class CascadingEngine:
 
         # Entries are now submitted internally strategy-by-strategy.
         num_entries = await self.process_entries(watchlist)
-        # Outcome-driven knob tuning (Phase 2 bandit). Independent of the LLM
-        # overseer — data-driven and gated by its own mode flag (off default).
-        await self.ai._maybe_run_bandit_tuner()
         # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
         ai_count = 0
         if self.overseer is not None:

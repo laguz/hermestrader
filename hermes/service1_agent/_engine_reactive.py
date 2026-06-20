@@ -39,7 +39,6 @@ from hermes.events.bus import (
     ExecuteOrderFillCommand,
     ProcessReactiveEntriesEvent,
     SubmitTradeActionsCommand,
-    EvaluateReactiveExitEvent,
     SyncPositionsCommand,
     ReconcileOrphansCommand,
     ProcessManagementCommand,
@@ -462,10 +461,6 @@ class ReactiveController:
             cmd = SubmitTradeActionsCommand(actions=mgmt_actions, action_type="management")
             self.ctx.event_bus.emit(cmd)
             await cmd.future
-
-        ev_exit = EvaluateReactiveExitEvent(symbol=symbol, mgmt_actions=mgmt_actions)
-        self.ctx.event_bus.emit(ev_exit)
-        await ev_exit.future
 
         if old_price is not None and old_price != event.price:
             try:

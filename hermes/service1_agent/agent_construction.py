@@ -18,9 +18,7 @@ from hermes.service1_agent.core import (
     CascadingEngine, IronCondorBuilder, MoneyManager,
 )
 from hermes.service1_agent.overseer import HermesOverseer
-from hermes.service1_agent.strategies import (
-    CreditSpreads7, CreditSpreads75, HermesAlpha, TastyTrade45, WheelStrategy,
-)
+from hermes.service1_agent.strategies import CreditSpreads75
 
 from .agent_settings import (
     SETTING_LLM_API_KEY, SETTING_LLM_BASE_URL, SETTING_LLM_ERROR,
@@ -158,18 +156,8 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           event_bus = None) -> CascadingEngine:
     db = HermesDB(os.environ.get("HERMES_DSN",
                                  "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
-    # Wire the database-backed regime-weight lookup into pop_engine so the
-    # agent's live POP scoring reads the nightly Bayesian posteriors instead
-    # of the static DEFAULT_REGIME_WEIGHTS. The watcher already does this
-    # (service2_watcher/api.py); without it here, nightly_calibrate's learning
-    # only reached the read-only dashboard, never live trades. The lookup is
-    # cold-start safe — it falls back to the static defaults on a missing
-    # table or <30 observations — so this is purely additive.
-    try:
-        from hermes.ml import pop_engine, regime_weights as _regime
-        pop_engine.set_regime_weight_lookup(_regime.make_lookup_fn(db))
-    except Exception as exc:                                       # noqa: BLE001
-        log.exception("regime_weight lookup wire-up failed: %s", exc)
+    # POP scoring is chain-only (Phase-0 teardown): pop_engine uses its static
+    # regime-weight fallback. The DB-backed regime-weight learning was removed.
     mm = MoneyManager(broker, db, config)
     ic = IronCondorBuilder(mm)
 
@@ -188,10 +176,6 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
                   dry_run=config.get("dry_run", False))
     all_strategies = [
         CreditSpreads75(**common),
-        CreditSpreads7(**common),
-        TastyTrade45(**common),
-        WheelStrategy(**common),
-        HermesAlpha(**common),
     ]
     # Filter out strategies the operator has disabled from the C2 panel.
     active_strategies = [s for s in all_strategies

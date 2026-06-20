@@ -5,7 +5,7 @@ from hermes.service1_agent.backtest_engine import (
     BacktestBroker,
     BacktestController,
 )
-from hermes.service1_agent.strategies.tt45 import TastyTrade45
+from hermes.service1_agent.strategies.cs75 import CreditSpreads75
 from tests._stubs import StubBroker
 
 class DummyTimeSeriesEngine:
@@ -69,7 +69,7 @@ async def test_backtest_controller_run(pg_available):
     
     # Run backtest controller with TastyTrade45 strategy
     controller = BacktestController(
-        strategies=[TastyTrade45],
+        strategies=[CreditSpreads75],
         watchlist=["AAPL"],
         ts_engine=ts,
         start_date=start_date,
@@ -95,7 +95,7 @@ async def test_backtest_clock_and_database(pg_available):
     end_date = datetime.date(2025, 1, 20)
     
     controller = BacktestController(
-        strategies=[TastyTrade45],
+        strategies=[CreditSpreads75],
         watchlist=["AAPL"],
         ts_engine=ts,
         start_date=start_date,
@@ -113,7 +113,7 @@ async def test_backtest_clock_and_database(pg_available):
     async with controller.db.AsyncSession() as session:
         trade = Trade(
             id=1,
-            strategy_id="TT45",
+            strategy_id="CS75",
             symbol="AAPL",
             side_type="put",
             lots=1,
