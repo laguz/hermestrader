@@ -2,8 +2,7 @@
 
 Covers:
 - predict_pop returns a probability ∈ [0, 1] for typical inputs.
-- predict_pop falls back to the legacy log-odds combiner when no
-  meta-learner is installed.
+- predict_pop is the chain-only log-odds combiner (no XGB / meta-learner).
 - predict_pop_with_band emits monotonically ordered (pop_lo, pop, pop_hi).
 - augment_levels_with_pop drops the magic 0.5+return*5 mapping and
   uses the BS-style CDF transform when ``predicted_prob`` is absent.
@@ -18,7 +17,6 @@ from typing import List
 import pytest
 
 from hermes.ml import pop_engine
-from hermes.ml.meta_learner import MetaLearner
 from hermes.ml.pop_engine import (
     FeatureVector,
     DEFAULT_REGIME_WEIGHTS,
@@ -28,14 +26,6 @@ from hermes.ml.pop_engine import (
     predict_pop_with_band,
     predict_single_pop,
 )
-
-
-@pytest.fixture(autouse=True)
-def reset_meta():
-    """Each test starts with the cold-start identity meta-learner."""
-    pop_engine.set_meta_learner(None)
-    yield
-    pop_engine.set_meta_learner(None)
 
 
 # ---------------------------------------------------------------------------
@@ -50,28 +40,11 @@ def test_predict_pop_returns_valid_probability():
     assert 0.0 <= pop <= 1.0
 
 
-def test_predict_pop_uses_legacy_combiner_when_meta_untrained():
+def test_predict_pop_is_the_legacy_combiner():
+    """Chain-only POP: predict_pop is exactly the log-odds combiner."""
     fv = FeatureVector(delta=0.20, xgb_prob=0.7, side="put", period="3M")
     legacy = pop_engine._legacy_combiner(fv)
     assert predict_pop(fv) == pytest.approx(legacy)
-
-
-def test_predict_pop_uses_meta_when_installed():
-    rows = [
-        {"delta_implied_prob": 0.8, "xgb_prob": 0.8,
-         "protection_score": 1.5, "iv_rank_365d": 50, "vol_ratio": 1.0}
-        for _ in range(40)
-    ]
-    outcomes = [1.0] * 30 + [0.0] * 10
-    meta = MetaLearner.fit(rows, outcomes)
-    pop_engine.set_meta_learner(meta)
-
-    fv = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
-                        iv_rank=50, side="put", period="3M")
-    pop_engine._legacy_combiner(fv)
-    pop = predict_pop(fv)
-    # Meta path may differ from legacy; we just need a valid probability.
-    assert 0.0 <= pop <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +175,9 @@ def test_generate_regime_pops_uses_per_horizon_xgb():
     assert out["3M"] > out["1Y"]
 
 
-def test_per_symbol_meta_learner_and_regime_weights():
-    # 1. Test per-symbol regime weights
+def test_per_symbol_regime_weights():
+    """A wired regime-weight lookup can vary weights per symbol; unknown
+    symbols fall back to the static defaults."""
     custom_weights = {"3M": [1.0, 2.0, 3.0, 4.0, 5.0]}
 
     def mock_lookup(period: str, symbol: str = "DEFAULT") -> List[float]:
@@ -212,39 +186,11 @@ def test_per_symbol_meta_learner_and_regime_weights():
         return DEFAULT_REGIME_WEIGHTS.get(period.upper(), DEFAULT_REGIME_WEIGHTS["3M"])
 
     pop_engine.set_regime_weight_lookup(mock_lookup)
-
-    # AAPL should return the customized weights
-    assert pop_engine.regime_weights("3M", symbol="AAPL") == [1.0, 2.0, 3.0, 4.0, 5.0]
-    # Another symbol should fall back to default
-    assert pop_engine.regime_weights("3M", symbol="TSLA") == DEFAULT_REGIME_WEIGHTS["3M"]
-
-    # 2. Test per-symbol MetaLearner
-    rows = [
-        {"delta_implied_prob": 0.8, "xgb_prob": 0.8,
-         "protection_score": 1.5, "iv_rank_365d": 50, "vol_ratio": 1.0}
-        for _ in range(40)
-    ]
-    outcomes_high = [1.0] * 40
-    meta_high = MetaLearner.fit(rows, outcomes_high)
-
-    outcomes_low = [0.0] * 40
-    meta_low = MetaLearner.fit(rows, outcomes_low)
-
-    pop_engine.set_meta_learner(meta_high, "AAPL")
-    pop_engine.set_meta_learner(meta_low, "TSLA")
-
-    fv_aapl = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
-                            iv_rank=50, side="put", period="3M", symbol="AAPL")
-    fv_tsla = FeatureVector(delta=0.2, xgb_prob=0.8, protection_score=1.5,
-                            iv_rank=50, side="put", period="3M", symbol="TSLA")
-
-    # AAPL predictions should be high (closer to 1.0) because of its custom high meta-learner
-    pop_aapl = predict_pop(fv_aapl)
-    # TSLA predictions should be low (closer to 0.0) because of its custom low meta-learner
-    pop_tsla = predict_pop(fv_tsla)
-
-    assert pop_aapl > pop_tsla
-
-    # Clear per-symbol configurations to avoid leaking state to other tests
-    pop_engine.clear_meta_learners()
-    pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)
+    try:
+        # AAPL should return the customized weights
+        assert pop_engine.regime_weights("3M", symbol="AAPL") == [1.0, 2.0, 3.0, 4.0, 5.0]
+        # Another symbol should fall back to default
+        assert pop_engine.regime_weights("3M", symbol="TSLA") == DEFAULT_REGIME_WEIGHTS["3M"]
+    finally:
+        # Restore the static lookup to avoid leaking state to other tests.
+        pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)

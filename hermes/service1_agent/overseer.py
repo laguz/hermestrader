@@ -11,8 +11,7 @@ provider-agnostic — `LLMClient` is any object with `.chat(messages, images=...
 as ``self.ctx``. The heavier concerns are owned collaborators, each in its own
 module:
 
-- review verdict  → :class:`~.overseer_single.SingleReviewer` /
-  :class:`~.overseer_committee.CommitteeReviewer`
+- review verdict  → :class:`~.overseer_single.SingleReviewer`
 - autonomous origination + chart reads
   → :class:`~.overseer_proposers.OverseerProposers`
 - out-of-loop settings tuning
@@ -39,7 +38,6 @@ from hermes.common import VALID_OVERSEER_MODES, normalize_overseer_mode
 from hermes.events.bus import EventBus, ReviewRequestEvent
 from .core import TradeAction
 from .overseer_context import OverseerContext
-from .overseer_committee import CommitteeReviewer
 from .overseer_governance import OverseerGovernor
 from .overseer_proposers import OverseerProposers
 from .overseer_single import SingleReviewer
@@ -49,14 +47,13 @@ logger = logging.getLogger("hermes.agent.overseer")
 
 
 class Reviewer(Protocol):
-    """The contract both review paths honor.
+    """The contract the review path honors.
 
-    :class:`~.overseer_single.SingleReviewer` and
-    :class:`~.overseer_committee.CommitteeReviewer` each expose exactly this:
-    one async ``consult`` returning a verdict dict shaped
+    :class:`~.overseer_single.SingleReviewer` exposes exactly this: one async
+    ``consult`` returning a verdict dict shaped
     ``{"verdict": "APPROVE"|"VETO"|"MODIFY", "rationale": str,
     "modifications"?: dict, ...}``. :meth:`HermesOverseer.review` consumes only
-    that shape, so the two paths stay interchangeable.
+    that shape.
     """
 
     async def consult(self, action: TradeAction) -> Dict[str, Any]: ...
@@ -98,22 +95,18 @@ class HermesOverseer:
         self.event_bus = event_bus
         # Owned collaborators. Each takes the shared context (not ``self``) and
         # reads live state + transport through it:
-        #   committee/single — the two review paths (single is also the
-        #                      committee's own failure fallback, injected below)
-        #   proposers        — autonomous origination + chart reads
-        #   governor         — out-of-loop settings tuning
-        #   worker           — the event-bus background review worker (also
-        #                      needs the bus + the mode-aware review dispatch)
+        #   single    — the review path (Phase 0 ships a single review mode)
+        #   proposers — autonomous origination + chart reads
+        #   governor  — out-of-loop settings tuning
+        #   worker    — the event-bus background review worker (also needs the
+        #               bus + the mode-aware review dispatch)
         self.single = SingleReviewer(self.ctx)
-        self.committee = CommitteeReviewer(self.ctx, self.single)
         # Single selection point: ``_consult`` normalizes the live overseer_mode
         # (via hermes.common) and dispatches through this registry. Keys are the
         # canonical modes; the guard fails loudly if the registry ever drifts
-        # from the vocabulary in hermes.common (e.g. a new mode added there but
-        # left unwired here).
+        # from the vocabulary in hermes.common.
         self._reviewers: Dict[str, Reviewer] = {
             "single": self.single,
-            "committee": self.committee,
         }
         assert set(self._reviewers) == set(VALID_OVERSEER_MODES), (
             "overseer reviewer registry out of sync with VALID_OVERSEER_MODES: "
@@ -253,8 +246,7 @@ class HermesOverseer:
         return await reviewer.consult(action)
 
     async def _consult_single(self, action: TradeAction) -> Dict[str, Any]:
-        """Thin delegator preserving the internal surface (the committee's
-        failure fallback calls this). The body now lives on
+        """Thin delegator preserving the internal surface. The body lives on
         :class:`SingleReviewer`."""
         return await self.single.consult(action)
 

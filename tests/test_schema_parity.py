@@ -28,15 +28,9 @@ from pathlib import Path
 
 from hermes.db.orm import Base
 
-# Populate Base.metadata deterministically, independent of test order: import
-# every module that registers ORM tables. The core tables come in via
-# hermes.db.orm above; the ML tables live in modules that no-op when their
-# optional deps are missing, so import them best-effort.
-for _mod in ("hermes.ml.ledger", "hermes.ml.regime_weights"):
-    try:
-        __import__(_mod)
-    except Exception:                                          # pragma: no cover
-        pass
+# Base.metadata is populated by importing hermes.db.orm above. The Phase-0
+# teardown removed the ML modules (ledger / regime_weights) that used to
+# register their own ORM tables here, so there is nothing further to import.
 
 SCHEMA_SQL = Path(__file__).resolve().parents[1] / "hermes" / "db" / "schema.sql"
 

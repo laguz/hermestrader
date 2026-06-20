@@ -41,7 +41,6 @@ from .routes import (
     approvals,
     charts,
     llm,
-    ml_diagnostics,
     soul,
     status,
     strategies,
@@ -73,23 +72,9 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("lifespan startup update/soul sync failed: %s", exc)
-    # ML-side migrations — idempotent. Each helper checkfirst=True so
-    # repeated boots are no-ops.
-    try:
-        from hermes.ml import ledger as _ledger
-        from hermes.ml import regime_weights as _regime
-        _ledger.ensure_table(db)
-        _regime.ensure_table(db)
-    except Exception as exc:                                       # noqa: BLE001
-        logger.exception("ml table-ensure failed: %s", exc)
-    # Wire the database-backed regime-weight lookup into pop_engine so
-    # every prediction reads the live posterior weights instead of the
-    # static DEFAULT_REGIME_WEIGHTS.
-    try:
-        from hermes.ml import pop_engine, regime_weights as _regime
-        pop_engine.set_regime_weight_lookup(_regime.make_lookup_fn(db))
-    except Exception as exc:                                       # noqa: BLE001
-        logger.exception("regime_weight lookup wire-up failed: %s", exc)
+    # ML forecasting/diagnostics were removed in the Phase-0 teardown: POP is
+    # chain-only (hermes.ml.pop_engine) with its static regime-weight fallback,
+    # so there are no ML tables to ensure and no DB-backed lookup to wire.
     # Connect to Inter-Process Communication (IPC) broker
     from hermes.ipc import ipc
     await ipc.connect(db)
@@ -149,7 +134,6 @@ app.include_router(llm.router)
 app.include_router(analytics.router)
 app.include_router(charts.router)
 app.include_router(admin.router)
-app.include_router(ml_diagnostics.router)
 
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi import HTTPException
