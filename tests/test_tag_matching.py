@@ -7,6 +7,9 @@ is a regression everywhere — see CLAUDE.md safety rule #5.
 """
 from __future__ import annotations
 
+from pathlib import Path as _Path
+from re import compile as _re_compile
+
 import pytest
 
 from hermes.common import (
@@ -113,4 +116,54 @@ def test_orm_helper_delegates_to_common():
     from hermes.db.orm import _close_reason_from_tag
     assert _close_reason_from_tag("HERMES-CS75-CLOSE-TP-50") == close_reason_from_tag(
         "HERMES-CS75-CLOSE-TP-50"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Guard: no module may re-derive the tag separator handling inline.
+#
+# The matchers above are the *only* place allowed to know about the Tradier
+# ``_``↔``-`` quirk. Behavioural tests can't catch a new call-site that opens
+# a bypass — they only test the helpers. This source-level guard fails the
+# build if any module under ``hermes/`` (other than the contract itself)
+# re-implements the separator handling inline, so a future matcher can't
+# silently forget one of the two forms. See CLAUDE.md safety rule #5.
+# ---------------------------------------------------------------------------
+
+# Each pattern is a signature of inline tag parsing that bypasses the helpers.
+# Order-*construction* (f"HERMES_{NAME}", f"...{NAME}_CLOSE_{reason}") never
+# matches: these require a quote adjacent to the separator, which only parsing
+# literals have. The outbound Tradier sanitiser (a char-class ``re.sub``) and
+# the canonical ``marker = "_CLOSE_"`` live in their own files and are exempt.
+_BYPASS_SIGNATURES = {
+    "separator swap": _re_compile(r"""\.replace\(\s*["'][-_]["']\s*,\s*["'][-_]["']"""),
+    "inline HERMES prefix match": _re_compile(r"""\.startswith\(\s*["']HERMES[-_]"""),
+    "inline CLOSE-field literal": _re_compile(r"""["'][-_]CLOSE[-_]["']"""),
+}
+
+# Modules permitted to know the raw tag shape: the contract and nothing else.
+_TAG_CONTRACT_FILES = {"common.py"}
+
+
+def test_no_module_reimplements_tag_separator_handling():
+    import hermes
+
+    pkg_root = _Path(hermes.__file__).resolve().parent
+    offenders = []
+    for path in pkg_root.rglob("*.py"):
+        if path.name in _TAG_CONTRACT_FILES:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            for label, pattern in _BYPASS_SIGNATURES.items():
+                if pattern.search(line):
+                    rel = path.relative_to(pkg_root.parent)
+                    offenders.append(f"{rel}:{lineno} ({label}): {line.strip()}")
+
+    assert not offenders, (
+        "Inline order-tag parsing detected — route through the helpers in "
+        "hermes.common (strategy_id_from_tag / is_hermes_tag / is_close_tag / "
+        "close_reason_from_tag) so both the HERMES_ and HERMES- forms stay "
+        "handled in one place (CLAUDE.md safety rule #5):\n  "
+        + "\n  ".join(offenders)
     )
