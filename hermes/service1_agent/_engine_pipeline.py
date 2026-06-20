@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence
 
 from hermes.events.bus import ReviewRequestEvent, AIApprovalEvent, ClockTickEvent
 from .trade_action import TradeAction
-from .context import TickContext
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .core import CascadingEngine
@@ -53,37 +52,6 @@ class PipelineController:
         # Shared dependency surface read through the context; ``self.engine`` is
         # kept for cross-phase orchestration calls + circuit-breaker counters.
         self.ctx = engine.ctx
-
-    async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
-        ctx = self.ctx
-        positions = await ctx.broker.get_positions() or []
-        active_legs = set()
-        try:
-            active_statuses = {"open", "partially_filled", "pending",
-                                "accepted", "calculated"}
-            orders = await ctx.broker.get_orders() or []
-            if isinstance(orders, list):
-                for o in orders:
-                    if str(o.get("status", "")).lower() not in active_statuses:
-                        continue
-                    legs = o.get("leg") or []
-                    if isinstance(legs, dict):
-                        legs = [legs]
-                    for leg in legs:
-                        sym = leg.get("option_symbol")
-                        if sym:
-                            active_legs.add(sym)
-                    top = o.get("option_symbol")
-                    if top:
-                        active_legs.add(top)
-        except Exception:                              # noqa: BLE001
-            logger.exception("[ENGINE] active-order leg fetch failed")
-        return TickContext(
-            timestamp=ctx.clock.utc_now(),
-            watchlist=list(watchlist or []),
-            positions=positions,
-            active_order_legs=active_legs,
-        )
 
     # 1
     async def sync_positions(self) -> tuple[List[Dict[str, Any]], set[str]]:
@@ -505,19 +473,6 @@ class PipelineController:
                     }
                     logger.info("[ENGINE] Registered order %s in reactive monitor", oid)
                     engine._ensure_order_monitor()
-
-    async def _read_banned_symbols(self) -> set[str]:
-        ctx = self.ctx
-        if not ctx.db:
-            return set()
-        try:
-            raw = await ctx.db.settings.get_setting("banned_symbols")
-            if not raw:
-                return set()
-            return {s.strip().upper() for s in raw.split(",") if s.strip()}
-        except Exception:
-            logger.exception("[GOVERNANCE] Failed to read banned_symbols setting")
-            return set()
 
     # ── slow heartbeat tick (operator guards wrapping the pipeline) ───────────
     # Owns the body of ``CascadingEngine._handle_clock_tick_internal``. The actual

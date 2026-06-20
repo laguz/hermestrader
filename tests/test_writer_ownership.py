@@ -13,7 +13,7 @@ deliberate:
 - ``operator_commands`` — the watcher's **one** write of canonical intent. The
   watcher appends a PENDING command (``enqueue_*``); the agent drains it and
   performs the real write in its own process. Operator toggles (mode, autonomy,
-  pause, learning, lots, LLM config, tunables) and approval decisions now flow
+  pause, lots, LLM config, tunables) and approval decisions now flow
   through here instead of the watcher writing ``system_settings`` /
   ``pending_approvals`` directly.
 - ``bot_logs``        — append-only audit; multiple appenders never contend on a

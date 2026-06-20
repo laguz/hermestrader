@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -12,14 +11,6 @@ class RuntimeConfig(BaseModel):
     tick_interval: int = Field(
         default=300,
         description="Core engine execution loop tick interval in seconds"
-    )
-    bandit_tuner_mode: Literal["off", "shadow", "active"] = Field(
-        default="off",
-        description="Contextual bandit tuner mode"
-    )
-    exit_policy_mode: Literal["off", "shadow", "active"] = Field(
-        default="off",
-        description="Exit policy reinforcement learning / rule mode"
     )
 
     @field_validator("obp_reserve")

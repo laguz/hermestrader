@@ -280,8 +280,6 @@ async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
     
     obp_reserve_val = await db.settings.get_setting("obp_reserve")
     tick_interval_val = await db.settings.get_setting("tick_interval") or await db.settings.get_setting("tick_interval_s")
-    bandit_val = await db.settings.get_setting("bandit_tuner_mode")
-    exit_val = await db.settings.get_setting("exit_policy_mode")
 
     config_data = {}
     if obp_reserve_val is not None and str(obp_reserve_val).strip() != "":
@@ -293,15 +291,5 @@ async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
         config_data["tick_interval"] = int(str(tick_interval_val).strip())
     else:
         config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 3600)))
-
-    if bandit_val is not None and str(bandit_val).strip() != "":
-        config_data["bandit_tuner_mode"] = str(bandit_val).strip().lower()
-    else:
-        config_data["bandit_tuner_mode"] = os.environ.get("HERMES_BANDIT_TUNER_MODE", "off").lower()
-
-    if exit_val is not None and str(exit_val).strip() != "":
-        config_data["exit_policy_mode"] = str(exit_val).strip().lower()
-    else:
-        config_data["exit_policy_mode"] = os.environ.get("HERMES_EXIT_POLICY_MODE", "off").lower()
 
     return RuntimeConfig(**config_data)
