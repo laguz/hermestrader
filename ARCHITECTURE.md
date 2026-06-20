@@ -82,13 +82,12 @@ and `backtest_engine.py`).
 │       all and pipeline/reactive keep one only for orchestration  │
 │       callbacks. core.py is pure orchestration + wiring.)        │
 │    HermesOverseer           — LLM review of every TradeAction;   │
-│      spine in overseer.py (review + wiring); the live state and  │
-│      LLM transport (prompt/chat/json) live on an OverseerContext │
-│      (overseer_context.py) shared by the collaborators in        │
-│      overseer_*.py — single / committee review, proposers        │
-│      (origination + charts), governance (settings tuning),       │
-│      worker (event-bus). Same shared-context pattern as the      │
-│      engine: collaborators depend on the context, not the spine. │
+│      one cohesive class in overseer.py — live operator-tunable   │
+│      state + LLM transport (prompt/chat/json), the single-mode   │
+│      review path, autonomous proposers (origination / charts /   │
+│      closes), out-of-loop governance (settings tuning), and the  │
+│      event-bus worker. Phase 0 ships one review mode; a second   │
+│      review mode (committee) earns a reviewer here, not before.  │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -265,10 +264,7 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
-| Change what the overseer asks the LLM (single or committee) | `overseer_single.py` / `overseer_committee.py` (spine + wiring in `overseer.py`) |
-| Change how the overseer originates trades / closes / chart reads | `overseer_proposers.py` |
-| Change the overseer's out-of-loop settings tuning (params, risk bans) | `overseer_governance.py` |
-| Change the overseer's event-bus review worker | `overseer_worker.py` |
+| Change anything the overseer does (review, origination/closes/chart reads, settings tuning, event-bus worker) | `overseer.py` — one cohesive `HermesOverseer` class |
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
 | Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |
