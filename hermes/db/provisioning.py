@@ -85,6 +85,42 @@ def apply_schema_addendum(dsn: str) -> None:
                 conn.execute(stmt)
 
 
+def lock_as_template(dsn: str) -> None:
+    """Pin a database so it can be used as a ``CREATE DATABASE`` template.
+
+    TimescaleDB attaches a per-database background worker that holds an open
+    session, which makes the database ineligible as a ``TEMPLATE`` (Postgres
+    rejects the clone with "source database is being accessed by other users").
+    Disallowing new connections and terminating the worker pins the database so
+    it stays clone-able for the rest of the session. Idempotent.
+    """
+    name = _dbname(dsn)
+    with psycopg.connect(_admin_dsn(dsn), autocommit=True) as conn:
+        conn.execute(f'ALTER DATABASE "{name}" WITH ALLOW_CONNECTIONS false')
+        conn.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (name,),
+        )
+
+
+def clone_ephemeral_db(template_dsn: str, *, prefix: str = "hermes_eph") -> str:
+    """Create a fresh database by cloning a locked template; return its DSN.
+
+    Much cheaper than :func:`create_ephemeral_db`: it skips the ``timescaledb``
+    extension load and the ORM ``create_all`` because the clone is a file-level
+    copy of an already-provisioned template (built once, pinned with
+    :func:`lock_as_template`). The clone inherits the template's
+    ``ALLOW_CONNECTIONS=false``, so it is flipped back on before returning.
+    """
+    template = _dbname(template_dsn)
+    name = f"{prefix}_{uuid.uuid4().hex[:12]}"
+    with psycopg.connect(_admin_dsn(template_dsn), autocommit=True) as conn:
+        conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{template}"')
+        conn.execute(f'ALTER DATABASE "{name}" WITH ALLOW_CONNECTIONS true')
+    return _with_dbname(template_dsn, name)
+
+
 def drop_ephemeral_db(dsn: str) -> None:
     """Drop a database created by :func:`create_ephemeral_db`. Best-effort."""
     name = _dbname(dsn)
