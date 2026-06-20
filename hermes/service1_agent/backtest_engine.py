@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import select
 
-from hermes.common import OCC_RE
+from hermes.common import OCC_RE, is_close_tag
 from hermes.greeks import black_scholes_greeks, black_scholes_price
 from hermes.service1_agent.core import CascadingEngine, IronCondorBuilder, MoneyManager
 from hermes.broker.models import (
@@ -474,7 +474,7 @@ class BacktestBroker:
         }
         self.placed_orders.append(order)
 
-        is_close = "close" in str(action.tag).lower() or "close" in str(action.legs[0].get("side", "")).lower()
+        is_close = is_close_tag(action.tag) or "close" in str(action.legs[0].get("side", "")).lower()
         lots = action.quantity or 1
         for leg in (action.legs or []):
             leg_side = (leg.get("side") or "").lower()
