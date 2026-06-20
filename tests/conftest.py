@@ -20,8 +20,10 @@ import pytest
 
 from hermes.db.provisioning import (
     apply_schema_addendum,
+    clone_ephemeral_db,
     create_ephemeral_db,
     drop_ephemeral_db,
+    lock_as_template,
 )
 
 TEST_SERVER_DSN = os.environ.get(
@@ -50,14 +52,61 @@ def pg_available():
         )
 
 
+@pytest.fixture(scope="session")
+def _db_template(pg_available):
+    """Session-scoped template-database factory; the per-test DBs clone these.
+
+    Building the schema from scratch (extension load + ``create_all`` + the
+    TimescaleDB addendum) costs ~0.5s and was paid once *per* DB-backed test.
+    Instead we provision each schema variant once, pin it with
+    :func:`lock_as_template`, and let every test clone it via ``CREATE DATABASE
+    ... TEMPLATE`` — a file copy that's ~70% cheaper. Per-test isolation is
+    unchanged: every test still gets its own fresh, throwaway database.
+
+    Two variants are built lazily so the ``make_db(schema=...)`` contract holds
+    exactly: ``schema=False`` clones carry only the ORM tables, ``schema=True``
+    clones also carry the ``bars_*`` hypertables / ``pnl_daily`` view.
+    """
+    import asyncio
+
+    from hermes.db.models import HermesDB
+
+    built: dict[bool, str] = {}
+
+    def _template_for(schema: bool) -> str:
+        if schema in built:
+            return built[schema]
+        dsn = create_ephemeral_db(TEST_SERVER_DSN, prefix="hermes_tmpl")
+        db = HermesDB(dsn)  # __init__ runs create_all for the ORM tables
+        if schema:
+            apply_schema_addendum(dsn)
+        db.engine.dispose()
+        try:
+            asyncio.run(db.async_engine.dispose())
+        except Exception:  # noqa: BLE001 — best-effort; must dispose before locking
+            pass
+        lock_as_template(dsn)
+        built[schema] = dsn
+        return dsn
+
+    yield _template_for
+
+    for dsn in built.values():
+        try:
+            drop_ephemeral_db(dsn)
+        except Exception:  # noqa: BLE001 — teardown is best-effort
+            pass
+
+
 @pytest.fixture
-def make_db(pg_available):
+def make_db(_db_template):
     """Factory yielding fresh ``HermesDB`` instances on isolated throwaway DBs.
 
     Call ``make_db()`` for the common case (ORM tables only), or
     ``make_db(schema=True)`` when the test needs the TimescaleDB addendum
-    (raw ``bars_*`` tables / hypertables / the ``pnl_daily`` view). Every
-    database created during the test is dropped at teardown.
+    (raw ``bars_*`` tables / hypertables / the ``pnl_daily`` view). Each test
+    gets its own fresh database — cloned from the matching session template
+    (see ``_db_template``) — and every database created is dropped at teardown.
     """
     import asyncio
 
@@ -66,11 +115,9 @@ def make_db(pg_available):
     created: list[tuple[str, "HermesDB"]] = []
 
     def _make(schema: bool = False):
-        dsn = create_ephemeral_db(TEST_SERVER_DSN, prefix="hermes_test")
-        db = HermesDB(dsn)  # __init__ runs create_all for the ORM tables
+        dsn = clone_ephemeral_db(_db_template(schema), prefix="hermes_test")
+        db = HermesDB(dsn)  # create_all is a no-op against the cloned schema
         created.append((dsn, db))
-        if schema:
-            apply_schema_addendum(dsn)
         return db
 
     yield _make
