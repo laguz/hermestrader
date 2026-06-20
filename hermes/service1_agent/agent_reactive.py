@@ -122,14 +122,15 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
     payload = data.get("payload")
 
     if event_type and payload:
-        from hermes.db.events import EVENT_TYPE_TO_CLASS
-        cls = EVENT_TYPE_TO_CLASS.get(event_type)
-        if cls:
-            try:
-                event = cls(**payload)
+        from hermes.db.events import deserialize_event
+        try:
+            event = deserialize_event(event_type, payload)
+            if event:
                 event_bus.emit(event)
-            except Exception as exc:
-                log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
+            else:
+                log.error("[IPC] Unknown event type %s", event_type)
+        except Exception as exc:
+            log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
     elif action == IPC_ACTION_DRAIN_COMMANDS:
         log.info("[IPC] Received drain operator-commands signal reactively")
         from hermes.events.bus import DrainOperatorCommandsCommand

@@ -51,32 +51,112 @@ class MockBroker(AbstractBroker):
         today = datetime.utcnow().date()
         return [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in [7, 14, 21, 28, 45]]
 
+    def _get_symbol_price(self, symbol: str) -> float:
+        """Synchronously get a deterministic current price for a symbol."""
+        base = 100.0 + (hash(symbol) % 200)
+        return round(base, 2)
+
     async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:
-        # Return some dummy legs
-        return [
-            OptionChainLeg(symbol=f"{symbol}230519P00150000", option_type="put", strike=150.0, bid=1.5, ask=1.6, delta=-0.3),
-            OptionChainLeg(symbol=f"{symbol}230519P00145000", option_type="put", strike=145.0, bid=0.5, ask=0.6, delta=-0.1),
-            OptionChainLeg(symbol=f"{symbol}230519C00160000", option_type="call", strike=160.0, bid=1.5, ask=1.6, delta=0.3),
-            OptionChainLeg(symbol=f"{symbol}230519C00165000", option_type="call", strike=165.0, bid=0.5, ask=0.6, delta=0.1),
-        ]
+        """Generate options chain dynamically centered around underlying spot price."""
+        from datetime import datetime
+        import math
+
+        spot = self._get_symbol_price(symbol)
+        
+        # Determine strike spacing based on spot price
+        if spot < 25:
+            strike_spacing = 1.0
+        elif spot < 100:
+            strike_spacing = 2.5
+        else:
+            strike_spacing = 5.0
+
+        # Center strike
+        center_strike = round(spot / strike_spacing) * strike_spacing
+        
+        try:
+            exp_date = datetime.strptime(expiry, "%Y-%m-%d")
+            occ_expiry = exp_date.strftime("%y%m%d")
+        except Exception:
+            occ_expiry = "260620"
+
+        ticker_part = symbol.ljust(6)
+        legs = []
+        strikes = [center_strike + i * strike_spacing for i in range(-6, 7)]
+        
+        for k in strikes:
+            if k <= 0:
+                continue
+                
+            dist = (k - spot) / (0.05 * spot) if spot > 0 else 0
+            
+            call_delta = round(1.0 / (1.0 + math.exp(dist)), 2)
+            put_delta = round(-1.0 / (1.0 + math.exp(-dist)), 2)
+            
+            call_intrinsic = max(0.0, spot - k)
+            put_intrinsic = max(0.0, k - spot)
+            
+            extrinsic = 0.04 * spot * math.exp(-dist**2 / 2.0)
+            
+            call_mid = call_intrinsic + extrinsic
+            put_mid = put_intrinsic + extrinsic
+            
+            call_spread = max(0.05, round(call_mid * 0.1, 2))
+            put_spread = max(0.05, round(put_mid * 0.1, 2))
+            
+            call_bid = max(0.01, round(call_mid - call_spread / 2.0, 2))
+            call_ask = max(0.02, round(call_mid + call_spread / 2.0, 2))
+            
+            put_bid = max(0.01, round(put_mid - put_spread / 2.0, 2))
+            put_ask = max(0.02, round(put_mid + put_spread / 2.0, 2))
+
+            strike_cents = int(round(k * 1000))
+            strike_str = f"{strike_cents:08d}"
+            
+            call_sym = f"{ticker_part}{occ_expiry}C{strike_str}"
+            put_sym = f"{ticker_part}{occ_expiry}P{strike_str}"
+            
+            legs.append(OptionChainLeg(
+                symbol=call_sym,
+                option_type="call",
+                strike=k,
+                bid=call_bid,
+                ask=call_ask,
+                delta=call_delta
+            ))
+            legs.append(OptionChainLeg(
+                symbol=put_sym,
+                option_type="put",
+                strike=k,
+                bid=put_bid,
+                ask=put_ask,
+                delta=put_delta
+            ))
+            
+        return legs
 
     async def get_quote(self, symbols: str) -> List[MarketQuote]:
         from datetime import datetime
-        return [
-            MarketQuote(
-                symbol=s.strip(),
-                price=155.0,
-                bid=154.9,
-                ask=155.1,
+        quotes = []
+        for s in symbols.split(","):
+            sym = s.strip()
+            price = self._get_symbol_price(sym)
+            bid = round(price - 0.05, 2)
+            ask = round(price + 0.05, 2)
+            quotes.append(MarketQuote(
+                symbol=sym,
+                price=price,
+                bid=bid,
+                ask=ask,
                 volume=1000000,
                 timestamp=datetime.utcnow().isoformat(),
-                last=155.0
-            )
-            for s in symbols.split(",")
-        ]
+                last=price
+            ))
+        return quotes
 
     async def get_delta(self, option_symbol: str) -> float:
-        return 0.15
+        # standard fallback delta
+        return -0.15 if "P" in option_symbol else 0.15
 
     async def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
         """Mirror TradierBroker.analyze_symbol over mock bars so the K-Means
@@ -85,7 +165,7 @@ class MockBroker(AbstractBroker):
         import pandas as pd
         from hermes.ml.pop_engine import find_key_levels
 
-        bars = self.get_history(symbol, interval="daily")
+        bars = await self.get_history(symbol, interval="daily")
         if not bars:
             return {"error": f"no history for {symbol}"}
         df = pd.DataFrame(bars)
@@ -129,8 +209,10 @@ class MockBroker(AbstractBroker):
             "period": period,
         }
 
-    def get_history(self, symbol: str, interval: str = "daily",
-                    start: Optional[str] = None, end: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_history(
+        self, symbol: str, *, interval: str = "daily",
+        start: Optional[str] = None, end: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Return dummy history data with deterministic per-symbol noise so
         downstream rolling stats (volume z-score, realized vol, beta) are
         well-defined."""
@@ -174,10 +256,50 @@ class MockBroker(AbstractBroker):
 
     async def place_order_from_action(self, action: TradeAction) -> OrderPlacementResult:
         logger.info("[MOCK] Placing order for %s: %s", action.symbol, action.legs)
+        
+        simulated_net_price = 0.0
+        for leg in action.legs:
+            opt_symbol = leg.get("option_symbol", "")
+            leg_side = leg.get("side", "buy")
+            qty = leg.get("quantity", 1)
+            
+            # Deterministic mid price and spread based on option symbol
+            h = hash(opt_symbol) & 0xFFFFFFFF
+            leg_mid = 0.5 + (h % 450) / 100.0
+            leg_spread = max(0.05, round(leg_mid * 0.1, 2))
+            
+            if leg_side == "buy":
+                # Buy filled slightly above mid (slippage)
+                slippage = (h % 3) * 0.1 * leg_spread
+                fill_price = round(leg_mid + slippage, 2)
+                simulated_net_price -= fill_price * qty
+            else:
+                # Sell filled slightly below mid (slippage)
+                slippage = (h % 3) * 0.1 * leg_spread
+                fill_price = round(leg_mid - slippage, 2)
+                simulated_net_price += fill_price * qty
+                
+        simulated_net_price = round(simulated_net_price, 2)
+        fill_status = "ok"
+        
+        # Determine if limit price is fillable
+        if action.order_type == "credit" or (action.side == "sell" and action.price is not None):
+            if action.price is not None and simulated_net_price < action.price:
+                logger.info("[MOCK] Order rejected: credit limit price %s not met by simulated net price %s", action.price, simulated_net_price)
+                fill_status = "rejected"
+        elif action.order_type == "debit" or (action.side == "buy" and action.price is not None):
+            if action.price is not None and -simulated_net_price > action.price:
+                logger.info("[MOCK] Order rejected: debit limit price %s not met by simulated net price %s", action.price, -simulated_net_price)
+                fill_status = "rejected"
+                
         return OrderPlacementResult(
             order_id="MOCK-123",
-            status="ok",
-            raw_response={"status": "ok", "order_id": "MOCK-123"}
+            status=fill_status,
+            raw_response={
+                "status": fill_status,
+                "order_id": "MOCK-123",
+                "simulated_net_price": simulated_net_price
+            }
         )
 
     async def roll_to_next_month(self, option_symbol: str) -> str:
@@ -185,12 +307,6 @@ class MockBroker(AbstractBroker):
 
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         return {"status": "ok", "id": order_id}
-
-    async def get_history(
-        self, symbol: str, *, interval: str = "daily",
-        start: Optional[str] = None, end: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        return []
 
     async def close(self) -> None:
         pass

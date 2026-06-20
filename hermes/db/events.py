@@ -18,6 +18,13 @@ class BaseEvent(BaseModel):
     """Base Event class for Event Sourcing."""
     event_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    event_version: int = 1
+
+    @classmethod
+    def upgrade_payload(cls, payload: Dict[str, Any], from_version: int) -> Dict[str, Any]:
+        """Hook for subclass-specific migrations of older payload versions."""
+        return payload
+
 
 
 class OrderSubmittedEvent(BaseEvent):
@@ -178,6 +185,39 @@ CLASS_TO_EVENT_TYPE: Dict[Type[BaseEvent], str] = {
 }
 
 
+def deserialize_event(
+    event_type: str,
+    payload: Dict[str, Any],
+    event_id: Optional[int] = None,
+    created_at: Optional[datetime] = None,
+) -> Optional[BaseEvent]:
+    """Deserialize a database event payload into its structured class after upgrading it."""
+    cls = EVENT_TYPE_TO_CLASS.get(event_type)
+    if not cls:
+        return None
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return None
+
+    # Handle older payloads that do not have event_version
+    from_version = payload.get("event_version", 1)
+
+    # Run the model-specific payload upgrader
+    upgraded_payload = cls.upgrade_payload(payload.copy(), from_version)
+
+    # Ensure event_version field is present and correct in the upgraded payload
+    if "event_version" not in upgraded_payload:
+        upgraded_payload["event_version"] = cls.model_fields["event_version"].default
+
+    event = cls(**upgraded_payload)
+    event.event_id = event_id
+    event.created_at = created_at
+    return event
+
+
 class EventStoreManager:
     """Manages appending and loading events from the DB EventLedger."""
 
@@ -233,17 +273,8 @@ class EventStoreManager:
         
         events = []
         for row in rows:
-            cls = EVENT_TYPE_TO_CLASS.get(row.event_type)
-            if not cls:
-                continue
-            
-            payload = row.payload
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-                
-            event = cls(**payload)
-            event.event_id = row.id
-            event.created_at = row.created_at
-            events.append(event)
+            event = deserialize_event(row.event_type, row.payload, row.id, row.created_at)
+            if event:
+                events.append(event)
             
         return events
