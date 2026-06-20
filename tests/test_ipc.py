@@ -75,3 +75,21 @@ async def test_mock_ipc_multiple_subscribers():
     
     # Clean up
     await ipc.unsubscribe("multi_channel")
+
+
+@pytest.mark.asyncio
+async def test_redis_ipc_failure_raises_error():
+    # Use a DSN that will fail to connect
+    ipc = AsyncIPC("redis://localhost:9999/9")
+    
+    # Under pytest, connect() defaults to LocalMemoryIPCBackend (which returns False)
+    connected = await ipc.connect()
+    assert not connected
+    assert not ipc.is_connected
+    
+    # If we bypass the pytest check, it will try connecting to Redis and fail, raising ConnectionError
+    with pytest.raises(ConnectionError) as exc_info:
+        await ipc.connect(bypass_pytest_check=True)
+    
+    assert "Failed to connect to Redis IPC" in str(exc_info.value)
+

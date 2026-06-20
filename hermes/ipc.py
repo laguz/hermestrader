@@ -18,8 +18,55 @@ def _validate_channel(channel: str) -> None:
     if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", channel):
         raise ValueError(f"Invalid channel name: {channel}")
 
-class AsyncIPC:
-    def __init__(self, redis_dsn: Optional[str] = None):
+class LocalMemoryIPCBackend:
+    """In-memory IPC backend for testing and single-process mode."""
+    def __init__(self):
+        self._local_subscribers: Dict[str, List[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]]] = {}
+
+    @property
+    def is_connected(self) -> bool:
+        return False
+
+    async def connect(self) -> bool:
+        logger.info("Local Memory IPC connected (always reports not connected to trigger fallback/mock behaviors).")
+        return False
+
+    async def publish(self, channel: str, data: Dict[str, Any]) -> int:
+        _validate_channel(channel)
+        receivers = 0
+        if channel in self._local_subscribers:
+            handlers = list(self._local_subscribers[channel])
+            for handler in handlers:
+                asyncio.create_task(handler(data))
+                receivers += 1
+        return receivers
+
+    async def subscribe(self, channel: str, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]) -> None:
+        _validate_channel(channel)
+        self._local_subscribers.setdefault(channel, []).append(callback)
+
+    async def unsubscribe(self, channel: str, callback: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = None) -> None:
+        _validate_channel(channel)
+        if channel in self._local_subscribers:
+            if callback:
+                try:
+                    self._local_subscribers[channel].remove(callback)
+                except ValueError:
+                    pass
+            else:
+                self._local_subscribers[channel] = []
+                
+            if not self._local_subscribers[channel]:
+                del self._local_subscribers[channel]
+
+    async def disconnect(self) -> None:
+        self._local_subscribers.clear()
+        logger.info("Local Memory IPC disconnected.")
+
+
+class RedisIPCBackend:
+    """Strict Redis Pub/Sub backend that raises ConnectionError on failure in production/dev."""
+    def __init__(self, redis_dsn: str):
         self.redis_dsn = redis_dsn
         self.client: Any = None
         self.is_connected = False
@@ -28,19 +75,9 @@ class AsyncIPC:
         self._active_channels: set[str] = set()
         self._stop_event = asyncio.Event()
 
-    async def connect(self, db: Optional[Any] = None, bypass_pytest_check: bool = False) -> bool:
-        """Attempt to connect to Redis. Returns True if successful, False if falling back to Mock."""
-        import sys
-        if "pytest" in sys.modules and not bypass_pytest_check:
-            self.is_connected = False
-            logger.info("Test environment detected; bypassing Redis IPC connection")
-            return False
-
+    async def connect(self) -> bool:
         if not self.redis_dsn:
-            self.is_connected = False
-            logger.info("Redis DSN not configured; using local mock fallback")
-            return False
-
+            raise ConnectionError("Redis DSN not configured, but Redis IPC backend was selected.")
         try:
             import redis.asyncio as aioredis
             self.client = aioredis.from_url(self.redis_dsn, decode_responses=True)
@@ -53,43 +90,28 @@ class AsyncIPC:
         except Exception as exc:
             self.is_connected = False
             self.client = None
-            logger.warning("Redis IPC connection failed (using local mock fallback): %s", exc)
-            return False
+            logger.error("Redis IPC connection failed: %s", exc)
+            raise ConnectionError(f"Failed to connect to Redis IPC at {self.redis_dsn}: {exc}") from exc
 
     async def publish(self, channel: str, data: Dict[str, Any]) -> int:
-        """Publish a JSON payload to a channel. Returns number of receivers."""
         _validate_channel(channel)
+        if not self.is_connected or self.client is None:
+            raise ConnectionError("Cannot publish: Redis IPC is not connected.")
         payload = json.dumps(data)
-        receivers = 0
-
-        if self.is_connected and self.client is not None:
-            try:
-                receivers = await self.client.publish(channel, payload)
-                logger.debug("IPC published to Redis channel %s: %s (receivers=%d)", channel, data, receivers)
-            except Exception as exc:
-                logger.error("Failed to publish to Redis channel %s: %s", channel, exc)
-
-        # Local mock publish fallback (useful for same-process thread triggers or testing)
-        if channel in self._local_subscribers:
-            handlers = list(self._local_subscribers[channel])
-            for handler in handlers:
-                asyncio.create_task(handler(data))
-                if not self.is_connected:
-                    receivers += 1
+        receivers = await self.client.publish(channel, payload)
+        logger.debug("IPC published to Redis channel %s: %s (receivers=%d)", channel, data, receivers)
         return receivers
 
     async def subscribe(self, channel: str, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]) -> None:
-        """Register an async callback for a channel."""
         _validate_channel(channel)
         self._local_subscribers.setdefault(channel, []).append(callback)
         
-        if self.is_connected and self.client is not None:
-            if channel not in self._active_channels:
-                self._active_channels.add(channel)
+        if channel not in self._active_channels:
+            self._active_channels.add(channel)
+            if self.is_connected and self.client is not None:
                 await self._start_listener()
 
     async def unsubscribe(self, channel: str, callback: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = None) -> None:
-        """Deregister callback and unsubscribe if no callbacks remain."""
         _validate_channel(channel)
         if channel in self._local_subscribers:
             if callback:
@@ -104,7 +126,7 @@ class AsyncIPC:
                 del self._local_subscribers[channel]
                 if channel in self._active_channels:
                     self._active_channels.remove(channel)
-                    if self.is_connected:
+                    if self.is_connected and self.client is not None:
                         await self._start_listener()
 
     async def _start_listener(self) -> None:
@@ -188,6 +210,55 @@ class AsyncIPC:
             
         self.is_connected = False
         logger.info("Disconnected from Redis IPC.")
+
+
+class AsyncIPC:
+    """Wrapper that delegates to either Redis or In-Memory IPC backend depending on environment."""
+    def __init__(self, redis_dsn: Optional[str] = None):
+        self.redis_dsn = redis_dsn
+        self.backend: Any = None
+
+    @property
+    def is_connected(self) -> bool:
+        return self.backend.is_connected if self.backend else False
+
+    async def connect(self, db: Optional[Any] = None, bypass_pytest_check: bool = False) -> bool:
+        """Attempt to connect. Returns True if Redis successful, False if local memory backend used."""
+        import sys
+        
+        # Decide which backend to use
+        is_pytest = "pytest" in sys.modules and not bypass_pytest_check
+        if is_pytest or not self.redis_dsn:
+            logger.info("Using Local Memory IPC backend (is_pytest=%s, DSN configured=%s)", is_pytest, bool(self.redis_dsn))
+            self.backend = LocalMemoryIPCBackend()
+        else:
+            logger.info("Using Redis IPC backend")
+            self.backend = RedisIPCBackend(self.redis_dsn)
+            
+        return await self.backend.connect()
+
+    async def publish(self, channel: str, data: Dict[str, Any]) -> int:
+        """Publish a JSON payload to a channel. Returns number of receivers."""
+        if self.backend is None:
+            raise RuntimeError("IPC is not connected. Call connect() first.")
+        return await self.backend.publish(channel, data)
+
+    async def subscribe(self, channel: str, callback: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]) -> None:
+        """Register an async callback for a channel."""
+        if self.backend is None:
+            self.backend = LocalMemoryIPCBackend()
+        await self.backend.subscribe(channel, callback)
+
+    async def unsubscribe(self, channel: str, callback: Optional[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]] = None) -> None:
+        """Deregister callback and unsubscribe if no callbacks remain."""
+        if self.backend is not None:
+            await self.backend.unsubscribe(channel, callback)
+
+    async def disconnect(self) -> None:
+        """Clean up tasks and close connection."""
+        if self.backend is not None:
+            await self.backend.disconnect()
+            self.backend = None
 
 # Global singleton client initialized with the settings DSN
 from hermes.config import settings
