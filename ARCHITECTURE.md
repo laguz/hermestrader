@@ -87,18 +87,15 @@ and `backtest_engine.py`).
 │      review path, informational vision chart reads, and the      │
 │      event-bus review worker, plus the autonomous-HermesAlpha    │
 │      origination hooks (propose_intent / decide_exit), live only │
-│      when autonomy=='autonomous'. A committee review mode still  │
-│      earns its reviewer here.                                    │
-│    AsyncXGBPredictor        — background ML forecasting          │
+│      when autonomy=='autonomous'. Single review mode only;       │
+│      committee is deferred (see REBUILD.md).                     │
+│    pop_engine (hermes/ml)   — chain-only POP gate (Δ·S/R·vol)    │
 └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│  Domain logic (five cascading strategies — hermes/.../strategies/)│
+│  Domain logic (two cascading strategies — hermes/.../strategies/) │
 │    CreditSpreads75   PRIORITY=1   39–45 DTE entries              │
-│    CreditSpreads7    PRIORITY=2   7 DTE entries                  │
-│    TastyTrade45      PRIORITY=3   16Δ short, 30–60 DTE           │
-│    WheelStrategy     PRIORITY=4   put-→assignment-→call wheel    │
 │    HermesAlpha       PRIORITY=5   LLM-directed credit spread     │
 │  Plus shared invariants:                                         │
 │    MoneyManager      — true BP, side-aware capacity, scaling     │
@@ -203,7 +200,7 @@ matter:
 |--------------------|-------------|--------------|------------------------------------------|
 | `trades`           | Service-1   | both         | Filled positions; hypertable on `opened_at` |
 | `pending_orders`   | Service-1   | both         | Submitted but not filled                 |
-| `predictions`      | Service-1   | both         | XGBoost next-bar forecasts               |
+| `predictions`      | Service-1   | both         | Next-bar price forecasts                 |
 | `ai_decisions`     | Service-1   | both         | Every overseer review (advisory or otherwise) |
 | `bars_daily`       | Service-1   | both         | Hypertable; populated by `_sync_history` |
 | `bars_intraday`    | Service-1   | both         | Hypertable; intraday OHLCV               |
@@ -258,7 +255,7 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 
 | You want to…                                  | Look in                                          |
 |-----------------------------------------------|--------------------------------------------------|
-| Change how a strategy enters a trade          | the strategy's module in `hermes/service1_agent/strategies/` (`cs75.py`, `cs7.py`, `tt45.py`, `wheel.py`, `hermes_alpha.py`) |
+| Change how a strategy enters a trade          | the strategy's module in `hermes/service1_agent/strategies/` (`cs75.py`, `hermes_alpha.py`) |
 | Change how a strategy exits a trade           | same — search `manage_positions`                 |
 | Add a new strategy                            | subclass `AbstractStrategy` in `strategy_base.py`, add a module under `strategies/`, register in `common.py` (`STRATEGIES`/`STRATEGY_PRIORITIES`) and `agent_construction.build()` |
 | Change the engine pipeline / event handling   | `core.py` (spine) + `_engine_*.py` collaborators |
@@ -269,7 +266,7 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Change anything the overseer does (review, vision chart reads, event-bus worker) | `overseer.py` — one cohesive `HermesOverseer` class |
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
-| Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |
+| Tune the POP gate (chain-only)                | `hermes/ml/pop_engine.py`                         |
 | Run / extend simulation (virtual clock)       | `hermes/service1_agent/backtest_engine.py`, `hermes/utils.py::set_virtual_time` |
 | Change shared constants (priorities, modes)   | `hermes/common.py`                               |
 | Change market-hours / holiday handling        | `hermes/market_hours.py`                         |

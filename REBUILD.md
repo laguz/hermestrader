@@ -9,15 +9,30 @@
 >
 > Read [`ARCHITECTURE.md`](ARCHITECTURE.md) first — this assumes its vocabulary.
 
+## Status — executed
+
+This plan has been carried out against the live system, so it now reads as the
+*rationale* for the current shape, not a pending to-do:
+
+- `067bc8e` — Phase-0 strip: CS75-only, single-mode overseer, chain-only POP
+  (the 18-module `hermes/ml/` collapsed to `pop_engine` + `__init__`).
+- `a50fdf0` — residual teardown: overseer review-only, dormant knobs dropped.
+- `9d694d7` — **HermesAlpha** earns promotion through the gate below
+  (autonomous origination + broker-verified exits).
+
+The live tree today is the Phase-0 core **plus the promoted HermesAlpha** —
+exactly the end-state this doc describes. So if asked "rebuild it differently
+or keep it as is?", the answer is now **keep it as is**: the code already *is*
+the wished-for construction order.
+
 ## Thesis
 
-The current system is ~25k LOC across five strategies, a two-mode overseer, and
-a 17-module ML subsystem (~4,300 LOC). The audit
-([`ml-subsystem-decision-map`](.)) shows the decision-critical ML core is only
-`pop_engine` + the XGB stack + `regime_weights` (~2,400 LOC); the other ~1,900
-LOC is gated-off tuners, observability, or a dormant stacking layer. That's the
-signature of **capability built ahead of use** — none of it unsafe, but a lot of
-it written before a live P&L signal asked for it.
+The pre-rebuild system was ~25k LOC across five strategies, a two-mode
+overseer, and a 17-module ML subsystem (~4,300 LOC) — only ~2,400 LOC of which
+(`pop_engine` + the XGB stack + `regime_weights`) was decision-critical; the
+other ~1,900 was gated-off tuners, observability, or a dormant stacking layer.
+That was the signature of **capability built ahead of use** — none of it
+unsafe, but a lot of it written before a live P&L signal asked for it.
 
 A rebuild keeps the safety-critical *spine* identical (it's the hard part and
 it's right) and changes only the **order of construction**: ship the smallest

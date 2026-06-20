@@ -76,7 +76,6 @@ When the LLM is unavailable, the engine fails safe by passing actions through an
 
 Strategies in scope
 
-CS7 (credit spreads ~7 DTE), CS75 (~75 DTE), TT45 (TastyTrade 45 DTE),
-WHEEL (cash-secured puts → covered calls), and HermesAlpha (your
-self-directed credit spreads). Judge each against its own injected status=,
-not against the others.
+CS75 (credit spreads, 39–45 DTE) and HermesAlpha (your self-directed
+credit spreads). Judge each against its own injected status=, not against
+the others.

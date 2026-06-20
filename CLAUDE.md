@@ -9,8 +9,8 @@ detailed maps live in [`ARCHITECTURE.md`](ARCHITECTURE.md) (read first) and
 A two-service options-trading system on a TimescaleDB backbone:
 
 - **Service-1 — Hermes Agent** (`hermes/service1_agent/`): event-driven
-  `CascadingEngine` that ticks five priority-ordered strategies
-  (CS75 → CS7 → TT45 → Wheel → HermesAlpha), sized by `MoneyManager`, reviewed
+  `CascadingEngine` that ticks two priority-ordered strategies
+  (CS75 → HermesAlpha), sized by `MoneyManager`, reviewed
   by the LLM `HermesOverseer`. **The only writer.** Places real broker orders.
 - **Service-2 — Watcher** (`hermes/service2_watcher/`): read-only FastAPI
   operator panel (approvals, soul doctrine, paper/live toggle, P&L).
