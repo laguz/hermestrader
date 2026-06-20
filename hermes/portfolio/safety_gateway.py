@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from hermes.common import is_close_tag
 from hermes.service1_agent.trade_action import TradeAction
 
 logger = logging.getLogger("hermes.portfolio.safety_gateway")
@@ -60,7 +61,7 @@ class SafetyGateway:
                 "to_close" in (leg.get("side") or leg.get("action") or "").lower()
                 for leg in action.legs
             )
-        if "CLOSE" in (action.tag or ""):
+        if is_close_tag(action.tag):
             is_closing = True
 
         if is_closing:

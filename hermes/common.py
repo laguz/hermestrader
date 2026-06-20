@@ -155,3 +155,16 @@ def close_reason_from_tag(tag: _Optional[str]) -> _Optional[str]:
         return None
     suffix = norm[idx + len(marker):].strip()
     return suffix or None
+
+
+def is_close_tag(tag: _Optional[str]) -> bool:
+    """True if ``tag`` marks a position-closing order.
+
+    Closes are tagged ``HERMES_<STRAT>_CLOSE_<REASON>``; accept either
+    separator form for the Tradier ``_``↔``-`` round-trip. Matches ``CLOSE`` as
+    a whole tag field so an entry tag (or a symbol that merely contains the
+    letters) doesn't false-positive. Returns ``False`` for entry/empty tags.
+    """
+    if not tag:
+        return False
+    return "CLOSE" in str(tag).replace("-", "_").split("_")

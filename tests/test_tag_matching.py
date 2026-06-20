@@ -11,6 +11,7 @@ import pytest
 
 from hermes.common import (
     close_reason_from_tag,
+    is_close_tag,
     is_hermes_tag,
     strategy_id_from_tag,
 )
@@ -76,6 +77,35 @@ def test_close_reason_separator_round_trip_is_stable():
     under = close_reason_from_tag("HERMES_CS75_CLOSE_EXIT-POLICY-REACTIVE")
     hyphen = close_reason_from_tag("HERMES-CS75-CLOSE-EXIT-POLICY-REACTIVE")
     assert under == hyphen
+
+
+@pytest.mark.parametrize("tag, expected", [
+    # Close tags, both separator forms.
+    ("HERMES_CS75_CLOSE_TP-50", True),
+    ("HERMES-CS75-CLOSE-TP-50", True),
+    ("HERMES_TT45_CLOSE_AI", True),
+    ("HERMES_HermesAlpha_CLOSE_EXIT-POLICY-REACTIVE", True),
+    # Entry tags are not closes.
+    ("HERMES_CS75", False),
+    ("HERMES-CS75", False),
+    ("HERMES_WHEEL", False),
+    # CLOSE must be a whole field, not an incidental substring.
+    ("HERMES_CLOSET", False),
+    ("HERMES_FORECLOSE_X", False),
+    # Empty / non-Hermes.
+    ("", False),
+    (None, False),
+    ("manual-trade", False),
+])
+def test_is_close_tag(tag, expected):
+    assert is_close_tag(tag) is expected
+
+
+def test_is_close_tag_agrees_with_close_reason():
+    """A tag has a recoverable close reason iff it's a close tag."""
+    for tag in ("HERMES_CS75_CLOSE_TP-50", "HERMES-CS75-CLOSE-TP-50",
+                "HERMES_CS75", "HERMES-CS75", "", None):
+        assert is_close_tag(tag) is (close_reason_from_tag(tag) is not None)
 
 
 def test_orm_helper_delegates_to_common():
