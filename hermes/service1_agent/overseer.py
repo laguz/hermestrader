@@ -1,9 +1,14 @@
 """
 [Service-1: Hermes-Agent-Core] — Hermes AI Overseer
 
-A local LLM (Gemma 3 Flash / Gemma 4 e4b) reviews proposed TradeActions, may VETO
-or MODIFY them, and may PROPOSE new ones from chart-image analysis. The class is
-provider-agnostic — ``LLMClient`` is any object with ``.chat(messages, images=...)``.
+A local LLM (Gemma 3 Flash / Gemma 4 e4b) reviews proposed TradeActions and may
+VETO or MODIFY them. The class is provider-agnostic — ``LLMClient`` is any object
+with ``.chat(messages, images=...)``.
+
+Phase 0 is **review-only**: the overseer sits above the rules engine and trims or
+vetoes what the strategies produce; it does not originate trades or tune live
+settings. (Autonomous origination and out-of-loop governance were deferred per
+``REBUILD.md`` — they earn their way back behind the promotion gate, not before.)
 
 One cohesive class owns the whole overseer surface:
 
@@ -14,10 +19,8 @@ One cohesive class owns the whole overseer surface:
 - the **LLM transport** (``get_system_prompt`` / ``_chat_with_timeout`` /
   ``_chat_with_retry`` / ``_safe_json``);
 - the **review** path (``review`` → ``_consult`` → ``_consult_single``);
-- the **autonomous origination** surface (``propose`` / ``propose_closes`` /
-  ``propose_alpha_setup`` / ``analyze_charts``);
-- the **out-of-loop governance** tuning (``propose_parameter_adjustments`` /
-  ``propose_risk_restrictions``);
+- the **vision chart reads** (``analyze_charts`` — informational only, surfaced
+  by the C2 chart routes; never originates trades);
 - the **event-bus worker** lifecycle (``start`` / ``stop`` / ``queue``).
 
 Phase 0 ships a *single* review mode. ``_consult`` still routes through the
@@ -48,8 +51,7 @@ class HermesOverseer:
     BASE_SYSTEM_PROMPT = (
         "You are HERMES, a quantitative options-trading overseer. "
         "You review trade actions produced by rule-based strategies and decide: "
-        "APPROVE / VETO / MODIFY. You also propose new trades when chart context "
-        "shows superior setups or imminent risks the rules missed. "
+        "APPROVE / VETO / MODIFY. "
         "Output strict JSON."
     )
 
@@ -70,7 +72,8 @@ class HermesOverseer:
         """
         autonomy: 'advisory'  → log decisions, never block (default for new deployments)
                   'enforcing' → veto/modify takes effect
-                  'autonomous'→ may also originate new actions
+                  'autonomous'→ reserved; reviews exactly like 'enforcing' in
+                                Phase 0 (autonomous origination is deferred)
 
         soul: free-text operator doctrine (typically the contents of a
               soul.md the user maintains in the watcher). When non-empty it
@@ -302,228 +305,10 @@ class HermesOverseer:
                 "llm_error_fallback": True,
             }
 
-    # ── autonomous origination + vision reads ─────────────────────────────────
-    # The LLM never authors raw legs or prices — it picks *which* trades to open
-    # or close, and the engine fills price from live quotes.
-    async def propose(self, watchlist: Iterable[str]) -> List[TradeAction]:
-        if self.autonomy != "autonomous":
-            return []
-        proposed: List[TradeAction] = []
-        for symbol in watchlist:
-            chart = await self.chart_provider.snapshot(symbol) if self.chart_provider else None
-            payload = await self._propose_for(symbol, chart)
-            if not payload:
-                continue
-            try:
-                a = TradeAction(**payload, ai_authored=True)
-                proposed.append(a)
-            except Exception as exc:                                   # noqa: BLE001
-                logger.warning("Overseer proposal malformed for %s: %s", symbol, exc)
-        return proposed
-
-    async def propose_closes(self) -> List[TradeAction]:
-        """Let the overseer decide which currently-OPEN positions to close.
-
-        The mirror image of :meth:`propose`: where ``propose`` originates new
-        entries, this originates exits. Only ``autonomous`` mode acts — the
-        overseer must already be trusted to author trades before it may
-        unwind them.
-
-        Division of labour matches the entry path: the LLM picks *which*
-        trades to close (by id, with a rationale); it never authors raw legs
-        or prices. We build the close legs from the real Trade rows and leave
-        ``price`` for the engine to fill from live quotes (see
-        ``CascadingEngine._price_ai_closes``). Equity positions are out of
-        scope here — closing shares needs an equity sell order, not a
-        debit-to-close — so only option positions (those carrying a short
-        leg) are offered as candidates.
-        """
-        if self.autonomy != "autonomous":
-            return []
-        try:
-            trades = await self.db.trades.all_open_trades()
-        except Exception as exc:                                   # noqa: BLE001
-            logger.warning("propose_closes: all_open_trades failed: %s", exc)
-            return []
-
-        candidates = [t for t in trades if t.get("short_leg")]
-        if not candidates:
-            return []
-
-        today = datetime.now(timezone.utc).date()
-        summary: List[Dict[str, Any]] = []
-        for t in candidates:
-            exp = t.get("expiry")
-            dte = None
-            if exp:
-                try:
-                    d = exp if hasattr(exp, "isoformat") else \
-                        datetime.strptime(str(exp), "%Y-%m-%d").date()
-                    dte = (d - today).days
-                except Exception:                                  # noqa: BLE001
-                    dte = None
-            summary.append({
-                "trade_id": t["id"], "strategy": t.get("strategy_id"),
-                "symbol": t.get("symbol"), "side": t.get("side_type"),
-                "lots": t.get("lots"), "entry_credit": t.get("entry_credit"),
-                "expiry": str(exp) if exp else None, "dte": dte,
-            })
-
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self.MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self.MAX_LOG_CHARS:]
-
-        system_prompt = await self.get_system_prompt()
-        prompt = (
-            "Review the currently OPEN option positions below against market "
-            "context and the recent execution log. Decide which, if any, to "
-            "CLOSE now — to lock in profit or to cut risk before it grows. "
-            "Closing is optional: return an empty list if every position "
-            "should be held.\n"
-            f"OPEN_POSITIONS:\n{json.dumps(summary, default=str)}\n"
-            f"RECENT_LOGS:\n{recent_logs}\n"
-            "Reply with strict JSON "
-            "{closes: [{trade_id: int, rationale: str}, ...]}."
-        )
-        try:
-            msg = await self._chat_with_timeout(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user",   "content": prompt}],
-                images=[],
-            )
-        except Exception as exc:                                   # noqa: BLE001
-            logger.warning("propose_closes LLM call failed: %s", exc)
-            return []
-
-        decision = self._safe_json(msg)
-        closes = decision.get("closes")
-        if not isinstance(closes, list):
-            return []
-
-        by_id = {t["id"]: t for t in candidates}
-        actions: List[TradeAction] = []
-        for c in closes:
-            if not isinstance(c, dict):
-                continue
-            try:
-                tid = int(c.get("trade_id"))
-            except (TypeError, ValueError):
-                continue
-            trade = by_id.get(tid)
-            if trade is None:
-                logger.info("propose_closes: trade_id %s is not an open "
-                            "option position; skip", c.get("trade_id"))
-                continue
-            action = self._build_close_action(trade, c.get("rationale") or "AI close")
-            if action is not None:
-                actions.append(action)
-
-        if actions:
-            try:
-                await self.db.decisions.write_ai_decision(
-                    "OVERSEER", "CLOSES", self.autonomy,
-                    {"type": "propose_closes",
-                     "trade_ids": [a.strategy_params.get("trade_id") for a in actions]},
-                )
-            except Exception:                                      # noqa: BLE001
-                pass
-        return actions
-
-    @staticmethod
-    def _build_close_action(trade: Dict[str, Any], rationale: str) -> Optional[TradeAction]:
-        """Build a debit-to-close TradeAction from a real OPEN Trade row.
-
-        ``price`` is intentionally left ``None``: the engine fills it from
-        live quotes at submit time so the close is priced against the market,
-        not against a stale entry credit or an LLM guess. The action is
-        flagged ``ai_authored`` so the engine routes it as a management close
-        and skips re-reviewing the overseer's own decision.
-        """
-        short_leg = trade.get("short_leg")
-        if not short_leg:
-            return None
-        lots = int(trade.get("lots") or 1)
-        legs = [{"option_symbol": short_leg, "side": "buy_to_close", "quantity": lots}]
-        order_class = "option"
-        long_leg = trade.get("long_leg")
-        if long_leg:
-            legs.append({"option_symbol": long_leg, "side": "sell_to_close", "quantity": lots})
-            order_class = "multileg"
-        strat = trade.get("strategy_id")
-        exp = trade.get("expiry")
-        return TradeAction(
-            strategy_id=strat, symbol=trade["symbol"], order_class=order_class,
-            legs=legs, price=None, side="buy", quantity=1, order_type="debit",
-            tag=f"HERMES_{strat}_CLOSE_AI",
-            strategy_params={"trade_id": trade["id"], "close_reason": "AI_CLOSE",
-                             "side_type": trade.get("side_type")},
-            expiry=str(exp) if exp else None, width=trade.get("width"),
-            ai_authored=True, ai_rationale=rationale,
-        )
-
-    async def propose_alpha_setup(
-        self, universe: Iterable[str], open_positions: Iterable[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
-        """Pick ONE self-directed credit-spread setup from a bounded universe.
-
-        Drives the HermesAlpha strategy: the overseer expresses *intent*
-        (symbol, side, short-leg delta, DTE, width, lots) and the strategy
-        turns it into real legs, clamping every numeric to a safe range.
-        Like ``propose`` / ``propose_closes`` the LLM never authors raw legs
-        or prices — it only chooses the setup, from a symbol list it may not
-        leave. Returns the intent dict, or ``None`` to stand down this tick.
-
-        Unlike ``propose``/``propose_closes`` this is not gated on the
-        overseer's ``autonomy`` setting: enabling the HermesAlpha strategy is
-        itself the authorisation to let Hermes trade his own book.
-        """
-        universe = [str(s).upper().strip() for s in (universe or []) if str(s).strip()]
-        if not universe or self.llm is None:
-            return None
-
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self.MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self.MAX_LOG_CHARS:]
-
-        system_prompt = await self.get_system_prompt()
-        prompt = (
-            "You are running the HermesAlpha book — your own self-directed "
-            "options strategy. Choose ONE credit spread to SELL now, or stand "
-            "down if nothing is compelling.\n"
-            f"UNIVERSE (you may only pick a symbol from this list): {universe}\n"
-            f"ALREADY OPEN (do not duplicate these): {list(open_positions or [])}\n"
-            f"RECENT_LOGS:\n{recent_logs}\n"
-            "Decide: side ('put' = bull-put spread below support, 'call' = "
-            "bear-call spread above resistance); the short-leg target delta "
-            "(0.05-0.45, higher = more premium and more risk); days-to-expiry "
-            "(5-45); spread width in strike points (1-10); and lot count (>=1). "
-            "Reply with strict JSON {verdict: 'OPEN'|'PASS', symbol, side, "
-            "target_delta, dte, width, lots, rationale}. Use PASS to hold fire."
-        )
-        try:
-            msg = await self._chat_with_timeout(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user",   "content": prompt}],
-                images=[],
-            )
-        except Exception as exc:                                   # noqa: BLE001
-            logger.warning("propose_alpha_setup LLM call failed: %s", exc)
-            return None
-
-        data = self._safe_json(msg)
-        if not isinstance(data, dict) or str(data.get("verdict", "")).upper() == "PASS":
-            return None
-        symbol = str(data.get("symbol", "")).upper().strip()
-        if symbol not in set(universe):
-            logger.info("propose_alpha_setup: %r not in universe; stand down", symbol)
-            return None
-        try:
-            await self.db.decisions.write_ai_decision("HermesAlpha", symbol, "autonomous",
-                                            {"type": "alpha_setup", **data})
-        except Exception:                                          # noqa: BLE001
-            pass
-        return data
-
+    # ── vision chart reads ────────────────────────────────────────────────────
+    # Informational only — the overseer renders each watchlist symbol's chart and
+    # stores the read for the C2 chart routes to surface. It never originates a
+    # trade; review is the overseer's only path to the order flow.
     async def analyze_charts(self, watchlist: Iterable[str]) -> None:
         """Run a vision-only read on each symbol's chart and store the result.
 
@@ -565,222 +350,6 @@ class HermesOverseer:
                 logger.info("Chart analysis %s → %s", symbol, verdict)
             except Exception as exc:                                   # noqa: BLE001
                 logger.warning("Chart analysis failed for %s: %s", symbol, exc)
-
-    async def _propose_for(self, symbol: str, chart) -> Optional[Dict[str, Any]]:
-        system_prompt = await self.get_system_prompt()
-        prompt = (
-            f"Propose ONE high-conviction options TradeAction for {symbol} or null. "
-            "Use only fields from the dataclass schema. JSON only."
-        )
-        try:
-            msg = await self._chat_with_timeout(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user",   "content": prompt}],
-                images=[chart] if chart is not None else [],
-            )
-        except Exception as exc:                                       # noqa: BLE001
-            logger.warning("LLM propose failed for %s: %s", symbol, exc)
-            return None
-        data = self._safe_json(msg)
-        if not data or data.get("verdict") == "PASS":
-            return None
-        return data.get("action")
-
-    # ── out-of-loop governance tuning ─────────────────────────────────────────
-    # Both methods are hard-bounded: every parameter change is clamped to an
-    # allow-listed range, and banned symbols are intersected with the active
-    # watchlist, so the LLM can nudge live settings but can neither invent new
-    # ones nor push a value out of range. Only ``enforcing`` / ``autonomous``
-    # modes mutate settings — advisory never does.
-    @staticmethod
-    def _tunable_params() -> Dict[str, tuple]:
-        """Allow-list of live-tunable settings, each as (kind, lo, hi).
-
-        A hard safety boundary: the LLM can nudge these knobs, but can neither
-        invent new settings nor push a value outside its range. Gate-threshold
-        bounds are sourced from ``entry_gate`` so the gate and the tuner never
-        drift apart.
-        """
-        from .entry_gate import BOUNDS as GATE_BOUNDS
-        params: Dict[str, tuple] = {
-            # DTE knobs the strategies already read live from system_settings.
-            "cs7_dte": ("int", 5, 10),
-            "cs75_min_dte": ("int", 30, 45),
-            "cs75_max_dte": ("int", 35, 60),
-        }
-        # AI-entry-gate stringency — "adjust your approval stringency" (soul.md).
-        for key, (lo, hi) in GATE_BOUNDS.items():
-            kind = "int" if key in ("ai_gate_min_dte", "ai_gate_max_dte") else "float"
-            params[key] = (kind, lo, hi)
-        return params
-
-    async def propose_parameter_adjustments(self) -> Dict[str, Any]:
-        """Let the overseer tune sanctioned knobs toward the operator's goal.
-
-        Rather than inventing arbitrary entry points, the overseer adjusts a
-        bounded set of live parameters (DTE windows + AI-gate stringency) in
-        response to recent strategy performance and the doctrine in soul.md.
-        Only ``enforcing`` / ``autonomous`` modes take effect — advisory never
-        mutates live settings.
-
-        Every proposed change is clamped to its allow-listed range and coerced
-        to its declared type before it is written; out-of-list keys are ignored.
-        Returns ``{"applied": {...}, "rationale": str, "skipped": [...]}``.
-        """
-        if self.autonomy not in ("enforcing", "autonomous"):
-            return {"applied": {}, "rationale": "advisory mode — no changes", "skipped": []}
-
-        tunables = self._tunable_params()
-        current: Dict[str, Any] = {}
-        for key, (kind, lo, _hi) in tunables.items():
-            raw = await self.db.settings.get_setting(key)
-            if raw is None:
-                # Surface the in-effect default so the LLM sees a real baseline.
-                from .entry_gate import DEFAULTS as GATE_DEFAULTS
-                raw = GATE_DEFAULTS.get(key)
-            current[key] = raw
-
-        bounds_desc = {
-            k: f"{kind}[{lo}..{hi}]" for k, (kind, lo, hi) in tunables.items()
-        }
-        system_prompt = await self.get_system_prompt()
-        prompt = (
-            "Review recent strategy performance against the operator doctrine "
-            "and propose adjustments to the TUNABLE PARAMETERS that move the "
-            "system toward the stated goal (capital preservation + consistent "
-            "positive returns). Tighten stringency (higher POP, lower delta "
-            "cap, higher min-credit) for strategies that recently FAILED; you "
-            "may relax modestly only for consistent PASSers.\n"
-            f"CURRENT VALUES: {json.dumps(current, default=str)}\n"
-            f"ALLOWED RANGES: {json.dumps(bounds_desc)}\n"
-            "Reply with strict JSON {adjustments: {key: number, ...}, rationale}. "
-            "Only include keys you want to change. Omit anything you'd leave as-is."
-        )
-        try:
-            msg = await self._chat_with_timeout(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user", "content": prompt}],
-                images=[],
-            )
-        except Exception as exc:                                   # noqa: BLE001
-            logger.warning("Parameter-tuning LLM call failed: %s", exc)
-            return {"applied": {}, "rationale": f"LLM error: {exc}", "skipped": []}
-
-        decision = self._safe_json(msg)
-        adjustments = decision.get("adjustments") or {}
-        rationale = decision.get("rationale", "")
-        applied: Dict[str, Any] = {}
-        skipped: List[str] = []
-
-        for key, value in adjustments.items():
-            if key not in tunables:
-                skipped.append(f"{key} (not tunable)")
-                continue
-            kind, lo, hi = tunables[key]
-            try:
-                num = float(value)
-            except (TypeError, ValueError):
-                skipped.append(f"{key} (non-numeric {value!r})")
-                continue
-            num = max(float(lo), min(float(hi), num))   # clamp to allow-listed range
-            coerced: Any = int(round(num)) if kind == "int" else round(num, 4)
-            old = current.get(key)
-            if str(old) == str(coerced):
-                continue                                # no-op; don't log churn
-            await self.db.settings.set_setting(key, str(coerced))
-            applied[key] = coerced
-            await self.db.logs.write_log(
-                "OVERSEER",
-                f"[PARAM-TUNE] {key}: {old} → {coerced} (goal-aligned)",
-            )
-
-        if applied:
-            logger.info("[PARAM-TUNE] applied %s — %s", applied, rationale)
-        result = {"applied": applied, "rationale": rationale, "skipped": skipped}
-        try:
-            await self.db.decisions.write_ai_decision(
-                "OVERSEER", "PARAMS", self.autonomy,
-                {"type": "param_tuning", **result},
-            )
-        except Exception:                                          # noqa: BLE001
-            pass
-        return result
-
-    async def propose_risk_restrictions(self) -> Dict[str, Any]:
-        """Let the overseer decide which symbols from the active watchlist should be temporarily banned due to risk.
-
-        Only runs in 'enforcing' or 'autonomous' modes — advisory never mutates settings.
-        """
-        if self.autonomy not in ("enforcing", "autonomous"):
-            return {"banned_symbols": [], "rationale": "advisory mode — no changes"}
-
-        watchlist_syms = set()
-        try:
-            if self.db is not None:
-                all_wls = await self.db.watchlist.list_all_watchlists()
-                for syms in all_wls.values():
-                    watchlist_syms.update(syms)
-        except Exception as exc:
-            logger.warning("Failed to fetch watchlist symbols for risk restrictions: %s", exc)
-
-        if not watchlist_syms:
-            return {"banned_symbols": [], "rationale": "watchlist is empty"}
-
-        recent_logs = await self.db.logs.recent_logs(limit=200)
-        if len(recent_logs) > self.MAX_LOG_CHARS:
-            recent_logs = "[...truncated...]\n" + recent_logs[-self.MAX_LOG_CHARS:]
-
-        system_prompt = await self.get_system_prompt()
-        prompt = (
-            "Review recent strategy performance, operator doctrine, and the active watchlist.\n"
-            f"ACTIVE WATCHLIST: {list(watchlist_syms)}\n"
-            f"RECENT_LOGS:\n{recent_logs}\n"
-            "Identify any symbols on the watchlist that pose excessive short-term risk right now "
-            "(e.g., due to imminent earnings, technical breakouts/breakdowns, extreme volatility, macro factors) "
-            "and should be temporarily banned from rules-based strategy entries. Banned symbols will be completely "
-            "skipped for new entries until the next check.\n"
-            "Reply with strict JSON: {banned_symbols: [string, ...], rationale}."
-        )
-        try:
-            msg = await self._chat_with_timeout(
-                [{"role": "system", "content": system_prompt},
-                 {"role": "user",   "content": prompt}],
-                images=[],
-            )
-        except Exception as exc:                                   # noqa: BLE001
-            logger.warning("Risk-restrictions LLM call failed: %s", exc)
-            return {"banned_symbols": [], "rationale": f"LLM error: {exc}"}
-
-        decision = self._safe_json(msg)
-        banned = decision.get("banned_symbols") or []
-        rationale = decision.get("rationale", "")
-        if not isinstance(banned, list):
-            banned = []
-
-        # Intersect with active watchlist to prevent arbitrary symbols being injected
-        banned_set = {str(s).upper().strip() for s in banned} & {s.upper() for s in watchlist_syms}
-        banned_list = sorted(list(banned_set))
-
-        old_banned = await self.db.settings.get_setting("banned_symbols") or ""
-        new_banned_str = ",".join(banned_list)
-
-        if old_banned != new_banned_str:
-            await self.db.settings.set_setting("banned_symbols", new_banned_str)
-            await self.db.logs.write_log(
-                "OVERSEER",
-                f"[RISK-RESTRICT] Banned symbols list updated: {old_banned or '-'} -> {new_banned_str or '-'} — {rationale}",
-            )
-            logger.info("[RISK-RESTRICT] updated banned symbols to %s — %s", banned_list, rationale)
-
-        result = {"banned_symbols": banned_list, "rationale": rationale}
-        try:
-            await self.db.decisions.write_ai_decision(
-                "OVERSEER", "RISK", self.autonomy,
-                {"type": "risk_restrictions", **result},
-            )
-        except Exception:                                          # noqa: BLE001
-            pass
-        return result
 
     # ── autonomous event-bus review worker ────────────────────────────────────
     # The queue + task that consume ``ReviewRequestEvent``s off the EventBus and

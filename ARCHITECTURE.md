@@ -84,10 +84,10 @@ and `backtest_engine.py`).
 │    HermesOverseer           — LLM review of every TradeAction;   │
 │      one cohesive class in overseer.py — live operator-tunable   │
 │      state + LLM transport (prompt/chat/json), the single-mode   │
-│      review path, autonomous proposers (origination / charts /   │
-│      closes), out-of-loop governance (settings tuning), and the  │
-│      event-bus worker. Phase 0 ships one review mode; a second   │
-│      review mode (committee) earns a reviewer here, not before.  │
+│      review path, informational vision chart reads, and the      │
+│      event-bus review worker. Phase 0 is review-only — no        │
+│      trade origination or out-of-loop settings tuning; a         │
+│      second review mode (committee) earns a reviewer here.       │
 │    AsyncXGBPredictor        — background ML forecasting          │
 └──────────────────────────────────────────────────────────────────┘
                               │
@@ -149,30 +149,24 @@ also owns the slow operator-guard heartbeat that wraps it
 3. reconcile_orphans()        ← flag broker positions Hermes doesn't own
 4. process_management()       ← every strategy's manage_positions() runs
    → submit(actions, "management")
-5. process_entries(watchlist) ← strategies in PRIORITY order:
-                                 CS75 → CS7 → TT45 → WHEEL → HermesAlpha
-                                 each strategy drains the watchlist before
-                                 the next one runs, so high-priority
-                                 strategies see fresh capacity.
-6. overseer.propose()         ← if autonomy=='autonomous', LLM may add trades
-   → submit(ai_actions, "ai")
+5. process_entries(watchlist) ← strategies in PRIORITY order. Phase 0 ships
+                                 CS75 only; the cascade is preserved so a
+                                 promoted strategy drains the watchlist after
+                                 CS75 and sees fresh capacity.
 ```
 
-`HermesAlpha` (priority 5) is the one rule-free strategy: instead of a fixed
-recipe it asks the overseer to pick one credit-spread *intent* from the
-deduped union of every strategy's watchlist, then resolves and prices that
-intent against the live chain like any other strategy.
+Phase 0 has **no overseer origination pass** (the old step 6). The overseer's
+only path to the order flow is `review` — it trims or vetoes the rules-driven
+actions; it never originates a trade.
 
 `submit()` either:
 - Queues the action in `pending_approvals` (when `approval_mode=true`), or
 - Records it in `pending_orders` and calls `broker.place_order_from_action`.
 
 The `HermesOverseer.review` hook can VETO, MODIFY, or APPROVE every action
-before it reaches `submit()`. Review runs in one of two modes (the
-`overseer_mode` setting): **single** (one LLM call) or **committee** — a
-Macro Specialist and a Strategy/Sizing Specialist run in parallel and a Risk
-Officer (Chairman) synthesizes their findings into the final verdict, falling
-back to single-LLM review if the committee call fails.
+before it reaches `submit()`. Phase 0 ships a single review mode (one LLM
+call); a second mode (committee) earns its way back behind the promotion gate
+(see `REBUILD.md`), it is not pre-scaffolded.
 
 ## A single watcher request (Service-2)
 
@@ -264,7 +258,7 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Change buying-power / capacity rules          | `MoneyManager` in `hermes/service1_agent/money_manager.py`|
 | Change the broker integration                 | `hermes/broker/tradier.py`                       |
 | Change the operator panel                     | `hermes/service2_watcher/api.py` + `static/`     |
-| Change anything the overseer does (review, origination/closes/chart reads, settings tuning, event-bus worker) | `overseer.py` — one cohesive `HermesOverseer` class |
+| Change anything the overseer does (review, vision chart reads, event-bus worker) | `overseer.py` — one cohesive `HermesOverseer` class |
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
 | Add a new ML feature                          | `hermes/ml/xgb_features.py`                       |
@@ -306,12 +300,13 @@ stack, import from `hermes/common.py` instead (e.g. `OCC_RE`).
   HermesAlpha=5); higher-priority strategies consume capacity first.
 - **HermesAlpha** — The rule-free strategy (priority 5): the overseer picks a
   credit-spread intent and the strategy resolves/prices it against the chain.
-- **Overseer modes** — `single` (one LLM review) or `committee`
-  (Macro + Strategy specialists run in parallel → Risk Officer synthesizes).
+- **Overseer modes** — Phase 0 ships `single` (one LLM review). `committee`
+  is deferred behind the promotion gate (see `REBUILD.md`).
 - **Soul** — The operator's free-text doctrine appended to the LLM
   overseer's system prompt.
-- **Autonomy levels** — `advisory` (log only), `enforcing` (LLM may
-  veto/modify), `autonomous` (LLM may originate trades).
+- **Autonomy levels** — `advisory` (log only) and `enforcing` (LLM may
+  veto/modify). `autonomous` is reserved and reviews like `enforcing` in
+  Phase 0 — trade origination is deferred.
 - **Approval mode** — When on, every proposed trade goes to a human queue
   before reaching the broker.
 - **Simulation mode** — Replays history against the real code paths on a

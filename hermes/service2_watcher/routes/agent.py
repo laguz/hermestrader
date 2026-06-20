@@ -13,7 +13,7 @@ them at the start of every iteration.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -28,15 +28,6 @@ from hermes.common import (
 from .._app_state import SETTING_MODE, SETTING_PAUSED, db
 
 router = APIRouter()
-
-# Outcome-driven learning toggles (Phases 2–3). Both default to "off".
-#   off    — dormant; no proposals, no capture, no behaviour change.
-#   shadow — track data + log what it *would* do; never acts. ← data-collection.
-#   active — additionally apply changes (bandit knobs / exit closes), still
-#            gated by agent autonomy (enforcing/autonomous) inside the engine.
-LEARNING_MODES = {"off", "shadow", "active"}
-BANDIT_MODE_KEY = "bandit_tuner_mode"
-EXIT_MODE_KEY = "exit_policy_mode"
 
 
 @router.post("/api/agent/pause")
@@ -74,61 +65,6 @@ async def trigger_ml_predictor() -> Dict[str, Any]:
     except Exception:
         pass
     return {"status": "triggered"}
-
-
-@router.get("/api/agent/learning")
-async def get_learning() -> Dict[str, Any]:
-    """Current outcome-driven learning modes (bandit entries + exit policy)."""
-    bandit = (await db.settings.get_setting(BANDIT_MODE_KEY) or "off").strip().lower()
-    exit_mode = (await db.settings.get_setting(EXIT_MODE_KEY) or "off").strip().lower()
-    return {
-        "bandit_tuner_mode": bandit,
-        "exit_policy_mode": exit_mode,
-        "valid_modes": sorted(LEARNING_MODES),
-    }
-
-
-class LearningBody(BaseModel):
-    # Either or both; omitted fields are left unchanged.
-    bandit_tuner_mode: Optional[str] = None
-    exit_policy_mode: Optional[str] = None
-
-
-@router.put("/api/agent/learning")
-async def set_learning(body: LearningBody) -> Dict[str, Any]:
-    """Toggle the learning subsystems on/off (off | shadow | active).
-
-    ``shadow`` is the data-collection setting: the bot records the trajectories
-    and proposals the learners need without changing any trade. Flip to
-    ``active`` only after a shadow period has validated the signal.
-    """
-    updated: Dict[str, str] = {}
-    for key, value in ((BANDIT_MODE_KEY, body.bandit_tuner_mode),
-                       (EXIT_MODE_KEY, body.exit_policy_mode)):
-        if value is None:
-            continue
-        m = str(value).strip().lower()
-        if m not in LEARNING_MODES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{key} must be one of {sorted(LEARNING_MODES)}",
-            )
-        await db.commands.enqueue_setting(key, m)
-        updated[key] = m
-
-    if not updated:
-        raise HTTPException(
-            status_code=400,
-            detail="provide bandit_tuner_mode and/or exit_policy_mode",
-        )
-
-    await db.logs.write_log("ENGINE", f"[C2] Learning modes updated by operator: {updated}")
-    try:
-        from hermes.ipc import ipc
-        await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
-    except Exception:
-        pass
-    return {"updated": updated}
 
 
 class ModeBody(BaseModel):

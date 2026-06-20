@@ -214,10 +214,6 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             await db.settings.set_setting("obp_reserve", str(runtime_config.obp_reserve))
         if await db.settings.get_setting("tick_interval") is None:
             await db.settings.set_setting("tick_interval", str(runtime_config.tick_interval))
-        if await db.settings.get_setting("bandit_tuner_mode") is None:
-            await db.settings.set_setting("bandit_tuner_mode", runtime_config.bandit_tuner_mode)
-        if await db.settings.get_setting("exit_policy_mode") is None:
-            await db.settings.set_setting("exit_policy_mode", runtime_config.exit_policy_mode)
     except Exception as exc:
         log.error("Fatal startup settings validation error: %s", exc)
         raise

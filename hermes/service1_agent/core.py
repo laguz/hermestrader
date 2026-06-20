@@ -32,7 +32,6 @@ from .trade_action import TradeAction
 from ._engine_reactive import ReactiveController
 from ._engine_ai import AIController
 from ._engine_pipeline import PipelineController
-from .context import TickContext
 from .engine_context import EngineContext
 
 if TYPE_CHECKING:
@@ -109,14 +108,9 @@ class CascadingEngine:
             llm_out_of_loop=llm_out_of_loop,
         )
         # Engine-only per-run runtime state (not shared via ctx): circuit-breaker
-        # counters, plus strong references to fire-and-forget background tasks.
-        # asyncio only holds a *weak* reference to a bare ``create_task`` result,
-        # so a task whose handle is discarded can be garbage-collected mid-await
-        # and silently cancelled. Keep them here (mirrors scheduler._tasks /
-        # overseer.worker._worker_task) until they finish.
+        # counters.
         self._cb_fail_count = 0
         self._cb_tripped_at = 0.0
-        self._bg_tasks: set[asyncio.Task] = set()
         # Serializes the two operator-command drain triggers (IPC nudge vs
         # tick-start) so a command can't be applied twice concurrently. The bus
         # dispatches handlers as independent tasks, so they really can overlap.
@@ -485,43 +479,6 @@ class CascadingEngine:
         # ctx.strategies preserves the PRIORITY sort invariant.
         self.ctx.strategies = val
 
-    async def _build_fallback_ctx(self, watchlist=None) -> TickContext:
-        return await self.pipeline._build_fallback_ctx(watchlist)
-
-    async def _async_propose(self, watchlist_or_ctx):
-        if not isinstance(watchlist_or_ctx, TickContext):
-            ctx = await self._build_fallback_ctx(watchlist_or_ctx)
-        else:
-            ctx = watchlist_or_ctx
-        return await self.ai._async_propose(ctx)
-
-    async def _async_propose_closes(self, ctx=None):
-        if ctx is None:
-            ctx = await self._build_fallback_ctx()
-        return await self.ai._async_propose_closes(ctx)
-
-    async def _price_ai_closes(self, ctx_or_actions, actions=None):
-        if actions is None:
-            actions = ctx_or_actions
-            ctx = await self._build_fallback_ctx()
-        else:
-            ctx = ctx_or_actions
-        return await self.ai._price_ai_closes(ctx, actions)
-
-    async def _gate_ai_actions(self, actions):
-        return await self.ai._gate_ai_actions(actions)
-
-    def _spawn_bg(self, coro) -> asyncio.Task:
-        """Schedule a fire-and-forget coroutine while holding a strong reference.
-
-        Without the retained reference + done-callback, asyncio can collect the
-        task before it completes (see ``self._bg_tasks``).
-        """
-        task = asyncio.create_task(coro)
-        self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
-        return task
-
     # ── tick-phase delegators → PipelineController (engine.pipeline) ──────────
     # The bodies live in _engine_pipeline.py; these stay so the engine surface
     # is greppable and remains the single seam tests monkeypatch.
@@ -551,9 +508,6 @@ class CascadingEngine:
         return await self.pipeline._execute_or_queue(a, action_type, approval_id=approval_id)
 
     # ----- top level entry point used by main.py and the scheduler ----------
-    async def _read_banned_symbols(self) -> set[str]:
-        return await self.pipeline._read_banned_symbols()
-
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         if self.event_bus is not None:
             self._ensure_event_loop()
@@ -569,12 +523,7 @@ class CascadingEngine:
         # order-sensitive trading pipeline runs, so this tick acts on the latest
         # operator intent. Prepended ahead of the pipeline, not interleaved.
         await self.drain_operator_commands()
-        res = await self.sync_positions()
-        if isinstance(res, tuple) and len(res) == 2:
-            positions, active_legs = res
-        else:
-            positions = []
-            active_legs = set()
+        await self.sync_positions()
         # Refresh real-time broker order counts to prevent duplicate entries.
         # mm may be None on legacy callers that haven't been updated yet;
         # skip rather than crash the entire tick.
@@ -584,51 +533,11 @@ class CascadingEngine:
         mgmt = await self.process_management()
         await self.submit(mgmt, action_type="management")
 
-        # Filter out banned symbols under out-of-loop governance
-        banned = await self._read_banned_symbols()
-        
-        ctx = TickContext(
-            timestamp=self.clock.utc_now(),
-            watchlist=list(watchlist),
-            banned_symbols=banned,
-            positions=positions,
-            active_order_legs=active_legs
-        )
-
-        if banned:
-            original_len = len(watchlist)
-            watchlist = [s for s in watchlist if s.upper() not in banned]
-            if len(watchlist) < original_len:
-                logger.info("[GOVERNANCE] Watchlist filtered by active AI risk restrictions. Banned symbols skipped: %s", banned)
-
-        # Entries are now submitted internally strategy-by-strategy.
+        # Entries are now submitted internally strategy-by-strategy. Phase 0 has
+        # no overseer origination pass — the overseer only reviews (veto/modify)
+        # the rules-driven actions on their way through ``submit``.
         num_entries = await self.process_entries(watchlist)
-        # Authorize the overseer to inject "AI-only" trades after the rules-driven pass.
-        ai_count = 0
-        if self.overseer is not None:
-            # Goal-aware parameter tuning & risk restrictions
-            if self.llm_out_of_loop:
-                # Run out-of-loop background policy adjustments asynchronously
-                self._spawn_bg(self.ai._maybe_tune_parameters())
-            else:
-                # Run inline blocking
-                await self.ai._maybe_tune_parameters()
-
-            if self.event_bus is not None:
-                # Asynchronously generate AI proposals without blocking the tick loop
-                self._spawn_bg(self._async_propose(ctx))
-                # Symmetric exit path: let the overseer unwind open positions
-                # too. Independent of the watchlist — closes act on the book.
-                self._spawn_bg(self._async_propose_closes(ctx))
-            else:
-                ai_actions = await self.overseer.propose(watchlist)
-                ai_actions = await self._gate_ai_actions(ai_actions)
-                await self.submit(ai_actions, action_type="ai")
-                ai_count = len(ai_actions)
-                ai_closes = await self.overseer.propose_closes()
-                ai_closes = await self._price_ai_closes(ctx, ai_closes)
-                await self.submit(ai_closes, action_type="management")
-        return {"managed": len(mgmt), "entries": num_entries, "ai": ai_count}
+        return {"managed": len(mgmt), "entries": num_entries, "ai": 0}
 
     async def handle_clock_tick(self, event: ClockTickEvent) -> None:
         if self.event_bus is not None:

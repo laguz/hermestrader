@@ -15,7 +15,7 @@ It reads the shared dependency surface (``db`` / ``broker`` / ``event_bus`` /
 ``config`` / ``strategies`` / ``mm`` / ``ipc_client`` / ``quote_cache``) off the
 :class:`~hermes.service1_agent.engine_context.EngineContext` (``self.ctx``), and
 keeps ``self.engine`` only for the orchestration callbacks it routes through the
-engine spine (``_watchlist_for`` / ``_read_banned_symbols``). Per-loop runtime
+engine spine (``_watchlist_for``). Per-loop runtime
 state (pending futures, tracked orders, loop / queue / monitor task handles)
 lives on the controller itself.
 """
@@ -532,14 +532,10 @@ class ReactiveController:
         try:
             watchlist = await self.ctx.db.watchlist.all_watchlist_symbols()
             if watchlist:
-                banned = await self.engine._read_banned_symbols()
-                if banned:
-                    watchlist = [s for s in watchlist if s.upper() not in banned]
-                if watchlist:
-                    cmd = ProcessEntriesCommand(watchlist=watchlist)
-                    self.ctx.event_bus.emit(cmd)
-                    num_entries = await cmd.future
-                    logger.info("[ENGINE] Reactively processed entries post order fill: placed %d entries", num_entries)
+                cmd = ProcessEntriesCommand(watchlist=watchlist)
+                self.ctx.event_bus.emit(cmd)
+                num_entries = await cmd.future
+                logger.info("[ENGINE] Reactively processed entries post order fill: placed %d entries", num_entries)
         except Exception as exc:
             logger.exception("[ENGINE] Failed to process entries on order fill event: %s", exc)
 
