@@ -95,7 +95,7 @@ Ordered roughly by how cheaply each earns its keep.
 | Piece | Promote when… |
 |-------|---------------|
 | **overseer-committee** | Single-LLM review shows a measurable failure mode (systematic blind spot) that a Macro + Strategy + Risk-Officer split provably fixes. The mode split is intentional in the live system ([`overseer-mode-split`](.)) — but in a rebuild it earns its second mode, it doesn't start with it. Committee already falls back to single on failure; preserve that. |
-| **proposers / governance / worker** collaborators | These are decompositions of a spine that grew. In a rebuild, keep `overseer.py` monolithic until it genuinely hurts, then split along the *same* context-object seam (`OverseerContext`). Don't pre-scaffold. |
+| **proposers / governance / worker** collaborators | These were decompositions of a spine that grew. **Done — collapsed back:** `overseer.py` is now one cohesive `HermesOverseer` class (review, origination, governance, worker), matching this plan. If it genuinely hurts again, split along a shared context-object seam (the retired `OverseerContext`); until then, don't pre-scaffold. |
 
 ### ML (sequenced straight from the audit tiers)
 
