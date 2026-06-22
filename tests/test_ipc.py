@@ -4,7 +4,7 @@ Unit tests for the AsyncIPC messaging system.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hermes.ipc import AsyncIPC
@@ -92,4 +92,27 @@ async def test_redis_ipc_failure_raises_error():
         await ipc.connect(bypass_pytest_check=True)
     
     assert "Failed to connect to Redis IPC" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_async_ipc_client_property():
+    ipc = AsyncIPC("redis://localhost:9999/9")
+    
+    # 1. Not connected yet -> client is None
+    assert ipc.client is None
+    
+    # 2. Connect via LocalMemoryIPCBackend -> client is None (no client attribute on local backend)
+    await ipc.connect()
+    assert ipc.client is None
+    
+    # 3. Connect to Redis with mock -> client is exposed
+    mock_redis = MagicMock()
+    mock_redis.ping = AsyncMock()
+    
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        redis_ipc = AsyncIPC("redis://localhost:6379/0")
+        connected = await redis_ipc.connect(bypass_pytest_check=True)
+        assert connected is True
+        assert redis_ipc.client is mock_redis
+
 

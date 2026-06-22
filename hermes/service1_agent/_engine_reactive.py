@@ -250,6 +250,66 @@ class ReactiveController:
 
             await asyncio.sleep(1.0)
 
+    def _serialize_value(self, v: Any) -> Any:
+        import dataclasses
+        if dataclasses.is_dataclass(v):
+            res = {"__event_class__": v.__class__.__name__}
+            for f in dataclasses.fields(v):
+                res[f.name] = self._serialize_value(getattr(v, f.name))
+            return res
+        elif isinstance(v, list):
+            return [self._serialize_value(item) for item in v]
+        elif isinstance(v, dict):
+            return {k: self._serialize_value(val) for k, val in v.items()}
+        else:
+            return v
+
+    def _deserialize_value(self, v: Any) -> Any:
+        import dataclasses
+        from hermes.events.bus import (
+            OrderFillEvent,
+            TickStartedEvent,
+            ClockTickEvent,
+            AIApprovalEvent,
+            MarketDataEvent,
+            OrderTrackedEvent,
+        )
+        from hermes.service1_agent.trade_action import TradeAction
+
+        EVENT_CLASS_MAP = {
+            "MarketDataEvent": MarketDataEvent,
+            "OrderFillEvent": OrderFillEvent,
+            "ClockTickEvent": ClockTickEvent,
+            "AIApprovalEvent": AIApprovalEvent,
+            "TickStartedEvent": TickStartedEvent,
+            "OrderTrackedEvent": OrderTrackedEvent,
+            "TradeAction": TradeAction,
+        }
+
+        if isinstance(v, dict):
+            v = {k: self._deserialize_value(val) for k, val in v.items()}
+            if "__event_class__" in v:
+                cls_name = v.pop("__event_class__")
+                cls = EVENT_CLASS_MAP.get(cls_name)
+                if cls:
+                    orig_timestamp = v.pop("timestamp", None)
+                    valid_fields = {f.name for f in dataclasses.fields(cls) if f.init}
+                    init_data = {field_name: val for field_name, val in v.items() if field_name in valid_fields}
+                    inst = cls(**init_data)
+                    if orig_timestamp is not None:
+                        from datetime import datetime
+                        try:
+                            inst.timestamp = datetime.fromisoformat(orig_timestamp)
+                        except Exception:
+                            pass
+                    return inst
+                return v
+            return v
+        elif isinstance(v, list):
+            return [self._deserialize_value(item) for item in v]
+        else:
+            return v
+
     async def publish_event(self, event_type: str, payload: Dict[str, Any]) -> Any:
         self._ensure_event_loop()
 
@@ -258,13 +318,14 @@ class ReactiveController:
             client = self.ctx.ipc_client.client
             fut = asyncio.get_running_loop().create_future()
 
-            serializable_payload = {k: v for k, v in payload.items() if k != "future"}
+            filtered_payload = {k: v for k, v in payload.items() if k != "future"}
+            serializable_payload = self._serialize_value(filtered_payload)
 
             msg_id = await client.xadd(
                 "hermes_event_stream",
                 {
                     "event_type": event_type,
-                    "payload": json.dumps(serializable_payload)
+                    "payload": json.dumps(serializable_payload, default=str)
                 }
             )
 
@@ -317,7 +378,8 @@ class ReactiveController:
                         event_type = payload.get("event_type")
                         payload_json = payload.get("payload")
                         try:
-                            data = json.loads(payload_json) if payload_json else {}
+                            raw_data = json.loads(payload_json) if payload_json else {}
+                            data = self._deserialize_value(raw_data)
 
                             fut = self._pending_futures.get(msg_id)
                             if fut:

@@ -222,6 +222,10 @@ class AsyncIPC:
     def is_connected(self) -> bool:
         return self.backend.is_connected if self.backend else False
 
+    @property
+    def client(self) -> Any:
+        return getattr(self.backend, "client", None)
+
     async def connect(self, db: Optional[Any] = None, bypass_pytest_check: bool = False) -> bool:
         """Attempt to connect. Returns True if Redis successful, False if local memory backend used."""
         import sys

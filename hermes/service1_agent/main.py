@@ -19,7 +19,9 @@ from hermes.common import (
 )
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import IronCondorBuilder
-from hermes.service1_agent.strategies import CreditSpreads75
+from hermes.service1_agent.strategies import (
+    CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
+)
 from hermes.market_hours import market_session, next_open, session_label  # noqa: F401
 
 logging.basicConfig(level=logging.INFO,
@@ -356,6 +358,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                       config=conf, overseer=engine.overseer, dry_run=conf.get("dry_run", False))
         all_strategies = [
             CreditSpreads75(**common),
+            CreditSpreads7(**common),
+            TastyTrade45(**common),
+            WheelStrategy(**common),
+            HermesAlpha(**common),
         ]
         enabled = new_overseer_cfg["strategy_enabled"]
         engine.strategies = sorted([s for s in all_strategies if enabled.get(s.NAME, True)], key=lambda s: s.PRIORITY)

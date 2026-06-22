@@ -18,7 +18,9 @@ from hermes.service1_agent.core import (
     CascadingEngine, IronCondorBuilder, MoneyManager,
 )
 from hermes.service1_agent.overseer import HermesOverseer
-from hermes.service1_agent.strategies import CreditSpreads75, HermesAlpha
+from hermes.service1_agent.strategies import (
+    CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
+)
 
 from .agent_settings import (
     SETTING_LLM_API_KEY, SETTING_LLM_BASE_URL, SETTING_LLM_ERROR,
@@ -176,6 +178,9 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
                   dry_run=config.get("dry_run", False))
     all_strategies = [
         CreditSpreads75(**common),
+        CreditSpreads7(**common),
+        TastyTrade45(**common),
+        WheelStrategy(**common),
         HermesAlpha(**common),
     ]
     # Filter out strategies the operator has disabled from the C2 panel.
