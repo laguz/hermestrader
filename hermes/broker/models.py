@@ -79,6 +79,12 @@ class BrokerOrder(dict):
                  option_symbol: Optional[str] = None, **kwargs):
         # Support both 'leg' (Tradier-style) and 'legs' keys for compatibility
         leg_data = legs or []
+        # Raw broker dicts carry their own 'id'/'leg' (and occasionally
+        # 'order_id'/'legs'); both spellings are re-emitted explicitly below, so
+        # drop them from the passthrough or dict.__init__ raises
+        # "multiple values for keyword argument 'id'".
+        for _alias in ("id", "order_id", "leg", "legs"):
+            kwargs.pop(_alias, None)
         super().__init__(
             id=order_id,
             order_id=order_id,

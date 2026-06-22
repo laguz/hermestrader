@@ -216,7 +216,12 @@ class TradierBroker(AbstractBroker):
                     tag=str(o.get("tag", "")),
                     legs=o.get("leg") or [],
                     option_symbol=o.get("option_symbol"),
-                    **o
+                    # Drop keys already passed explicitly so the raw-field spread
+                    # can't collide ("multiple values for keyword argument").
+                    **{k: v for k, v in o.items() if k not in (
+                        "order_id", "symbol", "status", "quantity", "price",
+                        "side", "tag", "legs", "option_symbol",
+                    )}
                 )
             )
         return orders_list
@@ -262,7 +267,15 @@ class TradierBroker(AbstractBroker):
                     ask=float(o.get("ask", 0.0) or 0.0),
                     delta=delta,
                     greeks=greeks,
-                    **o
+                    # Spread the remaining raw Tradier fields, but drop the keys
+                    # already passed explicitly — the raw chain dict carries
+                    # symbol/strike/option_type/bid/ask/greeks, so an unfiltered
+                    # ``**o`` raises "multiple values for keyword argument" and
+                    # silently empties every chain.
+                    **{k: v for k, v in o.items() if k not in (
+                        "symbol", "strike", "option_type", "bid", "ask",
+                        "delta", "greeks",
+                    )}
                 )
             )
         return legs
@@ -286,7 +299,11 @@ class TradierBroker(AbstractBroker):
                     ask=float(q.get("ask", 0.0) or 0.0),
                     volume=int(q.get("volume", 0) or 0),
                     timestamp=str(q.get("timestamp") or ""),
-                    **q
+                    # Drop keys already passed explicitly so the raw-field spread
+                    # can't collide ("multiple values for keyword argument").
+                    **{k: v for k, v in q.items() if k not in (
+                        "symbol", "price", "bid", "ask", "volume", "timestamp",
+                    )}
                 )
             )
         return quotes_list
