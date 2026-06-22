@@ -121,16 +121,29 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
     event_type = data.get("event_type")
     payload = data.get("payload")
 
-    if event_type and payload:
-        from hermes.db.events import deserialize_event
-        try:
-            event = deserialize_event(event_type, payload)
-            if event:
-                event_bus.emit(event)
-            else:
-                log.error("[IPC] Unknown event type %s", event_type)
-        except Exception as exc:
-            log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
+    if event_type and payload is not None:
+        if event_type == "CLOCK_TICK_EVENT":
+            from hermes.events.bus import ClockTickEvent
+            event_bus.emit(ClockTickEvent())
+        elif event_type == "CACHE_WARM_TICK":
+            from hermes.events.bus import CacheWarmTick
+            event_bus.emit(CacheWarmTick())
+        elif event_type == "ML_RETRAIN_TICK":
+            from hermes.events.bus import MlRetrainTick
+            event_bus.emit(MlRetrainTick())
+        elif event_type == "CHART_REFRESH_TICK":
+            from hermes.events.bus import ChartRefreshTick
+            event_bus.emit(ChartRefreshTick())
+        else:
+            from hermes.db.events import deserialize_event
+            try:
+                event = deserialize_event(event_type, payload)
+                if event:
+                    event_bus.emit(event)
+                else:
+                    log.error("[IPC] Unknown event type %s", event_type)
+            except Exception as exc:
+                log.error("[IPC] Failed to deserialize event %s: %s", event_type, exc)
     elif action == IPC_ACTION_DRAIN_COMMANDS:
         log.info("[IPC] Received drain operator-commands signal reactively")
         from hermes.events.bus import DrainOperatorCommandsCommand
