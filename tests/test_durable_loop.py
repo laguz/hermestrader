@@ -215,3 +215,84 @@ async def test_durable_loop_failed_tick_is_not_replayed():
             await engine.loop_task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_durable_loop_dataclass_serialization():
+    from hermes.events.bus import MarketDataEvent
+    
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+    mock_redis.xack = AsyncMock()
+
+    stream_db = []
+    
+    async def mock_xadd(name, fields, id='*'):
+        msg_id = f"1686984023000-{len(stream_db)}"
+        stream_db.append((msg_id, fields))
+        return msg_id
+        
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+    
+    async def mock_xreadgroup(groupname, consumername, streams, count=None, block=None):
+        stream_id = streams.get("hermes_event_stream")
+        if stream_id == "0":
+            return []
+        elif stream_id == ">":
+            if stream_db:
+                res = [("hermes_event_stream", list(stream_db))]
+                stream_db.clear()
+                return res
+            await asyncio.sleep(0.01)
+            return []
+        return []
+            
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    strat = DummyStrategy("CS75", 1, "CS75")
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    broker_mock = AsyncMock()
+    
+    engine = CascadingEngine(
+        broker=broker_mock,
+        db=db_mock,
+        strategies=[strat],
+        config={"portfolio_optimization": False}
+    )
+    engine.ipc_client = mock_ipc
+
+    processed_events = []
+    async def mock_process_event(event_type, payload):
+        processed_events.append((event_type, payload))
+        fut = payload.get("future")
+        if fut and not fut.done():
+            fut.set_result(True)
+        return True
+
+    engine.reactive._process_event = AsyncMock(side_effect=mock_process_event)
+    engine.reactive._ensure_event_loop()
+
+    event = MarketDataEvent(symbol="AAPL", price=150.0, volume=1000)
+    await engine.reactive.publish_event("MARKET_DATA", {"event": event})
+
+    assert len(processed_events) == 1
+    ev_type, payload = processed_events[0]
+    assert ev_type == "MARKET_DATA"
+    deserialized_event = payload["event"]
+    assert isinstance(deserialized_event, MarketDataEvent)
+    assert deserialized_event.symbol == "AAPL"
+    assert deserialized_event.price == 150.0
+    assert deserialized_event.volume == 1000
+
+    if engine.reactive.loop_task:
+        engine.reactive.loop_task.cancel()
+        try:
+            await engine.reactive.loop_task
+        except asyncio.CancelledError:
+            pass
+
