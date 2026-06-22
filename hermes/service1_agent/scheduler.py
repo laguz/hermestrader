@@ -21,6 +21,8 @@ class Scheduler:
         logger.info("Scheduler started with tick interval %s seconds.", self.tick_interval_s)
 
     async def _run_clock_tick(self) -> None:
+        logger.info("Scheduler emitting initial ClockTickEvent.")
+        self.event_bus.emit(ClockTickEvent())
         while True:
             try:
                 await asyncio.sleep(self.tick_interval_s)

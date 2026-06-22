@@ -342,7 +342,6 @@ class ReactiveController:
         import json
         logger.info("[ENGINE] Starting Redis Streams background durable event loop consumer.")
         client = self.ctx.ipc_client.client
-
         try:
             await client.xgroup_create("hermes_event_stream", "hermes_engine_group", id="0", mkstream=True)
             logger.info("[ENGINE] Created Redis Stream consumer group 'hermes_engine_group'")
@@ -361,7 +360,14 @@ class ReactiveController:
                     block=100
                 )
 
-                if not response:
+                has_messages = False
+                if response:
+                    for _, messages in response:
+                        if messages:
+                            has_messages = True
+                            break
+
+                if not has_messages:
                     response = await client.xreadgroup(
                         groupname="hermes_engine_group",
                         consumername=consumer_name,
@@ -369,8 +375,14 @@ class ReactiveController:
                         count=5,
                         block=1000
                     )
+                    has_messages = False
+                    if response:
+                        for _, messages in response:
+                            if messages:
+                                has_messages = True
+                                break
 
-                if not response:
+                if not has_messages:
                     continue
 
                 for stream_name, messages in response:
