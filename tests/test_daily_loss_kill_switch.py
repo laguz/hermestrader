@@ -187,3 +187,35 @@ def test_build_broker_live_armed_allows_real_orders(monkeypatch):
     monkeypatch.setenv("HERMES_LIVE_ARMED", "true")
     broker = _build_broker({"dry_run": False}, "live")
     assert broker.dry_run is False
+
+
+# ── _build_broker: MCP-broker path honors the same mode-aware dry_run ──────
+# Regression: the MCP-broker branch used to return MCPBrokerClient(conf)
+# before the dry_run normalization, so paper mode inherited the config
+# default (dry_run=True) and every approved trade was marked
+# "dry_run=True — no broker order placed" and never reached the broker.
+def test_build_broker_mcp_paper_routes_orders(monkeypatch):
+    from hermes.service1_agent.main import _build_broker
+    from hermes.config import settings
+    monkeypatch.setattr(settings, "hermes_use_mcp_broker", True, raising=False)
+    # conf carries the config default (dry_run=True); paper must override it.
+    broker = _build_broker({"dry_run": True}, "paper")
+    assert broker.dry_run is False
+
+
+def test_build_broker_mcp_live_unarmed_forces_dry_run(monkeypatch):
+    from hermes.service1_agent.main import _build_broker
+    from hermes.config import settings
+    monkeypatch.setattr(settings, "hermes_use_mcp_broker", True, raising=False)
+    monkeypatch.delenv("HERMES_LIVE_ARMED", raising=False)
+    broker = _build_broker({"dry_run": False}, "live")
+    assert broker.dry_run is True
+
+
+def test_build_broker_mcp_live_armed_allows_real_orders(monkeypatch):
+    from hermes.service1_agent.main import _build_broker
+    from hermes.config import settings
+    monkeypatch.setattr(settings, "hermes_use_mcp_broker", True, raising=False)
+    monkeypatch.setenv("HERMES_LIVE_ARMED", "true")
+    broker = _build_broker({"dry_run": False}, "live")
+    assert broker.dry_run is False

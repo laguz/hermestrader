@@ -211,14 +211,40 @@ def _resolve_mode_credentials(mode: str) -> Tuple[str, str, str]:
         settings.hermes_mode = orig_mode
 
 
+def _resolve_dry_run(conf: Dict[str, Any], mode: str) -> bool:
+    """Mode-aware dry_run for *any* broker type built in `mode`.
+
+    Paper mode hits the sandbox, which is harmless, so preview is never needed.
+    Live mode honors the operator's dry_run, but real orders additionally
+    require an explicit arming flag (HERMES_LIVE_ARMED=true). Absent it, we
+    force dry_run so flipping the mode to "live" can never silently route real
+    money — going live must be a deliberate act, not a default. This must be
+    resolved for every broker (Tradier *and* the MCP client), not just
+    TradierBroker, or paper mode silently never trades through the MCP path.
+    """
+    dry_run = conf.get("dry_run", False) if mode == "live" else False
+    if mode == "live" and not dry_run and not _live_armed():
+        dry_run = True
+        log.warning(
+            "LIVE mode selected but HERMES_LIVE_ARMED is not set — forcing "
+            "dry_run (preview-only). Set HERMES_LIVE_ARMED=true to place real "
+            "orders."
+        )
+    return dry_run
+
+
 def _build_broker(conf: Dict[str, Any], mode: str):
     """Build the broker for `mode`. Falls back to MockBroker only when
     *no* Tradier credentials of any kind are present in the environment."""
     from hermes.config import settings
+    dry_run = _resolve_dry_run(conf, mode)
     if settings.hermes_use_mcp_broker:
         from hermes.broker.mcp_client import MCPBrokerClient
-        log.info("Initializing MCPBrokerClient mode=%s", mode)
-        return MCPBrokerClient(conf)
+        cfg = dict(conf)
+        cfg["dry_run"] = dry_run
+        log.info("Initializing MCPBrokerClient mode=%s dry_run=%s armed=%s",
+                 mode, dry_run, _live_armed())
+        return MCPBrokerClient(cfg)
 
     has_any_tradier = any(
         os.environ.get(k) for k in (
@@ -234,19 +260,6 @@ def _build_broker(conf: Dict[str, Any], mode: str):
     from hermes.broker.tradier import TradierBroker
     token, account, url = _resolve_mode_credentials(mode)
     cfg = dict(conf)
-    # Paper mode hits the sandbox, which is harmless, so preview is never needed.
-    # Live mode honors the operator's dry_run, but real orders additionally
-    # require an explicit arming flag (HERMES_LIVE_ARMED=true). Absent it, we
-    # force dry_run so flipping the mode to "live" can never silently route real
-    # money — going live must be a deliberate act, not a default.
-    dry_run = conf.get("dry_run", False) if mode == "live" else False
-    if mode == "live" and not dry_run and not _live_armed():
-        dry_run = True
-        log.warning(
-            "LIVE mode selected but HERMES_LIVE_ARMED is not set — forcing "
-            "dry_run (preview-only). Set HERMES_LIVE_ARMED=true to place real "
-            "orders."
-        )
     cfg.update({
         "tradier_access_token": token,
         "tradier_account_id": account,
