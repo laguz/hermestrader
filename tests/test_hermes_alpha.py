@@ -8,9 +8,10 @@ Covers the four things that make Alpha safe to run unattended:
 - **Exits are broker-verified.** The close price comes from the live quote via
   ``compute_close_debit``; a stale/unverifiable quote forces a *hold*, and a
   deterministic backstop forces a time-exit the LLM cannot defer.
-- **The no-human-in-the-loop bypass is narrowly scoped.** It only skips the
-  approval queue for an autonomous HermesAlpha action with
-  ``alpha_autonomous_live`` armed; CS75 and the switch-OFF case still queue.
+- **The no-human-in-the-loop bypass is gated, not strategy-scoped.** When
+  ``alpha_autonomous_live`` is armed *and* autonomy is ``autonomous``, ANY
+  strategy (HermesAlpha, CS75, …) skips the approval queue; the switch-OFF case
+  still queues for every strategy.
 - **The weekly kill switch** trips on loss-rate / capital-loss / CS75
   underperformance and disables Alpha.
 
@@ -210,10 +211,19 @@ async def test_alpha_still_queues_when_switch_off():
     assert db.pending_orders == []
 
 
-async def test_non_alpha_never_bypasses_even_when_autonomous():
+async def test_non_alpha_also_bypasses_when_autonomous_live():
+    # Global auto-execute: the armed switch bypasses approval for every strategy,
+    # not just HermesAlpha.
     engine, db = _engine_with_state(autonomy="autonomous", alpha_live=True)
     await engine._execute_or_queue(_cs75_action(), "entry")
-    assert len(list(db.approvals)) == 1       # CS75 always honors approval_mode
+    assert list(db.approvals) == []           # CS75 routed straight through
+    assert len(db.pending_orders) == 1
+
+
+async def test_non_alpha_still_queues_when_switch_off():
+    engine, db = _engine_with_state(autonomy="autonomous", alpha_live=False)
+    await engine._execute_or_queue(_cs75_action(), "entry")
+    assert len(list(db.approvals)) == 1       # default-OFF switch keeps the human gate
     assert db.pending_orders == []
 
 

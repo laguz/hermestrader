@@ -361,21 +361,20 @@ class PipelineController:
         ctx = self.ctx
         side_type = (a.strategy_params or {}).get("side_type")
 
-        # Scoped no-human-in-the-loop carve-out (CLAUDE.md safety rule #2): an
-        # autonomous HermesAlpha action skips the human approval queue ONLY when
-        # the operator has explicitly armed the default-OFF ``alpha_autonomous_live``
-        # switch *and* autonomy is 'autonomous'. Every other gate — dry_run,
-        # paper/live, off-hours, PortfolioRiskEngine — still applies; CS75 and all
-        # other strategies keep honoring approval_mode unchanged.
+        # No-human-in-the-loop carve-out (CLAUDE.md safety rule #2): an action
+        # from ANY strategy skips the human approval queue when the operator has
+        # explicitly armed the default-OFF ``alpha_autonomous_live`` switch *and*
+        # autonomy is 'autonomous'. Every other gate — dry_run, paper/live,
+        # off-hours, PortfolioRiskEngine — still applies; only the human approval
+        # step is bypassed.
         cs = ctx.control_state
-        alpha_live_bypass = (
-            a.strategy_id == "HERMESALPHA"
-            and cs is not None
+        autonomous_live_bypass = (
+            cs is not None
             and str(getattr(cs, "autonomy", "")).lower() == "autonomous"
             and bool(getattr(cs, "alpha_autonomous_live", False))
         )
 
-        if ctx.approval_mode and not alpha_live_bypass:
+        if ctx.approval_mode and not autonomous_live_bypass:
             if approval_id is None:
                 # Dedup guard: never re-queue a trade that already has a PENDING
                 # approval for the same (strategy, symbol, side, expiry). Without
@@ -414,10 +413,10 @@ class PipelineController:
             )
             return
 
-        if alpha_live_bypass and ctx.approval_mode:
+        if autonomous_live_bypass and ctx.approval_mode:
             await ctx.db.logs.write_log(
                 a.strategy_id,
-                f"[ALPHA-AUTONOMOUS] {a.symbol} {a.order_class} side={side_type} "
+                f"[AUTO-EXECUTE] {a.symbol} {a.order_class} side={side_type} "
                 f"expiry={a.expiry} qty={a.quantity} — approval_mode bypassed "
                 f"(autonomous + alpha_autonomous_live); routing to broker",
             )
