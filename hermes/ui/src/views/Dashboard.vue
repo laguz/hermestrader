@@ -547,7 +547,12 @@ const lastActionText = computed(() => {
 
 /* Approvals Card Styling */
 .approvals-card {
-  max-height: 520px;
+  /* Cap to the viewport so a large queue scrolls internally instead of
+     growing the page and pushing the per-card Approve buttons off-screen. */
+  max-height: min(72vh, 720px);
+  /* min-height:0 lets this grid item honor max-height; without it the default
+     min-height:auto expands the card to fit all cards (the reported bug). */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--surface-glass);
@@ -570,6 +575,9 @@ const lastActionText = computed(() => {
 .queue-body {
   overflow-y: auto;
   flex-grow: 1;
+  /* Required for the scroll to engage: a flex child defaults to
+     min-height:auto, which would grow the card instead of scrolling. */
+  min-height: 0;
 }
 
 .empty-state {
