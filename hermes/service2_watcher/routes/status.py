@@ -27,7 +27,9 @@ from hermes.market_hours import market_session, next_open
 
 from .._app_state import (
     SETTING_AGENT_STARTED,
+    SETTING_ALPHA_AUTONOMOUS_LIVE,
     SETTING_APPROVAL_MODE,
+    SETTING_AUTONOMY,
     SETTING_LLM_ERROR,
     SETTING_LLM_MODEL,
     SETTING_LLM_OK_TS,
@@ -86,6 +88,10 @@ async def get_status() -> Dict[str, Any]:
 
     paused = (await db.settings.get_setting_async(SETTING_PAUSED) or "false").lower() == "true"
     approval_mode = (await db.settings.get_setting_async(SETTING_APPROVAL_MODE) or "true").lower() == "true"
+    autonomy = (await db.settings.get_setting_async(SETTING_AUTONOMY) or "advisory").lower()
+    alpha_autonomous_live = (
+        await db.settings.get_setting_async(SETTING_ALPHA_AUTONOMOUS_LIVE) or "false"
+    ).lower() == "true"
     pending_count = len(await db.approvals.list_approvals_async(status="PENDING", limit=500))
 
     strategy_enabled = {}
@@ -127,6 +133,8 @@ async def get_status() -> Dict[str, Any]:
         "mode": mode,
         "paused": paused,
         "approval_mode": approval_mode,
+        "autonomy": autonomy,
+        "alpha_autonomous_live": alpha_autonomous_live,
         "pending_approvals": pending_count,
         "strategy_enabled": strategy_enabled,
         "stale_after_s": STALE_AFTER_S,

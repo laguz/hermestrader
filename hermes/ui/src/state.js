@@ -353,6 +353,23 @@ export async function setMode(mode) {
   }
 }
 
+export async function setAutonomousLive(enabled) {
+  if (enabled && !confirm(
+    'Arm FULL AUTONOMY?\n\nHermesAlpha will originate AND place orders with NO human approval. ' +
+    'Paper/Live still applies — flip Live separately to risk real money.'
+  )) return
+  try {
+    await api('PUT', '/api/alpha-autonomous', { enabled })
+    await loadStatus()
+    await loadSoul()
+    showToast(enabled
+      ? '⚡ Full autonomy ARMED — Alpha auto-executes (no approval)'
+      : 'Autonomy disarmed — approvals required again')
+  } catch (e) {
+    showToast('Error: ' + e.message, true)
+  }
+}
+
 export async function setApprovalMode(enabled) {
   try {
     await api('PUT', '/api/approval-mode', { enabled })
