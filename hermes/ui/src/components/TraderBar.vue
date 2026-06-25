@@ -139,14 +139,19 @@ function tradeBadge(t) {
 
 .tb-tape {
   display: flex;
-  align-items: flex-start;
-  align-content: flex-start;
-  flex-wrap: wrap;
+  align-items: center;
+  /* Keep the tape to a single horizontally-scrolling row. With many open
+     positions, wrapping grew this sticky bar past the viewport height and
+     covered the whole dashboard (approvals included). nowrap + overflow-x
+     keeps the bar compact no matter how many positions are open. */
+  flex-wrap: nowrap;
   gap: 8px;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   flex-grow: 1;
   min-width: 0;
   padding-bottom: 10px;
+  scrollbar-width: thin;
 }
 .tb-tape-empty {
   color: var(--text-muted);
