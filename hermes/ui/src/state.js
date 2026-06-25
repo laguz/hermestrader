@@ -355,7 +355,7 @@ export async function setMode(mode) {
 
 export async function setAutonomousLive(enabled) {
   if (enabled && !confirm(
-    'Arm FULL AUTONOMY?\n\nHermesAlpha will originate AND place orders with NO human approval. ' +
+    'Arm FULL AUTONOMY?\n\nEVERY strategy (CS75, Wheel, Alpha, …) will place orders with NO human approval. ' +
     'Paper/Live still applies — flip Live separately to risk real money.'
   )) return
   try {
@@ -363,7 +363,7 @@ export async function setAutonomousLive(enabled) {
     await loadStatus()
     await loadSoul()
     showToast(enabled
-      ? '⚡ Full autonomy ARMED — Alpha auto-executes (no approval)'
+      ? '⚡ Full autonomy ARMED — all strategies auto-execute (no approval)'
       : 'Autonomy disarmed — approvals required again')
   } catch (e) {
     showToast('Error: ' + e.message, true)

@@ -101,15 +101,15 @@ class AlphaAutonomousBody(BaseModel):
 
 @router.put("/api/alpha-autonomous")
 async def set_alpha_autonomous(body: AlphaAutonomousBody) -> Dict[str, Any]:
-    """Arm/disarm the no-human-in-the-loop HermesAlpha auto-execute path.
+    """Arm/disarm the no-human-in-the-loop auto-execute path (all strategies).
 
-    This is the operator-facing switch for the scoped carve-out in
+    This is the operator-facing "Auto-Execute" switch for the carve-out in
     ``_engine_pipeline._execute_or_queue`` (CLAUDE.md safety rule #2). The gate
     requires BOTH ``agent_autonomy == 'autonomous'`` AND ``alpha_autonomous_live``,
     so arming here also sets autonomy to ``autonomous`` — otherwise the switch
     would be a no-op. Disarming only clears the live switch and leaves the
-    autonomy level untouched. Paper/live, dry_run, off-hours and the risk engine
-    still apply; only the human approval queue is bypassed, and only for Alpha.
+    autonomy level untouched. When armed, EVERY strategy skips the human approval
+    queue; paper/live, dry_run, off-hours and the risk engine still apply.
     """
     if body.enabled:
         await db.commands.enqueue_setting(SETTING_AUTONOMY, "autonomous")
