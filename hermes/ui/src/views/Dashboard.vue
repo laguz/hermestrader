@@ -8,7 +8,8 @@ import {
   decide,
   bulkDecide,
   togglePause,
-  setMode
+  setMode,
+  setAutonomousLive
 } from '../state'
 import Icon from '../components/Icon.vue'
 
@@ -141,6 +142,22 @@ const lastActionText = computed(() => {
           <div class="grid-item">
             <span class="lbl">Auto-Pilot Autonomy</span>
             <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
+          </div>
+
+          <div class="grid-item">
+            <span class="lbl">Auto-Execute (no approval)</span>
+            <div class="mode-toggles-inline">
+              <button
+                class="btn-inline-toggle"
+                :class="{ active: !state.status.alpha_autonomous_live }"
+                @click="setAutonomousLive(false)"
+              >Off</button>
+              <button
+                class="btn-inline-toggle btn-live-inline"
+                :class="{ active: state.status.alpha_autonomous_live }"
+                @click="setAutonomousLive(true)"
+              >Auto</button>
+            </div>
           </div>
 
           <div class="grid-item">
