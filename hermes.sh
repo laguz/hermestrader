@@ -6,12 +6,14 @@
 #   ./hermes.sh start            Pull latest images & start all services
 #   ./hermes.sh stop             Stop all services
 #   ./hermes.sh restart          Restart agent + watcher (keeps DB)
-#   ./hermes.sh update --check   Check Docker Hub for a newer image
-#   ./hermes.sh update           Pull latest image & recreate containers
+#   ./hermes.sh update --check   Check GitHub for newer commits on this branch
+#   ./hermes.sh update           git pull + rebuild/restart to apply latest code
 #   ./hermes.sh logs [service]   Tail container logs (default: all)
 #   ./hermes.sh status           Show running containers
 #   ./hermes.sh build            Build the image locally (dev workflow)
-#   ./hermes.sh push   # ── Config ────────────────────────────────────────────────────────────
+#   ./hermes.sh push             Push the local image to the registry
+#
+# ── Config ────────────────────────────────────────────────────────────
 HERMES_IMAGE="${HERMES_IMAGE:-ghcr.io/nousresearch/hermes-agent}"
 HERMES_TAG="${HERMES_TAG:-latest}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,15 +83,21 @@ warn()  { echo -e "${YELLOW}⚠${NC} $*"; }
 err()   { echo -e "${RED}✗${NC} $*" >&2; }
 
 # ── Helpers ───────────────────────────────────────────────────────────
-_local_digest() {
-    docker image inspect "$IMAGE_FULL" --format='{{index .RepoDigests 0}}' 2>/dev/null \
-        | sed 's/.*@//' || echo ""
+# ── Git-based update helpers ──────────────────────────────────────────
+# Hermes runs from a bind-mounted host checkout (docker-compose.yml mounts
+# ./hermes:ro and runs uvicorn --reload), so the deployed code IS this git
+# checkout — not a registry image. "Updating" therefore means pulling git and
+# restarting, mirroring the in-app updater in hermes/utils.py which compares
+# this repo's branch on GitHub. The registry image only supplies the Python env
+# and is rebuilt only when requirements.txt / Dockerfile change.
+_git_branch() {
+    git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main"
 }
 
-_remote_digest() {
-    # Use docker manifest inspect to get the remote digest without pulling.
-    docker manifest inspect "$IMAGE_FULL" 2>/dev/null \
-        | grep -m1 '"digest"' | sed 's/.*"digest": *"//;s/".*//' || echo ""
+# Fetch all refs + prune so a branch deleted on the remote (e.g. after its PR
+# merged) doesn't make a single-ref fetch fail and look like a network outage.
+_git_fetch() {
+    git fetch -q --prune origin 2>/dev/null
 }
 
 _current_version() {
@@ -185,45 +193,99 @@ cmd_update() {
 }
 
 cmd_update_check() {
-    info "Checking Docker Hub for updates to ${BOLD}${IMAGE_FULL}${NC}…"
-    local local_d remote_d
-    local_d=$(_local_digest)
-    remote_d=$(_remote_digest)
+    local branch behind ahead
+    branch=$(_git_branch)
+    info "Checking GitHub for updates on branch ${BOLD}${branch}${NC}…"
 
-    if [ -z "$remote_d" ]; then
-        warn "Could not reach Docker Hub — check your network or image name"
+    if ! _git_fetch; then
+        warn "Could not reach GitHub — check your network or the 'origin' remote"
+        return 1
+    fi
+    if ! git rev-parse "origin/${branch}" >/dev/null 2>&1; then
+        warn "Branch '${branch}' has no remote on origin (merged & deleted, or never pushed)."
+        echo -e "   Switch to your deploy branch and retry, e.g. ${BOLD}git checkout main${NC}"
         return 1
     fi
 
-    if [ -z "$local_d" ]; then
-        warn "No local image found — an update is available"
-        echo -e "   Remote: ${remote_d:0:24}…"
-        return 0
-    fi
+    behind=$(git rev-list --count "HEAD..origin/${branch}" 2>/dev/null || echo 0)
+    ahead=$(git rev-list --count "origin/${branch}..HEAD" 2>/dev/null || echo 0)
 
-    if [ "$local_d" = "$remote_d" ]; then
-        ok "Already up to date"
-        echo -e "   Digest: ${local_d:0:24}…"
+    if [ "$behind" -eq 0 ]; then
+        ok "Already up to date on ${branch} (local v${HERMES_VERSION})"
+        [ "$ahead" -gt 0 ] && info "${ahead} local commit(s) not yet pushed"
     else
-        warn "Update available!"
-        echo -e "   Local:  ${local_d:0:24}…"
-        echo -e "   Remote: ${remote_d:0:24}…"
+        warn "Update available — ${behind} commit(s) behind origin/${branch}"
+        git --no-pager log --oneline "HEAD..origin/${branch}" | head -8 | sed 's/^/   /'
         echo -e "   Run ${BOLD}./hermes.sh update${NC} to apply"
     fi
 }
 
 cmd_update_apply() {
-    info "Updating Hermes…"
-    _pull
+    local branch old_head new_head changed needs_image
+    branch=$(_git_branch)
+    info "Updating Hermes on branch ${BOLD}${branch}${NC}…"
+
+    if ! _git_fetch; then
+        err "Could not reach GitHub — aborting update"
+        return 1
+    fi
+    if ! git rev-parse "origin/${branch}" >/dev/null 2>&1; then
+        err "Branch '${branch}' has no remote on origin (merged & deleted, or never pushed)."
+        echo -e "   Switch to your deploy branch and retry, e.g. ${BOLD}git checkout main${NC}"
+        return 1
+    fi
+
+    old_head=$(git rev-parse HEAD 2>/dev/null)
+    if ! git merge --ff-only "origin/${branch}" >/dev/null 2>&1; then
+        err "Cannot fast-forward — local branch has diverged from origin/${branch}."
+        echo -e "   Resolve manually (e.g. ${BOLD}git pull --rebase${NC}) then re-run."
+        return 1
+    fi
+    new_head=$(git rev-parse HEAD 2>/dev/null)
+
+    if [ "$old_head" = "$new_head" ]; then
+        ok "Already up to date on ${branch} — nothing to apply"
+        return 0
+    fi
+    ok "Pulled $(git rev-list --count "${old_head}..${new_head}") new commit(s) → $(git rev-parse --short HEAD)"
+
+    changed=$(git diff --name-only "$old_head" "$new_head")
+
+    # Rebuild the dashboard bundle if the Vue source changed — it builds into the
+    # bind-mounted static dir the watcher serves.
+    if echo "$changed" | grep -q '^hermes/ui/'; then
+        if command -v npm >/dev/null 2>&1; then
+            info "UI source changed — rebuilding dashboard bundle…"
+            ( cd hermes/ui && npm install --silent && npm run build ) \
+                && ok "Dashboard rebuilt" \
+                || warn "npm build failed — dashboard bundle may be stale"
+        else
+            warn "hermes/ui changed but npm not found — rebuild the dashboard manually"
+        fi
+    fi
+
+    # The app code is bind-mounted, so most updates just need a restart for
+    # uvicorn --reload to re-import. Only rebuild the image when the Python env
+    # itself changed.
+    needs_image=false
+    if echo "$changed" | grep -qE '^(requirements\.txt|Dockerfile)$'; then
+        needs_image=true
+        info "requirements.txt/Dockerfile changed — image rebuild required"
+    fi
 
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
         local api_port
         api_port=$(grep -E "^HERMES_API_PORT=" "$env_file" | cut -d= -f2- | tr -d "'\"" || echo "8080")
-        info "Recreating containers with new image for ${BOLD}${proj_name}${NC}…"
-        docker compose --env-file "$env_file" -p "$proj_name" up -d --force-recreate --no-build
-        ok "Update complete — Hermes ${proj_name} is running the latest image"
+        if [ "$needs_image" = "true" ]; then
+            info "Rebuilding image + recreating containers for ${BOLD}${proj_name}${NC}…"
+            docker compose --env-file "$env_file" -p "$proj_name" up -d --build
+        else
+            info "Restarting watcher + agent for ${BOLD}${proj_name}${NC} (code is bind-mounted)…"
+            docker compose --env-file "$env_file" -p "$proj_name" restart watcher agent
+        fi
+        ok "Update complete — Hermes ${proj_name} now on $(git rev-parse --short HEAD)"
         echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:${api_port}"
         _show_version "$env_file" "$proj_name"
     done
@@ -408,8 +470,8 @@ cmd_help() {
     echo "  restart          Restart agent + watcher (keeps DB running)"
     echo "  rebuild          Stop, build from scratch (no cache), restart — keeps DB data"
     echo "  nuke             ⚠  Full reset: delete containers + volumes, rebuild clean"
-    echo "  update --check   Check if a newer image is available on Docker Hub"
-    echo "  update           Pull latest image & recreate containers"
+    echo "  update --check   Check GitHub for newer commits on the current branch"
+    echo "  update           git pull + rebuild/restart to apply the latest code"
     echo "  logs [service]   Tail logs (agent, watcher, db, or all)"
     echo "  status           Show running containers"
     echo "  build            Build the Docker image locally"
