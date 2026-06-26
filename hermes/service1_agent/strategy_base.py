@@ -199,28 +199,22 @@ class AbstractStrategy(ABC):
     def compute_close_debit(short_quote, long_quote, width):
         """Sane debit-to-close for a vertical spread.
 
-        Returns ``(debit, blocked, reason)``.
+        Returns ``(mid_debit, exec_debit, blocked, reason)``.
 
-        Closing a credit spread costs ``short_ask − long_bid`` per share.
-        Two failure modes were observed in production:
+        Two debits are returned because they serve different purposes:
+        - ``mid_debit``  — mid(short) − mid(long), matches how entry credit is
+          measured (``short_credit`` uses mid-mid).  Used for SL/TP decisions
+          so wide bid-ask spreads on TSLA/high-IV names don't produce false
+          stop-loss triggers on profitable positions.
+        - ``exec_debit`` — short_ask − long_bid, the real worst-case execution
+          cost.  Used as the order limit price so the close actually fills.
 
-        1. **Stale / missing quote** — Tradier returns ``bid=0`` on
-           illiquid contracts (especially pre-market on the long-side
-           protection leg). The naive formula then collapses to
-           ``short_ask`` which can be many multiples of the spread
-           width, looking like a max-loss SL trigger when the real
-           debit is bounded by ``width``.
-        2. **Bid-ask asymmetry vs. entry** — entry credit uses
-           mid-mid (``short_credit``) but the original close calc used
-           worst-of (``ask − bid``). Compounded with (1) this fires
-           panic-priced SL closes on transient quote glitches.
-
-        Guards: refuse the calculation when either leg is missing a
-        positive bid AND ask, or when the resulting debit exceeds the
-        spread width by more than 10% (impossible on a real spread).
+        Guards: refuse both when either leg is missing a positive bid AND ask,
+        or when exec_debit exceeds the spread width by more than 10% (which
+        only happens when long_bid is stale/zero — the phantom check).
         """
         if not (short_quote and long_quote):
-            return None, True, "missing quote leg"
+            return None, None, True, "missing quote leg"
         try:
             sb = float(short_quote.get("bid") or 0)
             sa = float(short_quote.get("ask") or 0)
@@ -228,25 +222,25 @@ class AbstractStrategy(ABC):
             la = float(long_quote.get("ask") or 0)
             w = float(width or 0)
         except (TypeError, ValueError):
-            return None, True, "quote parse error"
+            return None, None, True, "quote parse error"
 
-        if sa <= 0 or lb <= 0:
-            return None, True, (
-                f"stale quote: short_ask={sa} long_bid={lb} "
-                f"(short_bid={sb} long_ask={la})"
+        if sa <= 0 or la <= 0 or sb <= 0 or lb <= 0:
+            return None, None, True, (
+                f"stale quote: short={sb}/{sa} long={lb}/{la}"
             )
 
-        debit = max(0.01, round(sa - lb, 2))
-        # An honest spread debit cannot exceed its width by any
-        # meaningful margin. 10% slack tolerates wide bid-ask noise on
-        # one-lot orders without permitting the phantom $4.14-on-$1
-        # blowouts that triggered the IWM SL false-positive.
-        if w > 0 and debit > w * 1.10:
-            return None, True, (
-                f"phantom debit ${debit:.2f} > width ${w:.2f} × 1.10 "
+        exec_debit = max(0.01, round(sa - lb, 2))
+        # Phantom check: an honest spread debit cannot exceed its width by any
+        # meaningful margin (10% slack). Only exec_debit can hit this because
+        # long_bid can be near-zero on illiquid legs; mid_debit is self-bounding.
+        if w > 0 and exec_debit > w * 1.10:
+            return None, None, True, (
+                f"phantom debit ${exec_debit:.2f} > width ${w:.2f} × 1.10 "
                 f"(short_ask={sa} long_bid={lb})"
             )
-        return debit, False, ""
+
+        mid_debit = max(0.01, round(((sa + sb) / 2) - ((la + lb) / 2), 2))
+        return mid_debit, exec_debit, False, ""
 
     def is_morning_unreliable(self, now_dt: Optional[datetime] = None) -> bool:
         """True if the current time is between 9:30 AM and 10:30 AM Eastern Time."""

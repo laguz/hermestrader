@@ -332,7 +332,7 @@ class CreditSpreadStrategy(AbstractStrategy):
 
             sq = quotes.get(short_leg)
             lq = quotes.get(long_leg)
-            debit, blocked, reason = self.compute_close_debit(sq, lq, width)
+            mid_debit, exec_debit, blocked, reason = self.compute_close_debit(sq, lq, width)
             if blocked:
                 forced = self._forced_close_on_blocked(trade, dte, width, reason, t)
                 if forced is not None:
@@ -344,16 +344,18 @@ class CreditSpreadStrategy(AbstractStrategy):
                     )
                 continue
 
-            close_reason = self._close_reason(trade, dte, debit, entry_credit, width, t)
+            # SL/TP decisions use mid_debit (matches how entry credit is measured).
+            # exec_debit (ask-bid) is used only for the order limit price.
+            close_reason = self._close_reason(trade, dte, mid_debit, entry_credit, width, t)
             if close_reason:
                 # Morning pricing guard: before 10:30 AM ET, don't close unless in profit.
-                if self.is_morning_unreliable() and debit >= entry_credit:
+                if self.is_morning_unreliable() and mid_debit >= entry_credit:
                     self._log(
                         f"ℹ️ {trade['symbol']} {trade.get('side_type')}: close deferred (morning pricing unreliable, "
-                        f"debit ${debit:.2f} >= entry credit ${entry_credit:.2f})"
+                        f"debit ${mid_debit:.2f} >= entry credit ${entry_credit:.2f})"
                     )
                 else:
-                    actions.append(self._close_action(trade, debit, close_reason))
+                    actions.append(self._close_action(trade, exec_debit, close_reason))
         return actions
 
     def _close_action(self, trade, debit, reason) -> TradeAction:
