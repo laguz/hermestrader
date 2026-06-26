@@ -210,11 +210,12 @@ class HermesAlpha(CreditSpreadStrategy):
 
             sq = quotes.get(short_leg)
             lq = quotes.get(long_leg)
-            debit, blocked, reason = self.compute_close_debit(sq, lq, width)
+            mid_debit, exec_debit, blocked, reason = self.compute_close_debit(sq, lq, width)
 
             # Deterministic backstop runs first — it bounds the LLM and also
             # covers the stale-quote case (force a width-priced time-exit).
-            backstop = self._exit_backstop(trade, dte, debit, blocked, entry_credit, width)
+            # mid_debit used for SL decision; exec_debit for limit price.
+            backstop = self._exit_backstop(trade, dte, mid_debit, exec_debit, blocked, entry_credit, width)
             if backstop is not None:
                 actions.append(backstop)
                 continue
@@ -227,34 +228,36 @@ class HermesAlpha(CreditSpreadStrategy):
                 continue
 
             decision = await self.overseer.decide_exit(
-                trade, {"debit": debit, "entry_credit": entry_credit, "dte": dte, "width": width})
+                trade, {"debit": mid_debit, "entry_credit": entry_credit, "dte": dte, "width": width})
             if str(decision.get("action") or "").lower() == "close":
-                # Price comes from the live quote (``debit``), never the LLM.
+                # Price from live exec_debit (ask-bid), never the LLM.
                 self._log(
-                    f"→ {trade['symbol']}: AI exit at live debit ${debit:.2f} — "
-                    f"{decision.get('rationale','')}"
+                    f"→ {trade['symbol']}: AI exit at live debit ${exec_debit:.2f} "
+                    f"(mid ${mid_debit:.2f}) — {decision.get('rationale','')}"
                 )
-                actions.append(self._close_action(trade, debit, "AI"))
+                actions.append(self._close_action(trade, exec_debit, "AI"))
         return actions
 
-    def _exit_backstop(self, trade, dte: Optional[int], debit, blocked: bool,
-                       entry_credit: float, width: float) -> Optional[TradeAction]:
+    def _exit_backstop(self, trade, dte: Optional[int], mid_debit, exec_debit,
+                       blocked: bool, entry_credit: float, width: float) -> Optional[TradeAction]:
         """Hard exit the LLM cannot loosen: time-exit floor and max-loss stop.
 
         - At/under the time-exit DTE floor we force a TIME-EXIT (width-priced if
           the live quote is unusable) so a losing position can't ride to expiry.
         - A debit at/above the stop multiple forces an SL close while it is still
-          below max loss (width).
+          below max loss (width).  mid_debit is used for the SL decision so that
+          wide bid-ask spreads don't produce false triggers; exec_debit is used
+          for the limit price so the close fills.
         """
         time_exit_dte = int(self.config.get("hermesalpha_time_exit_dte", 2))
         sl_mult = float(self.config.get("hermesalpha_sl_mult", 2.5))
 
         if dte is not None and dte <= time_exit_dte:
-            price_debit = debit if (not blocked and debit is not None) else width
+            price_debit = exec_debit if (not blocked and exec_debit is not None) else width
             return self._close_action(trade, price_debit, "TIME-EXIT")
-        if not blocked and debit is not None and entry_credit > 0:
-            if debit >= entry_credit * sl_mult and debit < width:
-                return self._close_action(trade, debit, "SL")
+        if not blocked and mid_debit is not None and entry_credit > 0:
+            if mid_debit >= entry_credit * sl_mult and mid_debit < width:
+                return self._close_action(trade, exec_debit, "SL")
         return None
 
     # ── unused base hooks (we override execute_entries / manage_positions) ────
