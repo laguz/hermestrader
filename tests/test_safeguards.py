@@ -50,12 +50,12 @@ async def test_stop_loss_width_safety_cap():
     actions_a = await strategy_a.manage_positions()
     assert len(actions_a) == 0  # Blocked by width cap
 
-    # Case B: Debit is $4.00 (>= 3.75 SL, but < width of $5.00). Should trigger close.
+    # Case B: mid_debit=$4.00 (>= 3.75 SL), exec_debit=$4.50 (< width $5.00). Should trigger close.
     broker_b = StubBroker()
     broker_b.current_date = datetime(2026, 6, 9, 15, 0, 0)
     broker_b.get_quote = lambda symbols: [
-        {"symbol": trade["short_leg"], "bid": 18.00, "ask": 19.00},
-        {"symbol": trade["long_leg"], "bid": 15.00, "ask": 16.00},
+        {"symbol": trade["short_leg"], "bid": 9.50, "ask": 10.00},
+        {"symbol": trade["long_leg"], "bid": 5.50, "ask": 6.00},
     ]
 
     mm_b = MoneyManager(broker_b, db, {})
@@ -90,13 +90,13 @@ async def test_morning_pricing_guard():
     db = StubDB()
     db.set_open_trades("CS75", [trade])
 
-    # Case A: Firing Stop Loss (debit $4.00 >= entry $1.50) at 10:00 AM ET (unreliable pricing window). Should block.
+    # Case A: SL at 10:00 AM ET. mid_debit=$4.00, exec_debit=$4.50. Morning guard blocks.
     broker_a = StubBroker()
     # 10:00 AM ET is 14:00 UTC
     broker_a.current_date = datetime(2026, 6, 9, 14, 0, 0, tzinfo=ZoneInfo("UTC"))
     broker_a.get_quote = lambda symbols: [
-        {"symbol": trade["short_leg"], "bid": 18.00, "ask": 19.00},
-        {"symbol": trade["long_leg"], "bid": 15.00, "ask": 16.00},
+        {"symbol": trade["short_leg"], "bid": 9.50, "ask": 10.00},
+        {"symbol": trade["long_leg"], "bid": 5.50, "ask": 6.00},
     ]
 
     mm_a = MoneyManager(broker_a, db, {})
@@ -111,13 +111,13 @@ async def test_morning_pricing_guard():
     actions_a = await strategy_a.manage_positions()
     assert len(actions_a) == 0  # Blocked by morning pricing guard
 
-    # Case B: Firing Stop Loss (debit $4.00) at 11:00 AM ET (reliable window). Should trigger close.
+    # Case B: SL at 11:00 AM ET. mid_debit=$4.00 (>= 3.75), exec_debit=$4.50 (< width). Should fire.
     broker_b = StubBroker()
     # 11:00 AM ET is 15:00 UTC
     broker_b.current_date = datetime(2026, 6, 9, 15, 0, 0, tzinfo=ZoneInfo("UTC"))
     broker_b.get_quote = lambda symbols: [
-        {"symbol": trade["short_leg"], "bid": 18.00, "ask": 19.00},
-        {"symbol": trade["long_leg"], "bid": 15.00, "ask": 16.00},
+        {"symbol": trade["short_leg"], "bid": 9.50, "ask": 10.00},
+        {"symbol": trade["long_leg"], "bid": 5.50, "ask": 6.00},
     ]
 
     mm_b = MoneyManager(broker_b, db, {})

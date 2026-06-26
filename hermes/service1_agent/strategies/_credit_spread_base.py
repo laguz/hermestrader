@@ -347,6 +347,15 @@ class CreditSpreadStrategy(AbstractStrategy):
             # SL/TP decisions use mid_debit (matches how entry credit is measured).
             # exec_debit (ask-bid) is used only for the order limit price.
             close_reason = self._close_reason(trade, dte, mid_debit, entry_credit, width, t)
+            # Width safety cap: never SL-close when the execution cost is already
+            # at or above max loss (width). No benefit paying full-width to exit.
+            if (close_reason and "SL" in close_reason
+                    and exec_debit is not None and exec_debit >= width):
+                self._log(
+                    f"ℹ️ {trade['symbol']} {trade.get('side_type')}: SL suppressed — "
+                    f"exec_debit ${exec_debit:.2f} >= width ${width:.2f} (max loss)"
+                )
+                close_reason = None
             if close_reason:
                 # Morning pricing guard: before 10:30 AM ET, don't close unless in profit.
                 if self.is_morning_unreliable() and mid_debit >= entry_credit:
