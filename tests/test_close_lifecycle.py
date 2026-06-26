@@ -136,3 +136,41 @@ async def test_tracked_symbols_include_closing(db):
     tracked = await db.trades.tracked_option_symbols()
     # A mid-close position is still tracked, so it isn't misflagged as an orphan.
     assert SHORT in tracked and LONG in tracked
+
+
+# ── double-submit guard (record_pending_order pre-sets CLOSING) ──────────────
+async def test_record_pending_order_pure_close_sets_closing(db):
+    """record_pending_order on a pure-close action immediately sets trade to CLOSING.
+
+    This prevents manage_positions from seeing the same trade as OPEN on the
+    next strategy pass within the same tick (double-submit guard).
+    """
+    tid = await _open_trade(db)
+    await db.trades.record_pending_order(_close_action(tid))
+    assert await _status(db, tid) == "CLOSING"
+
+
+async def test_record_pending_order_non_close_leaves_open(db):
+    """record_pending_order on an open/entry action must not touch the trade status."""
+    await _open_trade(db)
+    entry = TradeAction(
+        strategy_id="CS75", symbol="TSLA", order_class="multileg",
+        legs=[{"option_symbol": SHORT, "side": "sell_to_open", "quantity": 1},
+              {"option_symbol": LONG, "side": "buy_to_open", "quantity": 1}],
+        price=1.50, side="sell", quantity=1, order_type="credit",
+        tag="HERMES_CS75",
+        strategy_params={"side_type": "call"},
+    )
+    await db.trades.record_pending_order(entry)
+    # Original trade is untouched — still OPEN.
+    assert await _status(db, 1) == "OPEN"
+
+
+async def test_close_rejection_after_pending_reopens_trade(db):
+    """If record_pending_order pre-sets CLOSING and the broker rejects, the trade
+    is put back to OPEN so it can be retried next tick."""
+    tid = await _open_trade(db)
+    await db.trades.record_pending_order(_close_action(tid))
+    assert await _status(db, tid) == "CLOSING"
+    await db.trades.close_trade_from_action(_close_action(tid), {"errors": "Buy To Cover"})
+    assert await _status(db, tid) == "OPEN"
