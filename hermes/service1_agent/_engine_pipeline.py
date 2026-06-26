@@ -622,7 +622,69 @@ class PipelineController:
                 await engine.reconcile_orphans()
                 stats = {"managed": 0, "entries": 0, "note": f"all submissions skipped ({mkt['session']})"}
 
-            # 8. Chart analysis
+            # 8. Daily-bar ingestion — feeds bars_daily for chart rendering
+            _BAR_INGEST_KEY = "bar_ingest_last_run"
+            _bar_ingest_watchlist = sorted(list(set(current_watchlist)))
+            if _bar_ingest_watchlist and hasattr(ctx.broker, "get_history"):
+                _should_ingest = False
+                try:
+                    _last_ingest_raw = await ctx.db.settings.get_setting(_BAR_INGEST_KEY)
+                    if not _last_ingest_raw:
+                        _should_ingest = True
+                    else:
+                        from datetime import datetime, timezone
+                        try:
+                            _s = _last_ingest_raw
+                            _last_ingest_dt = datetime.fromisoformat(
+                                _s[:-1] + "+00:00" if _s.endswith("Z") else _s
+                            )
+                            if not _last_ingest_dt.tzinfo:
+                                _last_ingest_dt = _last_ingest_dt.replace(tzinfo=timezone.utc)
+                            _ingest_age_h = (datetime.now(timezone.utc) - _last_ingest_dt).total_seconds() / 3600
+                            _should_ingest = _ingest_age_h >= 20
+                        except ValueError:
+                            _should_ingest = True
+                except Exception:
+                    _should_ingest = True
+
+                if _should_ingest:
+                    logger.info("Ingesting daily bars for %d symbols", len(_bar_ingest_watchlist))
+                    from datetime import date, timedelta
+                    import pandas as pd
+                    _ingest_end = date.today()
+                    _ingest_start = _ingest_end - timedelta(days=220)
+                    _ingested = 0
+                    for _sym in _bar_ingest_watchlist:
+                        try:
+                            _raw_bars = await ctx.broker.get_history(
+                                _sym,
+                                start=_ingest_start.isoformat(),
+                                end=_ingest_end.isoformat(),
+                            )
+                            if not _raw_bars:
+                                continue
+                            _df = pd.DataFrame(_raw_bars)
+                            if "date" not in _df.columns:
+                                continue
+                            _df = _df.rename(columns={"date": "ts"})
+                            for _col in ("open", "high", "low", "close", "volume"):
+                                if _col in _df.columns:
+                                    _df[_col] = pd.to_numeric(_df[_col], errors="coerce")
+                            _df = _df.dropna(subset=["close"])
+                            _df = _df.set_index("ts")
+                            await ctx.db.timeseries.save_daily_bars(_sym, _df)
+                            _ingested += 1
+                        except Exception as _bar_exc:  # noqa: BLE001
+                            logger.warning("Bar ingest failed for %s: %s", _sym, _bar_exc)
+                    from datetime import datetime, timezone
+                    await ctx.db.settings.set_setting(_BAR_INGEST_KEY, datetime.now(timezone.utc).isoformat())
+                    logger.info("Bar ingest complete: %d/%d symbols", _ingested, len(_bar_ingest_watchlist))
+                    await ctx.db.logs.write_log(
+                        "ENGINE",
+                        f"bar ingest: {_ingested}/{len(_bar_ingest_watchlist)} symbols refreshed"
+                    )
+
+            # 9. Chart analysis
             _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
             _CHART_ANALYSIS_INTERVAL_DAYS = 7
             db_watchlist = sorted(list(set(current_watchlist)))
@@ -681,7 +743,7 @@ class PipelineController:
                     _days_left = max(0.0, _CHART_ANALYSIS_INTERVAL_DAYS - _age_days)
                     logger.debug("Chart analysis throttled — next run in %.1f day(s)", _days_left)
 
-            # 9. Update live status indicators
+            # 10. Update live status indicators
             await ctx.db.settings.set_setting("tradier_last_ok_ts", datetime.now(timezone.utc).isoformat())
             await ctx.db.settings.set_setting("tradier_last_error", "")
             await ctx.db.settings.set_setting("market_session", mkt["session"])
