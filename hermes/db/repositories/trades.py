@@ -46,6 +46,15 @@ class TradesRepository(Repository):
             if side_value is None:
                 side_value = action.side
 
+        # Detect a pure-close action (every leg is _to_close) so we can flip
+        # the Trade to CLOSING in the same transaction as the PendingOrder.
+        # This prevents manage_positions from seeing the trade as OPEN on the
+        # next strategy pass within the same tick (double-submit guard).
+        is_pure_close = bool(action.legs) and all(
+            "_to_close" in (leg.get("side") or "").lower()
+            for leg in action.legs
+        )
+
         async with self.AsyncSession() as s:
             await TransactionManager.place_order(
                 session=s,
@@ -60,6 +69,37 @@ class TradesRepository(Repository):
                     "expiry": action.expiry,
                 }
             )
+
+            if is_pure_close:
+                sp = action.strategy_params or {}
+                trade_id = sp.get("trade_id")
+                trade_row: Optional[Trade] = None
+                if trade_id is not None:
+                    res = await s.execute(
+                        select(Trade).filter(
+                            Trade.id == int(trade_id), Trade.status == "OPEN"
+                        ).limit(1)
+                    )
+                    trade_row = res.scalars().first()
+                if trade_row is None:
+                    # Fallback: match by the buy_to_close leg's option symbol.
+                    short_leg_sym = next(
+                        (leg.get("option_symbol") for leg in action.legs
+                         if "buy_to_close" in (leg.get("side") or "").lower()),
+                        None,
+                    )
+                    if short_leg_sym:
+                        res = await s.execute(
+                            select(Trade).filter(
+                                Trade.strategy_id == action.strategy_id,
+                                Trade.short_leg == short_leg_sym,
+                                Trade.status == "OPEN",
+                            ).limit(1)
+                        )
+                        trade_row = res.scalars().first()
+                if trade_row is not None:
+                    trade_row.status = "CLOSING"
+
             await s.commit()
 
     async def record_order_response(self, action, response) -> None:
@@ -234,6 +274,19 @@ class TradesRepository(Repository):
                     side=(side_value or action.side or "").lower(),
                     lots=lots,
                 )
+                # Re-arm any CLOSING trade so it's retried next tick rather
+                # than waiting for upsert_positions to reopen it.
+                _sp = action.strategy_params or {}
+                _tid = _sp.get("trade_id")
+                if _tid is not None:
+                    _res = await s.execute(
+                        select(Trade).filter(
+                            Trade.id == int(_tid), Trade.status == "CLOSING"
+                        ).limit(1)
+                    )
+                    _closing = _res.scalars().first()
+                    if _closing is not None:
+                        _closing.status = "OPEN"
                 await s.commit()
                 await self._db.logs.write_log(
                     action.strategy_id,
@@ -244,7 +297,10 @@ class TradesRepository(Repository):
 
             row: Optional[Trade] = None
             if trade_id is not None:
-                q = select(Trade).filter(Trade.id == int(trade_id), Trade.status == "OPEN").limit(1)
+                q = select(Trade).filter(
+                    Trade.id == int(trade_id),
+                    Trade.status.in_(["OPEN", "CLOSING"]),
+                ).limit(1)
                 result = await s.execute(q)
                 row = result.scalars().first()
             if row is None:
@@ -255,7 +311,7 @@ class TradesRepository(Repository):
                 ]
                 if leg_syms:
                     q = (select(Trade)
-                           .filter(Trade.status == "OPEN",
+                           .filter(Trade.status.in_(["OPEN", "CLOSING"]),
                                    Trade.symbol == action.symbol,
                                    Trade.strategy_id == action.strategy_id,
                                    Trade.short_leg.in_(leg_syms))
