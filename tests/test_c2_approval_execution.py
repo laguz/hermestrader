@@ -81,6 +81,10 @@ class _FakeDB(RepoNamespaceMixin):
         self.events.append({"op": "record_order_response",
                             "symbol": action.symbol, "resp": resp})
 
+    async def close_trade_from_action(self, action: TradeAction, resp: Dict[str, Any]) -> None:
+        self.events.append({"op": "close_trade_from_action",
+                            "symbol": action.symbol, "resp": resp})
+
     async def mark_approval_executed(self, approval_id: int, success: bool = True,
                                 notes: Optional[str] = None) -> None:
         self.events.append({"op": "mark_approval_executed",
@@ -218,3 +222,37 @@ async def test_pending_order_is_recorded_before_broker_call():
     pre_idx = ops.index("record_pending_order")
     resp_idx = ops.index("record_order_response")
     assert pre_idx < resp_idx
+
+
+async def test_execute_approved_action_pure_close_routes_to_close_trade():
+    """Verify that if the action being executed from C2 is a pure-close action,
+    it calls close_trade_from_action instead of record_order_response."""
+    broker = _FakeBroker()
+    db = _FakeDB()
+    
+    # Pure-close action (all legs are *_to_close)
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        order_class="multileg",
+        legs=[
+            {"option_symbol": "AAPL250620P00150000", "side": "buy_to_close", "quantity": 1},
+            {"option_symbol": "AAPL250620P00145000", "side": "sell_to_close", "quantity": 1}
+        ],
+        price=1.25, side="buy", quantity=1, order_type="debit",
+        tag="HERMES_CS75_CLOSE_TEST",
+        strategy_params={"trade_id": 123},
+        expiry="2025-06-20",
+    )
+
+    result = await _execute_approved_action(_approval_item(action), broker=broker, db=db)
+
+    assert result == "executed"
+    assert len(broker.calls) == 1
+    assert db.approval_status == "EXECUTED"
+    
+    # Assert close_trade_from_action was called instead of record_order_response
+    ops = [e["op"] for e in db.events]
+    assert "close_trade_from_action" in ops
+    assert "record_order_response" not in ops
+
