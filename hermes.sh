@@ -122,7 +122,7 @@ _pull() {
         local env_file="${ENV_FILES[$i]}"
         local proj_name="${PROJECT_NAMES[$i]}"
         info "Pulling images for ${BOLD}${proj_name}${NC} using ${env_file}…"
-        if docker compose --env-file "$env_file" -p "$proj_name" pull -q >/dev/null 2>&1; then
+        if docker compose --env-file "$env_file" -p "$proj_name" pull --ignore-buildable --ignore-pull-failures -q >/dev/null 2>&1; then
             ok "Pull complete for ${proj_name}"
         else
             warn "Pull failed for ${proj_name} — will use local image or build from source"
