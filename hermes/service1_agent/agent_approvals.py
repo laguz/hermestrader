@@ -89,11 +89,20 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "preview"
 
+    is_pure_close = bool(action.legs) and all(
+        "to_close" in (leg.get("side") or "").lower() or "to_close" in (leg.get("action") or "").lower()
+        for leg in action.legs
+    )
+    close_method = getattr(db.trades, "close_trade_from_action", None)
+
     await db.trades.record_pending_order(action)
     try:
         resp = await async_broker.place_order_from_action(action)
     except Exception as exc:                                   # noqa: BLE001
-        await db.trades.record_order_response(action, {"errors": str(exc)})
+        if is_pure_close and close_method is not None:
+            await close_method(action, {"errors": str(exc)})
+        else:
+            await db.trades.record_order_response(action, {"errors": str(exc)})
         await db.approvals.mark_approval_executed(
             approval_id, success=False,
             notes=f"broker raised: {exc}",
@@ -107,7 +116,10 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "failed"
 
-    await db.trades.record_order_response(action, resp)
+    if is_pure_close and close_method is not None:
+        await close_method(action, resp)
+    else:
+        await db.trades.record_order_response(action, resp)
 
     order = (resp or {}).get("order") if isinstance(resp, dict) else None
     order_status = ""
