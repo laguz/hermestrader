@@ -35,7 +35,9 @@ onUnmounted(() => {
 function switchTab(tab) {
   activeTab.value = tab
   if (tab === 'keylevels') {
-    loadAnalysis(state.keyLevelsHorizon)
+    if (!state.keyLevelsData || Object.keys(state.keyLevelsData).length === 0) {
+      loadAnalysis(state.keyLevelsHorizon)
+    }
   }
   if (tab === 'performance') {
     nextTick(drawPnlChart)
@@ -66,9 +68,6 @@ function startPolling() {
   pollInterval = setInterval(async () => {
     await loadAnalytics()
     await loadLots()
-    if (activeTab.value === 'keylevels') {
-      loadAnalysis(state.keyLevelsHorizon, true)
-    }
   }, 30000)
 }
 
