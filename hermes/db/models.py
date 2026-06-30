@@ -16,6 +16,7 @@ contributed by a repository mixin.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import (
