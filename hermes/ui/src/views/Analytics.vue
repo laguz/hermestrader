@@ -67,7 +67,7 @@ function startPolling() {
     await loadAnalytics()
     await loadLots()
     if (activeTab.value === 'keylevels') {
-      loadAnalysis(state.keyLevelsHorizon)
+      loadAnalysis(state.keyLevelsHorizon, true)
     }
   }, 30000)
 }
