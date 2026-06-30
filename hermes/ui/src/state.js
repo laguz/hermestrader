@@ -260,9 +260,11 @@ export async function loadAnalytics() {
   }
 }
 
-export async function loadAnalysis(horizon) {
+export async function loadAnalysis(horizon, silent = false) {
   state.keyLevelsHorizon = horizon
-  state.keyLevelsLoading = true
+  if (!silent) {
+    state.keyLevelsLoading = true
+  }
   state.keyLevelsError = null
   try {
     const data = await api('GET', `/api/analysis?period=${horizon}&_=${Date.now()}`)
@@ -274,7 +276,9 @@ export async function loadAnalysis(horizon) {
   } catch (e) {
     state.keyLevelsError = e.message
   } finally {
-    state.keyLevelsLoading = false
+    if (!silent) {
+      state.keyLevelsLoading = false
+    }
   }
 }
 
