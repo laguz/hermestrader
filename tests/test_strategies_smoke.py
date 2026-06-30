@@ -277,3 +277,29 @@ async def test_wheel_allows_puts_when_sufficient_buying_power():
     assert len(actions) == 1
 
 
+async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
+    db = StubDB()
+    trade = make_trade("CS7", "AAPL", entry_credit=0.12, width=1.00, short_strike=90.0, long_strike=89.0, days_to_expiry=5)
+    db.set_open_trades("CS7", [trade])
+    s, broker, _ = _build(CreditSpreads7, db=db)
+    
+    # 1. Quote with exec_debit = 0.35 - 0.03 = 0.32 >= 0.12 entry credit
+    # (mid_debit is (0.35+0.05)/2 - (0.33+0.03)/2 = 0.20 - 0.18 = 0.02, which is <= 0.02 TP threshold)
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.05, "ask": 0.35},
+        {"symbol": trade["long_leg"], "bid": 0.03, "ask": 0.33},
+    ]
+    actions = await s.manage_positions()
+    assert actions == []  # Suppressed because it would close at a loss
+
+    # 2. Quote with exec_debit = 0.04 - 0.01 = 0.03 < 0.12, mid_debit = 0.01 <= 0.02
+    s.broker._shared_cache.quotes.clear()
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.02, "ask": 0.04},
+        {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.03},
+    ]
+    actions = await s.manage_positions()
+    assert len(actions) == 1
+    assert "HERMES_CS7_CLOSE_TP-2pctW" in actions[0].tag
+
+

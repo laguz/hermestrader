@@ -132,6 +132,33 @@ class HermesDB:
                 except Exception as e:
                     logger.warning("Failed to run schema statement %r: %s", stmt[:50], e)
 
+    async def get_setting(self, key: str, default: str | None = None) -> str | None:
+        return await self.settings.get_setting(key, default)
+
+    async def set_setting(self, key: str, value: str) -> None:
+        await self.settings.set_setting(key, value)
+
+    async def daily_bars(self, symbol: str, lookback_days: int = 400) -> Any:
+        return await self.timeseries.daily_bars(symbol, lookback_days)
+
+    async def intraday_bars(self, symbol: str, lookback_days: int = 10) -> Any:
+        return await self.timeseries.intraday_bars(symbol, lookback_days)
+
+    async def list_all_watchlists(self) -> Any:
+        return await self.watchlist.list_all_watchlists()
+
+    async def last_price(self, symbol: str) -> Any:
+        return await self.timeseries.last_price(symbol)
+
+    async def write_prediction(self, symbol: str, ret: float, price: float, spot: float = 0.0) -> Any:
+        return await self.decisions.write_prediction(symbol, ret, price, spot)
+
+    async def save_daily_bars(self, symbol: str, df: Any) -> Any:
+        return await self.timeseries.save_daily_bars(symbol, df)
+
+    async def save_intraday_bars(self, symbol: str, df: Any) -> Any:
+        return await self.timeseries.save_intraday_bars(symbol, df)
+
     @staticmethod
     def _reconcile_orm_schema(sync_conn) -> None:
         """Add any missing ORM table or column to ``sync_conn``'s database.
