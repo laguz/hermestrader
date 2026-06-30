@@ -119,6 +119,19 @@ class HermesDB:
         async with self.async_engine.begin() as conn:
             await conn.run_sync(self._reconcile_orm_schema)
 
+        from pathlib import Path
+        schema_path = Path(__file__).parent / "schema.sql"
+        if schema_path.exists():
+            with open(schema_path, "r", encoding="utf-8") as fh:
+                raw_sql = fh.read()
+            sql_clean = "\n".join(line.split("--", 1)[0] for line in raw_sql.splitlines())
+            for stmt in [s.strip() for s in sql_clean.split(";") if s.strip()]:
+                try:
+                    async with self.async_engine.begin() as conn:
+                        await conn.exec_driver_sql(stmt)
+                except Exception as e:
+                    logger.warning("Failed to run schema statement %r: %s", stmt[:50], e)
+
     @staticmethod
     def _reconcile_orm_schema(sync_conn) -> None:
         """Add any missing ORM table or column to ``sync_conn``'s database.
