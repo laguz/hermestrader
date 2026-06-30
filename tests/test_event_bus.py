@@ -59,6 +59,37 @@ async def test_event_bus_multiple_handlers():
     
     await bus.stop()
 
+async def test_event_bus_bounds_concurrent_dispatch():
+    """A handler slower than the event cadence must not spawn unbounded
+    dispatch tasks — _dispatch_sem should cap how many run at once and let
+    the rest queue instead of piling up as live tasks/threads."""
+    bus = EventBus(max_concurrent_dispatch=2)
+    bus.start()
+
+    in_flight = {"current": 0, "max_seen": 0}
+    release = asyncio.Event()
+
+    async def slow_handler(event: MarketDataEvent):
+        in_flight["current"] += 1
+        in_flight["max_seen"] = max(in_flight["max_seen"], in_flight["current"])
+        await release.wait()
+        in_flight["current"] -= 1
+
+    bus.subscribe(MarketDataEvent, slow_handler)
+
+    for i in range(5):
+        bus.emit(MarketDataEvent(symbol="SPY", price=float(i)))
+
+    await asyncio.sleep(0.05)
+    assert in_flight["max_seen"] == 2  # capped, not 5
+
+    release.set()
+    await asyncio.sleep(0.05)
+    assert in_flight["current"] == 0
+
+    await bus.stop()
+
+
 async def test_event_bus_handler_exception_isolation():
     bus = EventBus()
     bus.start()

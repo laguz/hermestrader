@@ -27,6 +27,7 @@ unaffected.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -101,6 +102,10 @@ class AsyncXGBPredictor:
         self._last_train_ts = 0.0
         self._last_calibrate_ts = 0.0
         self._last_predict_tuple: Optional[Tuple[int, int, int, int]] = None
+        # Reactive path (MlRetrainTick fires every 10s) must not start a new
+        # cycle while the previous one is still in the executor — sync/train
+        # can run long enough to overlap and pile up unboundedly otherwise.
+        self._cycle_in_progress = False
 
         # Ensure the prediction ledger table exists. Idempotent; safe on
         # every boot regardless of whether prior versions ran migrations.
@@ -136,9 +141,19 @@ class AsyncXGBPredictor:
 
     async def handle_ml_retrain_tick(self, event: Any) -> None:
         import asyncio
-        loop = asyncio.get_running_loop()
-        force = getattr(event, "force", False)
-        await loop.run_in_executor(None, self._run_ml_cycle, force)
+        if self._cycle_in_progress:
+            # A cycle is still running in the executor. Drop this tick rather
+            # than queuing another one — the next tick (10s later) will pick
+            # up any pending ml_force_run flag once the current cycle ends.
+            logger.debug("ML cycle already in progress; skipping tick.")
+            return
+        self._cycle_in_progress = True
+        try:
+            loop = asyncio.get_running_loop()
+            force = getattr(event, "force", False)
+            await loop.run_in_executor(None, self._run_ml_cycle, force)
+        finally:
+            self._cycle_in_progress = False
 
     def _run_ml_cycle(self, force: bool = False) -> None:
         from hermes.market_hours import ET
@@ -323,55 +338,75 @@ class AsyncXGBPredictor:
         return sorted(active)
 
     # -- history sync --------------------------------------------------------
+    # Bounds how many symbols sync concurrently per cycle — high enough to
+    # collapse N sequential broker round-trips into one, low enough not to
+    # hammer the Tradier rate limit.
+    _HISTORY_SYNC_CONCURRENCY = 5
+
+    async def _sync_one_symbol(self, sym: str, start_date: date, end_date: date,
+                               intra_start: date) -> None:
+        try:
+            daily_bars = await self.broker.get_history(
+                sym, interval="daily",
+                start=start_date.isoformat(),
+                end=end_date.isoformat())
+            if daily_bars:
+                if isinstance(daily_bars, list):
+                    df_daily = pd.DataFrame(daily_bars)
+                    if not df_daily.empty:
+                        if "date" in df_daily.columns:
+                            df_daily = df_daily.rename(columns={"date": "ts"})
+                        if ("vwap_close" not in df_daily.columns
+                                and "close" in df_daily.columns):
+                            df_daily["vwap_close"] = df_daily["close"]
+                        await self.db.save_daily_bars(sym, df_daily)
+                else:
+                    logger.error("history sync failed for %s: %s", sym, daily_bars)
+                    return
+        except Exception as exc:                    # noqa: BLE001
+            logger.error("history sync failed for %s: %s", sym, exc)
+            return
+
+        try:
+            intra_bars = await self.broker.get_history(
+                sym, interval="1min",
+                start=intra_start.isoformat(),
+                end=end_date.isoformat())
+            if intra_bars:
+                if isinstance(intra_bars, list):
+                    df_intra = pd.DataFrame(intra_bars)
+                    if not df_intra.empty:
+                        if "date" in df_intra.columns:
+                            df_intra = df_intra.rename(columns={"date": "ts"})
+                        await self.db.save_intraday_bars(sym, df_intra)
+                else:
+                    logger.debug("intraday sync failed for %s: %s", sym, intra_bars)
+        except Exception as exc:                    # noqa: BLE001
+            logger.debug("intraday sync failed for %s: %s", sym, exc)
+
+    async def _sync_history_async(self, symbols: List[str]) -> None:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=400)
+        intra_start = end_date - timedelta(days=10)
+        sem = asyncio.Semaphore(self._HISTORY_SYNC_CONCURRENCY)
+
+        async def _bounded(sym: str) -> None:
+            async with sem:
+                await self._sync_one_symbol(sym, start_date, end_date, intra_start)
+
+        await asyncio.gather(*(_bounded(sym) for sym in symbols))
+
     def _sync_history(self) -> None:
         if not hasattr(self.db, "save_daily_bars"):
             logger.warning("HermesDB missing save_daily_bars; cannot sync history")
             return
 
-        end_date = date.today()
-        start_date = end_date - timedelta(days=400)
-
-        for sym in self._get_active_symbols():
-            try:
-                daily_bars = run_maybe_async(
-                    self.broker.get_history,
-                    sym, interval="daily",
-                    start=start_date.isoformat(),
-                    end=end_date.isoformat())
-                if daily_bars:
-                    if isinstance(daily_bars, list):
-                        df_daily = pd.DataFrame(daily_bars)
-                        if not df_daily.empty:
-                            if "date" in df_daily.columns:
-                                df_daily = df_daily.rename(columns={"date": "ts"})
-                            if ("vwap_close" not in df_daily.columns
-                                    and "close" in df_daily.columns):
-                                df_daily["vwap_close"] = df_daily["close"]
-                            run_maybe_async(self.db.save_daily_bars, sym, df_daily)
-                    else:
-                        logger.error("history sync failed for %s: %s", sym, daily_bars)
-                        continue
-
-                try:
-                    intra_start = end_date - timedelta(days=10)
-                    intra_bars = run_maybe_async(
-                        self.broker.get_history,
-                        sym, interval="1min",
-                        start=intra_start.isoformat(),
-                        end=end_date.isoformat())
-                    if intra_bars:
-                        if isinstance(intra_bars, list):
-                            df_intra = pd.DataFrame(intra_bars)
-                            if not df_intra.empty:
-                                if "date" in df_intra.columns:
-                                    df_intra = df_intra.rename(columns={"date": "ts"})
-                                run_maybe_async(self.db.save_intraday_bars, sym, df_intra)
-                        else:
-                            logger.debug("intraday sync failed for %s: %s", sym, intra_bars)
-                except Exception as exc:            # noqa: BLE001
-                    logger.debug("intraday sync failed for %s: %s", sym, exc)
-            except Exception as exc:                # noqa: BLE001
-                logger.error("history sync failed for %s: %s", sym, exc)
+        symbols = self._get_active_symbols()
+        # One event loop for the whole batch — previously every broker/DB
+        # call went through run_maybe_async's per-call asyncio.run(), which
+        # serialized all symbols and tore a loop down and rebuilt one for
+        # every single request.
+        asyncio.run(self._sync_history_async(symbols))
         logger.info("history sync complete")
 
     # -- calibration ---------------------------------------------------------
