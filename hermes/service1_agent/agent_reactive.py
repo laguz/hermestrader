@@ -157,6 +157,10 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
         from hermes.db.events import ModeChangedEvent
         event_bus.emit(ModeChangedEvent(mode=control_state.mode, updated_at=_utcnow_iso()))
     elif action == IPC_ACTION_TRIGGER_ML:
-        # ML forecasting was removed in the Phase-0 teardown (chain-only POP).
-        # The trigger is accepted and ignored so older watcher builds don't error.
-        log.info("[IPC] trigger ML signal ignored — ML forecasting disabled")
+        log.info("[IPC] Received trigger ML signal reactively")
+        try:
+            await db.settings.set_setting("ml_force_run", "true")
+        except Exception:
+            pass
+        from hermes.events.bus import MlRetrainTick
+        event_bus.emit(MlRetrainTick(force=True))

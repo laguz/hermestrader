@@ -14,17 +14,36 @@ from .base import Repository
 logger = logging.getLogger("hermes.db")
 
 
+import threading
+from datetime import timedelta
+from hermes.utils import utc_now
+
+_last_log_ts: datetime | None = None
+_log_ts_lock = threading.Lock()
+
+
+def get_unique_log_ts() -> datetime:
+    """Generate a monotonic microsecond-precision UTC timestamp to prevent PK unique violations on fast/concurrent writes."""
+    global _last_log_ts
+    with _log_ts_lock:
+        now_ts = utc_now()
+        if _last_log_ts is not None and now_ts <= _last_log_ts:
+            now_ts = _last_log_ts + timedelta(microseconds=1)
+        _last_log_ts = now_ts
+        return now_ts
+
+
 class LogsRepository(Repository):
     async def write_log(self, strategy_id: str, message: str, level: str = "INFO") -> None:
         async with self.AsyncSession() as s:
-            s.add(BotLog(strategy_id=strategy_id, level=level, message=message))
+            s.add(BotLog(strategy_id=strategy_id, level=level, message=message, ts=get_unique_log_ts()))
             await s.commit()
 
     async def flag_orphans(self, orphan_symbols) -> None:
         async with self.AsyncSession() as s:
             for sym in orphan_symbols:
                 s.add(BotLog(strategy_id="ENGINE", level="WARN",
-                             message=f"orphan position: {sym}"))
+                             message=f"orphan position: {sym}", ts=get_unique_log_ts()))
             await s.commit()
 
     async def latest_log_ts(self) -> Optional[datetime]:

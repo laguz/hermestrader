@@ -571,7 +571,7 @@ function getMaxStrength(sym) {
           </div>
 
           <div v-if="!state.analyticsData.predictions?.length" class="no-data">
-            No predictions generated. Models require at least 60 daily bars of symbol data to train.
+            No predictions generated. Models require at least 80 daily bars of symbol data to train.
           </div>
           <div v-else class="predictions-bars-wrap">
             <div 

@@ -396,8 +396,19 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     event_bus.subscribe(CacheWarmTick, _handle_cache_warm_tick)
 
-    # ML forecasting was removed in the Phase-0 teardown: POP scoring is
-    # chain-only (hermes.ml.pop_engine), so there is no XGB predictor to wire.
+    # Initialize and wire ML Predictor
+    try:
+        from hermes.ml.xgb_features import AsyncXGBPredictor, FeatureEngineer
+        _ml_db = HermesDB(os.environ.get("HERMES_DSN",
+                                         "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
+        _ml_broker = _build_broker(conf, conf.get("mode", "paper"))
+        _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), _ml_broker, conf["watchlist"])
+        _ml_predictor.start(event_bus=event_bus)
+        log.info("AsyncXGBPredictor started under EventBus forecasting.")
+    except ImportError:
+        log.warning("xgboost or pandas not installed — ML predictor disabled")
+    except Exception as _ml_exc:
+        log.warning("AsyncXGBPredictor init failed: %s", _ml_exc)
 
     # Wire and start the Scheduler
     from hermes.service1_agent.scheduler import Scheduler

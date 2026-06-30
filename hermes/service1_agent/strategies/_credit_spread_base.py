@@ -356,6 +356,15 @@ class CreditSpreadStrategy(AbstractStrategy):
                     f"exec_debit ${exec_debit:.2f} >= width ${width:.2f} (max loss)"
                 )
                 close_reason = None
+            # Take-Profit debit safety cap: never TP-close when the execution cost is
+            # at or above entry credit (would lock in a loss or scratch instead of a profit).
+            if (close_reason and "TP" in close_reason
+                    and exec_debit is not None and exec_debit >= entry_credit):
+                self._log(
+                    f"ℹ️ {trade['symbol']} {trade.get('side_type')}: TP suppressed — "
+                    f"exec_debit ${exec_debit:.2f} >= entry credit ${entry_credit:.2f} (would close at a loss)"
+                )
+                close_reason = None
             if close_reason:
                 # Morning pricing guard: before 10:30 AM ET, don't close unless in profit.
                 if self.is_morning_unreliable() and mid_debit >= entry_credit:

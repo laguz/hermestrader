@@ -1,21 +1,37 @@
-"""Probability-of-profit (POP) layer.
+"""Machine-learning forecasting layer.
 
-Phase 0 ships a single module:
+The v2 stack is split into single-responsibility modules so each layer
+can evolve independently:
 
-- ``pop_engine`` — the consumer-facing POP surface. It discovers S/R key
-  levels and scores credit-spread strikes with a log-odds combiner over
-  delta, S/R protection, and the vol regime (weighted by regime weights,
-  static by default or a DB-backed lookup when one is wired). This is
-  *chain-only* POP — no XGB forecast, no meta-learner stacking.
+- ``feature_catalog``  — declarative feature catalog plus deterministic
+  schema-hash. Renaming a feature invalidates persisted models.
+- ``xgb_features``     — FeatureEngineer (raw equity alpha set) and
+  AsyncXGBPredictor (multi-horizon, multi-quantile threaded predictor
+  with decoupled sync/train/calibrate/predict subtasks).
+- ``persistence``      — joblib-backed model storage with sidecar meta
+  (model_hash, schema_hash, sample_size). Refuses to load on schema
+  mismatch and quarantines the artefact.
+- ``calibration``      — IsotonicCalibrator + PlattCalibrator plus
+  Brier / log-loss / reliability-curve helpers.
+- ``meta_learner``     — stacking logistic regression over delta,
+  XGB probability, protection score, IV rank, and vol ratio.
+- ``pop_engine``       — consumer-facing POP surface. Accepts a
+  FeatureVector, produces calibrated probabilities with confidence
+  bands. Backwards-compatible shim for legacy positional callers.
+- ``regime_weights``   — DB-backed weights with Bayesian posterior
+  updates from realised credit-spread outcomes.
+- ``drift``            — KS-test feature drift detector.
+- ``ledger``           — long-running PredictionLedger ORM table that
+  records every published prediction tagged with model_hash and
+  schema_hash for postmortem replay.
+- ``backtester``       — reality-check walk-forward POP backtester
+  with cost-model commissions and slippage.
 
-The XGB predictor stack, regime-weight learning, the bandit / exit-policy
-tuners, and the drift / ledger / attribution / backtester diagnostics were
-removed in the Phase-0 teardown; they are re-introduced only when chain-only
-POP is live and a refinement is shown to improve real entry decisions (see
-``REBUILD.md``). ``pop_engine`` already degrades to this chain-only path, so
-that re-introduction is purely additive.
+The options-IV feature stage (``feature_catalog.OPTIONS_FEATURES``) is
+currently empty: it was sourced from an IV cache that was never wired into
+the predictor. Re-add it once a real options-IV feed is connected.
 
-Optional dependencies: numpy, pandas, scipy, scikit-learn (for key-level
-clustering). Without an upstream forecast, ``augment_levels_with_pop`` scores
-levels off delta / protection / vol alone.
+Optional dependencies: xgboost, scikit-learn, pandas, joblib. Without
+them the agent runs without ML predictions; strategies fall back to
+chain-only strike selection.
 """
