@@ -183,10 +183,18 @@ class EventBus:
     A lightweight asynchronous event bus.
     Routes events to registered handler coroutines.
     """
-    def __init__(self):
+    def __init__(self, max_concurrent_dispatch: int = 50):
         self._subscribers: Dict[Type[Event], List[EventHandler]] = {}
         self._queue: asyncio.Queue[Event] = asyncio.Queue()
         self._task: asyncio.Task | None = None
+        # Bounds how many events can be mid-dispatch at once. Without this, a
+        # handler that runs slower than its events arrive (e.g. a tick fired
+        # every 10s paired with a handler that occasionally takes longer)
+        # causes _process_events to spawn an unbounded number of dispatch
+        # tasks, eventually exhausting memory/threads and crashing the
+        # process. Backpressure here just makes events wait in self._queue
+        # (cheap) instead of becoming live tasks (not cheap).
+        self._dispatch_sem = asyncio.Semaphore(max_concurrent_dispatch)
 
     def subscribe(self, event_type: Type[E], handler: EventHandler) -> None:
         """Register an async handler for a specific event type."""
@@ -216,7 +224,8 @@ class EventBus:
                     logger.debug(f"No subscribers for event: {event_type.__name__}")
                     self._queue.task_done()
                     continue
-                
+
+                await self._dispatch_sem.acquire()
                 asyncio.create_task(self._dispatch_event(event, handlers))
             except asyncio.CancelledError:
                 break
@@ -232,6 +241,7 @@ class EventBus:
                 await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             self._queue.task_done()
+            self._dispatch_sem.release()
 
     async def _safe_invoke(self, handler: EventHandler, event: Event) -> None:
         """Invokes a handler and catches any exceptions to prevent bus crashes."""
