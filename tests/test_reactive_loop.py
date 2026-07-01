@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from unittest.mock import AsyncMock, patch
 from hermes.events.bus import EventBus, MarketDataEvent, OrderFillEvent
@@ -253,4 +254,95 @@ async def test_order_fill_event_triggers_main_wakeup():
         # Reset global trigger settings
         main._TRIGGER_EVENT.clear()
         main._ASYNC_TRIGGER_EVENT = None
+
+
+class _FakeDurableRedisClient:
+    """Minimal stand-in for the ipc_client.client used by the durable Redis
+    Streams consumer loop: delivers one message on the first xreadgroup call,
+    then blocks like the real (bounded) call would on subsequent polls."""
+
+    def __init__(self, msg_id: str, event_type: str, payload: dict):
+        self._pending = [(msg_id, {"event_type": event_type, "payload": json.dumps(payload)})]
+        self.xack_calls: list = []
+
+    async def xgroup_create(self, *args, **kwargs):
+        return True
+
+    async def xreadgroup(self, *, groupname, consumername, streams, count, block):
+        if self._pending:
+            messages, self._pending = self._pending, []
+            return [("hermes_event_stream", messages)]
+        await asyncio.sleep(block / 1000.0)
+        return None
+
+    async def xack(self, stream, group, msg_id):
+        self.xack_calls.append(msg_id)
+        return 1
+
+
+class _FakeIpcClient:
+    def __init__(self, client):
+        self.is_connected = True
+        self.client = client
+
+
+@pytest.mark.asyncio
+async def test_durable_loop_bounds_a_deadlocked_process_event():
+    """Production incident: _process_event re-enters the same EventBus it
+    came from (it emits an Execute*Command and awaits its future) — a burst
+    of concurrent events can exhaust the bus's dispatch semaphore with outer
+    handlers all blocked on their own redis round-trip, deadlocking the
+    single-threaded durable consumer loop forever with no exception and 0%
+    CPU. The stuck message was also never acked, so it replayed and
+    re-deadlocked on every subsequent restart.
+
+    _process_event must be bounded so one stuck message can never wedge
+    every message behind it, and it must still get acked (so it isn't
+    replayed forever) and resolve the caller's pending future instead of
+    leaving it hanging.
+    """
+    db = StubDB()
+    broker = StubBroker()
+    bus = EventBus()
+    bus.start()
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[], event_bus=bus)
+    engine.reactive._PROCESS_EVENT_TIMEOUT_S = 0.05
+
+    async def hangs_forever(event_type, payload):
+        await asyncio.sleep(3600)
+
+    engine.reactive._process_event = hangs_forever
+
+    fake_client = _FakeDurableRedisClient(
+        msg_id="1-1", event_type="MARKET_DATA",
+        payload={"event": {"symbol": "AAPL", "price": 100.0}},
+    )
+    engine.ctx.ipc_client = _FakeIpcClient(fake_client)
+
+    pending_fut = asyncio.get_running_loop().create_future()
+    engine.reactive._pending_futures["1-1"] = pending_fut
+
+    loop_task = asyncio.create_task(engine.reactive._redis_event_consumer_loop())
+    try:
+        # Comfortably past the 0.05s test timeout but nowhere near the real
+        # 90s default — if the bound didn't work, this would just time out
+        # the *test* instead of the durable loop ever recovering.
+        await asyncio.sleep(0.5)
+
+        assert pending_fut.done(), "pending future should resolve once _process_event is bounded"
+        with pytest.raises(TimeoutError):
+            pending_fut.result()
+
+        # Acked despite the timeout — otherwise this exact message replays
+        # (and re-deadlocks) forever on every future restart.
+        assert fake_client.xack_calls == ["1-1"]
+        assert "1-1" not in engine.reactive._pending_futures
+    finally:
+        loop_task.cancel()
+        try:
+            await loop_task
+        except asyncio.CancelledError:
+            pass
+        await bus.stop()
 

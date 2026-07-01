@@ -54,6 +54,15 @@ logger = logging.getLogger("hermes.agent.core")
 class ReactiveController:
     """Event-loop runtime + reactive market-data / order-fill handlers."""
 
+    # _process_event round-trips back through the same EventBus (it emits an
+    # Execute*Command and awaits its future) that the *outer* handler used to
+    # get here in the first place — a burst of concurrent events can exhaust
+    # the bus's dispatch semaphore with outer handlers all blocked on their
+    # own redis round-trip, deadlocking the single-threaded durable consumer
+    # loop forever (no exception, 0% CPU, no further ticks). Bound it so one
+    # stuck/deadlocked message can never wedge every future message behind it.
+    _PROCESS_EVENT_TIMEOUT_S = 90.0
+
     def __init__(self, engine: "CascadingEngine") -> None:
         self.engine = engine
         # Shared dependency surface (db / broker / mm / event_bus / config /
@@ -397,7 +406,40 @@ class ReactiveController:
                             if fut:
                                 data["future"] = fut
 
-                            await self._process_event(event_type, data)
+                            try:
+                                await asyncio.wait_for(
+                                    self._process_event(event_type, data),
+                                    timeout=self._PROCESS_EVENT_TIMEOUT_S,
+                                )
+                            except asyncio.TimeoutError:
+                                logger.error(
+                                    "[ENGINE] Processing durable event %s (%s) timed out after "
+                                    "%ss — acking and continuing so the consumer loop isn't "
+                                    "wedged forever.",
+                                    msg_id, event_type, self._PROCESS_EVENT_TIMEOUT_S,
+                                )
+                                # wait_for cancels the inner coroutine on timeout, so
+                                # _process_event's own except-block (which only catches
+                                # Exception, not CancelledError) never gets to resolve
+                                # fut — do it here or the original caller awaiting fut
+                                # (publish_event's `return await fut`) hangs forever too.
+                                if fut and not fut.done():
+                                    fut.set_exception(TimeoutError(
+                                        f"{event_type} processing timed out after "
+                                        f"{self._PROCESS_EVENT_TIMEOUT_S}s"
+                                    ))
+
+                            # asyncio.wait_for swallows an outer cancellation that
+                            # arrives at the exact instant the wrapped coroutine
+                            # completes — it just returns the result instead of
+                            # raising CancelledError. Without this check, a
+                            # loop_task.cancel() that lands on this line is silently
+                            # discarded and the consumer loop runs forever instead of
+                            # stopping (this hung the shutdown path in tests and would
+                            # do the same in production stop()).
+                            current_task = asyncio.current_task()
+                            if current_task is not None and current_task.cancelling():
+                                raise asyncio.CancelledError()
 
                         except Exception as exc:
                             logger.exception("[ENGINE] Error processing durable event %s: %s", msg_id, exc)
@@ -420,7 +462,31 @@ class ReactiveController:
             try:
                 event_type, payload = await self.queue.get()
                 try:
-                    await self._process_event(event_type, payload)
+                    try:
+                        await asyncio.wait_for(
+                            self._process_event(event_type, payload),
+                            timeout=self._PROCESS_EVENT_TIMEOUT_S,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "[ENGINE] Processing event %s timed out after %ss — continuing "
+                            "so the consumer loop isn't wedged forever.",
+                            event_type, self._PROCESS_EVENT_TIMEOUT_S,
+                        )
+                        fut = payload.get("future")
+                        if fut and not fut.done():
+                            fut.set_exception(TimeoutError(
+                                f"{event_type} processing timed out after "
+                                f"{self._PROCESS_EVENT_TIMEOUT_S}s"
+                            ))
+
+                    # See the matching comment in _redis_event_consumer_loop:
+                    # wait_for can silently swallow an outer cancellation that
+                    # lands the instant the wrapped coroutine completes,
+                    # leaving this loop unstoppable.
+                    current_task = asyncio.current_task()
+                    if current_task is not None and current_task.cancelling():
+                        raise asyncio.CancelledError()
                 except Exception as exc:
                     logger.exception(f"[ENGINE] Error processing event {event_type}: {exc}")
                 finally:
