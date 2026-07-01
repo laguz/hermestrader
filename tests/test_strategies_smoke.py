@@ -261,6 +261,48 @@ async def test_wheel_skips_puts_when_insufficient_buying_power():
     assert any("insufficient BP" in log for log in db.logs)
 
 
+async def test_wheel_stops_retrying_after_first_blocked_lot():
+    """Production incident: with wheel_max_lots=5 and insufficient BP for even
+    one lot, execute_entries retried the identical doomed candidate 5 times
+    per side. The option chain fetch is cached per (symbol, expiry) so that
+    part was cheap, but each retry still re-ran a fresh, uncached buying-power
+    check (get_account_balances + DB open/pending-contract counts). That
+    repeated identical-per-lot cost, multiplied across every strategy/symbol
+    on a single market-data tick, was slow enough to blow the reactive
+    pipeline's processing budget and made the agent look frozen.
+
+    Nothing about the chain, buying power, or strike selection changes
+    between lots within one tick, so a blocked/failed attempt must stop the
+    loop instead of retrying identically wanted_lots times.
+    """
+    db = _DBWithShares(share_lots=0)
+    # Available BP is $5,000. A Put at strike ~$91 requires $9,100 collateral
+    # -- insufficient for even a single lot.
+    s, broker, db = _build(
+        WheelStrategy, db=db,
+        broker_kwargs={
+            "expirations": _expirations_for(35, 40),
+            "option_buying_power": 5000.0,
+        },
+        config={"wheel_max_lots": 5},
+    )
+    calls = []
+    real_get_account_balances = broker.get_account_balances
+    def counting_get_account_balances():
+        calls.append(1)
+        return real_get_account_balances()
+    broker.get_account_balances = counting_get_account_balances
+
+    actions = await s.execute_entries(["AAPL"])
+
+    assert actions == []
+    # scale_quantity checks balances once for the BP cap and once more to
+    # build the "insufficient BP" log message -- 2 calls for the one
+    # attempt it should make, not 2 * wheel_max_lots (10) from retrying the
+    # same doomed lot 5 times.
+    assert len(calls) == 2
+
+
 async def test_wheel_allows_puts_when_sufficient_buying_power():
     db = _DBWithShares(share_lots=0)
     # Available BP is $20,000. A Put at strike ~$91 requires $9,100 collateral.
