@@ -11,6 +11,7 @@ pending asyncio tasks).
 import asyncio
 import threading
 import time
+from datetime import date
 
 import pytest
 
@@ -81,3 +82,25 @@ async def test_cycle_flag_resets_after_completion(predictor):
 
     await predictor.handle_ml_retrain_tick(_Tick())
     assert predictor._cycle_in_progress is False
+
+
+async def test_sync_one_symbol_bounds_a_hanging_broker_call(predictor, monkeypatch):
+    """MCPBrokerClient._call_mcp has no timeout of its own, so a stalled
+    sandbox response makes broker.get_history() hang forever. Without a
+    timeout in _sync_one_symbol, that wedges _sync_history_async's gather
+    (it waits for every task), which wedges _run_ml_cycle, which leaves
+    _cycle_in_progress permanently True — every later ClockTickEvent piles
+    up behind it on the EventBus and the engine goes silent (observed:
+    hermes-paper-agent heartbeat stalled for over an hour with
+    system_settings.ml_force_run stuck true)."""
+    predictor._HISTORY_FETCH_TIMEOUT_S = 0.05
+
+    async def hangs_forever(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    predictor.broker.get_history = hangs_forever
+
+    await asyncio.wait_for(
+        predictor._sync_one_symbol("SPY", date.today(), date.today(), date.today()),
+        timeout=1.0,
+    )

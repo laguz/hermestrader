@@ -342,14 +342,21 @@ class AsyncXGBPredictor:
     # collapse N sequential broker round-trips into one, low enough not to
     # hammer the Tradier rate limit.
     _HISTORY_SYNC_CONCURRENCY = 5
+    # MCPBrokerClient._call_mcp has no timeout of its own — a stalled sandbox
+    # response hangs the stdio round-trip forever. Bound each call here so one
+    # bad symbol can't wedge the whole gather (and with it _run_ml_cycle,
+    # _cycle_in_progress, and every ClockTickEvent behind it on the bus).
+    _HISTORY_FETCH_TIMEOUT_S = 30.0
 
     async def _sync_one_symbol(self, sym: str, start_date: date, end_date: date,
                                intra_start: date) -> None:
         try:
-            daily_bars = await self.broker.get_history(
-                sym, interval="daily",
-                start=start_date.isoformat(),
-                end=end_date.isoformat())
+            daily_bars = await asyncio.wait_for(
+                self.broker.get_history(
+                    sym, interval="daily",
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat()),
+                timeout=self._HISTORY_FETCH_TIMEOUT_S)
             if daily_bars:
                 if isinstance(daily_bars, list):
                     df_daily = pd.DataFrame(daily_bars)
@@ -368,10 +375,12 @@ class AsyncXGBPredictor:
             return
 
         try:
-            intra_bars = await self.broker.get_history(
-                sym, interval="1min",
-                start=intra_start.isoformat(),
-                end=end_date.isoformat())
+            intra_bars = await asyncio.wait_for(
+                self.broker.get_history(
+                    sym, interval="1min",
+                    start=intra_start.isoformat(),
+                    end=end_date.isoformat()),
+                timeout=self._HISTORY_FETCH_TIMEOUT_S)
             if intra_bars:
                 if isinstance(intra_bars, list):
                     df_intra = pd.DataFrame(intra_bars)
