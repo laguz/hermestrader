@@ -115,9 +115,18 @@ class WheelStrategy(AbstractStrategy):
             for _ in range(wanted_calls):
                 a = await self._open_wheel_leg(symbol, "call", expiry,
                                                analysis=analysis, xgb_prob=xgb_prob, t=t)
-                if a:
-                    actions.append(a)
-                    added_calls += 1
+                if not a:
+                    # Nothing about the chain, BP, or strike selection changes
+                    # between iterations within this tick — a miss here (no
+                    # valid strike, no bid/ask, or insufficient BP) will miss
+                    # identically on every remaining lot. Retrying just re-fetches
+                    # the same option chain from the broker for no gain, and
+                    # under strategy/symbol fan-out this real per-lot broker
+                    # round-trip cost was enough to blow the reactive pipeline's
+                    # processing budget.
+                    break
+                actions.append(a)
+                added_calls += 1
 
             # ── Puts: fill remaining capacity toward max_lots total ──
             total_calls = calls_committed + added_calls
@@ -132,8 +141,10 @@ class WheelStrategy(AbstractStrategy):
             for _ in range(wanted_puts):
                 a = await self._open_wheel_leg(symbol, "put", expiry,
                                                analysis=analysis, xgb_prob=xgb_prob, t=t)
-                if a:
-                    actions.append(a)
+                if not a:
+                    # See the matching comment in the calls loop above.
+                    break
+                actions.append(a)
         return actions
 
     async def _pop_inputs(self, symbol: str):
