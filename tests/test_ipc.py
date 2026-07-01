@@ -4,6 +4,7 @@ Unit tests for the AsyncIPC messaging system.
 from __future__ import annotations
 
 import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
@@ -114,5 +115,60 @@ async def test_async_ipc_client_property():
         connected = await redis_ipc.connect(bypass_pytest_check=True)
         assert connected is True
         assert redis_ipc.client is mock_redis
+
+
+@pytest.mark.asyncio
+async def test_redis_ipc_publish_refuses_a_foreign_loop():
+    """A production incident: hermes/ml/xgb_features.py retrains on a
+    background thread and writes settings via run_maybe_async(), which calls
+    asyncio.run() per write — a brand new loop on that thread. settings.py's
+    set_setting() then does a best-effort `ipc.publish()` on the *process-wide*
+    `hermes.ipc.ipc` singleton, whose Redis connection was actually opened on
+    the main loop. Reusing that pooled connection from the background
+    thread's loop corrupted it (redis-py raised "Task ... attached to a
+    different loop", then "Event loop is closed"), silently breaking every
+    later `xadd`/publish call on the main loop for the rest of the process's
+    life — the agent looked alive but stopped making progress.
+
+    publish() must detect the foreign loop and refuse instead of touching the
+    shared client, so a background-thread caller degrades to a no-op instead
+    of poisoning the connection for the main tick loop.
+    """
+    mock_redis = MagicMock()
+    mock_redis.ping = AsyncMock()
+    mock_redis.publish = AsyncMock(return_value=1)
+
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        redis_ipc = AsyncIPC("redis://localhost:6379/0")
+        connected = await redis_ipc.connect(bypass_pytest_check=True)
+        assert connected is True
+
+    foreign_loop_error: list = []
+
+    def run_on_background_thread() -> None:
+        # Mirrors run_maybe_async(): a fresh event loop per call, on a
+        # thread that is not the one the redis client was connected on.
+        async def _publish():
+            return await redis_ipc.publish("hermes_agent_commands", {"key": "ml_last_ok_ts"})
+
+        try:
+            asyncio.run(_publish())
+        except Exception as exc:  # noqa: BLE001 - captured for the assertion below
+            foreign_loop_error.append(exc)
+
+    t = threading.Thread(target=run_on_background_thread, daemon=True)
+    t.start()
+    t.join(timeout=5)
+    assert not t.is_alive()
+
+    # Refused before ever touching the shared (foreign-loop) client.
+    assert len(foreign_loop_error) == 1
+    assert isinstance(foreign_loop_error[0], ConnectionError)
+    mock_redis.publish.assert_not_called()
+
+    # The connection is still healthy for its owning (main) loop afterwards.
+    receivers = await redis_ipc.publish("hermes_agent_commands", {"key": "tradier_last_ok_ts"})
+    assert receivers == 1
+    mock_redis.publish.assert_awaited_once()
 
 
