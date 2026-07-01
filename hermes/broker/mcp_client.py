@@ -21,6 +21,14 @@ logger = logging.getLogger("hermes.broker.mcp_client")
 class MCPBrokerClient(AbstractBroker):
     """Model Context Protocol Client wrapper that speaks to the Hermes Tradier MCP server."""
 
+    # The stdio round-trip to the MCP/Tradier sandbox has no protocol-level
+    # timeout of its own — every call funnels through _call_mcp, so bounding
+    # it here (rather than at each call site) protects the whole pipeline
+    # (sync_positions, order placement, ML history sync, ...) from a single
+    # stalled response wedging the tick loop forever.
+    _CALL_TIMEOUT_S = 30.0
+    _CLOSE_TIMEOUT_S = 5.0
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.current_date = None
@@ -41,13 +49,19 @@ class MCPBrokerClient(AbstractBroker):
     async def close(self) -> None:
         if self._session is not None:
             try:
-                await self._session.__aexit__(None, None, None)
+                await asyncio.wait_for(
+                    self._session.__aexit__(None, None, None),
+                    timeout=self._CLOSE_TIMEOUT_S,
+                )
             except Exception as e:
                 logger.debug("Error exiting MCP ClientSession: %s", e)
             self._session = None
         if self._ctx is not None:
             try:
-                await self._ctx.__aexit__(None, None, None)
+                await asyncio.wait_for(
+                    self._ctx.__aexit__(None, None, None),
+                    timeout=self._CLOSE_TIMEOUT_S,
+                )
             except Exception as e:
                 logger.debug("Error exiting MCP stdio client: %s", e)
             self._ctx = None
@@ -63,27 +77,45 @@ class MCPBrokerClient(AbstractBroker):
         if self._session is not None and getattr(self, "_loop", None) != current_loop:
             await self.close()
 
-        if self._session is None:
-            self._loop = current_loop
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-            import sys
+        try:
+            if self._session is None:
+                self._loop = current_loop
+                from mcp import ClientSession, StdioServerParameters
+                from mcp.client.stdio import stdio_client
+                import sys
 
-            python_exe = sys.executable or "python3"
-            server_params = StdioServerParameters(
-                command=python_exe,
-                args=["-m", "hermes.mcp.server"],
-                env=os.environ.copy()
+                python_exe = sys.executable or "python3"
+                server_params = StdioServerParameters(
+                    command=python_exe,
+                    args=["-m", "hermes.mcp.server"],
+                    env=os.environ.copy()
+                )
+
+                self._ctx = stdio_client(server_params)
+                self._read_write = await asyncio.wait_for(
+                    self._ctx.__aenter__(), timeout=self._CALL_TIMEOUT_S)
+                read, write = self._read_write
+                self._session = ClientSession(read, write)
+                await self._session.__aenter__()
+                await asyncio.wait_for(
+                    self._session.initialize(), timeout=self._CALL_TIMEOUT_S)
+
+            result = await asyncio.wait_for(
+                self._session.call_tool(tool_name, arguments=kwargs),
+                timeout=self._CALL_TIMEOUT_S,
             )
-
-            self._ctx = stdio_client(server_params)
-            self._read_write = await self._ctx.__aenter__()
-            read, write = self._read_write
-            self._session = ClientSession(read, write)
-            await self._session.__aenter__()
-            await self._session.initialize()
-
-        result = await self._session.call_tool(tool_name, arguments=kwargs)
+        except asyncio.TimeoutError:
+            # The stdio subprocess is wedged (stalled sandbox response, or a
+            # handshake that never completes). Reset the session so the next
+            # call gets a fresh process instead of retrying the same dead
+            # pipe and hanging again immediately; surface this like any other
+            # broker failure instead of hanging the caller forever.
+            logger.error(
+                "[MCP] %s timed out after %ss — resetting session",
+                tool_name, self._CALL_TIMEOUT_S,
+            )
+            await self.close()
+            raise
 
         # Prefer structured content: FastMCP serialises the tool's actual return
         # value here losslessly. This server wraps every return — dicts, lists

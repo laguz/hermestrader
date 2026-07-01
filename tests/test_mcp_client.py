@@ -2,6 +2,9 @@ import os
 import asyncio
 import logging
 from unittest.mock import AsyncMock, patch, MagicMock
+
+import pytest
+
 from hermes.broker.mcp_client import MCPBrokerClient
 from hermes.service1_agent.core import TradeAction
 
@@ -195,6 +198,35 @@ async def test_mcp_client_expirations_string_blocks_fallback():
         assert res == ["2026-05-29", "2026-06-01", "2026-06-05"]
         assert "2026-06-05" in res
         await client.close()
+
+
+async def test_mcp_client_bounds_a_hanging_call_and_resets_session():
+    """MCPBrokerClient._call_mcp had no timeout of its own, so a stalled
+    sandbox response to session.call_tool() hung the stdio round-trip
+    forever. That previously wedged every caller that funnels through here
+    (sync_positions, order placement, ML history sync, ...). A timeout must
+    bound the call AND reset the session so the next call gets a fresh
+    subprocess instead of retrying the same dead pipe."""
+    client = MCPBrokerClient()
+    client._CALL_TIMEOUT_S = 0.05
+    mock_session = AsyncMock()
+
+    async def hangs_forever(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    mock_session.call_tool = hangs_forever
+
+    with patch("mcp.client.stdio.stdio_client") as mock_stdio, \
+         patch("mcp.ClientSession") as mock_client_session_class:
+
+        mock_client_session_class.return_value = mock_session
+        mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(client.get_account_balances(), timeout=1.0)
+
+        assert client._session is None
+        assert client._ctx is None
 
 
 async def test_mcp_client_recreates_session_on_loop_change():
