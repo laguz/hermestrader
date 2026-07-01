@@ -74,6 +74,14 @@ class RedisIPCBackend:
         self._local_subscribers: Dict[str, List[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]]] = {}
         self._active_channels: set[str] = set()
         self._stop_event = asyncio.Event()
+        # The redis-asyncio client's pooled connections (StreamReader/Writer)
+        # are bound to whichever loop was running at connect() time. Callers
+        # that reach this singleton from a *different* loop/thread (e.g. a
+        # background thread's own asyncio.run()) must not reuse that pooled
+        # connection — doing so corrupts it for every future caller,
+        # including the main tick loop. Track the owning loop so publish()
+        # can refuse instead of reusing it cross-loop.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def connect(self) -> bool:
         if not self.redis_dsn:
@@ -83,6 +91,7 @@ class RedisIPCBackend:
             self.client = aioredis.from_url(self.redis_dsn, decode_responses=True)
             await self.client.ping()
             self.is_connected = True
+            self._loop = asyncio.get_running_loop()
             logger.info("Connected to Redis IPC at %s", self.redis_dsn)
             if self._local_subscribers:
                 await self._start_listener()
@@ -97,6 +106,11 @@ class RedisIPCBackend:
         _validate_channel(channel)
         if not self.is_connected or self.client is None:
             raise ConnectionError("Cannot publish: Redis IPC is not connected.")
+        if self._loop is not None and self._loop is not asyncio.get_running_loop():
+            raise ConnectionError(
+                "Cannot publish: Redis IPC client belongs to a different event loop "
+                "(likely called from a background thread's own asyncio.run())."
+            )
         payload = json.dumps(data)
         receivers = await self.client.publish(channel, payload)
         logger.debug("IPC published to Redis channel %s: %s (receivers=%d)", channel, data, receivers)
