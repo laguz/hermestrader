@@ -324,7 +324,7 @@ async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
     trade = make_trade("CS7", "AAPL", entry_credit=0.12, width=1.00, short_strike=90.0, long_strike=89.0, days_to_expiry=5)
     db.set_open_trades("CS7", [trade])
     s, broker, _ = _build(CreditSpreads7, db=db)
-    
+
     # 1. Quote with exec_debit = 0.35 - 0.03 = 0.32 >= 0.12 entry credit
     # (mid_debit is (0.35+0.05)/2 - (0.33+0.03)/2 = 0.20 - 0.18 = 0.02, which is <= 0.02 TP threshold)
     broker.get_quote = lambda symbols: [
@@ -334,11 +334,25 @@ async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
     actions = await s.manage_positions()
     assert actions == []  # Suppressed because it would close at a loss
 
-    # 2. Quote with exec_debit = 0.04 - 0.01 = 0.03 < 0.12, mid_debit = 0.01 <= 0.02
+    # 2. Quote with exec_debit = 0.04 - 0.01 = 0.03, mid_debit = 0.01 <= 0.02 (mid
+    # fires TP) but the real exec_debit ($0.03) does NOT itself clear the $0.02
+    # (2% of $1 width) TP threshold — still profitable vs. the $0.12 entry
+    # credit, but not really "at target". Must stay suppressed.
     s.broker._shared_cache.quotes.clear()
     broker.get_quote = lambda symbols: [
         {"symbol": trade["short_leg"], "bid": 0.02, "ask": 0.04},
         {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.03},
+    ]
+    actions = await s.manage_positions()
+    assert actions == []  # Suppressed: real exec_debit doesn't clear the TP threshold
+
+    # 3. Quote with exec_debit = 0.03 - 0.01 = 0.02, which DOES clear the $0.02
+    # threshold exactly — the real, fillable price is genuinely at target, so
+    # this one should close.
+    s.broker._shared_cache.quotes.clear()
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.02, "ask": 0.03},
+        {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.02},
     ]
     actions = await s.manage_positions()
     assert len(actions) == 1

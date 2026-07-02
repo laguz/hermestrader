@@ -356,15 +356,25 @@ class CreditSpreadStrategy(AbstractStrategy):
                     f"exec_debit ${exec_debit:.2f} >= width ${width:.2f} (max loss)"
                 )
                 close_reason = None
-            # Take-Profit debit safety cap: never TP-close when the execution cost is
-            # at or above entry credit (would lock in a loss or scratch instead of a profit).
-            if (close_reason and "TP" in close_reason
-                    and exec_debit is not None and exec_debit >= entry_credit):
-                self._log(
-                    f"ℹ️ {trade['symbol']} {trade.get('side_type')}: TP suppressed — "
-                    f"exec_debit ${exec_debit:.2f} >= entry credit ${entry_credit:.2f} (would close at a loss)"
+            # Take-Profit real-fill cap: mid_debit can clear the TP threshold on a
+            # wide bid-ask market (nobody would actually fill you there) while the
+            # real cost — exec_debit — is several times higher. Re-run this
+            # strategy's own close rule against exec_debit and only keep the TP
+            # if the *real* number also clears the same threshold, not merely
+            # "less than what was collected" (which let a real fill many times
+            # the TP level still register as a "profit take").
+            if close_reason and "TP" in close_reason:
+                exec_reason = (
+                    self._close_reason(trade, dte, exec_debit, entry_credit, width, t)
+                    if exec_debit is not None else None
                 )
-                close_reason = None
+                if not exec_reason or "TP" not in exec_reason:
+                    self._log(
+                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: TP suppressed — "
+                        f"mid_debit ${mid_debit:.2f} hit the TP target but exec_debit "
+                        f"${exec_debit:.2f} does not clear it (wide market; real fill isn't at target)"
+                    )
+                    close_reason = None
             if close_reason:
                 # Morning pricing guard: before 10:30 AM ET, don't close unless in profit.
                 if self.is_morning_unreliable() and mid_debit >= entry_credit:
