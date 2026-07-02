@@ -245,8 +245,9 @@ class StubDB:
     async def tracked_option_symbols(self):
         return set()
 
-    async def flag_orphans(self, *_a, **_kw):
-        pass
+    async def flag_orphans(self, orphan_symbols):
+        for sym in orphan_symbols:
+            self.logs.append(f"orphan position: {sym}")
 
     async def open_trades(self, strategy_id: str):
         return list(self._open_trades.get(strategy_id, []))
