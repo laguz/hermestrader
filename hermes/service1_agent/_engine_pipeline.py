@@ -91,13 +91,104 @@ class PipelineController:
 
     # 2
     async def reconcile_orphans(self) -> None:
-        """Flag broker positions not tied to any strategy as MANUAL_ORPHAN."""
+        """Adopt Hermes-tagged orphans into a Trade row; flag the rest.
+
+        A broker position lands here as an "orphan" whenever it has no
+        matching OPEN/CLOSING ``Trade`` row — normally because it's a
+        position the operator opened by hand outside Hermes. But it can also
+        happen when Hermes' own fill was recorded at the broker while the
+        local bookkeeping step never completed (e.g. an exception between
+        the broker accepting the order and ``record_order_response``
+        writing the Trade row) — that variant is silently invisible to
+        every strategy's TP/SL/time-exit logic forever, since
+        ``manage_positions`` only ever looks at tracked ``Trade`` rows.
+
+        A position carrying a recognizable ``HERMES_<STRAT>``/``HERMES-<STRAT>``
+        order tag (CLAUDE.md safety rule #5) is the latter case — re-run it
+        through the normal fill-recording path so it becomes a real, managed
+        Trade again. Anything without a Hermes tag is left untouched and
+        just logged; that's a genuine manual/foreign position, not ours to
+        adopt.
+        """
         ctx = self.ctx
         tracked = await ctx.db.trades.tracked_option_symbols()
         live = {p["symbol"] for p in await ctx.broker.get_positions() or []}
         orphans = live - tracked
-        if orphans:
-            await ctx.db.logs.flag_orphans(orphans)
+        if not orphans:
+            return
+
+        orders = await ctx.broker.get_orders() or []
+        adopted = await self._adopt_orphans(orphans, orders)
+        remaining = orphans - adopted
+        if remaining:
+            await ctx.db.logs.flag_orphans(remaining)
+
+    async def _adopt_orphans(self, orphans: set, orders: List[Dict[str, Any]]) -> set:
+        """Reopen orphaned legs whose originating order carries a Hermes tag.
+
+        Groups orphan symbols by the (filled) broker order that produced
+        them, so a 2-leg spread is adopted as one Trade rather than two.
+        Returns the subset of ``orphans`` successfully adopted.
+        """
+        from hermes.common import strategy_id_from_tag
+        from .strategies._helpers import parse_occ
+
+        ctx = self.ctx
+        adopted: set = set()
+        for order in orders:
+            if str(order.get("status", "")).lower() != "filled":
+                continue
+            tag = order.get("tag") or ""
+            strategy_id = strategy_id_from_tag(tag)
+            if not strategy_id:
+                continue
+
+            legs = order.get("leg") or order.get("legs") or []
+            if isinstance(legs, dict):
+                legs = [legs]
+            leg_symbols = {leg.get("option_symbol") for leg in legs if leg.get("option_symbol")}
+            if not leg_symbols:
+                top_sym = order.get("option_symbol")
+                if top_sym:
+                    leg_symbols = {top_sym}
+
+            matched = leg_symbols & orphans
+            if not matched or matched <= adopted:
+                continue
+
+            expiry = None
+            for sym in leg_symbols:
+                parsed = parse_occ(sym)
+                if parsed:
+                    expiry = parsed["expiry"].isoformat()
+                    break
+
+            action = TradeAction(
+                strategy_id=strategy_id,
+                symbol=str(order.get("symbol") or "").upper(),
+                order_class="multileg" if len(legs) > 1 else "option",
+                legs=legs,
+                price=float(order.get("price") or order.get("avg_fill_price") or 0.0) or None,
+                side=str(order.get("side") or "sell"),
+                quantity=int(order.get("quantity") or 1),
+                order_type="credit",
+                expiry=expiry,
+                tag=tag,
+            )
+            resp = {"order": {"id": order.get("id") or order.get("order_id"), "status": "filled"}}
+            try:
+                await ctx.db.trades.record_order_response(action, resp)
+            except Exception:                              # noqa: BLE001
+                logger.exception("[ENGINE] orphan adoption failed for order %s", order.get("id"))
+                continue
+
+            adopted |= matched
+            await ctx.db.logs.write_log(
+                "ENGINE",
+                f"[ORPHAN ADOPTED] {action.symbol} strategy={strategy_id} "
+                f"legs={sorted(matched)} tag={tag} — reopened as a tracked Trade",
+            )
+        return adopted
 
     # 3
     async def process_management(self) -> List[TradeAction]:
