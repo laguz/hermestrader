@@ -63,6 +63,13 @@ class ReactiveController:
     # stuck/deadlocked message can never wedge every future message behind it.
     _PROCESS_EVENT_TIMEOUT_S = 90.0
 
+    # Caps the durable Redis stream so it can't grow unboundedly (xadd has no
+    # implicit trim). Generous relative to normal throughput — the consumer
+    # loop keeps PENDING at ~1 message under healthy operation — so this only
+    # ever bites during a genuine sustained backlog, trimming stale entries
+    # rather than growing Redis memory forever.
+    _STREAM_MAXLEN = 10_000
+
     def __init__(self, engine: "CascadingEngine") -> None:
         self.engine = engine
         # Shared dependency surface (db / broker / mm / event_bus / config /
@@ -330,12 +337,20 @@ class ReactiveController:
             filtered_payload = {k: v for k, v in payload.items() if k != "future"}
             serializable_payload = self._serialize_value(filtered_payload)
 
+            # Bound the stream — xadd never trims on its own, so without maxlen
+            # every event (including high-frequency MARKET_DATA ticks) stays in
+            # Redis forever, even once acked. Approximate trimming (MAXLEN ~) is
+            # the cheap form: Redis trims whole macro-nodes instead of walking
+            # the stream, and the single in-flight consumer entry is always the
+            # most recent add, so it's never at risk of being trimmed away.
             msg_id = await client.xadd(
                 "hermes_event_stream",
                 {
                     "event_type": event_type,
                     "payload": json.dumps(serializable_payload, default=str)
-                }
+                },
+                maxlen=self._STREAM_MAXLEN,
+                approximate=True,
             )
 
             self._pending_futures[msg_id] = fut
@@ -561,6 +576,32 @@ class ReactiveController:
                 event.future.set_exception(exc)
             raise
 
+    async def _strategies_holding_symbol(self, symbol: str) -> list:
+        """Strategies with >=1 open position in ``symbol``.
+
+        ``manage_positions()`` is a full broker-backed sweep (fetches live
+        quotes for every open position the strategy holds, anywhere) — calling
+        it for every strategy on every single market-data tick and filtering
+        the *result* by symbol still pays the full broker round-trip cost for
+        strategies with nothing open in this symbol. One ``all_open_trades()``
+        DB read replaces up to ``len(strategies)`` broker sweeps per tick.
+        Fails open (returns every strategy) on a DB error so a transient read
+        failure can never silently skip a real exit check.
+        """
+        if not self.ctx.strategies:
+            return []
+        try:
+            open_trades = await self.ctx.db.trades.all_open_trades() or []
+        except Exception:
+            logger.exception(
+                "[ENGINE] failed to check open trades for %s reactive "
+                "management; running the full strategy sweep", symbol,
+            )
+            return list(self.ctx.strategies)
+        open_strategy_ids = {t.get("strategy_id") for t in open_trades
+                              if t.get("symbol") == symbol}
+        return [s for s in self.ctx.strategies if s.strategy_id in open_strategy_ids]
+
     async def _handle_market_data_internal(self, event: MarketDataEvent) -> None:
         """Evaluates strategies reactively when a new MarketDataEvent is received."""
         symbol = event.symbol
@@ -588,7 +629,7 @@ class ReactiveController:
             return
 
         mgmt_actions = []
-        for s in self.ctx.strategies:
+        for s in await self._strategies_holding_symbol(symbol):
             try:
                 actions = await s.manage_positions()
                 if actions:

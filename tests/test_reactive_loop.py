@@ -256,6 +256,103 @@ async def test_order_fill_event_triggers_main_wakeup():
         main._ASYNC_TRIGGER_EVENT = None
 
 
+@pytest.mark.asyncio
+async def test_market_data_management_sweep_skips_strategies_with_no_open_position():
+    """Production incident: every market-data tick ran manage_positions() —
+    a full broker-backed quote sweep — for EVERY strategy, then threw away
+    results that didn't match the ticked symbol. In paper mode (Tradier
+    sandbox, materially slower/spikier than production) stacking that many
+    broker round-trips per tick routinely blew past the 90s durable-event
+    timeout, so every single MARKET_DATA event timed out back-to-back.
+    manage_positions() must only run for strategies actually holding a
+    position in the ticked symbol.
+    """
+    bus = EventBus()
+    bus.start()
+
+    db = StubDB()
+    broker = StubBroker()
+    # Only HAS_AAPL holds a position in AAPL; HAS_OTHER holds one in a
+    # different symbol and must not be swept on an AAPL tick.
+    db.set_open_trades("HAS_AAPL", [
+        {"id": 1, "strategy_id": "HAS_AAPL", "symbol": "AAPL", "side_type": "put",
+         "width": 5.0, "entry_credit": 1.0, "lots": 1, "expiry": "2026-06-20"},
+    ])
+    db.set_open_trades("HAS_OTHER", [
+        {"id": 2, "strategy_id": "HAS_OTHER", "symbol": "MSFT", "side_type": "put",
+         "width": 5.0, "entry_credit": 1.0, "lots": 1, "expiry": "2026-06-20"},
+    ])
+
+    class NamedDummyStrategy(DummyStrategy):
+        def __init__(self, strategy_id, *a, **kw):
+            super().__init__(*a, **kw)
+            self.strategy_id = strategy_id
+
+    has_aapl = NamedDummyStrategy("HAS_AAPL", broker, db)
+    has_other = NamedDummyStrategy("HAS_OTHER", broker, db)
+    no_positions = NamedDummyStrategy("NO_POSITIONS", broker, db)
+
+    engine = CascadingEngine(
+        broker=broker, db=db,
+        strategies=[has_aapl, has_other, no_positions],
+        approval_mode=False, event_bus=bus,
+    )
+
+    try:
+        ev = MarketDataEvent(symbol="AAPL", price=100.0)
+        await engine.handle_market_data(ev)
+
+        assert has_aapl.manage_positions_called is True
+        assert has_other.manage_positions_called is False
+        assert no_positions.manage_positions_called is False
+    finally:
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_publish_event_bounds_the_durable_stream():
+    """Production incident: xadd() had no maxlen, so the durable Redis stream
+    grew forever — every acked/processed event stayed in Redis regardless,
+    with maxmemory-policy=noeviction. Live measured 130k stale entries
+    (~44MB); paper, whose MARKET_DATA events were timing out and thus
+    piling up faster, measured 817k (~292MB). xadd must cap the stream so
+    it can't grow unboundedly."""
+    db = StubDB()
+    broker = StubBroker()
+    engine = CascadingEngine(broker=broker, db=db, strategies=[])
+
+    xadd_calls = []
+
+    class _FakeClient:
+        async def xadd(self, name, fields, **kwargs):
+            xadd_calls.append((name, fields, kwargs))
+            return "1-1"
+
+    class _FakeIpc:
+        is_connected = True
+        client = _FakeClient()
+
+    engine.ctx.ipc_client = _FakeIpc()
+
+    # publish_event awaits a future keyed by msg_id that only the (not
+    # running, in this test) consumer loop would normally resolve — resolve
+    # it ourselves from a background task so the awaited xadd call above it
+    # is what's actually under test.
+    async def _resolve_soon():
+        await asyncio.sleep(0)
+        for f in engine.reactive._pending_futures.values():
+            if not f.done():
+                f.set_result("ok")
+
+    asyncio.create_task(_resolve_soon())
+    await engine.reactive.publish_event("MARKET_DATA", {"event": {"symbol": "AAPL"}})
+
+    assert len(xadd_calls) == 1
+    _, _, kwargs = xadd_calls[0]
+    assert kwargs.get("maxlen") == engine.reactive._STREAM_MAXLEN
+    assert kwargs.get("approximate") is True
+
+
 class _FakeDurableRedisClient:
     """Minimal stand-in for the ipc_client.client used by the durable Redis
     Streams consumer loop: delivers one message on the first xreadgroup call,
