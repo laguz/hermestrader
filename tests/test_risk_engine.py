@@ -105,3 +105,54 @@ async def test_risk_engine_portfolio_optimization_kelly():
     assert len(validated) == 1
     assert validated[0].symbol == "AAPL"
     assert validated[0].quantity == 4
+
+
+@pytest.mark.asyncio
+async def test_risk_engine_counts_existing_open_trades_by_side_type():
+    """Regression: capacity counts key on side_type ('put'/'call'), but the
+    risk engine passed action.side ('sell'/'buy'), so an already-open chain
+    never counted against max_lots — strategies without their own MoneyManager
+    check (HermesAlpha) could stack duplicate spreads tick after tick."""
+    db = StubDB()
+    db.set_open_trades("HERMESALPHA", [{
+        "symbol": "AAPL", "side_type": "put", "expiry": "2025-06-20",
+        "lots": 1, "width": 5.0, "entry_credit": 1.0,
+    }])
+    broker = StubBroker(option_buying_power=100_000.0)
+    config = {"hermesalpha_max_lots": 1}
+
+    risk_engine = PortfolioRiskEngine(broker, db, config)
+
+    action = _action("HERMESALPHA", "AAPL", 1, 5.0, 1.0)
+    validated = await risk_engine.evaluate_and_scale([action])
+
+    assert validated == []
+    assert any("BLOCKED" in log for log in db.logs)
+
+
+@pytest.mark.asyncio
+async def test_risk_engine_counts_resting_broker_orders_by_side_type():
+    """Same regression for the broker-side count: normalized active orders are
+    keyed by side_type, so the action.side lookup always missed and a resting
+    limit order didn't block a duplicate entry on the same chain."""
+    resting_order = {
+        "status": "open",
+        "tag": "HERMES-HERMESALPHA",
+        "symbol": "AAPL",
+        "quantity": 1,
+        "leg": [
+            {"option_symbol": "AAPL250620P00090000", "quantity": 1},
+            {"option_symbol": "AAPL250620P00085000", "quantity": 1},
+        ],
+    }
+    db = StubDB()
+    broker = StubBroker(option_buying_power=100_000.0, orders=[resting_order])
+    config = {"hermesalpha_max_lots": 1}
+
+    risk_engine = PortfolioRiskEngine(broker, db, config)
+
+    action = _action("HERMESALPHA", "AAPL", 1, 5.0, 1.0)
+    validated = await risk_engine.evaluate_and_scale([action])
+
+    assert validated == []
+    assert any("BLOCKED" in log for log in db.logs)

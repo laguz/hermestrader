@@ -207,3 +207,83 @@ async def test_broker_wrapper_safety_validation_interception():
         await wrapper.place_order_from_action(action)
         
     mock_broker.place_order_from_action.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_broker_wrapper_safety_gateway_reads_namespaced_open_trades():
+    """Regression: the real HermesDB only exposes ``all_open_trades`` and
+    ``write_log`` through its namespaced repos (``db.trades`` / ``db.logs``);
+    the wrapper's flat ``hasattr(db, ...)`` probes silently fed the gateway an
+    empty open-trades list, disabling the concentration/max-trades/side-lock
+    checks in production while stub-backed tests kept passing."""
+    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+
+    class _SettingsRepo:
+        def __init__(self, data):
+            self._data = data
+
+        async def get_setting(self, key, default=None):
+            return self._data.get(key, default)
+
+    class _TradesRepo:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def all_open_trades(self):
+            return list(self._rows)
+
+    class _LogsRepo:
+        def __init__(self):
+            self.messages = []
+
+        async def write_log(self, strategy_id, message, level="INFO"):
+            self.messages.append(message)
+
+    class _NamespacedDB:
+        """Mirrors HermesDB's surface: namespaced repos plus a flat
+        ``get_setting`` delegator — no flat all_open_trades/write_log."""
+
+        def __init__(self, settings, open_trades):
+            self.settings = _SettingsRepo(settings)
+            self.trades = _TradesRepo(open_trades)
+            self.logs = _LogsRepo()
+
+        async def get_setting(self, key, default=None):
+            return await self.settings.get_setting(key, default)
+
+    open_trades = [
+        {"symbol": "AAPL", "side_type": "put", "width": 5.0,
+         "entry_credit": 1.0, "lots": 1, "expiry": "2026-06-20"}
+        for _ in range(3)
+    ]
+    db = _NamespacedDB({"safety_max_symbol_trades": "3"}, open_trades)
+
+    mock_broker = MagicMock()
+    mock_broker.get_account_balances = AsyncMock(
+        return_value={"option_buying_power": 1_000_000.0})
+    mock_broker.place_order_from_action = AsyncMock(
+        return_value={"order_id": "123"})
+
+    wrapper = AsyncBrokerWrapper(mock_broker, db)
+
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        order_class="multileg",
+        legs=[
+            {"option_symbol": "AAPL260620P00150000", "side": "sell_to_open", "quantity": 1},
+            {"option_symbol": "AAPL260620P00145000", "side": "buy_to_open", "quantity": 1},
+        ],
+        price=1.0,
+        side="sell",
+        quantity=1,
+        width=5.0,
+        strategy_params={"side_type": "put"},
+        expiry="2026-06-20",
+    )
+
+    with pytest.raises(SafetyValidationError, match="concentration count limit"):
+        await wrapper.place_order_from_action(action)
+
+    mock_broker.place_order_from_action.assert_not_called()
+    assert any("REJECTED" in m for m in db.logs.messages)

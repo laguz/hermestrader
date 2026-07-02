@@ -3,12 +3,31 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
+from hermes.common import OCC_RE
 from hermes.service1_agent.trade_action import TradeAction
 from hermes.broker import BrokerAdapter
 from hermes.portfolio.safety_gateway import SafetyGateway
 from .money_manager import parse_occ_strike
 
 logger = logging.getLogger("hermes.agent.risk_engine")
+
+
+def _action_side_type(action: TradeAction) -> str:
+    """Normalize an action to its chain side ('put'/'call').
+
+    Every capacity store — ``Trade.side_type``, ``PendingOrder.side``, the
+    normalized broker-order counts — is keyed on the option side, not the
+    order direction ('sell'/'buy'), so lookups must use the same key. Mirrors
+    the normalization in ``TradesRepository.record_pending_order``.
+    """
+    side_value = (action.strategy_params or {}).get("side_type")
+    if side_value and str(side_value).lower() not in {"buy", "sell"}:
+        return str(side_value).lower()
+    for leg in (action.legs or []):
+        m = OCC_RE.match(str(leg.get("option_symbol", "") or ""))
+        if m:
+            return "put" if m.group(3) == "P" else "call"
+    return str(action.side or "").lower()
 
 
 class PortfolioRiskEngine:
@@ -142,12 +161,13 @@ class PortfolioRiskEngine:
                 if action.width:
                     requirement_per_lot = action.width * 100.0
 
-            key = (action.strategy_id, action.symbol, action.side, action.expiry)
+            side_type = _action_side_type(action)
+            key = (action.strategy_id, action.symbol, side_type, action.expiry)
             in_tick_used = in_tick_allocated.get(key, 0)
 
-            open_qty = await self.db.trades.count_open_contracts(action.strategy_id, action.symbol, action.side, action.expiry)
-            pending = await self.db.trades.count_pending_orders(action.strategy_id, action.symbol, action.side, action.expiry)
-            broker_qty = self._broker_order_counts.get((action.strategy_id, action.symbol, action.side, action.expiry), 0)
+            open_qty = await self.db.trades.count_open_contracts(action.strategy_id, action.symbol, side_type, action.expiry)
+            pending = await self.db.trades.count_pending_orders(action.strategy_id, action.symbol, side_type, action.expiry)
+            broker_qty = self._broker_order_counts.get((action.strategy_id, action.symbol, side_type, action.expiry), 0)
 
             total_used = open_qty + pending + broker_qty + in_tick_used
             side_cap = max(0, max_lots - total_used)
@@ -174,7 +194,7 @@ class PortfolioRiskEngine:
                     for violation in report.violations:
                         await self.db.logs.write_log(
                             action.strategy_id,
-                            f"[SAFETY VIOLATION] {action.symbol} {action.side.upper()}: {violation}"
+                            f"[SAFETY VIOLATION] {action.symbol} {side_type.upper()}: {violation}"
                         )
                     scaled = 0
 
@@ -188,16 +208,16 @@ class PortfolioRiskEngine:
                     reason = f"bp_cap={bp_cap} side_cap={side_cap}"
                 await self.db.logs.write_log(
                     action.strategy_id,
-                    f"[MM] BLOCKED {action.symbol} {action.side.upper()}: {reason} — 0 lots available",
+                    f"[MM] BLOCKED {action.symbol} {side_type.upper()}: {reason} — 0 lots available",
                 )
             elif scaled < requested_lots:
                 logger.info(
                     "[RiskEngine] Scaled %s/%s %s %d→%d (bp_cap=%d side_cap=%d)",
-                    action.strategy_id, action.symbol, action.side, requested_lots, scaled, bp_cap, side_cap,
+                    action.strategy_id, action.symbol, side_type, requested_lots, scaled, bp_cap, side_cap,
                 )
                 await self.db.logs.write_log(
                     action.strategy_id,
-                    f"[MM] Scaled {action.symbol} {action.side.upper()} {requested_lots}→{scaled} lots (bp_cap={bp_cap} side_cap={side_cap})",
+                    f"[MM] Scaled {action.symbol} {side_type.upper()} {requested_lots}→{scaled} lots (bp_cap={bp_cap} side_cap={side_cap})",
                 )
 
             if scaled > 0:

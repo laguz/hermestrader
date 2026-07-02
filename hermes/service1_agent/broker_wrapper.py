@@ -247,31 +247,35 @@ class AsyncBrokerWrapper:
             logger.error("Circuit breaker is OPEN. Fast-failing order placement.")
             raise CircuitBreakerError("Circuit breaker is OPEN. Orders are blocked.")
 
-        # Declarative Safety Verification Gateway Checks
+        # Declarative Safety Verification Gateway Checks. Probe the namespaced
+        # repos (db.settings / db.trades / db.logs) — HermesDB only exposes
+        # these methods there, and a flat hasattr(db, ...) probe passes on test
+        # stubs but fails on the real DB, silently disabling the checks.
         config = {}
         enabled = False
-        if self.db is not None and hasattr(self.db, "get_setting"):
+        settings_repo = getattr(self.db, "settings", None) if self.db is not None else None
+        if settings_repo is not None and hasattr(settings_repo, "get_setting"):
             try:
-                enabled_raw = await self.db.settings.get_setting("safety_gateway_enabled")
+                enabled_raw = await settings_repo.get_setting("safety_gateway_enabled")
                 if enabled_raw is not None:
                     enabled = enabled_raw.lower() == "true"
 
-                max_risk_raw = await self.db.settings.get_setting("safety_max_risk_bp_ratio")
+                max_risk_raw = await settings_repo.get_setting("safety_max_risk_bp_ratio")
                 if max_risk_raw is not None:
                     config["safety_max_risk_bp_ratio"] = float(max_risk_raw)
                     enabled = True
-                    
-                max_exp_raw = await self.db.settings.get_setting("safety_max_symbol_exposure_ratio")
+
+                max_exp_raw = await settings_repo.get_setting("safety_max_symbol_exposure_ratio")
                 if max_exp_raw is not None:
                     config["safety_max_symbol_exposure_ratio"] = float(max_exp_raw)
                     enabled = True
-                    
-                max_trades_raw = await self.db.settings.get_setting("safety_max_symbol_trades")
+
+                max_trades_raw = await settings_repo.get_setting("safety_max_symbol_trades")
                 if max_trades_raw is not None:
                     config["safety_max_symbol_trades"] = int(max_trades_raw)
                     enabled = True
-                    
-                side_lock_raw = await self.db.settings.get_setting("safety_side_lock_enabled")
+
+                side_lock_raw = await settings_repo.get_setting("safety_side_lock_enabled")
                 if side_lock_raw is not None:
                     config["safety_side_lock_enabled"] = side_lock_raw.lower() == "true"
                     enabled = True
@@ -290,8 +294,9 @@ class AsyncBrokerWrapper:
 
             try:
                 open_trades = []
-                if hasattr(self.db, "all_open_trades"):
-                    open_trades = await self.db.trades.all_open_trades() or []
+                trades_repo = getattr(self.db, "trades", None)
+                if trades_repo is not None and hasattr(trades_repo, "all_open_trades"):
+                    open_trades = await trades_repo.all_open_trades() or []
             except Exception as e:
                 logger.warning("[SAFETY] Failed to fetch open trades for safety checks: %s", e)
                 open_trades = []
@@ -303,12 +308,13 @@ class AsyncBrokerWrapper:
                 decision_msg += f". Violations: {report.violations}"
             
             logger.info(decision_msg)
-            if self.db is not None and hasattr(self.db, "write_log"):
+            logs_repo = getattr(self.db, "logs", None) if self.db is not None else None
+            if logs_repo is not None and hasattr(logs_repo, "write_log"):
                 try:
-                    await self.db.logs.write_log(
-                        strategy_id=action.strategy_id, 
-                        msg=decision_msg, 
-                        level="INFO" if report.decision == "APPROVED" else "WARNING"
+                    await logs_repo.write_log(
+                        action.strategy_id,
+                        decision_msg,
+                        level="INFO" if report.decision == "APPROVED" else "WARNING",
                     )
                 except Exception:
                     pass
