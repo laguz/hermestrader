@@ -33,7 +33,7 @@ async def test_durable_loop_redis_streams_flow():
 
     stream_db = []
     
-    async def mock_xadd(name, fields, id='*'):
+    async def mock_xadd(name, fields, id='*', **_kwargs):
         msg_id = f"1686984023000-{len(stream_db)}"
         stream_db.append((msg_id, fields))
         return msg_id
@@ -106,7 +106,8 @@ async def test_durable_loop_redis_streams_flow():
     mock_redis.xgroup_create.assert_called_once()
     mock_redis.xadd.assert_called_once_with(
         "hermes_event_stream",
-        {"event_type": "TICK", "payload": '{"watchlist": ["AAPL"]}'}
+        {"event_type": "TICK", "payload": '{"watchlist": ["AAPL"]}'},
+        maxlen=10_000, approximate=True,
     )
     mock_redis.xack.assert_called_once_with("hermes_event_stream", "hermes_engine_group", "1686984023000-0")
 
@@ -144,7 +145,7 @@ async def test_durable_loop_failed_tick_is_not_replayed():
 
     mock_redis.xack = AsyncMock(side_effect=mock_xack)
 
-    async def mock_xadd(name, fields, id="*"):
+    async def mock_xadd(name, fields, id="*", **_kwargs):
         msg_id = f"1686984023000-{len(new_msgs) + len(pel) + len(acked)}"
         new_msgs.append((msg_id, fields))
         return msg_id
@@ -227,7 +228,7 @@ async def test_durable_loop_dataclass_serialization():
 
     stream_db = []
     
-    async def mock_xadd(name, fields, id='*'):
+    async def mock_xadd(name, fields, id='*', **_kwargs):
         msg_id = f"1686984023000-{len(stream_db)}"
         stream_db.append((msg_id, fields))
         return msg_id

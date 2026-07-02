@@ -65,7 +65,14 @@ async def test_stream_client_to_engine_flow():
     # 2. Setup Stubs & Engine
     db = StubDB()
     broker = StubBroker()
-    
+    # The reactive market-data handler only sweeps manage_positions() for
+    # strategies holding an open position in the ticked symbol (AAPL) — seed
+    # one so this test still exercises the reactive management call.
+    db.set_open_trades("DUMMY", [{
+        "id": 1, "strategy_id": "DUMMY", "symbol": "AAPL", "side_type": "put",
+        "width": 5.0, "entry_credit": 1.0, "lots": 1, "expiry": "2026-06-20",
+    }])
+
     strategy = DummyStrategy(broker, db)
     engine = CascadingEngine(
         broker=broker,
