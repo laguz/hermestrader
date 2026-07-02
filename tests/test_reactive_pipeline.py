@@ -161,3 +161,58 @@ async def test_reactive_order_monitor_flow():
         if engine._order_monitor_task:
             engine._order_monitor_task.cancel()
         await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_entry_resolves_pending_order_instead_of_leaking_capacity():
+    """dry_run must resolve the row record_pending_order() just wrote, the same
+    way a real broker rejection would — otherwise it sits at status=PENDING
+    forever (count_pending_orders has no staleness filter), permanently
+    occupying that (strategy, symbol, side, expiry) capacity slot even though
+    nothing was ever sent to the broker. Regression for "[MM] BLOCKED ... at
+    capacity" recurring on every tick with no order ever reaching the broker.
+    """
+    bus = EventBus()
+    bus.start()
+    try:
+        db = StubDB()
+        broker = StubBroker()
+        broker.dry_run = True
+
+        strategy = DummyStrategy(broker, db)
+        engine = CascadingEngine(
+            broker=broker,
+            db=db,
+            strategies=[strategy],
+            approval_mode=False,
+            event_bus=bus,
+        )
+
+        action = TradeAction(
+            strategy_id="CS7",
+            symbol="IWM",
+            order_class="multileg",
+            legs=[
+                {"side": "sell_to_open", "quantity": 1, "option_symbol": "IWM260709P00292000"},
+                {"side": "buy_to_open", "quantity": 1, "option_symbol": "IWM260709P00291000"},
+            ],
+            price=0.24,
+            side="sell",
+            quantity=1,
+            duration="day",
+            order_type="credit",
+            expiry="2026-07-09",
+            width=1.0,
+            strategy_params={"side_type": "put"},
+            tag="HERMES_CS7",
+        )
+
+        with patch.object(db.trades, "record_order_response", new_callable=AsyncMock) as mock_resolve:
+            await engine._execute_or_queue(action, action_type="entry")
+
+        mock_resolve.assert_awaited_once()
+        resolved_action, resolved_response = mock_resolve.await_args.args
+        assert resolved_action is action
+        assert "errors" in resolved_response
+    finally:
+        await bus.stop()

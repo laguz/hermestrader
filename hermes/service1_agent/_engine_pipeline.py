@@ -440,6 +440,17 @@ class PipelineController:
         )
         close_method = getattr(ctx.db.trades, "close_trade_from_action", None)
         if getattr(ctx.broker, "dry_run", False):
+            # Nothing was sent to the broker, so the PENDING row from
+            # record_pending_order() above must be freed the same way a real
+            # broker rejection frees it — otherwise it permanently occupies
+            # this (strategy, symbol, side, expiry) capacity slot and every
+            # future tick gets "[MM] BLOCKED ... at capacity" with no order
+            # ever having reached the broker.
+            dry_run_resp = {"errors": "dry_run=True — no broker order placed"}
+            if is_pure_close and close_method is not None:
+                await close_method(a, dry_run_resp)
+            else:
+                await ctx.db.trades.record_order_response(a, dry_run_resp)
             if approval_id is not None:
                 await ctx.db.approvals.mark_approval_executed(
                     approval_id, success=False,
