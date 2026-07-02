@@ -112,6 +112,28 @@ class HermesOverseer:
         self._worker_task: Optional[asyncio.Task] = None
 
     # ── LLM transport ─────────────────────────────────────────────────────────
+    async def _mark_llm_ok(self) -> None:
+        """Record a successful LLM round-trip for the watcher's health indicator.
+
+        Called from every call site (review / origination / exit / vision) —
+        not just the review path — so the status reflects the LLM actually
+        being reached even when ``llm_out_of_loop`` skips per-trade review.
+        """
+        try:
+            await self.db.settings.set_setting("llm_last_error", "")
+            await self.db.settings.set_setting(
+                "llm_last_ok_ts",
+                datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+        except Exception:                                          # noqa: BLE001
+            pass
+
+    async def _mark_llm_error(self, exc: Exception) -> None:
+        try:
+            await self.db.settings.set_setting("llm_last_error", (str(exc) or repr(exc))[:500])
+        except Exception:                                          # noqa: BLE001
+            pass
+
     async def _chat_with_timeout(self, messages: List[Dict[str, str]],
                                  images: List[Any] = None) -> str:
         """Call the LLM with a strict timeout gate to prevent hanging."""
@@ -123,10 +145,12 @@ class HermesOverseer:
         else:
             timeout_s = timeout_val or 15.0
 
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             asyncio.to_thread(self.llm.chat, messages, images=images or []),
             timeout=timeout_s,
         )
+        await self._mark_llm_ok()
+        return result
 
     async def _chat_with_retry(self, messages: List[Dict[str, str]],
                                images: List[Any] = None) -> str:
@@ -144,6 +168,7 @@ class HermesOverseer:
                         attempt + 1, self.LLM_MAX_RETRIES, wait_s, exc,
                     )
                     await asyncio.sleep(wait_s)
+        await self._mark_llm_error(last_exc)
         raise last_exc
 
     async def get_system_prompt(self) -> str:
@@ -283,23 +308,11 @@ class HermesOverseer:
                     {"role": "user",   "content": prompt}]
         try:
             msg = await self._chat_with_retry(messages, images=images)
-            # Clear any stored LLM error on success.
-            try:
-                await self.db.settings.set_setting("llm_last_error", "")
-                await self.db.settings.set_setting(
-                    "llm_last_ok_ts",
-                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                )
-            except Exception:                                      # noqa: BLE001
-                pass
             return self._safe_json(msg)
         except Exception as last_exc:
+            # _chat_with_retry already recorded llm_last_error before raising.
             logger.warning("Single-LLM call failed after %d attempts — passing action through: %s",
                            self.LLM_MAX_RETRIES, last_exc)
-            try:
-                await self.db.settings.set_setting("llm_last_error", (str(last_exc) or repr(last_exc))[:500])
-            except Exception:                                              # noqa: BLE001
-                pass
             # Fail-safe: pass action through but flag so the operator can see it.
             return {
                 "verdict": "APPROVE",
