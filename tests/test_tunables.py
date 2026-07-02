@@ -33,7 +33,8 @@ def test_defaults_match_documented_spec_literals():
         "cs75_width": 5.0, "cs75_min_dte": 39, "cs75_max_dte": 45,
         "cs75_short_delta_max": 0.40, "cs75_pop_target": 0.75,
         "cs75_sl_mult": 2.5, "cs75_time_exit_dte": 8,
-        "cs7_width": 1.0, "cs7_dte": 7, "cs7_tp_pct_width": 0.02, "cs7_sl_mult": 3.0,
+        "cs7_width": 1.0, "cs7_dte": 7, "cs7_pop_target": 0.75,
+        "cs7_min_credit_pct": 0.12, "cs7_tp_pct_width": 0.02, "cs7_sl_mult": 3.0,
         "tt45_delta": 0.16, "tt45_hard_exit_dte": 21, "tt45_challenged_delta": 0.30,
         "wheel_delta": 0.30, "wheel_min_pop": 0.50, "wheel_roll_dte": 7,
     }
