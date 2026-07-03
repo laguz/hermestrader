@@ -489,54 +489,6 @@ class AsyncXGBPredictor:
         out = base.drop(columns=["target"], errors="ignore").assign(target=target)
         return out.dropna()
 
-    # -- diagnostics surface -------------------------------------------------
-    def diagnostics(self) -> Dict[str, Any]:
-        """JSON-serialisable view of the predictor's current state.
-
-        Powers /api/ml/diagnostics. Includes per-symbol model meta,
-        latest predictions, drift alarms, and the live config.
-        """
-        out: Dict[str, Any] = {
-            "config": {
-                "horizons_dte": list(self._cfg.horizons_dte),
-                "quantiles": list(self._cfg.quantiles),
-                "predict_interval_s": self._cfg.predict_interval_s,
-                "retrain_interval_s": self._cfg.retrain_interval_s,
-                "calibrate_interval_s": self._cfg.calibrate_interval_s,
-                "drift_alarm_threshold": self._cfg.drift_alarm_threshold,
-                "target_kind": self._cfg.target_kind,
-            },
-            "schema_hash": feature_catalog.schema_hash("equity"),
-            "symbols": {},
-        }
-        for sym, heads in self._models.items():
-            sym_block: Dict[str, Any] = {
-                "models": {},
-                "last_prediction": self._last_pred.get(sym),
-                "calibrator": (self._calibrators.get(sym).to_dict()
-                               if self._calibrators.get(sym) else None),
-            }
-            for (horizon, q), (_model, meta) in heads.items():
-                sym_block["models"][f"q{int(q*100):02d}_{horizon}dte"] = {
-                    "model_hash": meta.model_hash,
-                    "schema_hash": meta.schema_hash,
-                    "trained_at": meta.trained_at,
-                    "sample_size": meta.sample_size,
-                    "metrics": meta.metrics,
-                }
-            detector = self._drift.get(sym)
-            if detector is not None:
-                try:
-                    cur = self._feature_frame(sym, drop_target=True)
-                    if cur is not None and not cur.empty:
-                        sym_block["drift"] = detector.summary(
-                            cur.tail(60),
-                            threshold=self._cfg.drift_alarm_threshold,
-                        )
-                except Exception as exc:            # noqa: BLE001
-                    logger.debug("drift summary failed for %s: %s", sym, exc)
-            out["symbols"][sym] = sym_block
-        return out
 
 
 __all__ = [
