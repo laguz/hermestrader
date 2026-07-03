@@ -140,6 +140,59 @@ async def test_heartbeat_refit_installs_persists_and_throttles():
     assert len(fetch_calls) == 1
 
 
+async def test_sync_from_settings_installs_updates_and_tolerates_garbage():
+    """The watcher-side read path: install on first sight of the persisted
+    blob, no-op while unchanged, re-install on change, never crash or clear
+    the installed calibrator on garbage/missing blobs."""
+    import hermes.ml.pop_calibration as pc
+
+    class _SettingsDB:
+        def __init__(self):
+            self.value = None
+            self.settings = self
+
+        async def get_setting(self, key):
+            assert key == pc.POP_CAL_STATE_KEY
+            return self.value
+
+    db = _SettingsDB()
+    pc._synced_state_raw = None
+    try:
+        # Nothing persisted yet → no install.
+        assert await pc.sync_pop_calibrator_from_settings(db) is False
+        assert get_pop_calibrator() is None
+
+        first = PlattCalibrator(a=1.2, b=-0.4)
+        db.value = json.dumps({"calibrator": first.to_dict(), "n": 40,
+                               "fitted_at": "2026-07-03T00:00:00+00:00"})
+        assert await pc.sync_pop_calibrator_from_settings(db) is True
+        assert get_pop_calibrator().to_dict() == first.to_dict()
+
+        # Unchanged blob → no re-install churn.
+        assert await pc.sync_pop_calibrator_from_settings(db) is False
+
+        # Refit landed → new params picked up.
+        second = PlattCalibrator(a=0.9, b=0.1)
+        db.value = json.dumps({"calibrator": second.to_dict(), "n": 80,
+                               "fitted_at": "2026-07-04T00:00:00+00:00"})
+        assert await pc.sync_pop_calibrator_from_settings(db) is True
+        assert get_pop_calibrator().to_dict() == second.to_dict()
+
+        # Garbage blob → ignored, installed calibrator untouched.
+        db.value = "{not json"
+        assert await pc.sync_pop_calibrator_from_settings(db) is False
+        assert get_pop_calibrator().to_dict() == second.to_dict()
+    finally:
+        pc._synced_state_raw = None
+
+
+def test_state_key_shared_between_agent_and_watcher_sync():
+    from hermes.ml.pop_calibration import POP_CAL_STATE_KEY
+    from hermes.service1_agent._engine_pipeline import PipelineController
+
+    assert PipelineController._POP_CAL_STATE_KEY.fget(object()) == POP_CAL_STATE_KEY
+
+
 async def test_heartbeat_restart_recovery_reinstalls_persisted_calibrator():
     engine, db, _fetch_calls = _engine_with_trades([])
     fitted = PlattCalibrator.fit([0.85] * 40 + [0.85] * 20,
