@@ -322,13 +322,14 @@ class TradesRepository(Repository):
 
             if row is None:
                 # Still consume the matching pending order even if trade is orphan
-                await TransactionManager._consume_pending(
+                po = await TransactionManager._consume_pending(
                     session=s,
                     strategy_id=action.strategy_id,
                     symbol=action.symbol,
-                    side=(side_value or action.side or "").lower(),
-                    terminal_status="SUBMITTED"
+                    side=(side_value or action.side or "").lower()
                 )
+                if po:
+                    po.status = "SUBMITTED"
                 await s.commit()
                 await self._db.logs.write_log(
                     action.strategy_id,

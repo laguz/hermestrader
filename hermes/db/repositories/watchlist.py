@@ -101,6 +101,7 @@ class WatchlistRepository(Repository):
                 return False
             s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
             await s.commit()
+            return True
     async def set_watchlist(self, strategy_id: str, symbols: List[str]) -> List[str]:
         clean = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
         async with self.AsyncSession() as s:
