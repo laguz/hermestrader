@@ -419,14 +419,7 @@ class TradierBroker(AbstractBroker):
         else:
             res = await self._place_multileg(action)
 
-        order_dict = res.get("order") or {}
-        order_id = str(order_dict.get("id") or res.get("id") or "")
-        status = str(order_dict.get("status") or res.get("status") or "ok")
-        return OrderPlacementResult(
-            order_id=order_id,
-            status=status,
-            raw_response=res
-        )
+        return OrderPlacementResult.from_broker_response(res)
 
     def _leg_action(self, leg: Dict[str, Any], default_open: bool = True) -> str:
         explicit = (leg.get("action") or "").lower().strip()
