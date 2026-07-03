@@ -386,7 +386,7 @@ class TradierBroker(AbstractBroker):
         if not np.isfinite(realized_vol):
             realized_vol = 0.0
         if not np.isfinite(avg_vol):
-            realized_vol = 0.0
+            avg_vol = 0.0
 
         put_entries = [lvl for lvl in key_levels if lvl['type'] == 'support']
         call_entries = [lvl for lvl in key_levels if lvl['type'] == 'resistance']
