@@ -243,6 +243,7 @@ async def roll_to_next_month(option_symbol: str) -> str:
 
 
 def main() -> None:
+    load_env_file()
     mcp.run()
 
 
