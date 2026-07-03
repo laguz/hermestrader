@@ -154,10 +154,3 @@ class TradierStreamClient:
         except Exception as e:
             logger.error("Failed to parse WebSocket message: %s", e, exc_info=True)
 
-    def update_watchlist(self, new_watchlist: List[str]) -> None:
-        """Dynamically updates the watchlist symbols and resubscribes."""
-        new_set = set(new_watchlist)
-        if self.watchlist != new_set:
-            self.watchlist = new_set
-            if self._ws and self._ws.open and self.session_id:
-                asyncio.create_task(self._send_subscription())
