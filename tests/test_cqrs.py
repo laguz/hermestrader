@@ -161,3 +161,57 @@ async def test_cqrs_event_sourcing_flow_and_replay(db, make_db):
     finally:
         # The throwaway DB is disposed and dropped by the make_db fixture.
         pass
+
+
+@pytest.mark.asyncio
+async def test_record_order_response_orphan_close(db):
+    from hermes.service1_agent.trade_action import TradeAction
+    from sqlalchemy import select
+
+    await db.watchlist.ensure_strategies({"CS75": 1})
+
+    # 1. Place a pending close order
+    async with db.AsyncSession() as s:
+        po = await TransactionManager.place_order(
+            session=s,
+            strategy_id="CS75",
+            symbol="AAPL",
+            side="put",
+            quantity=5,
+            payload={"legs": [{"option_symbol": "AAPL260620P00150000", "quantity": 5}]}
+        )
+        await s.commit()
+        po_id = po.id
+        assert po.status == "PENDING"
+
+    # 2. Simulate receiving order response for a close action on a non-existent trade (orphan)
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        order_class="multileg",
+        legs=[{"option_symbol": "AAPL260620P00150000", "side": "buy_to_close", "quantity": 5}],
+        price=0.25,
+        side="buy",
+        quantity=5,
+        order_type="debit",
+        tag="HERMES_CS75",
+        strategy_params={"trade_id": 99999}  # non-existent trade
+    )
+    response = {
+        "order": {
+            "status": "submitted",
+            "id": "broker-ord-123"
+        }
+    }
+
+    # Call record_order_response which should consume the pending order without crashing
+    await db.trades.record_order_response(action, response)
+
+    # 3. Verify the pending order was consumed and updated to SUBMITTED
+    async with db.AsyncSession() as s:
+        q = select(PendingOrder).where(PendingOrder.id == po_id)
+        res = await s.execute(q)
+        po_updated = res.scalars().first()
+        assert po_updated is not None
+        assert po_updated.status == "SUBMITTED"
+

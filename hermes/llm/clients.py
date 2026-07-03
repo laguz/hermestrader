@@ -160,73 +160,7 @@ class OpenAICompatibleLLM:
                 f"malformed completion response: {exc}; body={r.text[:400]!r}"
             ) from exc
 
-    # --------------------------------------------------------------- Helpers
-    def list_models(self, *, timeout_s: Optional[float] = None) -> List[Dict[str, Any]]:
-        """List models the configured server is currently serving.
 
-        Standard OpenAI shape: GET /models returns {data: [{id, ...}, ...]}.
-        Used by the watcher's "Refresh models" button so the operator can
-        pick a freshly-loaded model id instead of typing it by hand — e.g.
-        when Nous Research ships a new Hermes revision and you load it in
-        LM Studio, this populates the dropdown without a code change.
-        """
-        url = f"{self.base_url}/models"
-        try:
-            r = requests.get(url, headers=self._headers(),
-                             timeout=timeout_s if timeout_s is not None else 15.0)
-        except requests.RequestException as exc:
-            raise LLMConnectionError(f"unreachable: {exc}") from exc
-        if not r.ok:
-            try:
-                detail = r.json()
-            except Exception:                                   # noqa: BLE001
-                detail = r.text
-            raise LLMConnectionError(
-                f"{r.status_code} {r.reason} from {url}: {detail}"
-            )
-        try:
-            data = r.json()
-        except Exception as exc:                                # noqa: BLE001
-            raise LLMConnectionError(
-                f"malformed /models response: {exc}; body={r.text[:400]!r}"
-            ) from exc
-        # Some backends wrap the list in `data`, others return a bare list.
-        items = data.get("data") if isinstance(data, dict) else data
-        if not isinstance(items, list):
-            return []
-        return [
-            {
-                "id": (m.get("id") or "").strip(),
-                "owned_by": m.get("owned_by"),
-                "created": m.get("created"),
-            }
-            for m in items if isinstance(m, dict) and m.get("id")
-        ]
-
-    def ping(self, *, timeout_s: Optional[float] = None) -> Dict[str, Any]:
-        """Cheap connectivity check used by /api/llm/test in the watcher.
-
-        Sends a tiny prompt with max_tokens=32 so a healthy round-trip
-        finishes in seconds. The instance's timeout still applies — LM
-        Studio's cold-load of a fresh GGUF can take a long time on the
-        first request, so the operator should give the test endpoint a
-        generous timeout (120s+ is reasonable on consumer hardware).
-        """
-        reply = self.chat(
-            [
-                {"role": "system", "content": "Respond with exactly: OK"},
-                {"role": "user",   "content": "ping"},
-            ],
-            images=None,
-            max_tokens=32,
-            timeout_s=timeout_s,
-        )
-        return {
-            "ok": True,
-            "base_url": self.base_url,
-            "model": self.model,
-            "reply": (reply or "").strip()[:200],
-        }
 
 
 class OllamaCloudLLM:
@@ -339,30 +273,3 @@ class OllamaCloudLLM:
         except Exception as exc:                                    # noqa: BLE001
             raise LLMConnectionError(f"Ollama Cloud error: {exc}") from exc
 
-    def ping(self, *, timeout_s: Optional[float] = None) -> Dict[str, Any]:
-        """Quick connectivity check."""
-        reply = self.chat(
-            [
-                {"role": "system", "content": "Respond with exactly: OK"},
-                {"role": "user",   "content": "ping"},
-            ],
-            max_tokens=32,
-        )
-        return {
-            "ok": True,
-            "base_url": "https://api.ollama.com",
-            "model": self.model,
-            "reply": (reply or "").strip()[:200],
-        }
-
-    def list_models(self, *, timeout_s: Optional[float] = None) -> List[Dict[str, Any]]:
-        """List models available on Ollama Cloud for this key."""
-        try:
-            result = self._client.list()
-            models = result.get("models") if isinstance(result, dict) else getattr(result, "models", [])
-            return [
-                {"id": getattr(m, "model", None) or m.get("model", ""), "owned_by": "ollama"}
-                for m in (models or [])
-            ]
-        except Exception as exc:                                    # noqa: BLE001
-            raise LLMConnectionError(f"list_models failed: {exc}") from exc

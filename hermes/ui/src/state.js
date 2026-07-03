@@ -109,8 +109,6 @@ export function beep(freq = 880, durationMs = 140) {
   }
 }
 
-// First pending approval — what hotkeys A/R act on.
-export const firstPending = computed(() => state.approvals.pending[0] || null)
 
 // SSE Connection Management
 let eventSource = null
