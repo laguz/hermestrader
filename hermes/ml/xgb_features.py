@@ -44,7 +44,7 @@ from hermes.ml import persistence
 from hermes.ml.calibration import load_calibrator
 # Pure feature-engineering layer — moved to its own module; re-exported below
 # so existing `from hermes.ml.xgb_features import FeatureEngineer` imports work.
-from hermes.ml.feature_engineer import FeatureRow, FeatureEngineer, hv_rank
+from hermes.ml.feature_engineer import FeatureRow, FeatureEngineer
 # Live-tunable predictor config — moved to its own module; re-exported below so
 # existing `from hermes.ml.xgb_features import PredictorConfig` imports work.
 from hermes.ml.predictor_config import PredictorConfig, run_maybe_async
@@ -205,16 +205,6 @@ class AsyncXGBPredictor:
 
     def predict_latest(self, symbol: str) -> Optional[Dict[str, Any]]:
         return self._last_pred.get(symbol)
-
-    def predict_quantiles(self, symbol: str) -> Optional[Dict[str, float]]:
-        """Return per-quantile probabilities for the default horizon.
-
-        Used by augment_levels_with_pop to render confidence bands.
-        """
-        last = self._last_pred.get(symbol)
-        if not last:
-            return None
-        return last.get("quantiles")
 
     @property
     def config(self) -> PredictorConfig:
@@ -496,5 +486,4 @@ __all__ = [
     "FeatureEngineer",
     "AsyncXGBPredictor",
     "PredictorConfig",
-    "hv_rank",
 ]
