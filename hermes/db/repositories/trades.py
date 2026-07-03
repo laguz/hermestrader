@@ -694,6 +694,29 @@ class TradesRepository(Repository):
                     symbols.add(r.long_leg)
             return symbols
 
+    async def closed_trades_entry_features(self, limit: int = 500) -> List[Dict[str, Any]]:
+        """Most-recent CLOSED trades carrying an entry-feature snapshot and a
+        realized pnl — the labelled rows POP outcome-calibration trains on."""
+        async with self.AsyncSession() as s:
+            q = (select(Trade)
+                 .filter(Trade.status == "CLOSED",
+                         Trade.pnl.isnot(None),
+                         Trade.entry_features.isnot(None))
+                 .order_by(Trade.closed_at.desc())
+                 .limit(limit))
+            result = await s.execute(q)
+            rows = result.scalars().all()
+            return [
+                {
+                    "strategy_id": r.strategy_id,
+                    "symbol": r.symbol,
+                    "entry_features": r.entry_features,
+                    "pnl": float(r.pnl),
+                    "closed_at": r.closed_at,
+                }
+                for r in rows
+            ]
+
     async def equity_position(self, symbol: str) -> int:
         async with self.AsyncSession() as s:
             result = await s.execute(

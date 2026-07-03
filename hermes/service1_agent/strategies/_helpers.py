@@ -94,7 +94,11 @@ def entry_feature_snapshot(
     width_f = _coerce_float(width)
     credit_f = _coerce_float(entry_credit)
     feats: Dict[str, Any] = {
-        "schema": 1,
+        # schema 2: ``pop`` is the honest chain-delta POP (centered combiner,
+        # actual chain delta at the candidate expiry). schema-1 rows carry the
+        # old inflated overlay POP — outcome calibration must exclude them or
+        # the fitted correction double-deflates the honest scores.
+        "schema": 2,
         "strategy_id": strategy_id,
         "side_type": side_type,
         "knobs": dict(knobs) if knobs else None,

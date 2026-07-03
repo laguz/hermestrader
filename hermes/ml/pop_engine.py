@@ -140,6 +140,24 @@ def clear_meta_learners() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Outcome calibrator — fitted on the book's own closed trades (predicted POP
+# vs realized win/loss) and installed by the agent's heartbeat. Anything with
+# a ``.transform(seq) -> array`` surface works (PlattCalibrator in practice).
+# ---------------------------------------------------------------------------
+_pop_calibrator: Optional[Any] = None
+
+
+def set_pop_calibrator(calibrator: Optional[Any]) -> None:
+    """Install the outcome-fitted POP calibrator. Pass None to clear."""
+    global _pop_calibrator
+    _pop_calibrator = calibrator
+
+
+def get_pop_calibrator() -> Optional[Any]:
+    return _pop_calibrator
+
+
+# ---------------------------------------------------------------------------
 # Key-level discovery (unchanged from v1, just better-tested)
 # ---------------------------------------------------------------------------
 def find_key_levels(
@@ -287,11 +305,22 @@ def predict_pop(fv: FeatureVector) -> float:
     weights through training. When the meta-learner is the cold-start
     identity, we fall through to the legacy log-odds combiner so the
     transition is bisectable and behaviour-preserving.
+
+    The outcome calibrator (fitted on the book's own closed trades) is
+    applied last, whichever path scored: it maps "engine said p" onto the
+    realized win rate at that p. Refit continuously from live outcomes,
+    it converges toward identity as the underlying scorer gets honest —
+    so stacking it on an already-calibrated scorer is safe.
     """
     meta = get_meta_learner(fv.symbol)
     if meta.weights:
-        return float(meta.predict(fv.to_meta_dict()))
-    return _legacy_combiner(fv)
+        pop = float(meta.predict(fv.to_meta_dict()))
+    else:
+        pop = _legacy_combiner(fv)
+    calibrator = _pop_calibrator
+    if calibrator is not None:
+        pop = float(np.clip(calibrator.transform([pop])[0], 0.01, 0.99))
+    return pop
 
 
 def predict_pop_with_band(fv: FeatureVector) -> Dict[str, float]:
@@ -530,6 +559,8 @@ __all__ = [
     "set_meta_learner",
     "get_meta_learner",
     "clear_meta_learners",
+    "set_pop_calibrator",
+    "get_pop_calibrator",
     "find_key_levels",
     "calculate_strike_protection",
     "calculate_log_odds",
