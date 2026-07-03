@@ -212,3 +212,24 @@ async def test_mcp_place_order_soft_reject_surfaces_errors():
     assert "errors" in resp
     assert resp["order_id"] == ""
     assert resp["status"] == "rejected"
+
+
+async def test_analyze_symbol_zeroes_nonfinite_avg_vol():
+    """Regression: the non-finite guard for avg_vol assigned realized_vol
+    instead of avg_vol, so a NaN avg_vol (e.g. a bad zero-close bar making a
+    ±inf log return) flowed into the analysis dict and poisoned the
+    vol-regime inputs of the credit-spread POP calc."""
+    broker = TradierBroker(_CFG)
+    bars = []
+    for i in range(40):
+        close = 100.0 + (i % 5)
+        if i == 5:
+            close = 0.0  # bad bar outside the last-21 window → inf log return
+        bars.append({"date": f"2026-05-{i + 1:02d}", "close": close, "volume": 1_000_000})
+    with patch.object(broker, "get_history", new_callable=AsyncMock, return_value=bars):
+        analysis = await broker.analyze_symbol("TSLA")
+    assert "error" not in analysis
+    import math
+    assert math.isfinite(analysis["current_vol"])
+    assert math.isfinite(analysis["avg_vol"])
+    await broker.close()

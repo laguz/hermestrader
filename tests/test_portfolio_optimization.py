@@ -173,3 +173,36 @@ async def test_cascading_engine_process_entries_optimized(monkeypatch):
     assert count == 1
     assert len(broker.placed) == 1
     assert len(db.pending_orders) == 1
+
+
+@pytest.mark.asyncio
+async def test_width_fallback_cs75_not_matched_as_cs7():
+    """Regression: the width fallback tested '"CS7" in strat' before CS75,
+    and "CS7" is a substring of "CS75" — so a CS75 spread with no width and
+    unparseable strikes fell back to width=1.0 instead of 5.0, understating
+    margin per lot 5x and letting the optimizer grant ~5x too many lots."""
+    db = StubDB()
+    broker = StubBroker(option_buying_power=1000.0)
+    mm = MoneyManager(broker, db, config={"portfolio_optimization": True, "kelly_fraction": 0.5})
+
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        order_class="multileg",
+        legs=[
+            {"option_symbol": "NOT-AN-OCC-SYMBOL", "side": "sell_to_open", "quantity": 10},
+            {"option_symbol": "ALSO-NOT-OCC", "side": "buy_to_open", "quantity": 10},
+        ],
+        price=1.25,
+        side="sell",
+        quantity=1,
+        width=None,
+        strategy_params={"pop": 0.85},
+    )
+
+    optimized = await mm.optimize_allocation([action], 1000.0)
+
+    # CS75 fallback width is 5.0 → $500 margin per lot → $1000 BP affords at
+    # most 2 lots. Under the substring bug (width 1.0 → $100/lot) the
+    # optimizer granted far more.
+    assert all(a.legs[0]["quantity"] <= 2 for a in optimized)

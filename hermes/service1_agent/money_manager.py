@@ -272,9 +272,12 @@ class MoneyManager:
                     if len(strikes) >= 2:
                         width = abs(strikes[0] - strikes[1])
                     else:
-                        # Fallback default width
+                        # Fallback default width. "CS7" is a substring of
+                        # "CS75", so the wider strategy must match first.
                         strat = (action.strategy_id or "").upper()
-                        if "CS7" in strat:
+                        if "CS75" in strat:
+                            width = 5.0
+                        elif "CS7" in strat:
                             width = 1.0
                         else:
                             width = 5.0
