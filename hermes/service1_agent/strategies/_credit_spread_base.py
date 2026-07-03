@@ -257,12 +257,19 @@ class CreditSpreadStrategy(AbstractStrategy):
         # overlay POP (z-score delta estimate, hardcoded DTE) remains a
         # dashboard/ranking aid but no longer decides entries: gating on it
         # scored a 43Δ short as 76% "POP" in production and pulled strikes
-        # closer than pop_target intends. Pick the candidate whose honest POP
-        # is closest to (and ≥) the target — max premium above the safety floor.
-        best_strike = None
-        best_pop_diff = 999.0
+        # closer than pop_target intends.
+        #
+        # Every candidate clearing the POP floor is fully priced (long leg
+        # snapped, credit measured, min-credit enforced) and the winner is the
+        # highest *expected value* under this strategy's own TP/SL policy —
+        # POP-proximity always took the closest qualifying strike, which
+        # loses whenever a farther strike carries disproportionate premium
+        # (calibrated-POP × TP-profit beats a few extra cents of credit).
+        dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
+
+        best: Optional[Dict[str, Any]] = None
         max_pop_seen = 0.0
-        best_pop_val = None
+        credit_reject: Optional[Tuple[float, float, float]] = None
 
         pop_target = self._tun(t, "pop_target")
         delta_min = self._tun(t, "short_delta_min")
@@ -299,56 +306,61 @@ class CreditSpreadStrategy(AbstractStrategy):
             ))
             if pop > max_pop_seen:
                 max_pop_seen = pop
+            if pop < pop_target - _POP_GATE_EPS:
+                continue
 
-            if pop >= pop_target - _POP_GATE_EPS:
-                diff = abs(pop - pop_target)
-                if diff < best_pop_diff:
-                    best_pop_diff = diff
-                    best_strike = strike_opt
-                    best_pop_val = pop
+            # Snap the long strike to the nearest chain strike below/above
+            # the short; long must be a distinct strike further OTM.
+            sl_strike = float(strike_opt["strike"])
+            long_target = sl_strike - width if side == "put" else sl_strike + width
+            long_leg = nearest_strike(chain, opt_type, long_target)
+            if not long_leg or long_leg["symbol"] == strike_opt["symbol"]:
+                continue
+            ll_strike = float(long_leg["strike"])
+            if side == "put" and ll_strike >= sl_strike:
+                continue
+            if side == "call" and ll_strike <= sl_strike:
+                continue
+            actual_width = abs(sl_strike - ll_strike)
 
-        if not best_strike:
-            self._log(f"✗ {symbol} {side}: no ≥{pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_pop_seen:.1%}); skip.")
+            credit = self.short_credit(strike_opt, long_leg)
+            # Optionally re-scale min_credit against the actual snapped width —
+            # chain strikes may not match the requested ``width`` exactly.
+            if self.RESCALE_CREDIT_TO_WIDTH and width > 0:
+                effective_min_credit = round(actual_width * (min_credit / width), 2)
+            else:
+                effective_min_credit = min_credit
+            if credit < effective_min_credit:
+                if credit_reject is None:
+                    credit_reject = (credit, effective_min_credit, actual_width)
+                continue
+
+            ev = self._expected_value(pop=pop, credit=credit,
+                                      width=actual_width, dte=dte, t=t)
+            if best is None or ev > best["ev"]:
+                best = {
+                    "short": strike_opt, "long": long_leg, "pop": pop,
+                    "delta": delta, "credit": credit,
+                    "actual_width": actual_width, "ev": ev,
+                }
+
+        if best is None:
+            if credit_reject is not None:
+                credit, effective_min_credit, actual_width = credit_reject
+                self._log(
+                    f"✗ {symbol} {side}: credit ${credit:.2f} < min ${effective_min_credit:.2f} "
+                    f"(width={actual_width:.2f}); skip."
+                )
+            else:
+                self._log(f"✗ {symbol} {side}: no ≥{pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_pop_seen:.1%}); skip.")
             return None
 
-        short_leg = best_strike
-        # Snap the long strike to the nearest chain strike below/above the short.
-        long_target = float(short_leg["strike"]) - width if side == "put" else float(short_leg["strike"]) + width
-        long_leg = nearest_strike(chain, opt_type, long_target)
-        if not long_leg or long_leg["symbol"] == short_leg["symbol"]:
-            self._log(
-                f"✗ {symbol} {side}: no distinct long leg for short={short_leg['strike']:.2f} "
-                f"long_target={long_target:.2f}; skip."
-            )
-            return None
-        sl_strike = float(short_leg["strike"])
-        ll_strike = float(long_leg["strike"])
-        # Direction sanity — long must be further OTM than short.
-        if side == "put" and ll_strike >= sl_strike:
-            self._log(f"✗ {symbol} {side}: long strike {ll_strike} ≥ short {sl_strike} (invalid put spread); skip.")
-            return None
-        if side == "call" and ll_strike <= sl_strike:
-            self._log(f"✗ {symbol} {side}: long strike {ll_strike} ≤ short {sl_strike} (invalid call spread); skip.")
-            return None
-        actual_width = abs(sl_strike - ll_strike)
+        short_leg, long_leg = best["short"], best["long"]
         self._log(
-            f"→ {symbol} {side}: short={sl_strike:.2f} long={ll_strike:.2f} "
-            f"width={actual_width:.2f}"
+            f"→ {symbol} {side}: short={float(short_leg['strike']):.2f} "
+            f"long={float(long_leg['strike']):.2f} width={best['actual_width']:.2f} "
+            f"pop={best['pop']:.1%} credit=${best['credit']:.2f} ev=${best['ev']:.2f}"
         )
-
-        credit = self.short_credit(short_leg, long_leg)
-        # Optionally re-scale min_credit against the actual snapped width —
-        # chain strikes may not match the requested ``width`` exactly.
-        if self.RESCALE_CREDIT_TO_WIDTH and width > 0:
-            effective_min_credit = round(actual_width * (min_credit / width), 2)
-        else:
-            effective_min_credit = min_credit
-        if credit < effective_min_credit:
-            self._log(
-                f"✗ {symbol} {side}: credit ${credit:.2f} < min ${effective_min_credit:.2f} "
-                f"(width={actual_width:.2f}); skip."
-            )
-            return None
 
         return TradeAction(
             strategy_id=self.strategy_id,
@@ -357,14 +369,51 @@ class CreditSpreadStrategy(AbstractStrategy):
                 {"option_symbol": short_leg["symbol"], "side": "sell_to_open", "quantity": lots},
                 {"option_symbol": long_leg["symbol"],  "side": "buy_to_open",  "quantity": lots},
             ],
-            price=credit, side="sell", quantity=1, order_type="credit",
+            price=best["credit"], side="sell", quantity=1, order_type="credit",
             tag=f"HERMES_{self.NAME}",
             strategy_params={"short_leg": short_leg["symbol"], "long_leg": long_leg["symbol"],
-                             "side_type": side, "pop": best_pop_val,
-                             "short_delta": abs(float((short_leg.get("greeks") or {}).get("delta") or 0.0))},
-            dte=(datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days,
+                             "side_type": side, "pop": best["pop"],
+                             "short_delta": best["delta"],
+                             "ev": round(best["ev"], 4)},
+            dte=dte,
             expiry=expiry, width=width,
         )
+
+    # ---- entry economics (EV under this strategy's management policy) ------
+    def _tp_profit(self, credit: float, width: float, dte: int, t) -> float:
+        """Per-share profit captured when this strategy's TP fires.
+
+        Base default: half the credit (the canonical 50%-capture rule).
+        Subclasses whose close policy differs must override so EV ranking
+        prices their actual exit, not a generic one.
+        """
+        return 0.5 * credit
+
+    def _sl_loss(self, credit: float, width: float, t) -> float:
+        """Per-share loss realized when this strategy's SL fires.
+
+        Close debit at the stop is ``sl_mult × credit`` → loss of
+        ``(sl_mult − 1) × credit``, capped at the structural max loss
+        (width − credit; the SL width-cap suppresses closes beyond it).
+        """
+        try:
+            sl_mult = float(self._tun(t, "sl_mult"))
+        except Exception:                                  # noqa: BLE001
+            sl_mult = 2.5
+        return min((sl_mult - 1.0) * credit, max(width - credit, 0.0))
+
+    def _expected_value(self, *, pop: float, credit: float, width: float,
+                        dte: int, t) -> float:
+        """First-order EV per share under the management policy.
+
+        ``pop`` is the calibrated P(win) — post-#156 it reflects realized
+        outcomes under this very TP/SL policy, so pairing it with the
+        policy's win/loss amounts prices the trade as it will actually be
+        managed, not as if held to expiry.
+        """
+        win = self._tp_profit(credit, width, dte, t)
+        loss = self._sl_loss(credit, width, t)
+        return pop * win - (1.0 - pop) * loss
 
     # =======================================================================
     # MANAGEMENT

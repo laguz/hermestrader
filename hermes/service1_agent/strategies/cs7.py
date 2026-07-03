@@ -62,6 +62,11 @@ class CreditSpreads7(CreditSpreadStrategy):
     def _min_credit(self, dte: int, width: float, t) -> float:
         return round(width * t.cs7_min_credit_pct, 2)
 
+    def _tp_profit(self, credit: float, width: float, dte: int, t) -> float:
+        # Mirrors _close_reason: TP fires at debit ≤ tp_pct_width × width, so
+        # the captured profit is credit − tp_pct_width × width.
+        return max(credit - float(t.cs7_tp_pct_width) * width, 0.0)
+
     def _close_reason(self, trade, dte, debit, entry_credit, width, t) -> Optional[str]:
         """TP @ debit ≤ 2% of width; SL @ debit ≥ 3× entry credit."""
         if debit <= width * t.cs7_tp_pct_width:

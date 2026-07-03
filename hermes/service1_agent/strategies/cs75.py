@@ -65,6 +65,12 @@ class CreditSpreads75(CreditSpreadStrategy):
                           else t.cs75_min_credit_pct_near)
         return round(width * min_credit_pct, 2)
 
+    def _tp_profit(self, credit: float, width: float, dte: int, t) -> float:
+        # Mirrors _close_reason: TP fires at debit ≤ tp_pct × credit, so the
+        # captured profit is (1 − tp_pct) × credit for the matching DTE band.
+        tp_pct = t.cs75_tp_pct_far if 21 <= dte <= 45 else t.cs75_tp_pct_near
+        return (1.0 - float(tp_pct)) * credit
+
     def _close_reason(self, trade, dte, debit, entry_credit, width, t) -> Optional[str]:
         """TP @ 50% (DTE 21–45) or 75% (DTE<21); SL @ 2.5×; time exit ≤ 8 DTE."""
         if 21 <= dte <= 45 and debit <= entry_credit * t.cs75_tp_pct_far:
