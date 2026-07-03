@@ -597,6 +597,70 @@ class PipelineController:
                     logger.info("[ENGINE] Registered order %s in reactive monitor", oid)
                     engine._ensure_order_monitor()
 
+    # ── POP outcome calibration (slow heartbeat job) ──────────────────────────
+    _POP_CAL_FIT_KEY = "pop_cal_last_fit"       # ISO ts of the last fit attempt
+    _POP_CAL_STATE_KEY = "pop_calibration"      # JSON blob: params + fit stats
+    _POP_CAL_REFIT_S = 6 * 3600
+
+    async def maybe_refit_pop_calibrator(self) -> None:
+        """Refit the POP outcome calibrator from closed trades, throttled.
+
+        Runs on the slow heartbeat. The fitted parameters are persisted in
+        ``system_settings`` (agent-owned per the single-writer invariant) so a
+        restart re-installs the last calibrator instead of running naked until
+        the next refit window. Every failure path is non-fatal — calibration
+        must never take down a trading tick.
+        """
+        import json
+        from datetime import datetime, timezone
+
+        from hermes.ml.calibration import PlattCalibrator
+        from hermes.ml.pop_calibration import fit_pop_calibrator
+        from hermes.ml.pop_engine import get_pop_calibrator, set_pop_calibrator
+
+        ctx = self.ctx
+        try:
+            # Restart recovery: nothing installed in-process but a persisted
+            # calibrator exists → re-install it before the throttle can skip.
+            if get_pop_calibrator() is None:
+                blob = await ctx.db.settings.get_setting(self._POP_CAL_STATE_KEY)
+                if blob:
+                    state = json.loads(blob)
+                    set_pop_calibrator(PlattCalibrator.from_dict(state["calibrator"]))
+                    logger.info("[POP-CAL] reinstalled persisted calibrator "
+                                "(fitted_at=%s n=%s)",
+                                state.get("fitted_at"), state.get("n"))
+
+            raw = await ctx.db.settings.get_setting(self._POP_CAL_FIT_KEY)
+            now = datetime.now(timezone.utc)
+            if raw:
+                try:
+                    last = datetime.fromisoformat(raw)
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=timezone.utc)
+                    if (now - last).total_seconds() < self._POP_CAL_REFIT_S:
+                        return
+                except ValueError:
+                    pass
+
+            result = await fit_pop_calibrator(ctx.db)
+            await ctx.db.settings.set_setting(self._POP_CAL_FIT_KEY, now.isoformat(timespec="seconds"))
+            if result is None:
+                return                     # too few labelled rows / no improvement
+
+            calibrator = result.pop("calibrator")
+            set_pop_calibrator(calibrator)
+            state = {"calibrator": calibrator.to_dict(), **result}
+            await ctx.db.settings.set_setting(self._POP_CAL_STATE_KEY, json.dumps(state))
+            await ctx.db.logs.write_log(
+                "ENGINE",
+                f"[POP-CAL] calibrator refit on {result['n']} closed trades "
+                f"(wins={result['wins']} losses={result['losses']}, "
+                f"log-loss {result['log_loss_raw']:.4f}→{result['log_loss_cal']:.4f})",
+            )
+        except Exception as exc:                              # noqa: BLE001
+            logger.warning("[POP-CAL] refit skipped: %s", exc)
+
     # ── slow heartbeat tick (operator guards wrapping the pipeline) ───────────
     # Owns the body of ``CascadingEngine._handle_clock_tick_internal``. The actual
     # trading work is delegated back to ``engine._run_tick_internal`` (and the
@@ -695,6 +759,9 @@ class PipelineController:
                     await _execute_approved_action(item, broker=ctx.broker.broker, db=ctx.db)
             except Exception as exc:
                 logger.warning("Executing approved actions failed: %s", exc)
+
+            # 5b. POP outcome calibration (throttled internally; never fatal)
+            await self.maybe_refit_pop_calibrator()
 
             # 6. Heartbeat and Market-hours gate
             mkt = market_session()

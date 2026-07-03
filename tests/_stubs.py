@@ -277,6 +277,9 @@ class StubDB:
     async def latest_closed_trade_time(self, strategy_id: str, symbol: str) -> Optional[datetime]:
         return self._closed_times.get((strategy_id, symbol))
 
+    async def closed_trades_entry_features(self, limit: int = 500):
+        return []
+
     async def count_open_contracts(self, strategy_id: str, symbol: str, side: str,
                               expiry: str) -> int:
         # Mirror HermesDB: expiry is now required so a stub call without
