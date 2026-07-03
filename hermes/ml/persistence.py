@@ -216,22 +216,6 @@ def load_model(
     return model, meta
 
 
-def list_models(symbol: str, root: Path = DEFAULT_MODEL_ROOT) -> Dict[str, ModelMeta]:
-    """Return the {model_name → meta} map for a symbol.  Used by the
-    diagnostics endpoint to surface every checkpoint Hermes is serving.
-    """
-    out: Dict[str, ModelMeta] = {}
-    d = _model_dir(root, symbol)
-    if not d.exists():
-        return out
-    for meta_path in sorted(d.glob("*.meta.json")):
-        try:
-            meta = ModelMeta.from_json(meta_path.read_text())
-        except (OSError, json.JSONDecodeError, TypeError):
-            continue
-        out[meta_path.stem.replace(".meta", "")] = meta
-    return out
-
 
 def _quarantine(artefact: Path, meta: Path, *, reason: str) -> None:
     """Move a bad pair into ``<root>/_quarantine/<ts>-<reason>/`` so a
@@ -251,5 +235,4 @@ __all__ = [
     "ModelMeta",
     "save_model",
     "load_model",
-    "list_models",
 ]

@@ -150,15 +150,3 @@ class FeatureEngineer:
         numeric_cols = df.columns.difference(["symbol"])
         df[numeric_cols] = df[numeric_cols].replace([np.inf, -np.inf], np.nan)
         return df.dropna()
-
-
-# ---------------------------------------------------------------------------
-# HV Rank — retained for callers that still want a HV proxy.
-# ---------------------------------------------------------------------------
-def hv_rank(daily: pd.DataFrame, window: int = 252, lookback: int = 365) -> pd.Series:
-    log_ret = np.log(daily["close"] / daily["close"].shift(1))
-    hv = log_ret.rolling(window).std() * math.sqrt(252)
-    rolling_min = hv.rolling(lookback).min()
-    rolling_max = hv.rolling(lookback).max()
-    rank = (hv - rolling_min) / (rolling_max - rolling_min)
-    return rank.fillna(0).clip(0, 1) * 100

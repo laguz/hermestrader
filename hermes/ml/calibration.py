@@ -225,18 +225,10 @@ def load_calibrator(payload: Optional[dict]):
     return None
 
 
-def calibrator_to_json(cal) -> str:
-    """Serialise a calibrator object to JSON. Inverse of load_calibrator."""
-    if cal is None:
-        return "null"
-    return json.dumps(cal.to_dict(), sort_keys=True)
-
-
 __all__ = [
     "PlattCalibrator",
     "IsotonicCalibrator",
     "load_calibrator",
-    "calibrator_to_json",
     "brier_score",
     "log_loss",
 ]

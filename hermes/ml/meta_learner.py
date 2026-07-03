@@ -40,7 +40,6 @@ from hermes.ml.calibration import (
     brier_score,
     log_loss,
     load_calibrator,
-    calibrator_to_json,
 )
 
 logger = logging.getLogger("hermes.ml.meta")
