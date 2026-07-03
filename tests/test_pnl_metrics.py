@@ -248,3 +248,44 @@ async def test_pnl_metrics_wheel(make_db):
     assert tsla_details["current_spot"] == 150.0
     assert tsla_details["total_pnl"] == 200.0 - 20000.0 + 15000.0
     assert tsla_details["outcome"] == "FAIL"
+
+
+async def test_pnl_metrics_hermesalpha(db):
+    await db.watchlist.ensure_strategies({
+        "CS7": 1,
+        "CS75": 2,
+        "TT45": 3,
+        "WHEEL": 4,
+        "HERMESALPHA": 5
+    })
+
+    # HERMESALPHA uses CS75's thresholds: FAIL <= 7%, PASS >= 22%
+    async with db.AsyncSession() as s:
+        # Width: 10.0, lots: 2, entry_credit: 2.0 -> risk_capital = (10 - 2) * 2 * 100 = 1600
+        # realized_pnl = 400.0 (return = 400/1600 = 25% >= 22% PASS)
+        t1 = Trade(
+            id=1,
+            strategy_id="HERMESALPHA",
+            symbol="NVDA",
+            side_type="put",
+            short_strike=100.0,
+            long_strike=90.0,
+            width=10.0,
+            lots=2,
+            entry_credit=2.0,
+            status="CLOSED",
+            pnl=400.0,
+            closed_at=datetime.utcnow() - timedelta(days=3),
+            opened_at=datetime.utcnow() - timedelta(days=20)
+        )
+        s.add(t1)
+        await s.commit()
+
+    metrics = await db.analytics.get_strategy_performance_metrics(days=30)
+
+    alpha = metrics["HERMESALPHA"]
+    assert alpha["closed_trades"] == 1
+    assert alpha["passed"] == 1
+    assert alpha["failed"] == 0
+    assert alpha["status"] == "PASS"
+    assert alpha["total_pnl"] == 400.0
