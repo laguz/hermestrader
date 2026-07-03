@@ -485,8 +485,8 @@ class AsyncXGBPredictor:
             return None
         if self._cfg.use_pnl_target:
             # Realised credit-spread P&L would require a full options
-            # backtest harness; until backtester.py is wired to write a
-            # hermes_pnl_target setting per symbol, fall back to return.
+            # backtest harness to write a hermes_pnl_target setting per
+            # symbol; none exists yet, so fall back to return.
             target = (bars_daily["close"].shift(-horizon)
                       / bars_daily["close"] - 1.0)
         else:
