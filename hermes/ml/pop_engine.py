@@ -220,7 +220,7 @@ def find_key_levels(
 # ---------------------------------------------------------------------------
 # Strike protection
 # ---------------------------------------------------------------------------
-_PROTECTION_DISTANCE_FLOOR = 0.1   # exposed for tests; see rec #19
+_PROTECTION_DISTANCE_FLOOR = 0.1   # percent-of-spot points; exposed for tests (rec #19)
 
 
 def calculate_strike_protection(
@@ -232,9 +232,22 @@ def calculate_strike_protection(
     """Numerical score representing how well a short strike is protected
     by S/R clusters. ``>=1.0`` means baseline protection.
 
+    Level distance is measured in **percent-of-spot points**
+    (``100 × |spot − level| / spot``), not raw dollars — a support 1%
+    below spot means the same thing on a $20 stock as on a $600 stock.
+    In dollar units the same structure scored ~30× apart by share price,
+    systematically starving expensive underlyings of protection. At
+    spot=$100 the two units coincide, so scores match the historical
+    dollar-based tuning there. (σ√t-normalisation — pricing the distance
+    in vol units — is the further refinement, but needs vol+DTE plumbed
+    into every caller.)
+
     Logs the raw score so silent saturation against the distance floor
     becomes observable in production (rec #19).
     """
+    if not np.isfinite(current_price) or current_price <= 0:
+        return 1.0
+    pct = 100.0 / current_price
     raw_score = 0.0
     for level in key_levels:
         ltype = level.get("type")
@@ -242,11 +255,11 @@ def calculate_strike_protection(
         strength = float(level.get("strength", 1))
         if spread_type == "put_credit" and ltype == "support":
             if short_strike < price < current_price:
-                distance = max(current_price - price, _PROTECTION_DISTANCE_FLOOR)
+                distance = max((current_price - price) * pct, _PROTECTION_DISTANCE_FLOOR)
                 raw_score += strength * (1.0 / distance)
         elif spread_type == "call_credit" and ltype == "resistance":
             if current_price < price < short_strike:
-                distance = max(price - current_price, _PROTECTION_DISTANCE_FLOOR)
+                distance = max((price - current_price) * pct, _PROTECTION_DISTANCE_FLOOR)
                 raw_score += strength * (1.0 / distance)
 
     score = 1.0 + (raw_score * 0.1)
