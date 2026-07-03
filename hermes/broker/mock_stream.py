@@ -37,10 +37,6 @@ class MockStreamClient:
             self._task = None
         logger.info("MockStreamClient stopped.")
 
-    def update_watchlist(self, watchlist: List[str]) -> None:
-        self.watchlist = list(watchlist)
-        logger.debug("MockStreamClient watchlist updated: %s", self.watchlist)
-
     async def _run_loop(self) -> None:
         while self._running:
             try:
