@@ -304,14 +304,49 @@ cmd_logs() {
         svc="${1:-}"
     fi
 
-    local env_file=".env.paper"
-    local proj_name="hermes-paper"
-    if [ "$target" = "live" ]; then
-        env_file=".env.live"
-        proj_name="hermes-live"
+    local env_file=""
+    local proj_name=""
+
+    # Try to find the matching project in our detected instances
+    local target_proj="hermes-${target}"
+    for i in "${!PROJECT_NAMES[@]}"; do
+        if [ "${PROJECT_NAMES[$i]}" = "$target_proj" ]; then
+            env_file="${ENV_FILES[$i]}"
+            proj_name="${PROJECT_NAMES[$i]}"
+            break
+        fi
+    done
+
+    # Fallback to defaults if not found in detected array
+    if [ -z "$env_file" ]; then
+        if [ "$target" = "live" ]; then
+            if [ -f .env.live ]; then
+                env_file=".env.live"
+                proj_name="hermes-live"
+            fi
+        else
+            if [ -f .env.paper ]; then
+                env_file=".env.paper"
+                proj_name="hermes-paper"
+            elif [ -f .env ]; then
+                env_file=".env"
+                proj_name="hermes-paper"
+            fi
+        fi
     fi
 
-    info "Showing logs for ${proj_name}..."
+    # Final fallback if still empty
+    if [ -z "$env_file" ]; then
+        if [ "$target" = "live" ]; then
+            env_file=".env.live"
+            proj_name="hermes-live"
+        else
+            env_file=".env.paper"
+            proj_name="hermes-paper"
+        fi
+    fi
+
+    info "Showing logs for ${proj_name} using ${env_file}..."
     if [ -n "$svc" ]; then
         docker compose --env-file "$env_file" -p "$proj_name" logs -f "$svc"
     else
@@ -329,8 +364,13 @@ cmd_status() {
 }
 
 cmd_build() {
+    local no_cache=""
+    if [ "${1:-}" = "--no-cache" ]; then
+        no_cache="--no-cache"
+    fi
     info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${HERMES_VERSION})…"
     docker build \
+        $no_cache \
         --build-arg HERMES_VERSION="$HERMES_VERSION" \
         -t "$IMAGE_FULL" \
         -t "${HERMES_IMAGE}:${HERMES_VERSION}" \
@@ -351,7 +391,7 @@ cmd_rebuild() {
     info "Clearing corrupted Docker build cache to prevent I/O errors…"
     docker builder prune -a -f
 
-    cmd_build
+    cmd_build --no-cache
 
     info "Starting services…"
     _up
