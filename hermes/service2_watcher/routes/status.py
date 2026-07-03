@@ -278,4 +278,15 @@ async def get_debug_info() -> Dict[str, Any]:
         except Exception:                                         # noqa: BLE001
             pass
 
+        try:
+            import json as _json
+            from hermes.ml.pop_calibration import POP_CAL_STATE_KEY
+            res_cal = await s.execute(sa_text(
+                "SELECT value FROM system_settings WHERE key=:k"
+            ), {"k": POP_CAL_STATE_KEY})
+            cal_raw = res_cal.scalar()
+            result["db"]["pop_calibration"] = _json.loads(cal_raw) if cal_raw else None
+        except Exception:                                         # noqa: BLE001
+            result["db"]["pop_calibration"] = None
+
     return result

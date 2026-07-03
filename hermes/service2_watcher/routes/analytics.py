@@ -78,6 +78,7 @@ def _safe_json_response(content: Any, headers: Dict[str, str] = None) -> Respons
                     headers=headers or {})
 
 from hermes.db.models import HermesDB
+from hermes.ml.pop_calibration import sync_pop_calibrator_from_settings
 from hermes.ml.pop_engine import augment_levels_with_pop
 
 from .._app_state import DSN, WATCHLIST, db
@@ -304,6 +305,9 @@ async def get_symbol_analysis(symbol: str) -> Response:
         if "error" in analysis:
             return _safe_json_response(analysis)
         local_db = HermesDB(DSN)
+        # Keep the displayed POP in step with the agent: install the persisted
+        # outcome calibrator (agent-fitted, settings-persisted) before scoring.
+        await sync_pop_calibrator_from_settings(local_db)
         xgb_pred = await local_db.decisions.latest_prediction(symbol.upper()) or {}
         return _safe_json_response(augment_levels_with_pop(analysis, xgb_pred))
     except Exception as exc:                                       # noqa: BLE001
@@ -347,7 +351,8 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
         # 2. Fetch all predictions in one batch (DB optimization)
         preds_map = await local_db.decisions.latest_predictions_batch(sorted_symbols)
 
-        # 3. Augment with POP
+        # 3. Augment with POP — calibrated the same way the agent gates.
+        await sync_pop_calibrator_from_settings(local_db)
         for sym, ans in results.items():
             if "error" not in ans:
                 xgb_pred = preds_map.get(sym) or {}

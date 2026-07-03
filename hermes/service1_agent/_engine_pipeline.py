@@ -600,8 +600,14 @@ class PipelineController:
 
     # ── POP outcome calibration (slow heartbeat job) ──────────────────────────
     _POP_CAL_FIT_KEY = "pop_cal_last_fit"       # ISO ts of the last fit attempt
-    _POP_CAL_STATE_KEY = "pop_calibration"      # JSON blob: params + fit stats
     _POP_CAL_REFIT_S = 6 * 3600
+
+    @property
+    def _POP_CAL_STATE_KEY(self) -> str:
+        # Shared with the watcher's read-side sync (pop_calibration.py) so the
+        # two processes can't drift on the settings key name.
+        from hermes.ml.pop_calibration import POP_CAL_STATE_KEY
+        return POP_CAL_STATE_KEY
 
     async def maybe_refit_pop_calibrator(self) -> None:
         """Refit the POP outcome calibrator from closed trades, throttled.

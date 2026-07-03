@@ -21,6 +21,7 @@ Deliberately conservative for a system that places real orders:
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -32,6 +33,11 @@ logger = logging.getLogger("hermes.ml.pop_cal")
 MIN_SAMPLES = 30
 MIN_CLASS = 5
 MAX_SAMPLES = 500
+
+# system_settings key holding the fitted calibrator params + fit stats.
+# Written only by the agent (single-writer invariant); the watcher reads it
+# so its dashboard POP matches what the agent actually gates on.
+POP_CAL_STATE_KEY = "pop_calibration"
 
 
 def extract_calibration_rows(trades: List[Dict[str, Any]]) -> tuple[List[float], List[float]]:
@@ -56,6 +62,42 @@ def extract_calibration_rows(trades: List[Dict[str, Any]]) -> tuple[List[float],
         pops.append(pop)
         outcomes.append(1.0 if pnl > 0 else 0.0)
     return pops, outcomes
+
+
+# Last settings blob installed via sync — change detection so read-only
+# consumers (the watcher) can call sync on every request for pennies.
+_synced_state_raw: Optional[str] = None
+
+
+async def sync_pop_calibrator_from_settings(db) -> bool:
+    """Install the persisted outcome calibrator when it (re)appears or changes.
+
+    Read-only consumers of ``predict_pop`` running outside the agent process
+    (the watcher's analytics routes) call this before scoring so the POP they
+    display is the POP the agent trades on. Returns True when a calibrator
+    was (re)installed, False on no-change or any failure — never raises, and
+    never clears an installed calibrator on a transient read error.
+    """
+    global _synced_state_raw
+    from hermes.ml.pop_engine import set_pop_calibrator
+
+    try:
+        raw = await db.settings.get_setting(POP_CAL_STATE_KEY)
+    except Exception:                                          # noqa: BLE001
+        return False
+    if not raw or raw == _synced_state_raw:
+        return False
+    try:
+        state = json.loads(raw)
+        calibrator = PlattCalibrator.from_dict(state["calibrator"])
+    except Exception:                                          # noqa: BLE001
+        logger.warning("pop_calibration settings blob unparseable; ignoring")
+        return False
+    set_pop_calibrator(calibrator)
+    _synced_state_raw = raw
+    logger.info("POP calibrator synced from settings (fitted_at=%s n=%s)",
+                state.get("fitted_at"), state.get("n"))
+    return True
 
 
 async def fit_pop_calibrator(
