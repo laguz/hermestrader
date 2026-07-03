@@ -24,8 +24,6 @@ can evolve independently:
 - ``ledger``           — long-running PredictionLedger ORM table that
   records every published prediction tagged with model_hash and
   schema_hash for postmortem replay.
-- ``backtester``       — reality-check walk-forward POP backtester
-  with cost-model commissions and slippage.
 
 The options-IV feature stage (``feature_catalog.OPTIONS_FEATURES``) is
 currently empty: it was sourced from an IV cache that was never wired into
