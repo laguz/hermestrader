@@ -250,10 +250,4 @@ class MetaLearner:
             metrics=data.get("metrics", {}),
         )
 
-    @property
-    def calibrator_json(self) -> str:
-        cal = load_calibrator(self.calibrator_payload)
-        return calibrator_to_json(cal)
-
-
 __all__ = ["MetaLearner", "DEFAULT_FEATURES"]

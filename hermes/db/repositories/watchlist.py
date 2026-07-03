@@ -101,19 +101,6 @@ class WatchlistRepository(Repository):
                 return False
             s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
             await s.commit()
-            return True
-
-    async def remove_from_watchlist(self, strategy_id: str, symbol: str) -> bool:
-        sym = (symbol or "").strip().upper()
-        async with self.AsyncSession() as s:
-            result = await s.execute(select(StrategyWatchlist).filter_by(strategy_id=strategy_id, symbol=sym).limit(1))
-            row = result.scalars().first()
-            if not row:
-                return False
-            await s.delete(row)
-            await s.commit()
-            return True
-
     async def set_watchlist(self, strategy_id: str, symbols: List[str]) -> List[str]:
         clean = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
         async with self.AsyncSession() as s:
