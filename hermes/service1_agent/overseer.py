@@ -431,8 +431,6 @@ class HermesOverseer:
                 )
                 analysis = self._safe_json(msg)
                 verdict  = analysis.get("outlook", "NEUTRAL").upper()
-                rationale = analysis.get("rationale", "")
-                self.chart_provider.record_analysis(symbol, verdict, rationale, analysis)
                 await self.db.decisions.write_ai_decision(
                     "CHART", symbol, "vision",
                     {"type": "chart_analysis", **analysis},

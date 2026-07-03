@@ -99,11 +99,5 @@ class SettingsRepository(Repository):
             except Exception:
                 pass
 
-    async def setting_updated_at(self, key: str) -> Optional[datetime]:
-        async with self.AsyncSession() as s:
-            result = await s.execute(select(SystemSetting).filter_by(key=key).limit(1))
-            row = result.scalars().first()
-            return row.updated_at if row else None
-
     async def get_setting_async(self, key: str, default: Optional[str] = None) -> Optional[str]:
         return await self.get_setting(key, default)

@@ -216,13 +216,6 @@ class AsyncXGBPredictor:
             return None
         return last.get("quantiles")
 
-    def reload_config(self) -> PredictorConfig:
-        """Re-read the live-tunable knobs from HermesDB. Returns the
-        updated PredictorConfig so the /ml/diagnostics endpoint can
-        render what is currently in effect."""
-        self._cfg = PredictorConfig.from_db(self.db)
-        return self._cfg
-
     @property
     def config(self) -> PredictorConfig:
         return self._cfg

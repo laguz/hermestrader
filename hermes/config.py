@@ -20,7 +20,6 @@ class HermesSettings(BaseSettings):
     hermes_use_mcp_broker: bool = Field(default=True)
     hermes_soul_path: str = Field(default="/app/soul.md")
     hermes_version: str = Field(default="dev")
-    hermes_grpc_target: str = Field(default="localhost:50051")
 
     # Tradier generic credentials
     tradier_access_token: Optional[str] = None

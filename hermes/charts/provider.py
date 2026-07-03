@@ -236,8 +236,6 @@ class HermesChartProvider:
         self._lock        = threading.Lock()
         # {symbol: (monotonic_time, png_bytes)}
         self._cache: Dict[str, Tuple[float, bytes]] = {}
-        # Latest AI analysis per symbol: {symbol: {"verdict":…, "rationale":…, "ts":…}}
-        self._analysis: Dict[str, dict] = {}
 
     def start(self, symbols) -> None:
         """Warm up the cache for `symbols` in a background thread."""
@@ -276,21 +274,4 @@ class HermesChartProvider:
             logger.warning("Chart render failed for %s: %s", symbol, exc)
             return None
 
-    def record_analysis(self, symbol: str, verdict: str,
-                        rationale: str, features: dict | None = None) -> None:
-        """Store the latest LLM chart analysis for a symbol (used by the API)."""
-        with self._lock:
-            self._analysis[symbol] = {
-                "verdict":   verdict,
-                "rationale": rationale,
-                "features":  features or {},
-                "ts":        datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            }
 
-    def latest_analysis(self, symbol: str) -> Optional[dict]:
-        with self._lock:
-            return self._analysis.get(symbol)
-
-    def all_analyses(self) -> dict:
-        with self._lock:
-            return dict(self._analysis)
