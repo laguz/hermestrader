@@ -6,9 +6,12 @@ from typing import Any, Dict, List
 
 from sqlalchemy import select
 
+from hermes.common import STRATEGIES
 from hermes.db.orm import Trade, _compute_realized_pnl
 
 from .base import Repository
+
+_SPREAD_STRATEGIES = tuple(s for s in STRATEGIES if s != "WHEEL")
 
 
 class AnalyticsRepository(Repository):
@@ -88,14 +91,12 @@ class AnalyticsRepository(Repository):
             closed_trades = result.scalars().all()
 
         metrics = {
-            "CS7": {"closed_trades": 0, "passed": 0, "failed": 0, "total_pnl": 0.0, "details": []},
-            "CS75": {"closed_trades": 0, "passed": 0, "failed": 0, "total_pnl": 0.0, "details": []},
-            "TT45": {"closed_trades": 0, "passed": 0, "failed": 0, "total_pnl": 0.0, "details": []},
-            "WHEEL": {"closed_trades": 0, "passed": 0, "failed": 0, "total_pnl": 0.0, "details": []}
+            strat: {"closed_trades": 0, "passed": 0, "failed": 0, "total_pnl": 0.0, "details": []}
+            for strat in STRATEGIES
         }
 
-        # 1. Process option spreads: CS7, CS75, TT45
-        spread_trades = [t for t in closed_trades if t.strategy_id in ("CS7", "CS75", "TT45")]
+        # 1. Process option spreads: CS7, CS75, TT45, HERMESALPHA
+        spread_trades = [t for t in closed_trades if t.strategy_id in _SPREAD_STRATEGIES]
         for t in spread_trades:
             strat = t.strategy_id
             pnl_val = float(t.pnl) if t.pnl is not None else None
@@ -142,7 +143,7 @@ class AnalyticsRepository(Repository):
                 elif return_pct >= 0.10:
                     outcome = "PASS"
                     metrics[strat]["passed"] += 1
-            elif strat == "CS75":
+            elif strat in ("CS75", "HERMESALPHA"):
                 if return_pct <= 0.07:
                     outcome = "FAIL"
                     metrics[strat]["failed"] += 1
@@ -235,7 +236,7 @@ class AnalyticsRepository(Repository):
                     "outcome": outcome
                 })
 
-        for strat in ("CS7", "CS75", "TT45", "WHEEL"):
+        for strat in STRATEGIES:
             m = metrics[strat]
             if m["closed_trades"] == 0 and strat != "WHEEL":
                 m["status"] = "NEUTRAL"
