@@ -71,35 +71,6 @@ def log_loss(probs: Sequence[float], outcomes: Sequence[float]) -> float:
     return float(-np.mean(y * np.log(p) + (1 - y) * np.log(1 - p)))
 
 
-def reliability_curve(
-    probs: Sequence[float], outcomes: Sequence[float], *, n_bins: int = 10,
-) -> List[dict]:
-    """Return reliability bins for a calibration plot.
-
-    Each bin reports its centre probability, the empirical hit rate, and
-    the bin's row count. The /ml/diagnostics endpoint surfaces this
-    payload directly.
-    """
-    p = _coerce_array(probs)
-    y = _coerce_array(outcomes)
-    if p.size == 0:
-        return []
-    bins = np.linspace(0.0, 1.0, n_bins + 1)
-    out: List[dict] = []
-    for lo, hi in zip(bins[:-1], bins[1:]):
-        mask = (p >= lo) & (p < hi if hi < 1.0 else p <= hi)
-        n = int(mask.sum())
-        if n == 0:
-            continue
-        out.append({
-            "bin_low": float(lo),
-            "bin_high": float(hi),
-            "mean_predicted": float(p[mask].mean()),
-            "mean_actual": float(y[mask].mean()),
-            "count": n,
-        })
-    return out
-
 
 # ---------------------------------------------------------------------------
 # Calibrators
@@ -268,5 +239,4 @@ __all__ = [
     "calibrator_to_json",
     "brier_score",
     "log_loss",
-    "reliability_curve",
 ]

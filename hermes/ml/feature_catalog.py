@@ -211,13 +211,6 @@ def schema_hash(stage: str = "raw") -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-def catalog_dict() -> Dict[str, List[Dict[str, str]]]:
-    """JSON-serialisable view of the full catalog. Powers /ml/diagnostics."""
-    return {
-        stage: [asdict(s) for s in specs_for(stage)]
-        for stage in ("equity", "options", "macro", "meta")
-    }
-
 
 __all__ = [
     "FeatureSpec",
@@ -229,5 +222,4 @@ __all__ = [
     "feature_names",
     "specs_for",
     "schema_hash",
-    "catalog_dict",
 ]
