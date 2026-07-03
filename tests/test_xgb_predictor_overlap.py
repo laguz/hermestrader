@@ -10,7 +10,6 @@ pending asyncio tasks).
 """
 import asyncio
 import threading
-import time
 from datetime import date
 
 import pytest

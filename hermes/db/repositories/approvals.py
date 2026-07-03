@@ -209,7 +209,6 @@ class ApprovalsRepository(Repository):
             )
             await EventStoreManager.record_event(s, ev)
             
-            import json
             payload = {
                 "event_type": "ApprovalDecidedEvent",
                 "payload": ev.model_dump(mode="json")
@@ -251,7 +250,6 @@ class ApprovalsRepository(Repository):
                 )
                 await EventStoreManager.record_event(s, ev)
                 
-                import json
                 payload = {
                     "event_type": "ApprovalDecidedEvent",
                     "payload": ev.model_dump(mode="json")

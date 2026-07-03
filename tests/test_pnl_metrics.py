@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-import pytest
 import pandas as pd
 
 from hermes.db.models import Trade

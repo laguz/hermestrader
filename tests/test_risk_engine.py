@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from hermes.service1_agent.trade_action import TradeAction
 from hermes.service1_agent.risk_engine import PortfolioRiskEngine
 from ._stubs import StubDB, StubBroker

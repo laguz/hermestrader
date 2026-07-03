@@ -21,7 +21,7 @@ Precedence (highest wins):  ``system_settings`` > ``env_config`` > default.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +255,3 @@ def groups() -> List[str]:
         if t.group not in seen:
             seen.append(t.group)
     return seen
-
-
-def all_keys() -> Iterable[str]:
-    return TUNABLES.keys()

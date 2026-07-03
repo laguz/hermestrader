@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-import pytest
-from pydantic import Field
+from typing import Any, Dict
 
 from hermes.db.events import BaseEvent, deserialize_event, EVENT_TYPE_TO_CLASS
 

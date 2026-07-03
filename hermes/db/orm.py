@@ -23,7 +23,6 @@ guards that remaining seam (every hypertable-backed ORM table has its
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Optional
 from hermes.common import close_reason_from_tag
 from hermes.utils import utc_now

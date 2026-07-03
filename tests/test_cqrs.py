@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import pytest
 
-from hermes.db.models import PendingOrder, Trade, SystemSetting
+from hermes.db.models import PendingOrder, Trade
 from hermes.service1_agent.transaction_manager import TransactionManager
 from hermes.db.events import EventStoreManager, OrderSubmittedEvent, OrderFilledEvent, CloseSubmittedEvent, CloseFilledEvent
 from hermes.db.repositories.projections import ProjectionsRepository

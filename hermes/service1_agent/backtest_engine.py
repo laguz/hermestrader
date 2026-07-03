@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import datetime
 import logging
-import math
 import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-import pandas as pd
 from sqlalchemy import select
 
 from hermes.common import OCC_RE, is_close_tag
@@ -64,7 +62,7 @@ class _DictNSView(dict):
 
 
 class BacktestDatabase:
-    """Mock repository matching IDatabase Protocol, persisting state in memory."""
+    """Mock repository matching the HermesDB persistence surface, persisting state in memory."""
 
     def __init__(self):
         # Container-backed namespaces: usable both as inspection state and as a

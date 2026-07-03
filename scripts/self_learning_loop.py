@@ -39,7 +39,6 @@ async def main() -> int:
         from hermes.db.models import HermesDB, Trade
         from hermes.charts.provider import render_chart
         from hermes.service1_agent.main import _build_llm
-        import pandas as pd
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("import failed: %s", exc)
         return 1

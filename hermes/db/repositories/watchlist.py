@@ -132,7 +132,6 @@ class WatchlistRepository(Repository):
             )
             await EventStoreManager.record_event(s, ev)
             
-            import json
             payload = {
                 "event_type": "WatchlistChangedEvent",
                 "payload": ev.model_dump(mode="json")
