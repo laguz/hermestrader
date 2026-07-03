@@ -61,7 +61,8 @@ class CascadingEngine:
         1. Sync positions (broker → DB)
         2. Reconcile orphans
         3. Process exits / management for every strategy
-        4. Execute entries in priority order: CS75 → CS7 → TastyTrade45 → Wheel
+        4. Execute entries in priority order:
+           CS75 → CS7 → TastyTrade45 → Wheel → HermesAlpha
            — fully draining the watchlist for one strategy before moving on.
     """
 

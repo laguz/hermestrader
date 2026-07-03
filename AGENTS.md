@@ -9,8 +9,10 @@ HermesTrader is a two-service Python trading system:
 
 - **Service-1 (`hermes/service1_agent/`)** — the agent itself. Runs a
   `CascadingEngine` that ticks every `HERMES_TICK_INTERVAL` seconds and drives
-  two strategies: the rules-driven credit-spread core **CS75** (priority 1) and
-  the LLM-originated **HermesAlpha** (priority 5). Writes through a
+  five strategies in priority order: the rules-driven credit-spread core
+  **CS75** (1), short-cycle **CS7** (2), delta-driven **TT45** (3), the
+  covered-call/CSP **Wheel** (4), and the LLM-originated **HermesAlpha** (5).
+  Writes through a
   `MoneyManager` that enforces buying-power and side-aware capacity limits.
 - **Service-2 (`hermes/service2_watcher/`)** — FastAPI C2 (command & control)
   panel for human oversight. Approves trades, edits the agent's "soul"
