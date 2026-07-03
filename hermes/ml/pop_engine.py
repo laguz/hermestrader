@@ -249,8 +249,17 @@ def calculate_log_odds(probability: float) -> float:
 
 
 def _legacy_combiner(fv: FeatureVector) -> float:
+    # The vol-ratio and protection terms are *centered* on their neutral
+    # values (rv=1, protection=1) so they contribute zero log-odds in a
+    # neutral market. Uncentered, they added a constant ~+0.7 log-odds that
+    # systematically inflated POP ~10-20 points above the delta-implied
+    # probability (a 43Δ short scored 76% "POP" in production), pushing the
+    # strategies into closer strikes than their pop_target intends. With
+    # neutral inputs (xgb=0.5, rv=1, prot=1) POP now equals 1-|delta| exactly.
     p_base = 1.0 - abs(fv.delta)
-    rv = fv.current_vol / (fv.avg_vol + 1e-5)
+    # max() not +epsilon in the denominator, matching to_meta_dict: equal
+    # vols must give rv == 1.0 exactly so the centered term is truly zero.
+    rv = fv.current_vol / max(fv.avg_vol, 1e-5)
     l_base = calculate_log_odds(p_base)
     l_xgb = calculate_log_odds(fv.xgb_prob)
     if fv.side == "call":
@@ -261,8 +270,8 @@ def _legacy_combiner(fv: FeatureVector) -> float:
         beta_0
         + beta_1 * l_base
         + beta_2 * l_xgb
-        + beta_3 * rv
-        + beta_4 * fv.protection_score
+        + beta_3 * (rv - 1.0)
+        + beta_4 * (fv.protection_score - 1.0)
     )
     return float(1.0 / (1.0 + math.exp(-max(min(score, 30.0), -30.0))))
 
@@ -423,6 +432,15 @@ def augment_levels_with_pop(
     xgb_prob_lo = xgb_pred.get("predicted_prob_lo")
     xgb_prob_hi = xgb_pred.get("predicted_prob_hi")
 
+    # Stash the coerced probability on the analysis blob so downstream
+    # consumers (the strategies' chain-delta POP gate) reuse this exact
+    # number instead of re-deriving it from the raw prediction row.
+    analysis["xgb_prob"] = float(xgb_prob)
+    if xgb_prob_lo is not None:
+        analysis["xgb_prob_lo"] = float(xgb_prob_lo)
+    if xgb_prob_hi is not None:
+        analysis["xgb_prob_hi"] = float(xgb_prob_hi)
+
     target_dte = 7 if period.lower() == "3m" else 45
     t_years = target_dte / 365
     sigma = max(0.05, current_vol)
@@ -454,6 +472,7 @@ def augment_levels_with_pop(
         )
         if np.isnan(prot_score):
             prot_score = 1.0
+        level["protection"] = float(prot_score)
 
         fv = FeatureVector(
             delta=delta_est,

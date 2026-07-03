@@ -58,7 +58,8 @@ class DecisionsRepository(Repository):
             if row:
                 return {
                     "predicted_return": float(row.predicted_return or 0),
-                    "predicted_price": float(row.predicted_price or 0)
+                    "predicted_price": float(row.predicted_price or 0),
+                    "asof": row.ts,
                 }
             return None
 
@@ -70,7 +71,7 @@ class DecisionsRepository(Repository):
         # Postgres-specific DISTINCT ON for efficient latest-per-group
         sql = sa_text("""
             SELECT DISTINCT ON (symbol)
-                symbol, predicted_return, predicted_price
+                symbol, predicted_return, predicted_price, ts
             FROM predictions
             WHERE symbol IN :symbols
             ORDER BY symbol, ts DESC
@@ -82,6 +83,7 @@ class DecisionsRepository(Repository):
             for r in rows:
                 results[r.symbol] = {
                     "predicted_return": float(r.predicted_return or 0),
-                    "predicted_price": float(r.predicted_price or 0)
+                    "predicted_price": float(r.predicted_price or 0),
+                    "asof": r.ts,
                 }
         return results

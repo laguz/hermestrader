@@ -34,13 +34,18 @@ this base shares *code*, never state.
 """
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Iterable, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..core import AbstractStrategy, TradeAction
-from hermes.ml.pop_engine import augment_levels_with_pop
+from hermes.ml.pop_engine import FeatureVector, augment_levels_with_pop, predict_pop
 
 from ._helpers import nearest_strike, parse_occ
+
+# Floating-point guard for the honest-POP entry gate: sigmoid(logit(p))
+# round-trips a hair under p (0.75 → 0.7499999…), so an exactly-at-target
+# strike must not be rejected on the last ulp.
+_POP_GATE_EPS = 1e-9
 
 
 class CreditSpreadStrategy(AbstractStrategy):
@@ -95,7 +100,14 @@ class CreditSpreadStrategy(AbstractStrategy):
                     continue
 
                 # Centralised POP overlay on the institutional-flow S/R levels.
-                xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
+                # Prefer the in-process predictor (carries the calibrated
+                # predicted_prob + quantile bands the DB row lacks); fall back
+                # to the persisted row. Either way a stale prediction is
+                # dropped to neutral rather than silently steering today's POP.
+                xgb_pred = self._latest_xgb_pred(symbol)
+                if xgb_pred is None:
+                    xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
+                xgb_pred = self._drop_stale_pred(xgb_pred)
                 analysis = augment_levels_with_pop(analysis, xgb_pred, period=self.ANALYSIS_PERIOD)
 
                 price = analysis["current_price"]
@@ -169,6 +181,53 @@ class CreditSpreadStrategy(AbstractStrategy):
             target_lots = symbol_meta.get("target_lots") or target_lots_global
         return symbol, target_lots
 
+    def _latest_xgb_pred(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """In-process prediction from the agent's AsyncXGBPredictor, if wired.
+
+        ``main.py`` stashes ``predictor.predict_latest`` in the shared config
+        dict; the in-memory dict carries the calibrated ``predicted_prob`` and
+        quantile bands that ``write_prediction`` never persists. Returns None
+        when the hook is absent (tests, watcher) or has nothing for ``symbol``.
+        """
+        get_pred = (self.config or {}).get("xgb_predict_latest")
+        if not callable(get_pred):
+            return None
+        try:
+            pred = get_pred(symbol)
+        except Exception:                                          # noqa: BLE001
+            return None
+        return dict(pred) if pred else None
+
+    def _drop_stale_pred(self, pred: Dict[str, Any]) -> Dict[str, Any]:
+        """Neutralise a prediction older than ``xgb_pred_max_age_s``.
+
+        A row with no ``asof`` is kept as-is (pre-upgrade rows and test stubs
+        never carried one). Stale → empty dict, which coerces to the neutral
+        0.5 downstream instead of letting a days-old forecast tilt POP.
+        """
+        asof = pred.get("asof")
+        if not asof:
+            return pred
+        if isinstance(asof, str):
+            try:
+                asof = datetime.fromisoformat(asof)
+            except ValueError:
+                return pred
+        if asof.tzinfo is None:
+            asof = asof.replace(tzinfo=timezone.utc)
+        now = self.now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        max_age_s = int(self.config.get("xgb_pred_max_age_s", 86400))
+        age_s = (now - asof).total_seconds()
+        if age_s > max_age_s:
+            self._log(
+                f"ℹ️ XGB prediction stale ({age_s/3600:.1f}h old > "
+                f"{max_age_s/3600:.1f}h max); using neutral POP inputs."
+            )
+            return {}
+        return pred
+
     async def _in_cooldown(self, symbol: str) -> bool:
         """True if a trade on ``symbol`` closed inside the re-entry cooldown."""
         last_closed = await self.db.trades.latest_closed_trade_time(self.strategy_id, symbol)
@@ -191,47 +250,65 @@ class CreditSpreadStrategy(AbstractStrategy):
             return None
 
         opt_type = side
-        # Use the POP already computed for the key levels (institutional flow)
-        # rather than scanning the whole chain — cheaper, and POP is the
-        # selection criterion anyway. Pick the level whose POP is closest to
-        # (and ≥) the target, whose nearest chain strike is in the delta band.
+        # Walk the S/R levels, snap each to its nearest chain strike, and gate
+        # on an *honest* POP computed from the actual chain delta of that
+        # strike — the market's own implied P(OTM) at the real candidate
+        # expiry, absorbing IV skew and term structure for free. The level's
+        # overlay POP (z-score delta estimate, hardcoded DTE) remains a
+        # dashboard/ranking aid but no longer decides entries: gating on it
+        # scored a 43Δ short as 76% "POP" in production and pulled strikes
+        # closer than pop_target intends. Pick the candidate whose honest POP
+        # is closest to (and ≥) the target — max premium above the safety floor.
         best_strike = None
         best_pop_diff = 999.0
-        max_level_pop = 0.0
+        max_pop_seen = 0.0
         best_pop_val = None
 
         pop_target = self._tun(t, "pop_target")
         delta_min = self._tun(t, "short_delta_min")
         delta_max = self._tun(t, "short_delta_max")
 
+        xgb_prob = float(analysis.get("xgb_prob", 0.5))
+        current_vol = float(analysis.get("current_vol", 0.30))
+        avg_vol = float(analysis.get("avg_vol", 0.25))
+
         target_type = "support" if side == "put" else "resistance"
         levels = [lvl for lvl in analysis.get("key_levels", []) if lvl.get("type") == target_type]
 
         for level in levels:
-            lvl_pop = level.get("pop", 0.0)
-            if lvl_pop > max_level_pop:
-                max_level_pop = lvl_pop
+            strike_opt = nearest_strike(chain, opt_type, level["price"])
+            if not strike_opt:
+                continue
 
-            if lvl_pop >= pop_target:
-                diff = abs(lvl_pop - pop_target)
+            # Delta sanity bound: avoid both deep OTM (no premium)
+            # and near-the-money (too much assignment risk).
+            greeks = strike_opt.get("greeks") or {}
+            delta = abs(float(greeks.get("delta", 0.0)))
+            if delta < delta_min or delta > delta_max:
+                continue
+
+            pop = predict_pop(FeatureVector(
+                delta=delta,
+                xgb_prob=xgb_prob,
+                current_vol=current_vol,
+                avg_vol=avg_vol,
+                protection_score=float(level.get("protection", 1.0)),
+                side=side,
+                period=self.ANALYSIS_PERIOD.upper(),
+                symbol=symbol,
+            ))
+            if pop > max_pop_seen:
+                max_pop_seen = pop
+
+            if pop >= pop_target - _POP_GATE_EPS:
+                diff = abs(pop - pop_target)
                 if diff < best_pop_diff:
-                    strike_opt = nearest_strike(chain, opt_type, level["price"])
-                    if not strike_opt:
-                        continue
-
-                    # Delta sanity bound: avoid both deep OTM (no premium)
-                    # and near-the-money (too much assignment risk).
-                    greeks = strike_opt.get("greeks") or {}
-                    delta = abs(float(greeks.get("delta", 0.0)))
-                    if delta < delta_min or delta > delta_max:
-                        continue
-
                     best_pop_diff = diff
                     best_strike = strike_opt
-                    best_pop_val = lvl_pop
+                    best_pop_val = pop
 
         if not best_strike:
-            self._log(f"✗ {symbol} {side}: no ≥{pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_level_pop:.1%}); skip.")
+            self._log(f"✗ {symbol} {side}: no ≥{pop_target:.0%} POP S/R level found in chain (Best Level POP: {max_pop_seen:.1%}); skip.")
             return None
 
         short_leg = best_strike
@@ -272,11 +349,6 @@ class CreditSpreadStrategy(AbstractStrategy):
                 f"(width={actual_width:.2f}); skip."
             )
             return None
-
-        if best_pop_val is None and short_leg:
-            greeks = short_leg.get("greeks") or {}
-            delta = abs(float(greeks.get("delta") or 0.0))
-            best_pop_val = 1.0 - delta if delta > 0.0 else 0.75
 
         return TradeAction(
             strategy_id=self.strategy_id,

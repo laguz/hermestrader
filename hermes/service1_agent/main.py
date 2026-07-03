@@ -404,6 +404,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         _ml_broker = _build_broker(conf, conf.get("mode", "paper"))
         _ml_predictor = AsyncXGBPredictor(_ml_db, FeatureEngineer(), _ml_broker, conf["watchlist"])
         _ml_predictor.start(event_bus=event_bus)
+        # Strategies share `conf` by reference: expose the in-process
+        # prediction cache so POP scoring sees the calibrated predicted_prob
+        # and quantile bands that the persisted predictions row lacks.
+        conf["xgb_predict_latest"] = _ml_predictor.predict_latest
         log.info("AsyncXGBPredictor started under EventBus forecasting.")
     except ImportError:
         log.warning("xgboost or pandas not installed — ML predictor disabled")
