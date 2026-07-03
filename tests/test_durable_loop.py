@@ -2,7 +2,6 @@ from __future__ import annotations
 from ._stubs import alias_db_namespaces
 
 import asyncio
-import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 

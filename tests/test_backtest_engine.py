@@ -6,7 +6,6 @@ from hermes.service1_agent.backtest_engine import (
     BacktestController,
 )
 from hermes.service1_agent.strategies.cs75 import CreditSpreads75
-from tests._stubs import StubBroker
 
 class DummyTimeSeriesEngine:
     async def get_price_on_date(self, symbol, dt):

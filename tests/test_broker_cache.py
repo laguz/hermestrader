@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 import pytest
 from datetime import datetime, timedelta
 
-from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper, BrokerCache
+from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
 
 
 @pytest.fixture(autouse=True)

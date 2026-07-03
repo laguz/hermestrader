@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from hermes.common import OCC_RE
 from hermes.service1_agent.trade_action import TradeAction

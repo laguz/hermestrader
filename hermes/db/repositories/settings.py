@@ -88,7 +88,6 @@ class SettingsRepository(Repository):
                 
             await EventStoreManager.record_event(s, ev)
             
-            import json
             payload = {
                 "event_type": ev.__class__.__name__,
                 "payload": ev.model_dump(mode="json")

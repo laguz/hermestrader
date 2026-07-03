@@ -8,15 +8,15 @@ Each strategy declares ``PRIORITY`` (1 = highest). The ``CascadingEngine``
 runs them in PRIORITY order; high-priority strategies consume capacity
 before lower-priority ones see the watchlist.
 
-Phase 0 ships a single strategy — the highest-priority, longest-DTE / most
-vetted recipe. Additional strategies are admitted only when they clear the
-promotion gate (see ``REBUILD.md``).
-
 Layout
 ------
 - ``_helpers.py`` — OCC parser + ``_nearest_strike`` (used by every strategy)
 - ``_credit_spread_base.py`` — shared POP-driven credit-spread engine
-- ``cs75.py``     — Priority 1, 39–45 DTE credit spreads (config + hooks)
+- ``cs75.py``         — Priority 1, 39–45 DTE credit spreads (config + hooks)
+- ``cs7.py``          — Priority 2, short-cycle 7-DTE iron-condor spreads
+- ``tt45.py``         — Priority 3, delta-driven verticals, 30–60 DTE
+- ``wheel.py``        — Priority 4, CSP → assignment → covered-call wheel
+- ``hermes_alpha.py`` — Priority 5, LLM-originated credit spreads
 
 Adding a strategy: subclass ``AbstractStrategy`` from ``..core``, give it a
 ``PRIORITY`` ≥2 and a ``NAME``, drop it in here, and register it in

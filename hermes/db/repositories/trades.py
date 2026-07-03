@@ -11,7 +11,7 @@ from sqlalchemy import select
 from hermes.common import OCC_RE as _OCC_RE
 from hermes.db.orm import (
     ExitTick, PendingApproval, PendingOrder, Trade,
-    _close_reason_from_tag, _compute_realized_pnl,
+    _close_reason_from_tag,
 )
 from hermes.service1_agent.transaction_manager import TransactionManager
 

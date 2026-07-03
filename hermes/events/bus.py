@@ -125,12 +125,6 @@ class SubmitTradeActionsCommand(Event):
 
 
 @dataclass
-class EvaluateReactiveExitEvent(Event):
-    symbol: str
-    mgmt_actions: List[Any]
-
-
-@dataclass
 class ProcessReactiveEntriesEvent(Event):
     symbol: str
 

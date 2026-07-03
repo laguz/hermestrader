@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timedelta, date, time
-from typing import Any, Dict, List
+from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo
 
 from hermes.service1_agent.strategies.cs75 import CreditSpreads75

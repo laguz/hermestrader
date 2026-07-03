@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 from hermes.common import (
     DEFAULT_OVERSEER_MODE,
     STRATEGY_PRIORITIES,
