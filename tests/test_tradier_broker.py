@@ -146,3 +146,69 @@ async def test_get_delta_broker_none_delta():
         delta = await broker.get_delta("SYM")
         assert delta == 0.0
     await broker.close()
+
+
+def _spread_action():
+    from hermes.service1_agent.trade_action import TradeAction
+    return TradeAction(
+        strategy_id="CS75", symbol="TSLA", order_class="multileg",
+        legs=[
+            {"option_symbol": "TSLA260731P00400000", "side": "sell_to_open", "quantity": 1},
+            {"option_symbol": "TSLA260731P00395000", "side": "buy_to_open", "quantity": 1},
+        ],
+        price=1.25, side="sell", expiry="2026-07-31", tag="HERMES_CS75",
+    )
+
+
+async def test_place_order_soft_reject_surfaces_errors():
+    """Regression: Tradier soft-rejects with HTTP 200 + {"errors": ...} and no
+    "order" key. The result must carry a top-level "errors" key and a rejected
+    status — otherwise record_order_response/_execute_or_queue see the
+    synthesized {"id": "", "status": "ok"} and log [ORDER ACCEPTED] for an
+    order the broker never registered."""
+    broker = TradierBroker(_CFG)
+    tradier_reject = {"errors": {"error": ["Margin requirement not met."]}}
+    with patch.object(broker, "_post", new_callable=AsyncMock, return_value=tradier_reject):
+        resp = await broker.place_order_from_action(_spread_action())
+    assert "errors" in resp
+    assert resp["order_id"] == ""
+    assert resp["status"] == "rejected"
+    assert (resp.get("order") or {}).get("status") == "rejected"
+    await broker.close()
+
+
+async def test_place_order_missing_id_is_not_accepted():
+    """A 2xx body without an order id (e.g. a preview response) is not a live
+    order and must not be reported as placed."""
+    broker = TradierBroker(_CFG)
+    preview_like = {"order": {"status": "ok", "commission": 1.4}}
+    with patch.object(broker, "_post", new_callable=AsyncMock, return_value=preview_like):
+        resp = await broker.place_order_from_action(_spread_action())
+    assert "errors" in resp
+    assert resp["order_id"] == ""
+    assert resp["status"] == "rejected"
+    await broker.close()
+
+
+async def test_place_order_success_contract_unchanged():
+    broker = TradierBroker(_CFG)
+    accepted = {"order": {"id": 881377, "status": "ok", "partner_id": "x"}}
+    with patch.object(broker, "_post", new_callable=AsyncMock, return_value=accepted):
+        resp = await broker.place_order_from_action(_spread_action())
+    assert "errors" not in resp
+    assert resp["order_id"] == "881377"
+    assert resp["status"] == "ok"
+    await broker.close()
+
+
+async def test_mcp_place_order_soft_reject_surfaces_errors():
+    """Same contract for the MCP broker client — its result parsing mirrored
+    the Tradier bug."""
+    from hermes.broker.mcp_client import MCPBrokerClient
+    client = MCPBrokerClient.__new__(MCPBrokerClient)
+    reject = {"errors": {"error": ["account not authorized"]}}
+    with patch.object(client, "_call_mcp", new_callable=AsyncMock, return_value=reject):
+        resp = await client.place_order_from_action(_spread_action())
+    assert "errors" in resp
+    assert resp["order_id"] == ""
+    assert resp["status"] == "rejected"

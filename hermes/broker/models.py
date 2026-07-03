@@ -240,3 +240,27 @@ class OrderPlacementResult(dict):
     @property
     def status(self) -> str:
         return self["status"]
+
+    @classmethod
+    def from_broker_response(cls, res: Dict[str, Any]) -> "OrderPlacementResult":
+        """Normalize a raw placement response, refusing to fabricate success.
+
+        Tradier soft-rejects with HTTP 200 + ``{"errors": ...}`` and no
+        ``order`` key; a 2xx body without an order id (e.g. a preview) is not
+        a live order either. Both must surface a top-level ``errors`` key and
+        a ``rejected`` status so ``record_order_response`` /
+        ``_execute_or_queue`` free the PENDING row instead of logging
+        [ORDER ACCEPTED] for an order the broker never registered.
+        """
+        res = res if isinstance(res, dict) else {}
+        order_dict = res.get("order") or {}
+        order_id = str(order_dict.get("id") or res.get("id") or "")
+        if res.get("errors") or not order_id:
+            return cls(
+                order_id="",
+                status="rejected",
+                raw_response=res,
+                errors=res.get("errors") or "no order id in broker response",
+            )
+        status = str(order_dict.get("status") or res.get("status") or "ok")
+        return cls(order_id=order_id, status=status, raw_response=res)

@@ -317,13 +317,4 @@ class MCPBrokerClient(AbstractBroker):
                 tag=action.tag,
             )
 
-        if not isinstance(res, dict):
-            res = {}
-        order_dict = res.get("order") or {}
-        order_id = str(order_dict.get("id") or res.get("id") or "")
-        status = str(order_dict.get("status") or res.get("status") or "ok")
-        return OrderPlacementResult(
-            order_id=order_id,
-            status=status,
-            raw_response=res
-        )
+        return OrderPlacementResult.from_broker_response(res)
