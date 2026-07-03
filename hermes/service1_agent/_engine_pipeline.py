@@ -320,6 +320,7 @@ class PipelineController:
                 entry_credit=credit,
                 expiry=getattr(a, "expiry", None),
                 ai_authored=bool(getattr(a, "ai_authored", False)),
+                extra=({"ev": sp["ev"]} if sp.get("ev") is not None else None),
             )
             a.strategy_params = sp
         except Exception:                                      # noqa: BLE001
