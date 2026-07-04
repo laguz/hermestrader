@@ -114,3 +114,31 @@ async def test_event_bus_handler_exception_isolation():
     assert not bus._task.done()  # Task loop should still be running
     
     await bus.stop()
+
+
+async def test_event_bus_holds_strong_refs_to_dispatch_tasks():
+    # The event loop keeps only weak references to tasks: a bare
+    # create_task() in _process_events could be GC'd mid-flight, dropping
+    # the event, leaking a semaphore permit, and hanging stop()'s join().
+    bus = EventBus()
+    bus.start()
+
+    release = asyncio.Event()
+    handled = []
+
+    async def slow_handler(event: MarketDataEvent):
+        await release.wait()
+        handled.append(event)
+
+    bus.subscribe(MarketDataEvent, slow_handler)
+    bus.emit(MarketDataEvent(symbol="SPY", price=500.0))
+    await asyncio.sleep(0.01)
+
+    # While the handler is in flight the bus must hold the dispatch task.
+    assert len(bus._dispatch_tasks) == 1
+
+    release.set()
+    await bus.stop()
+
+    assert handled and handled[0].symbol == "SPY"
+    assert not bus._dispatch_tasks  # done-callback discarded the reference

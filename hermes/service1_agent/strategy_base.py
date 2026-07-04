@@ -16,6 +16,7 @@ from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from hermes.clock import Clock, RealClock
+from hermes.market_hours import ET as _ET
 from .broker_wrapper import AsyncBrokerWrapper
 from .money_manager import IronCondorBuilder, MoneyManager
 from .trade_action import TradeAction
@@ -27,14 +28,6 @@ if TYPE_CHECKING:
     from .overseer import HermesOverseer
 
 logger = logging.getLogger("hermes.agent.strategy")
-
-try:
-    from zoneinfo import ZoneInfo
-    _ET = ZoneInfo("America/New_York")
-except Exception:                       # ZoneInfoNotFoundError or ImportError
-    from datetime import timedelta as _timedelta
-    _ET = timezone(_timedelta(hours=-5))  # type: ignore[assignment]
-
 
 # ---------------------------------------------------------------------------
 # AbstractStrategy — base class for every cascading strategy
@@ -64,6 +57,11 @@ class AbstractStrategy(ABC):
         self.overseer = overseer
         self.strategy_id = self.NAME
         self.execution_logs: List[str] = []
+        # The event loop holds only a weak reference to tasks, so the bare
+        # create_task() in _log() could be garbage-collected before the DB
+        # write runs, silently dropping log lines. Keep a strong reference
+        # until each task completes.
+        self._pending_log_tasks: set[asyncio.Task] = set()
 
     # ---- shared helpers ----------------------------------------------------
     async def load_tunables(self):
@@ -107,7 +105,9 @@ class AbstractStrategy(ABC):
         logger.info(line)
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.db.logs.write_log(self.strategy_id, msg))
+            task = loop.create_task(self.db.logs.write_log(self.strategy_id, msg))
+            self._pending_log_tasks.add(task)
+            task.add_done_callback(self._pending_log_tasks.discard)
         except RuntimeError:
             asyncio.run(self.db.logs.write_log(self.strategy_id, msg))
 

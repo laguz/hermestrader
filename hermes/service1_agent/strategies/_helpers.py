@@ -6,10 +6,11 @@ Only ``parse_occ`` and ``nearest_strike`` live here — anything that needs
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from hermes.common import OCC_RE
+from hermes.market_hours import ET
 
 
 def parse_occ(symbol: str) -> Optional[Dict[str, Any]]:
@@ -64,7 +65,13 @@ def _dte_from_expiry(expiry: Any, *, asof: Optional[datetime] = None) -> Optiona
             exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
         except (TypeError, ValueError):
             return None
-    today = (asof or datetime.utcnow()).date()
+    # ET trading day, not the raw UTC calendar date — between ~8pm and
+    # midnight ET the UTC date has already rolled over and the recorded DTE
+    # would come out one day short (same boundary bug as StrategyBase.today).
+    now = asof or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    today = now.astimezone(ET).date()
     return (exp_date - today).days
 
 
