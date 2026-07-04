@@ -51,12 +51,9 @@ panel: approve queued trades, edit the operator's "soul" doctrine, toggle
 paper/live mode, see live P&L, etc.
 
 Both services share one SQLAlchemy database as their single source of truth —
-**TimescaleDB (Postgres)** everywhere: production, dev, tests, and the unified
-simulation mode. There is no SQLite fallback. Tests and simulation each run
-against a *throwaway* Timescale database created and dropped on the fly (see
-`hermes/db/provisioning.py`); simulation also drives a virtual clock that
-replays history against the same code paths (`hermes/utils.py::set_virtual_time`
-and `backtest_engine.py`).
+**TimescaleDB (Postgres)** everywhere: production, dev, and tests. There is no
+SQLite fallback. Tests run against a *throwaway* Timescale database created
+and dropped on the fly (see `hermes/db/provisioning.py`).
 
 ## Layers (top-down)
 
@@ -267,7 +264,6 @@ every hypertable-backed ORM table has its `create_hypertable` line, and
 | Add / change a DB query method                | the matching mixin in `hermes/db/repositories/`  |
 | Add a new chart indicator                     | `hermes/charts/provider.py`                      |
 | Tune the POP gate (chain-only)                | `hermes/ml/pop_engine.py`                         |
-| Run / extend simulation (virtual clock)       | `hermes/service1_agent/backtest_engine.py`, `hermes/utils.py::set_virtual_time` |
 | Change shared constants (priorities, modes)   | `hermes/common.py`                               |
 | Change market-hours / holiday handling        | `hermes/market_hours.py`                         |
 
