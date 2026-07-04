@@ -25,7 +25,7 @@ v1 until enough data has accumulated.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Mapping, Optional
+from typing import Dict, List
 
 from sqlalchemy import Column, DateTime, Float, Integer, String
 
@@ -143,13 +143,9 @@ async def update_from_outcomes(
     *,
     hits: int,
     misses: int,
-    feature_means: Optional[Mapping[str, float]] = None,
 ) -> None:
     """Apply a Beta-Bernoulli update to the (symbol, period) row.
 
-    ``feature_means`` is optional; when supplied the per-feature
-    weights are nudged toward the mean of features observed during
-    profitable trades (Bayesian linear regression-style heuristic).
     The math is intentionally light — this is a controller, not a
     second model.
     """

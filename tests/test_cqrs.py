@@ -103,6 +103,7 @@ async def test_cqrs_event_sourcing_flow_and_replay(db, make_db):
             close_reason="TP",
             close_tag="TEST_CLOSE"
         )
+        assert po_close is not None
         await s.commit()
 
     # Verify close events
