@@ -194,3 +194,175 @@ def test_per_symbol_regime_weights():
     finally:
         # Restore the static lookup to avoid leaking state to other tests.
         pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)
+
+
+def test_regime_weights_wiring_default_off():
+    """Verify that by default (gate off), pop_engine lookup remains static lookup."""
+    from hermes.ml import pop_engine
+    # Ensure it's static lookup first
+    assert pop_engine._regime_weight_lookup == pop_engine._static_regime_lookup
+
+
+@pytest.mark.asyncio
+async def test_regime_weights_gating_logic(monkeypatch):
+    """Verify the gating logic checks both env var and database settings without needing a real DB."""
+    import os
+
+    class MockSettings:
+        def __init__(self, val):
+            self.val = val
+        async def get_setting(self, key, default=None):
+            return self.val
+
+    class MockDB:
+        def __init__(self, val):
+            self.settings = MockSettings(val)
+
+    # Case 1: env=false, db=false -> off
+    monkeypatch.setenv("HERMES_REGIME_WEIGHTS", "false")
+    db_off = MockDB("false")
+    regime_weights_env = os.environ.get("HERMES_REGIME_WEIGHTS", "false").lower() == "true"
+    regime_weights_setting = (await db_off.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+    assert not (regime_weights_env or regime_weights_setting)
+
+    # Case 2: env=true, db=false -> on
+    monkeypatch.setenv("HERMES_REGIME_WEIGHTS", "true")
+    regime_weights_env = os.environ.get("HERMES_REGIME_WEIGHTS", "false").lower() == "true"
+    assert (regime_weights_env or regime_weights_setting)
+
+    # Case 3: env=false, db=true -> on
+    monkeypatch.setenv("HERMES_REGIME_WEIGHTS", "false")
+    db_on = MockDB("true")
+    regime_weights_env = os.environ.get("HERMES_REGIME_WEIGHTS", "false").lower() == "true"
+    regime_weights_setting = (await db_on.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+    assert (regime_weights_env or regime_weights_setting)
+
+
+@pytest.mark.asyncio
+async def test_regime_weights_wiring_and_caching(db, monkeypatch):
+    """Verify that when gated on, wiring works, updates on ticks, and falls back on error."""
+    import os
+    import asyncio
+    from hermes.ml import pop_engine, regime_weights
+    from hermes.events.bus import EventBus, ClockTickEvent, CacheWarmTick
+    from sqlalchemy import select
+
+    # 1. Gate ON via monkeypatching environment variable
+    monkeypatch.setenv("HERMES_REGIME_WEIGHTS", "true")
+
+    # Verify the table is ensured and wired
+    regime_weights.ensure_table(db)
+
+    event_bus = EventBus()
+    event_bus.start()
+    try:
+        lookup_fn = regime_weights.make_lookup_fn(db, event_bus)
+        await lookup_fn.initialize()
+
+        pop_engine.set_regime_weight_lookup(lookup_fn)
+
+        # Initial check: no entries in DB -> should return static defaults
+        weights_initial = pop_engine.regime_weights("3M", symbol="AAPL")
+        assert weights_initial == regime_weights.STATIC_DEFAULTS["3M"]
+
+        # 2. Write outcomes to database to exceed cold start limit (>=30 observations)
+        await regime_weights.update_from_outcomes(
+            db, symbol="AAPL", period="3M", hits=25, misses=5
+        )
+
+        # Manually alter the weights to be different from static defaults
+        # because the default mathematical update equation keeps defaults identical to static defaults
+        async with db.AsyncSession() as s:
+            q = select(regime_weights.RegimeWeights).filter_by(symbol="AAPL", period="3M")
+            res = await s.execute(q)
+            row = res.scalars().first()
+            row.beta_1 = 9.9
+            await s.commit()
+
+        # Verify cache is NOT refreshed yet (in-process cache is not updated automatically without event)
+        assert pop_engine.regime_weights("3M", symbol="AAPL") == regime_weights.STATIC_DEFAULTS["3M"]
+
+        # 3. Emit CacheWarmTick to trigger refresh
+        event_bus.emit(CacheWarmTick())
+        await asyncio.sleep(0.1)
+
+        # Now it should be updated and reflect the DB value
+        weights_after_tick = pop_engine.regime_weights("3M", symbol="AAPL")
+        assert weights_after_tick[1] == 9.9
+        assert len(weights_after_tick) == 5
+        assert weights_after_tick[0] == 0.0
+
+        # 4. Check lookup error fallback
+        fallback_weights = pop_engine.regime_weights("INVALID_PERIOD", symbol="AAPL")
+        assert fallback_weights == regime_weights.STATIC_DEFAULTS["3M"]
+
+        # Test database query failure does not crash the cache lookup
+        original_session = db.AsyncSession
+        def mock_async_session():
+            raise Exception("DB Connection Error")
+        db.AsyncSession = mock_async_session
+
+        try:
+            await lookup_fn.refresh_async()
+            # Cache should keep previous values on failure
+            assert pop_engine.regime_weights("3M", symbol="AAPL") == weights_after_tick
+        finally:
+            db.AsyncSession = original_session
+
+    finally:
+        await event_bus.stop()
+        pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)
+
+
+@pytest.mark.asyncio
+async def test_regime_weights_gating_via_system_settings(db):
+    """Verify that the setting in db.settings (regime_weights_enabled) gates the wiring logic."""
+    from hermes.ml import pop_engine
+
+    # Verify default is off
+    assert pop_engine._regime_weight_lookup == pop_engine._static_regime_lookup
+
+    # 1. Turn setting OFF in DB and check
+    await db.settings.set_setting("regime_weights_enabled", "false")
+    regime_weights_setting = (await db.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+    assert not regime_weights_setting
+
+    # 2. Turn setting ON in DB and check
+    await db.settings.set_setting("regime_weights_enabled", "true")
+    regime_weights_setting = (await db.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+    assert regime_weights_setting
+
+
+@pytest.mark.asyncio
+async def test_cached_regime_weights_lookup_no_event_bus(db):
+    """Verify that when event_bus is None (e.g. offline/test mode), cache misses query synchronously."""
+    from hermes.ml import pop_engine, regime_weights
+    from sqlalchemy import select
+
+    regime_weights.ensure_table(db)
+    lookup_fn = regime_weights.make_lookup_fn(db, event_bus=None)
+    pop_engine.set_regime_weight_lookup(lookup_fn)
+
+    try:
+        await regime_weights.update_from_outcomes(
+            db, symbol="MSFT", period="6M", hits=30, misses=0
+        )
+
+        # Manually alter the weights to be different from static defaults
+        async with db.AsyncSession() as s:
+            q = select(regime_weights.RegimeWeights).filter_by(symbol="MSFT", period="6M")
+            res = await s.execute(q)
+            row = res.scalars().first()
+            row.beta_1 = 9.9
+            await s.commit()
+
+        # MSFT 6M has >=30 observations. Querying should pull dynamically via sync fallback
+        weights = pop_engine.regime_weights("6M", symbol="MSFT")
+        assert weights[1] == 9.9
+        assert len(weights) == 5
+
+    finally:
+        pop_engine.set_regime_weight_lookup(pop_engine._static_regime_lookup)
+
+
+

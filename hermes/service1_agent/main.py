@@ -402,6 +402,23 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     except Exception as _ml_exc:
         log.warning("AsyncXGBPredictor init failed: %s", _ml_exc)
 
+    # Initialize and wire DB-backed regime weights lookup if enabled
+    try:
+        regime_weights_env = os.environ.get("HERMES_REGIME_WEIGHTS", "false").lower() == "true"
+        regime_weights_setting = (await db.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+        if regime_weights_env or regime_weights_setting:
+            from hermes.ml import pop_engine, regime_weights
+            regime_weights.ensure_table(db)
+            lookup_fn = regime_weights.make_lookup_fn(db, event_bus)
+            if hasattr(lookup_fn, "initialize"):
+                await lookup_fn.initialize()
+            pop_engine.set_regime_weight_lookup(lookup_fn)
+            log.info("DB-backed regime weights lookup wired and warmed up.")
+        else:
+            log.info("DB-backed regime weights lookup is disabled (gate is off).")
+    except Exception as _rw_exc:
+        log.warning("DB-backed regime weights lookup init failed, falling back to static defaults: %s", _rw_exc)
+
     # Wire and start the Scheduler
     from hermes.service1_agent.scheduler import Scheduler
     scheduler = Scheduler(event_bus, runtime_config.tick_interval)

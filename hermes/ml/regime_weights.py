@@ -24,8 +24,9 @@ v1 until enough data has accumulated.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import Column, DateTime, Float, Integer, String
 
@@ -109,28 +110,90 @@ def lookup(db: "HermesDB", symbol: str, period: str) -> List[float]:
     ]
 
 
-def make_lookup_fn(db: "HermesDB"):
-    """Return a closure suitable for ``pop_engine.set_regime_weight_lookup``.
+class CachedRegimeWeightsLookup:
+    """In-process cache of regime weights that refreshes asynchronously on ticks.
 
-    The closure is called from the hot prediction path so it must not
-    do any work on cold-start: we cache the row results in-process for
-    a few minutes to keep round-trip latency minimal.
+    This avoids blocking database calls during the hot option scoring path.
     """
-    import time
-    cache: Dict[tuple[str, str], tuple[float, List[float]]] = {}
-    ttl = 300.0
 
-    def _fn(period: str, symbol: str = "DEFAULT") -> List[float]:
-        key = (symbol.upper(), period.upper())
-        now = time.time()
-        cached = cache.get(key)
-        if cached is not None and now - cached[0] < ttl:
-            return list(cached[1])
-        weights = lookup(db, symbol, period)
-        cache[key] = (now, weights)
-        return list(weights)
+    def __init__(self, db: "HermesDB", event_bus: Optional[Any] = None) -> None:
+        self.db = db
+        self.event_bus = event_bus
+        self.cache: Dict[tuple[str, str], List[float]] = {}
+        self._refresh_lock = asyncio.Lock()
 
-    return _fn
+        if event_bus is not None:
+            from hermes.events.bus import CacheWarmTick, ClockTickEvent
+            event_bus.subscribe(ClockTickEvent, self.refresh_async)
+            event_bus.subscribe(CacheWarmTick, self.refresh_async)
+
+    async def initialize(self) -> None:
+        """Warms up the cache at startup."""
+        await self.refresh_async()
+
+    async def refresh_async(self, event: Any = None) -> None:
+        """Asynchronously queries the database for all regime weights and updates the cache."""
+        if self.db is None or RegimeWeights is None:
+            return
+        async with self._refresh_lock:
+            try:
+                from sqlalchemy import select
+                async with self.db.AsyncSession() as s:
+                    q = select(RegimeWeights)
+                    result = await s.execute(q)
+                    rows = result.scalars().all()
+
+                    new_cache = {}
+                    for row in rows:
+                        if (row.hits + row.misses) < 30:
+                            continue
+                        key = (row.symbol.upper(), row.period.upper())
+                        new_cache[key] = [
+                            float(row.beta_0),
+                            float(row.beta_1),
+                            float(row.beta_2),
+                            float(row.beta_3),
+                            float(row.beta_4),
+                        ]
+                    self.cache = new_cache
+                    logger.debug("Regime weights cache refreshed: %d rows loaded", len(new_cache))
+            except Exception as exc:
+                logger.warning("Failed to refresh regime weights cache: %s", exc)
+
+    def __call__(self, period: str, symbol: str = "DEFAULT") -> List[float]:
+        """Synchronous lookup from cache, returning copy of weights."""
+        period_key = period.upper()
+        symbol_key = symbol.upper()
+        key = (symbol_key, period_key)
+
+        try:
+            if key in self.cache:
+                return list(self.cache[key])
+
+            default_key = ("DEFAULT", period_key)
+            if default_key in self.cache:
+                return list(self.cache[default_key])
+
+            # In testing/offline environments (no event bus), fetch synchronously on cache miss
+            if self.event_bus is None:
+                try:
+                    weights = lookup(self.db, symbol, period)
+                    self.cache[key] = weights
+                    return list(weights)
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.warning("CachedRegimeWeightsLookup call failed: %s", exc)
+
+        return list(STATIC_DEFAULTS.get(period_key, STATIC_DEFAULTS["3M"]))
+
+
+def make_lookup_fn(db: "HermesDB", event_bus: Optional[Any] = None) -> CachedRegimeWeightsLookup:
+    """Return a closure/callable suitable for ``pop_engine.set_regime_weight_lookup``.
+
+    Wires the async tick-refreshed cached lookup in Service-1.
+    """
+    return CachedRegimeWeightsLookup(db, event_bus)
 
 
 # ---------------------------------------------------------------------------
