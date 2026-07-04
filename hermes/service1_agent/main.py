@@ -104,18 +104,6 @@ def set_trigger() -> None:
 
 
 
-async def _interruptible_sleep(seconds: float) -> None:
-    """Sleep that wakes up immediately on shutdown or trigger signals."""
-    steps = int(seconds * 10)
-    for _ in range(steps):
-        if _SHUTDOWN_EVENT.is_set() or _TRIGGER_EVENT.is_set():
-            break
-        await asyncio.sleep(0.1)
-
-
-# _cache_prewarm_loop removed in favor of CacheWarmTick event-driven handler
-
-
 # VALID_MODES, VALID_AUTONOMY, DEFAULT_LLM_TIMEOUT_S,
 # and STRATEGY_PRIORITIES are imported from hermes.common above.
 
