@@ -176,6 +176,11 @@ async def sync_soul_file_to_db(db) -> None:
 
 
 def utcnow_iso() -> str:
-    """Return current UTC time as an ISO-8601 string, rounded to seconds."""
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    """Return current UTC time as an ISO-8601 string, rounded to seconds.
+
+    Goes through ``utc_now()`` (the ``_GLOBAL_CLOCK``-backed helper) rather than
+    ``datetime.now()`` directly, so it honors a ``SimulatedClock`` during
+    backtesting instead of leaking real wall-clock time.
+    """
+    return utc_now().replace(tzinfo=datetime.timezone.utc).isoformat(timespec="seconds")
 

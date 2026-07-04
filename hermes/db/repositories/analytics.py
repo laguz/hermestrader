@@ -104,7 +104,7 @@ class AnalyticsRepository(Repository):
                 pnl_val = _compute_realized_pnl(
                     entry_credit=t.entry_credit,
                     entry_debit=t.entry_debit,
-                    exit_price=t.exit_price or 0.0,
+                    exit_price=t.exit_price,
                     lots=int(t.lots or 0)
                 )
             if pnl_val is None:
@@ -187,7 +187,7 @@ class AnalyticsRepository(Repository):
                         pnl_val = _compute_realized_pnl(
                             entry_credit=t.entry_credit,
                             entry_debit=t.entry_debit,
-                            exit_price=t.exit_price or 0.0,
+                            exit_price=t.exit_price,
                             lots=int(t.lots or 0)
                         )
                     if pnl_val is None and t.entry_credit is not None:

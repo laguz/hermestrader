@@ -160,7 +160,7 @@ class PortfolioRiskEngine:
                         if strike:
                             requirement_per_lot = strike * 100.0
             else:
-                if action.width:
+                if action.width is not None:
                     requirement_per_lot = action.width * 100.0
 
             side_type = _action_side_type(action)

@@ -205,6 +205,7 @@ class OllamaCloudLLM:
             self._client = Client(
                 host="https://api.ollama.com",
                 headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout_s,
             )
         except ImportError as exc:
             raise LLMConnectionError(
@@ -257,6 +258,7 @@ class OllamaCloudLLM:
         can analyse them.
         """
         effective_max = max_tokens if max_tokens is not None else self.max_tokens
+        effective_timeout = timeout_s if timeout_s is not None else self.timeout_s
         ollama_images = self._images_to_ollama(images)
 
         # Build the message list, attaching images to the last user message.
@@ -270,7 +272,18 @@ class OllamaCloudLLM:
                 msg_list.append({"role": "user", "content": "", "images": ollama_images})
 
         try:
-            response = self._client.chat(
+            client = self._client
+            if effective_timeout != self.timeout_s:
+                # Per-call override differs from the instance default — the
+                # ollama Client bakes its timeout in at construction (no
+                # per-request override), so spin up a scoped client.
+                from ollama import Client
+                client = Client(
+                    host="https://api.ollama.com",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    timeout=effective_timeout,
+                )
+            response = client.chat(
                 model=self.model,
                 messages=msg_list,
                 options={

@@ -114,7 +114,7 @@ class HermesAlpha(CreditSpreadStrategy):
         target_delta = abs(float(intent.get("target_delta") if intent.get("target_delta") is not None else 0.16))
         dte_min = int(intent.get("dte_min") if intent.get("dte_min") is not None else 30)
         dte_max = int(intent.get("dte_max") if intent.get("dte_max") is not None else 45)
-        width = int(intent.get("width") or default_width)
+        width = int(intent.get("width") if intent.get("width") is not None else default_width)
 
         expiry = await self.find_expiry_in_dte_range(symbol, dte_min, dte_max, prefer="max")
         if not expiry:
