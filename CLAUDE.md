@@ -85,3 +85,22 @@ lack of a DB. CI runs the full suite against a Timescale service container.
 - `VERSION` (unless asked), `hermes/scratch/` and `scratch/` (exploratory),
   and schema migrations without operator sign-off (data is live in Timescale,
   migrations run by hand).
+
+## Recent cleanup (context for future dead-code audits)
+
+PR #188 removed six watcher endpoints and one repo method that had zero
+callers across the UI, tests, docs, and scripts — verified, not just
+grep-absent: `GET /api/balances`, `GET /api/strategies`, `GET
+/api/analysis/{symbol}`, `GET`/`POST /api/admin/ml-intervals`, the whole
+`GET`/`PUT /api/tunables` router (file deleted), and
+`WatchlistRepository.add_to_watchlist`. `resolve()` and the `TUNABLES`
+catalog in `hermes/service1_agent/tunables.py` are untouched — strategies
+still read them every tick — but tunables lost their HTTP write path;
+retuning a value now requires a direct `system_settings` write instead of
+`PUT /api/tunables`. Don't re-flag these as "missing" API surface; if the
+tunables panel or per-symbol analysis view comes back, restore from that
+PR's diff rather than re-deriving it.
+
+Kept deliberately in that same audit: `GET /api/debug` (operator triage
+endpoint, no UI caller by design) and the admin instance/upgrade routes
+(`scripts/upgrade_runner.sh` depends on them).
