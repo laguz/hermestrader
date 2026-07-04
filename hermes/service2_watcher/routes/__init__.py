@@ -2,7 +2,7 @@
 
 Each module owns a single resource surface:
 
-- ``status``     — root + health + agent/Tradier/LLM status + balances + debug + logs
+- ``status``     — root + health + agent/Tradier/LLM status + debug + logs
 - ``approvals``  — pending-approval queue + approval-mode toggle
 - ``watchlist``  — per-strategy symbol lists
 - ``soul``       — operator doctrine + autonomy level
@@ -11,6 +11,7 @@ Each module owns a single resource surface:
 - ``llm``        — overseer LLM provider configuration
 - ``analytics``  — ML predictions + closed-trade performance + analysis
 - ``charts``     — chart PNGs + per-symbol LLM chart analyses
+- ``admin``      — instance identity + host-side upgrade queue
 
 ``api.py`` wires them all into the FastAPI app via ``include_router``.
 Each module imports the shared ``db``, settings constants, and helpers

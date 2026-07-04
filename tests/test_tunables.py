@@ -6,8 +6,6 @@ import pytest
 from hermes.service1_agent.tunables import (
     TUNABLES,
     Tunables,
-    catalog,
-    groups,
     resolve,
 )
 from ._stubs import RepoNamespaceMixin
@@ -16,16 +14,6 @@ from ._stubs import RepoNamespaceMixin
 # ---------------------------------------------------------------------------
 # Pure-catalog tests (no DB)
 # ---------------------------------------------------------------------------
-def test_catalog_covers_every_tunable():
-    cat_keys = {e["key"] for e in catalog()}
-    assert cat_keys == set(TUNABLES.keys())
-    # Every entry carries the metadata the API relies on.
-    for e in catalog():
-        assert e["type"] in ("int", "float")
-        assert e["group"] in groups()
-        assert e["label"]
-
-
 def test_defaults_match_documented_spec_literals():
     # A spot-check that the spec defaults equal the literals the strategies
     # used before centralisation — the guarantee that behaviour is unchanged.

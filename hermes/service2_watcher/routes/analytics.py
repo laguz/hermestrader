@@ -4,7 +4,6 @@ Routes
 ------
 - ``GET /analytics``                — analytics dashboard HTML
 - ``GET /api/analytics``            — predictions + closed-trade perf + open trades + P&L series
-- ``GET /api/analysis/{symbol}``    — S/R clustering for one symbol (POP-augmented)
 - ``GET /api/analysis``             — S/R clustering for every watchlist symbol
 
 The /api/analytics endpoint is the heaviest read in the watcher; cache
@@ -296,24 +295,6 @@ async def _analyze_one(broker, symbol: str, period: str) -> Dict[str, Any]:
     loop = asyncio.get_event_loop()
     fn = functools.partial(broker.analyze_symbol, symbol, period=period)
     return await loop.run_in_executor(None, fn)
-
-
-@router.get("/api/analysis/{symbol}")
-async def get_symbol_analysis(symbol: str) -> Response:
-    """S/R clustering for one symbol, augmented with the latest XGB POP."""
-    try:
-        broker = _build_broker_for_analysis()
-        analysis = await _analyze_one(broker, symbol.upper(), period="6m")
-        if "error" in analysis:
-            return _safe_json_response(analysis)
-        local_db = HermesDB(DSN)
-        # Keep the displayed POP in step with the agent: install the persisted
-        # outcome calibrator (agent-fitted, settings-persisted) before scoring.
-        await sync_pop_calibrator_from_settings(local_db)
-        xgb_pred = await local_db.decisions.latest_prediction(symbol.upper()) or {}
-        return _safe_json_response(augment_levels_with_pop(analysis, xgb_pred))
-    except Exception as exc:                                       # noqa: BLE001
-        return _safe_json_response({"error": str(exc)})
 
 
 @router.get("/api/analysis")

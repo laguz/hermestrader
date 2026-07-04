@@ -11,8 +11,8 @@ strategy files.
 
 Now every parameter is declared once in :data:`TUNABLES` with its spec
 default, type and operator-facing metadata. :func:`resolve` reads overrides
-from ``system_settings`` so the operator can retune from the panel without a
-deploy, falling back to env config and finally the spec default. The spec
+from ``system_settings`` so a value can be retuned without a deploy, falling
+back to env config and finally the spec default. The spec
 defaults are exactly the literals the strategies used before, so behaviour
 is unchanged until someone deliberately overrides a value.
 
@@ -229,29 +229,3 @@ async def resolve(db, env_config: Optional[Dict[str, Any]] = None,
 
     values = {s.key: _resolve_one(s, overrides.get(s.key), env_config) for s in specs}
     return Tunables(values)
-
-
-def catalog(group: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Catalog metadata (no current values) — for the tunables API."""
-    out: List[Dict[str, Any]] = []
-    for t in _specs_for(group):
-        out.append({
-            "key": t.key,
-            "group": t.group,
-            "label": t.label,
-            "default": t.default,
-            "type": "int" if t.cast is int else "float",
-            "min": t.min,
-            "max": t.max,
-            "help": t.help,
-        })
-    return out
-
-
-def groups() -> List[str]:
-    """Distinct group names in catalog declaration order."""
-    seen: List[str] = []
-    for t in TUNABLES.values():
-        if t.group not in seen:
-            seen.append(t.group)
-    return seen

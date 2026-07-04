@@ -63,7 +63,6 @@ OPERATOR_ALLOWED_WRITES = {
     "enqueue_decision",  # operator_commands — DECIDE_APPROVAL intent
     "write_log",         # bot_logs         — append-only audit
     "set_watchlist",     # strategy_watchlists — Service-2 is sole writer
-    "add_to_watchlist",  # strategy_watchlists — (same table; not used today)
     "ensure_strategies", # strategies       — idempotent registry seed
 }
 
