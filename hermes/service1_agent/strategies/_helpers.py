@@ -36,7 +36,16 @@ def nearest_strike(chain, option_type: str, target: float) -> Optional[Dict[str,
     ``chain`` is whatever ``broker.get_option_chains`` returned;
     ``option_type`` is 'put' or 'call'. Returns ``None`` for an empty side.
     """
-    candidates = [o for o in chain if o.get("option_type") == option_type]
+    candidates = []
+    for o in chain:
+        if o.get("option_type") == option_type:
+            strike = o.get("strike")
+            if strike is not None:
+                try:
+                    float(strike)
+                    candidates.append(o)
+                except (ValueError, TypeError):
+                    pass
     if not candidates:
         return None
     return min(candidates, key=lambda o: abs(float(o["strike"]) - target))

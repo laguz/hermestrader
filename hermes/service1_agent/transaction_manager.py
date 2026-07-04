@@ -41,7 +41,7 @@ def _to_json_safe(val: Any) -> Any:
 
 async def _get_next_id(session, seq_name: str) -> int:
     from sqlalchemy import text
-    res = await session.execute(text(f"SELECT nextval('{seq_name}')"))
+    res = await session.execute(text("SELECT nextval(:seq)"), {"seq": seq_name})
     return res.scalar()
 
 

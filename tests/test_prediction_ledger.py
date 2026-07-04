@@ -6,15 +6,15 @@ from hermes.ml.ledger import PredictionLedger, write_record, LedgerRecord, backf
 
 
 @pytest.fixture
-def test_db(make_db):
+def prediction_db(make_db):
     # schema=True provisions the raw bars_* hypertables
     return make_db(schema=True)
 
 
-async def test_backfill_prediction_outcomes(test_db):
+async def test_backfill_prediction_outcomes(prediction_db):
     # Ensure the table is created
     from hermes.ml.ledger import ensure_table
-    ensure_table(test_db)
+    ensure_table(prediction_db)
 
     now = datetime.now(timezone.utc)
 
@@ -30,7 +30,7 @@ async def test_backfill_prediction_outcomes(test_db):
         "volume": [1000] * 20,
         "vwap_close": [500.0] * 20
     })
-    await test_db.save_daily_bars("SPY", df_bars)
+    await prediction_db.save_daily_bars("SPY", df_bars)
 
     # 2. Insert records into prediction ledger
     # Prediction 1: Target date is in the past (horizon = 5, ts = now - 10d). Spot = 450.
@@ -49,7 +49,7 @@ async def test_backfill_prediction_outcomes(test_db):
         spot=450.0,
         ts=now - timedelta(days=10),
     )
-    await write_record(test_db, rec1)
+    await write_record(prediction_db, rec1)
 
     # Prediction 2: Target date is in the past (horizon = 5, ts = now - 10d). Spot = 550.
     # realized_close is 500, which is < spot (550), so outcome = 0.0.
@@ -67,7 +67,7 @@ async def test_backfill_prediction_outcomes(test_db):
         spot=550.0,
         ts=now - timedelta(days=10),
     )
-    await write_record(test_db, rec2)
+    await write_record(prediction_db, rec2)
 
     # Prediction 3: Target date is in the future (horizon = 5, ts = now - 2d). Target = now + 3d.
     # Should not be marked yet.
@@ -85,14 +85,14 @@ async def test_backfill_prediction_outcomes(test_db):
         spot=500.0,
         ts=now - timedelta(days=2),
     )
-    await write_record(test_db, rec3)
+    await write_record(prediction_db, rec3)
 
     # Run backfill
-    marked = await backfill_prediction_outcomes(test_db, lookback_days=90)
+    marked = await backfill_prediction_outcomes(prediction_db, lookback_days=90)
     assert marked == 2
 
     # Query rows to assert correctness
-    async with test_db.AsyncSession() as session:
+    async with prediction_db.AsyncSession() as session:
         from sqlalchemy import select
         q = select(PredictionLedger).order_by(PredictionLedger.spot)
         result = await session.execute(q)

@@ -148,19 +148,35 @@ class TradierBroker(AbstractBroker):
             except (TypeError, ValueError):
                 return 0.0
 
-        obp = (
-            _f(b.get("option_buying_power"))
-            or _f(margin.get("option_buying_power"))
-            or _f(pdt.get("option_buying_power"))
-            or _f(cash.get("cash_available"))
-            or _f(b.get("total_cash"))
-        )
+        obp_val = None
+        for source, key in [
+            (b, "option_buying_power"),
+            (margin, "option_buying_power"),
+            (pdt, "option_buying_power"),
+            (cash, "cash_available"),
+            (b, "total_cash")
+        ]:
+            if source and source.get(key) is not None:
+                try:
+                    obp_val = float(source.get(key))
+                    break
+                except (TypeError, ValueError):
+                    pass
+        obp = obp_val if obp_val is not None else 0.0
 
-        sbp = (
-            _f(b.get("stock_buying_power"))
-            or _f(margin.get("stock_buying_power"))
-            or _f(pdt.get("stock_buying_power"))
-        )
+        sbp_val = None
+        for source, key in [
+            (b, "stock_buying_power"),
+            (margin, "stock_buying_power"),
+            (pdt, "stock_buying_power")
+        ]:
+            if source and source.get(key) is not None:
+                try:
+                    sbp_val = float(source.get(key))
+                    break
+                except (TypeError, ValueError):
+                    pass
+        sbp = sbp_val if sbp_val is not None else 0.0
 
         logger.debug(
             "get_account_balances: account_type=%s obp=%.2f sbp=%.2f raw_keys=%s",
@@ -171,9 +187,17 @@ class TradierBroker(AbstractBroker):
             option_buying_power=obp,
             stock_buying_power=sbp,
             total_equity=_f(b.get("total_equity")),
-            cash=_f(cash.get("cash_available") or b.get("total_cash")),
+            cash=_f(
+                cash.get("cash_available")
+                if cash.get("cash_available") is not None
+                else b.get("total_cash")
+            ),
             account_type=b.get("account_type"),
-            margin_buying_power=_f(margin.get("stock_buying_power") or pdt.get("stock_buying_power")),
+            margin_buying_power=_f(
+                margin.get("stock_buying_power")
+                if margin.get("stock_buying_power") is not None
+                else pdt.get("stock_buying_power")
+            ),
             raw=b,
         )
 
@@ -312,7 +336,7 @@ class TradierBroker(AbstractBroker):
         quotes = await self.get_quote(option_symbol)
         if not quotes:
             return 0.0
-        greeks = (quotes[0].get("greeks") or {})
+        greeks = (quotes[0].get("greeks") or {}) if quotes else {}
         return float(greeks.get("delta", 0.0) or 0.0)
 
     async def get_history(self, symbol: str, *, interval: str = "daily",
@@ -451,7 +475,7 @@ class TradierBroker(AbstractBroker):
         for i, leg in enumerate(action.legs):
             data[f"option_symbol[{i}]"] = leg.get("option_symbol", "")
             data[f"side[{i}]"] = self._leg_action(leg, default_open=True)
-            data[f"quantity[{i}]"] = int(leg.get("quantity", action.quantity or 1))
+            data[f"quantity[{i}]"] = int(leg.get("quantity") if leg.get("quantity") is not None else (action.quantity if action.quantity is not None else 1))
 
         self._enforce_dry_run(data)
         return await self._post(f"/accounts/{self.account_id}/orders", data)
@@ -479,7 +503,7 @@ class TradierBroker(AbstractBroker):
             "symbol": action.symbol,
             "option_symbol": leg["option_symbol"],
             "side": self._leg_action(leg, default_open=True),
-            "quantity": int(leg.get("quantity", action.quantity or 1)),
+            "quantity": int(leg.get("quantity") if leg.get("quantity") is not None else (action.quantity if action.quantity is not None else 1)),
             "type": order_type,
             "duration": (action.duration or "day").lower(),
         }
@@ -498,7 +522,7 @@ class TradierBroker(AbstractBroker):
             "class": "equity",
             "symbol": action.symbol,
             "side": (action.side or "buy").lower(),
-            "quantity": int(action.quantity or 1),
+            "quantity": int(action.quantity if action.quantity is not None else 1),
             "type": order_type,
             "duration": (action.duration or "day").lower(),
         }

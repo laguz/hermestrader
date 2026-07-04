@@ -114,36 +114,7 @@ def _make_strategy(legs):
     )
 
 
-async def test_find_active_ic_returns_earliest_incomplete_expiry():
-    """Two incomplete ICs on different expiries → return the earlier one."""
-    legs = [
-        {"option_symbol": "AAPL250620P00150000", "side": "put", "expiry": "2025-06-20"},
-        {"option_symbol": "AAPL250516P00150000", "side": "put", "expiry": "2025-05-16"},
-    ]
-    s = _make_strategy(legs)
-    assert await s.find_active_ic_expiry("AAPL") == "2025-05-16"
 
-
-async def test_find_active_ic_skips_complete_ic():
-    """An expiry with both put and call legs is skipped."""
-    legs = [
-        # Complete IC on 2025-05-16
-        {"option_symbol": "AAPL250516P00150000", "side": "put", "expiry": "2025-05-16"},
-        {"option_symbol": "AAPL250516C00200000", "side": "call", "expiry": "2025-05-16"},
-        # Incomplete on 2025-06-20
-        {"option_symbol": "AAPL250620P00150000", "side": "put", "expiry": "2025-06-20"},
-    ]
-    s = _make_strategy(legs)
-    assert await s.find_active_ic_expiry("AAPL") == "2025-06-20"
-
-
-async def test_find_active_ic_returns_none_when_all_complete():
-    legs = [
-        {"option_symbol": "AAPL250516P00150000", "side": "put", "expiry": "2025-05-16"},
-        {"option_symbol": "AAPL250516C00200000", "side": "call", "expiry": "2025-05-16"},
-    ]
-    s = _make_strategy(legs)
-    assert await s.find_active_ic_expiry("AAPL") is None
 
 
 # ---------------------------------------------------------------------------

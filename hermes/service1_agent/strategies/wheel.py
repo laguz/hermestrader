@@ -164,7 +164,7 @@ class WheelStrategy(AbstractStrategy):
             self._log(f"ℹ️ {symbol}: no 6M analysis; delta-only strike selection.")
             return None, None
         xgb_pred = await self.db.decisions.latest_prediction(symbol) or {}
-        current_vol = float(analysis.get("current_vol") or 0.30)
+        current_vol = float(analysis.get("current_vol") if analysis.get("current_vol") is not None else 0.30)
         return analysis, coerce_xgb_prob(xgb_pred, current_vol)
 
     async def _open_wheel_leg(self, symbol: str, side: str, expiry: str,
@@ -246,9 +246,9 @@ class WheelStrategy(AbstractStrategy):
             opt, _ = min(candidates, key=lambda c: abs(c[1] - target))
             return opt, None
 
-        current_price = float(analysis.get("current_price") or 0.0)
-        current_vol = float(analysis.get("current_vol") or 0.30)
-        avg_vol = float(analysis.get("avg_vol") or 0.25)
+        current_price = float(analysis.get("current_price") if analysis.get("current_price") is not None else 0.0)
+        current_vol = float(analysis.get("current_vol") if analysis.get("current_vol") is not None else 0.30)
+        avg_vol = float(analysis.get("avg_vol") if analysis.get("avg_vol") is not None else 0.25)
         key_levels = analysis.get("key_levels") or []
         spread_type = "put_credit" if side == "put" else "call_credit"
         prob = 0.5 if xgb_prob is None else float(xgb_prob)

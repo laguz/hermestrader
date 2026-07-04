@@ -168,7 +168,15 @@ class PipelineController:
                 symbol=str(order.get("symbol") or "").upper(),
                 order_class="multileg" if len(legs) > 1 else "option",
                 legs=legs,
-                price=float(order.get("price") or order.get("avg_fill_price") or 0.0) or None,
+                price=(
+                    float(order.get("price"))
+                    if order.get("price") is not None and str(order.get("price")).strip() != ""
+                    else (
+                        float(order.get("avg_fill_price"))
+                        if order.get("avg_fill_price") is not None and str(order.get("avg_fill_price")).strip() != ""
+                        else None
+                    )
+                ),
                 side=str(order.get("side") or "sell"),
                 quantity=int(order.get("quantity") or 1),
                 order_type="credit",

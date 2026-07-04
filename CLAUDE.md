@@ -156,6 +156,14 @@ An additional DeepSeek V4 scan in July 2026 resolved 10 confirmed bugs:
 - **Falsy-zero price fallbacks**: Fixed price parsing in `tradier.py` lines ~214 and ~293 to preserve `price=0.0` instead of falling back to default prices.
 - **Falsy-zero lots in `_broker_order_dict`**: Fixed in `broker_wrapper.py` line ~402 to preserve `quantity=0`.
 
+An audit in July 2026 resolved 24 confirmed bugs and codebase improvements:
+- **Falsy-zero patterns**: Fixed Option Buying Power (OBP) and Stock Buying Power (SBP) chain fallbacks, `cash_available`, `llm_temperature`, `llm_timeout_s`, leg/action quantities, TradeAction price, and strategy parameters (`current_vol`/`avg_vol`/`target_delta`) using explicit `is not None` and non-empty checks.
+- **SQL Injection Risks**: Parameterized database sequence query (`SELECT nextval(:seq)`) in `transaction_manager.py` and wrapped dynamic SQL database name/template statements using `psycopg.sql.SQL` and `psycopg.sql.Identifier` in `provisioning.py`.
+- **Descriptive KeyError Handling**: Refactored bare choices dictionary accesses in `clients.py` to raise explicit KeyErrors instead of throwing generic errors.
+- **Silent Exception Swallowing**: Added warning and error logging to IPC command publish failures in `agent.py` and `settings.py`, and to log database fetch failures in `status.py`.
+- **Dead Code Cleanup**: Removed unused imports in `main.py` (datetime/timezone and 11 unused `SETTING_*` exports), `DummyEngine` class from `test_deepseek_v4_bugs.py`, and `_mm()` helper function from `test_money_manager_sync.py`.
+- **Test Suite Enhancements**: Renamed misleading `test_db` fixtures to `schema_db`, `prediction_db`, and `timeseries_db`, consolidated `find_active_ic_expiry` test cases into `test_strategy_helpers.py`, and added assertions to test idempotency and robustness.
+
 ## Known false positives for AI code scanners
 
 The following patterns are intentional and should NOT be flagged as dead code or bugs:

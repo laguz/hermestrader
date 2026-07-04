@@ -13,10 +13,13 @@ them at the start of every iteration.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger("hermes.c2.agent")
 
 from hermes.common import (
     IPC_ACTION_SYNC_SETTINGS,
@@ -43,8 +46,8 @@ async def pause_agent() -> Dict[str, Any]:
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("IPC publish failure on pause_agent: %s", e)
     return {"paused": True}
 
 
@@ -55,8 +58,8 @@ async def resume_agent() -> Dict[str, Any]:
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("IPC publish failure on resume_agent: %s", e)
     return {"paused": False}
 
 
@@ -68,8 +71,8 @@ async def trigger_ml_predictor() -> Dict[str, Any]:
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_TRIGGER_ML})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("IPC publish failure on trigger_ml: %s", e)
     return {"status": "triggered"}
 
 
@@ -90,8 +93,8 @@ async def set_mode(body: ModeBody) -> Dict[str, Any]:
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("IPC publish failure on set_mode: %s", e)
     return {"mode": m}
 
 
@@ -124,6 +127,6 @@ async def set_alpha_autonomous(body: AlphaAutonomousBody) -> Dict[str, Any]:
     try:
         from hermes.ipc import ipc
         await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, {"action": IPC_ACTION_SYNC_SETTINGS})
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("IPC publish failure on set_alpha_autonomous: %s", e)
     return {"alpha_autonomous_live": body.enabled}

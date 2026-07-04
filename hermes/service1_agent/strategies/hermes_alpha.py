@@ -111,7 +111,7 @@ class HermesAlpha(CreditSpreadStrategy):
         if side not in ("put", "call"):
             self._log(f"✗ {symbol}: overseer intent has no valid side ({intent.get('side')!r}); skip.")
             return None
-        target_delta = abs(float(intent.get("target_delta") or 0.16))
+        target_delta = abs(float(intent.get("target_delta") if intent.get("target_delta") is not None else 0.16))
         dte_min = int(intent.get("dte_min") or 30)
         dte_max = int(intent.get("dte_max") or 45)
         width = int(intent.get("width") or default_width)

@@ -1,6 +1,7 @@
 """Shared agent/watcher runtime settings (key/value)."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -8,8 +9,9 @@ from sqlalchemy import select
 
 from hermes.common import IPC_CHANNEL_AGENT_COMMANDS
 from hermes.db.orm import SystemSetting
-
 from .base import Repository
+
+logger = logging.getLogger("hermes.db.settings")
 
 
 class SettingsRepository(Repository):
@@ -96,8 +98,8 @@ class SettingsRepository(Repository):
             try:
                 from hermes.ipc import ipc
                 await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("IPC publish failure for setting event: %s", e)
 
     async def get_setting_async(self, key: str, default: Optional[str] = None) -> Optional[str]:
         return await self.get_setting(key, default)

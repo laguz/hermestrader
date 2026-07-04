@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 import threading
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from hermes.common import (
@@ -33,12 +32,10 @@ log = logging.getLogger("hermes.agent.main")
 # (`patch("...main.X")`) keep resolving, and the run loop below can keep
 # calling them by bare name.
 from .agent_settings import (
-    SETTING_MODE, SETTING_TRADIER_OK_TS, SETTING_TRADIER_ERROR,
-    SETTING_AGENT_STARTED_AT, SETTING_LLM_PROVIDER, SETTING_LLM_BASE_URL,
-    SETTING_LLM_MODEL, SETTING_LLM_API_KEY, SETTING_LLM_TEMPERATURE,
-    SETTING_LLM_VISION, SETTING_LLM_TIMEOUT, SETTING_LLM_OK_TS,
-    SETTING_LLM_ERROR, SETTING_SOUL, SETTING_AUTONOMY, SETTING_PAUSED,
-    SETTING_APPROVAL_MODE, SETTING_LLM_OUT_OF_LOOP,
+    SETTING_MODE, SETTING_TRADIER_ERROR,
+    SETTING_AGENT_STARTED_AT,
+    SETTING_SOUL, SETTING_AUTONOMY, SETTING_PAUSED,
+    SETTING_LLM_OUT_OF_LOOP,
     _read_overseer_settings,
 )
 from .agent_risk import resolve_max_daily_loss, enforce_daily_loss_limit

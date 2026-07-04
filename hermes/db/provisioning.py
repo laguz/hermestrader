@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
+from psycopg import sql
 
 # Default server DSN for local dev: the docker-compose ``db`` service published
 # on host port 5433. Override with ``HERMES_TEST_DSN``.
@@ -59,7 +60,7 @@ def create_ephemeral_db(server_dsn: str = DEFAULT_SERVER_DSN, *, prefix: str = "
     """
     name = f"{prefix}_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(_admin_dsn(server_dsn), autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}"')
+        conn.execute(sql.SQL('CREATE DATABASE {}').format(sql.Identifier(name)))
 
     new_dsn = _with_dbname(server_dsn, name)
     with psycopg.connect(_pq(new_dsn), autocommit=True) as conn:
@@ -96,7 +97,9 @@ def lock_as_template(dsn: str) -> None:
     """
     name = _dbname(dsn)
     with psycopg.connect(_admin_dsn(dsn), autocommit=True) as conn:
-        conn.execute(f'ALTER DATABASE "{name}" WITH ALLOW_CONNECTIONS false')
+        conn.execute(
+            sql.SQL('ALTER DATABASE {} WITH ALLOW_CONNECTIONS false').format(sql.Identifier(name))
+        )
         conn.execute(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
             "WHERE datname = %s AND pid <> pg_backend_pid()",
@@ -116,8 +119,14 @@ def clone_ephemeral_db(template_dsn: str, *, prefix: str = "hermes_eph") -> str:
     template = _dbname(template_dsn)
     name = f"{prefix}_{uuid.uuid4().hex[:12]}"
     with psycopg.connect(_admin_dsn(template_dsn), autocommit=True) as conn:
-        conn.execute(f'CREATE DATABASE "{name}" TEMPLATE "{template}"')
-        conn.execute(f'ALTER DATABASE "{name}" WITH ALLOW_CONNECTIONS true')
+        conn.execute(
+            sql.SQL('CREATE DATABASE {} TEMPLATE {}').format(
+                sql.Identifier(name), sql.Identifier(template)
+            )
+        )
+        conn.execute(
+            sql.SQL('ALTER DATABASE {} WITH ALLOW_CONNECTIONS true').format(sql.Identifier(name))
+        )
     return _with_dbname(template_dsn, name)
 
 
@@ -130,4 +139,6 @@ def drop_ephemeral_db(dsn: str) -> None:
             "WHERE datname = %s AND pid <> pg_backend_pid()",
             (name,),
         )
-        conn.execute(f'DROP DATABASE IF EXISTS "{name}"')
+        conn.execute(
+            sql.SQL('DROP DATABASE IF EXISTS {}').format(sql.Identifier(name))
+        )
