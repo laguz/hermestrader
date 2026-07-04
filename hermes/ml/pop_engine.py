@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -54,9 +54,6 @@ DEFAULT_REGIME_WEIGHTS: Dict[str, List[float]] = {
 # Pluggable accessor — set by the watcher boot when a HermesDB session
 # is available (see hermes.service2_watcher.api.AppState). Defaults to
 # the static dict so unit tests don't need a database.
-_RegimeWeightLookup = Callable[[str, str], List[float]]
-
-
 def _static_regime_lookup(period: str, symbol: str = "DEFAULT") -> List[float]:
     return DEFAULT_REGIME_WEIGHTS.get(period.upper(), DEFAULT_REGIME_WEIGHTS["3M"])
 

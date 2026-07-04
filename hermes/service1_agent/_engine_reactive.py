@@ -822,7 +822,7 @@ class ReactiveController:
                                     if strike:
                                         requirement_per_lot = strike * 100.0
                         else:
-                            if action.width:
+                            if action.width is not None:
                                 requirement_per_lot = action.width * 100.0
 
                         scaled = await self.ctx.mm.scale_quantity(
