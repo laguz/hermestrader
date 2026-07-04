@@ -801,7 +801,8 @@ class ReactiveController:
                             "HERMESALPHA": 1,
                         }
                         config_key = f"{strat_id.lower()}_max_lots"
-                        max_lots = int(self.ctx.config.get(config_key) or max_lots_map.get(strat_id, 1))
+                        _raw_max_lots = self.ctx.config.get(config_key)
+                        max_lots = int(_raw_max_lots) if _raw_max_lots is not None else max_lots_map.get(strat_id, 1)
 
                         requirement_per_lot = 0.0
                         if strat_id == "WHEEL":
