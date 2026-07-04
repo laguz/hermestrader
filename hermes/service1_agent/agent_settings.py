@@ -42,7 +42,6 @@ SETTING_LLM_OUT_OF_LOOP = "llm_out_of_loop" # "true" | "false"
 # Daily-loss kill switch. Dollar amount of realized loss (positive number) that
 # auto-pauses the agent for the rest of the session. "" / "0" / unset disables.
 # Falls back to the HERMES_MAX_DAILY_LOSS env var when no setting is stored.
-SETTING_MAX_DAILY_LOSS = "max_daily_loss"
 
 
 # Per-strategy enable/disable flags — written by the C2 panel.

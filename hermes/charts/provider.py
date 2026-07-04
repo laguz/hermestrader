@@ -105,7 +105,7 @@ def _render_chart_locked(df, symbol, lookback,
 
     sma20 = _sma(df["close"], 20).values
     sma50 = _sma(df["close"], min(50, n - 1)).values
-    bb_upper, bb_mid, bb_lower = [s.values for s in _bollinger(df["close"])]
+    bb_upper, _, bb_lower = [s.values for s in _bollinger(df["close"])]
     rsi_vals = _rsi(df["close"]).values
 
     # ── Figure layout: price | volume | RSI ─────────────────────────────────
