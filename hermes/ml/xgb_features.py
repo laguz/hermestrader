@@ -17,7 +17,6 @@ This module owns the predictor layer:
        7-day retrain constants).
      * joblib + schema-hash persistence under ``~/.hermes/models`` so
        warm starts cannot silently misalign feature columns.
-     * KS drift detection that surfaces in /ml/diagnostics.
      * prediction-ledger writes carrying the model_hash and feature
        schema for postmortem replay.
 
@@ -37,7 +36,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 
-from hermes.ml import drift as drift_mod
 from hermes.ml import ledger as ledger_mod
 from hermes.ml import persistence
 from hermes.ml.calibration import load_calibrator
@@ -91,8 +89,6 @@ class AsyncXGBPredictor:
         self._models: Dict[str, Dict[Tuple[int, float], Tuple[Any, persistence.ModelMeta]]] = {}
         # Per-symbol calibrators applied to the q50 head.
         self._calibrators: Dict[str, Any] = {}
-        # Per-symbol drift detectors fitted on the latest training frame.
-        self._drift: Dict[str, drift_mod.DriftDetector] = {}
         # Last predictions surfaced to the rest of the system.
         self._last_pred: Dict[str, Dict[str, Any]] = {}
 
@@ -119,7 +115,7 @@ class AsyncXGBPredictor:
             logger.warning("Cannot create model dir %s: %s", self._model_root, exc)
 
         # Owned collaborators: training and inference read this predictor's
-        # state and mutate its shared caches (_models / _drift / _last_pred)
+        # state and mutate its shared caches (_models / _last_pred)
         # through back-references. The scheduling loop below routes to them.
         self.trainer = PredictorTrainer(self)
         self.inference = PredictorInference(self)
@@ -432,7 +428,7 @@ class AsyncXGBPredictor:
             if meta_payload:
                 try:
                     meta = MetaLearner.from_json(meta_payload)
-                    set_meta_learner(sym, meta)
+                    set_meta_learner(meta, sym)
                 except Exception as exc:                # noqa: BLE001
                     logger.debug("meta-learner load failed for %s: %s", sym, exc)
 

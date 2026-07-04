@@ -16,9 +16,9 @@ keep it small and explainable on purpose:
 
 - Two parameters per feature plus an intercept means tens of rows are
   enough to fit it (the prediction ledger doesn't need to be huge).
-- The fitted weights surface in /ml/diagnostics so the operator can
-  see, "this week the meta-learner trusts the protection score more
-  than usual" without running SHAP.
+- The fitted weights are plain floats in the persisted JSON, so the
+  operator can see, "this week the meta-learner trusts the protection
+  score more than usual" without running SHAP.
 
 When no fitted MetaLearner is available (cold start), we fall back to
 a deterministic identity that returns ``xgb_prob`` so behaviour matches

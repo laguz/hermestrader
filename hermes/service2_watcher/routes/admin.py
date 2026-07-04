@@ -56,7 +56,6 @@ _ML_INTERVAL_KEYS = {
     "predict_interval_s": "ml_predict_interval_s",
     "retrain_interval_s": "ml_retrain_interval_s",
     "calibrate_interval_s": "ml_calibrate_interval_s",
-    "drift_threshold": "ml_drift_threshold",
     "target_kind": "ml_target_kind",
 }
 
@@ -66,7 +65,6 @@ _ML_INTERVAL_BOUNDS = {
     "predict_interval_s": (60.0, 24 * 3600.0),
     "retrain_interval_s": (3600.0, 30 * 24 * 3600.0),
     "calibrate_interval_s": (600.0, 7 * 24 * 3600.0),
-    "drift_threshold": (0.01, 1.0),
 }
 
 

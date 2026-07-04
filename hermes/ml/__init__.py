@@ -20,7 +20,6 @@ can evolve independently:
   bands. Backwards-compatible shim for legacy positional callers.
 - ``regime_weights``   — DB-backed weights with Bayesian posterior
   updates from realised credit-spread outcomes.
-- ``drift``            — KS-test feature drift detector.
 - ``ledger``           — long-running PredictionLedger ORM table that
   records every published prediction tagged with model_hash and
   schema_hash for postmortem replay.
