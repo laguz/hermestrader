@@ -41,7 +41,7 @@ logger = logging.getLogger("hermes.broker.tradier")
 OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
 _RETRY_POLICY = dict(
-    retry=retry_if_exception_type(httpx.RequestError),
+    retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
     before_sleep=before_sleep_log(logger, logging.WARNING),
@@ -211,7 +211,7 @@ class TradierBroker(AbstractBroker):
                     symbol=str(o.get("symbol", "")),
                     status=str(o.get("status", "")),
                     quantity=int(o.get("quantity", 1) or 1),
-                    price=float(o.get("price") or o.get("avg_fill_price") or 0.0),
+                    price=float(o.get("price") if o.get("price") is not None else (o.get("avg_fill_price") if o.get("avg_fill_price") is not None else 0.0)),
                     side=str(o.get("side", "")),
                     tag=str(o.get("tag", "")),
                     legs=o.get("leg") or [],
@@ -290,7 +290,7 @@ class TradierBroker(AbstractBroker):
             items = [items]
         quotes_list = []
         for q in items:
-            price = float(q.get("last") or q.get("price") or 0.0)
+            price = float(q.get("last") if q.get("last") is not None else (q.get("price") if q.get("price") is not None else 0.0))
             quotes_list.append(
                 MarketQuote(
                     symbol=q.get("symbol", ""),
@@ -449,7 +449,7 @@ class TradierBroker(AbstractBroker):
             data["tag"] = clean_tag
 
         for i, leg in enumerate(action.legs):
-            data[f"option_symbol[{i}]"] = leg["option_symbol"]
+            data[f"option_symbol[{i}]"] = leg.get("option_symbol", "")
             data[f"side[{i}]"] = self._leg_action(leg, default_open=True)
             data[f"quantity[{i}]"] = int(leg.get("quantity", action.quantity or 1))
 

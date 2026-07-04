@@ -145,6 +145,17 @@ A follow-up audit in July 2026 (DeepSeek V4 Flash Free scan, verified by Opus) f
 - `control_state.py`: removed unreachable `key == "overseer_mode"` in elif at line 121 (already handled at line 104).
 - `alpha_killswitch.py`: simplified dead `getattr` else branch (all brokers return dicts).
 
+An additional DeepSeek V4 scan in July 2026 resolved 10 confirmed bugs:
+- **Reactive path falsy-zero `or` on max_lots**: Fixed in `_engine_reactive.py` line ~804 to use `is not None` check, ensuring `{strategy}_max_lots=0` is not overridden.
+- **HTTP 429 rate-limit retry**: Added `httpx.HTTPStatusError` to `_RETRY_POLICY` in `tradier.py` so rate-limiting and other status failures are retried.
+- **Bracket access on `leg["option_symbol"]`**: Used `.get("option_symbol", "")` in `tradier.py` line ~452 to avoid `KeyError` if option symbol is missing.
+- **Falsy-zero `or` on `action.quantity`**: Fixed in `trades.py` line ~121 to use `is not None` check to preserve `quantity=0`.
+- **Dead/redundant conditions in leg extraction**: Simplified check to just `"sell" in ls` / `"buy" in ls` in `trades.py` lines ~149,151.
+- **Copy-paste bug in `option_type` fallback**: Fixed fallback check in `mcp_client.py` line ~250 to check `leg.get("type")` if `option_type` is absent.
+- **Falsy-zero on timeout**: Fixed in `overseer.py` line ~146 to preserve `timeout_val=0.0` rather than defaulting to `15.0`.
+- **Falsy-zero price fallbacks**: Fixed price parsing in `tradier.py` lines ~214 and ~293 to preserve `price=0.0` instead of falling back to default prices.
+- **Falsy-zero lots in `_broker_order_dict`**: Fixed in `broker_wrapper.py` line ~402 to preserve `quantity=0`.
+
 ## Known false positives for AI code scanners
 
 The following patterns are intentional and should NOT be flagged as dead code or bugs:

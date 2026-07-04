@@ -143,7 +143,7 @@ class HermesOverseer:
         if not isinstance(timeout_val, (int, float)):
             timeout_s = 15.0
         else:
-            timeout_s = timeout_val or 15.0
+            timeout_s = timeout_val if timeout_val is not None else 15.0
 
         result = await asyncio.wait_for(
             asyncio.to_thread(self.llm.chat, messages, images=images or []),

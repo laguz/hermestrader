@@ -247,7 +247,7 @@ class MCPBrokerClient(AbstractBroker):
             OptionChainLeg(
                 symbol=str(leg.get("symbol") or ""),
                 strike=float(leg.get("strike") or 0.0),
-                option_type=str(leg.get("option_type") or leg.get("option_type") or "put"),
+                option_type=str(leg.get("option_type") or leg.get("type") or "put"),
                 bid=float(leg.get("bid") or 0.0),
                 ask=float(leg.get("ask") or 0.0),
                 delta=float(leg.get("delta") or (leg.get("greeks") or {}).get("delta") or 0.0),

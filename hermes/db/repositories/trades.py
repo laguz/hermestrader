@@ -118,7 +118,7 @@ class TradesRepository(Repository):
         )
 
         # Resolve lots from the first sell/open leg (matches record_pending_order)
-        lots = action.quantity or 1
+        lots = action.quantity if action.quantity is not None else 1
         for leg in (action.legs or []):
             leg_side = (leg.get("side") or "").lower()
             if "sell" in leg_side or "open" in leg_side:
@@ -146,9 +146,9 @@ class TradesRepository(Repository):
                 osym = leg.get("option_symbol")
                 if not osym:
                     continue
-                if not short_leg and ("sell" in ls or "open" in ls and "sell" in ls):
+                if not short_leg and "sell" in ls:
                     short_leg = osym
-                elif not long_leg and ("buy" in ls or "open" in ls and "buy" in ls):
+                elif not long_leg and "buy" in ls:
                     long_leg = osym
 
         short_strike = self._extract_strike(short_leg)

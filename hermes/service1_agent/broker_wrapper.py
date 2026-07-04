@@ -399,7 +399,8 @@ class AsyncBrokerWrapper:
                     legs = [{"option_symbol": top_opt,
                              "quantity": o.get("quantity", 1)}]
 
-            lots = int(o.get("quantity", 1) or 1)
+            _raw_qty = o.get("quantity")
+            lots = int(_raw_qty) if _raw_qty is not None else 1
             side_type = "unknown"
             expiry_iso = ""
             for leg in legs:
