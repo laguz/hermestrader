@@ -60,6 +60,7 @@ async def test_cache_ttl_and_simulated_time():
     # Cache hit
     dummy.get_option_expirations.reset_mock()
     res2 = await wrapper.get_option_expirations("AAPL")
+    assert res2 == ["2026-06-19", "2026-06-26"]
     dummy.get_option_expirations.assert_not_called()
     
     # Advance simulated time past TTL (default is 120s, let's advance by 130s)

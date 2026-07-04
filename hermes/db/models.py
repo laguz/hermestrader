@@ -10,7 +10,7 @@ from ``hermes.db.models`` unchanged::
     from hermes.db.models import HermesDB, Base, Trade, Prediction, ...
 
 ``HermesDB`` itself keeps only connection/engine setup and schema lifecycle
-(``__init__`` / ``init_schema`` / ``run_migrations``); every query method is
+(``__init__`` / ``run_migrations``); every query method is
 contributed by a repository mixin.
 """
 from __future__ import annotations
@@ -86,22 +86,6 @@ class HermesDB:
             # Don't crash on import — the next real query surfaces the cause.
             pass
         self.engine.dispose()
-
-    async def init_schema(self, schema_sql_path: str) -> None:
-        """Provision a fresh DB: ORM tables first, then the Timescale addendum.
-
-        The ORM is authoritative for tables/columns, so this creates them from
-        ``Base.metadata`` and only then applies ``schema.sql`` — which now holds
-        just the TimescaleDB layer (raw ``bars_*`` tables, hypertable
-        conversions, compression policies, the ``pnl_daily`` view) that
-        references tables the ORM has already created.
-        """
-        with open(schema_sql_path, "r", encoding="utf-8") as fh:
-            sql = fh.read()
-        async with self.async_engine.begin() as conn:
-            await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=True))
-            for stmt in [s.strip() for s in sql.split(";") if s.strip()]:
-                await conn.exec_driver_sql(stmt + ";")
 
     # ------------------------------------------------------------------
     # Boot-time schema self-heal, applied at agent/watcher startup.

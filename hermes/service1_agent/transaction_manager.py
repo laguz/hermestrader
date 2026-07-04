@@ -39,7 +39,7 @@ def _to_json_safe(val: Any) -> Any:
     return val
 
 
-async def _get_next_id(session, table_name: str, seq_name: str) -> int:
+async def _get_next_id(session, seq_name: str) -> int:
     from sqlalchemy import text
     res = await session.execute(text(f"SELECT nextval('{seq_name}')"))
     return res.scalar()
@@ -57,7 +57,7 @@ class TransactionManager:
         payload: Dict[str, Any]
     ) -> PendingOrder:
         """Create and place a pending order with status PENDING, and record event."""
-        po_id = await _get_next_id(session, "pending_orders", "pending_orders_id_seq")
+        po_id = await _get_next_id(session, "pending_orders_id_seq")
 
         # Emit event
         event = OrderSubmittedEvent(
@@ -155,7 +155,7 @@ class TransactionManager:
 
         trade_id = trade_fields.get("id")
         if trade_id is None:
-            trade_id = await _get_next_id(session, "trades", "trades_id_seq")
+            trade_id = await _get_next_id(session, "trades_id_seq")
 
         trade_fields_copy = dict(trade_fields)
         trade_fields_copy["id"] = trade_id
