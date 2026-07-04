@@ -133,11 +133,6 @@ def get_meta_learner(symbol: str = "DEFAULT") -> MetaLearner:
     return _meta_learners.get(symbol.upper(), MetaLearner())
 
 
-def clear_meta_learners() -> None:
-    """Clear all installed meta-learners."""
-    global _meta_learners
-    _meta_learners.clear()
-
 
 # ---------------------------------------------------------------------------
 # Outcome calibrator — fitted on the book's own closed trades (predicted POP
@@ -571,7 +566,6 @@ __all__ = [
     "regime_weights",
     "set_meta_learner",
     "get_meta_learner",
-    "clear_meta_learners",
     "set_pop_calibrator",
     "get_pop_calibrator",
     "find_key_levels",

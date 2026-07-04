@@ -53,7 +53,8 @@ class MockBroker(AbstractBroker):
 
     def _get_symbol_price(self, symbol: str) -> float:
         """Synchronously get a deterministic current price for a symbol."""
-        base = 100.0 + (hash(symbol) % 200)
+        h = sum(ord(c) for c in symbol)
+        base = 100.0 + (h % 200)
         return round(base, 2)
 
     async def get_option_chains(self, symbol: str, expiry: str) -> List[OptionChainLeg]:

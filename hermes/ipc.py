@@ -107,6 +107,11 @@ class RedisIPCBackend:
             return True
         except Exception as exc:
             self.is_connected = False
+            if self.client is not None:
+                try:
+                    await self.client.aclose()
+                except Exception:
+                    pass
             self.client = None
             logger.error("Redis IPC connection failed: %s", exc)
             raise ConnectionError(f"Failed to connect to Redis IPC at {self.redis_dsn}: {exc}") from exc
@@ -226,7 +231,7 @@ class RedisIPCBackend:
             
         if self.client is not None:
             try:
-                await self.client.close()
+                await self.client.aclose()
             except Exception:
                 pass
             self.client = None

@@ -241,10 +241,9 @@ async def test_regime_weights_gating_logic(monkeypatch):
 @pytest.mark.asyncio
 async def test_regime_weights_wiring_and_caching(db, monkeypatch):
     """Verify that when gated on, wiring works, updates on ticks, and falls back on error."""
-    import os
     import asyncio
     from hermes.ml import pop_engine, regime_weights
-    from hermes.events.bus import EventBus, ClockTickEvent, CacheWarmTick
+    from hermes.events.bus import EventBus, CacheWarmTick
     from sqlalchemy import select
 
     # 1. Gate ON via monkeypatching environment variable

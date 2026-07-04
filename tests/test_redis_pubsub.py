@@ -61,6 +61,7 @@ async def test_decide_approval_emits_publish(db):
     """Verify that decide_approval publishes to IPC agent_commands when decision is made."""
     # Mock AsyncSession context to capture executes
     session_mock = AsyncMock()
+    session_mock.add = MagicMock()
     session_mock.__aenter__.return_value = session_mock
     session_mock.__aexit__.return_value = False
     
