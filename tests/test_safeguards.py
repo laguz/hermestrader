@@ -15,6 +15,9 @@ ET = ZoneInfo("America/New_York")
 async def test_stop_loss_width_safety_cap():
     """Verify that Stop Loss exits are blocked if debit is equal to or greater than the spread width."""
     # CS75 call spread, width = 5.00, entry_credit = 1.50. SL threshold is 1.50 * 2.5 = 3.75.
+    # Pin expiry relative to the simulated current_date below (2026-06-09), not
+    # real wall-clock date.today() — otherwise dte drifts as calendar days pass
+    # and can cross the CS75 TP/SL DTE-band boundaries out from under the test.
     trade = make_trade(
         strategy_id="CS75",
         symbol="TSLA",
@@ -24,6 +27,7 @@ async def test_stop_loss_width_safety_cap():
         width=5.0,
         entry_credit=1.50,
         lots=1,
+        expiry=date(2026, 6, 9) + timedelta(days=21),
     )
 
     db = StubDB()
@@ -75,6 +79,9 @@ async def test_stop_loss_width_safety_cap():
 async def test_morning_pricing_guard():
     """Verify that exits in loss are deferred before 10:30 AM ET, but TP exits and afternoon exits work."""
     # CS75 call spread, width = 5.00, entry_credit = 1.50. SL threshold = 3.75.
+    # Pin expiry relative to the simulated current_date below (2026-06-09), not
+    # real wall-clock date.today() — otherwise dte drifts as calendar days pass
+    # and can cross the CS75 TP/SL DTE-band boundaries out from under the test.
     trade = make_trade(
         strategy_id="CS75",
         symbol="TSLA",
@@ -84,6 +91,7 @@ async def test_morning_pricing_guard():
         width=5.0,
         entry_credit=1.50,
         lots=1,
+        expiry=date(2026, 6, 9) + timedelta(days=21),
     )
 
     db = StubDB()
