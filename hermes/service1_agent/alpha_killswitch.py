@@ -70,10 +70,7 @@ async def _account_equity(broker) -> Optional[float]:
     except Exception as exc:
         log.warning("alpha kill switch: get_account_balances failed: %s", exc)
         return None
-    if hasattr(balances, "get"):
-        val = balances.get("total_equity")
-    else:
-        val = getattr(balances, "total_equity", None)
+    val = balances.get("total_equity")
     try:
         return float(val) if val is not None else None
     except (TypeError, ValueError):
@@ -123,5 +120,5 @@ async def enforce_alpha_killswitch(db, broker, control_state, config) -> bool:
     try:
         await db.logs.write_log(ALPHA, msg)
     except Exception:
-        pass
+        log.warning("[ALPHA-KILLSWITCH] audit log write failed")
     return True

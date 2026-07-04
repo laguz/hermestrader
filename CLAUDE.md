@@ -122,5 +122,51 @@ An audit in July 2026 resolved four codebase bugs:
 - Fixed semicolons in comment lines in [schema.sql](file:///Users/laguz/Git/hermestrader/hermes/db/schema.sql) which had broken Alembic's baseline statement splitting.
 - Removed 106 unused `# noqa: BLE001` directives (and other unused ones) using Ruff `RUF100` auto-fixing.
 
+A follow-up audit in July 2026 (DeepSeek V4 Flash Free scan, verified by Opus) fixed 22 confirmed findings:
+
+**Bugs fixed:**
+- **Falsy-zero `or` pattern** in [risk_engine.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/risk_engine.py) line ~150: `int(config.get(k) or default)` treated `0` as falsy, silently overriding `max_lots=0` with `1`. Fixed to use `if raw is not None` check.
+- **Partial cache populate** in [risk_engine.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/risk_engine.py) `_sync_broker_orders`: cache was cleared before the try block, leaving it partially populated on mid-loop exception. Fixed with atomic local-dict swap.
+- **6 HermesAlpha tunables missing** from the catalog in [tunables.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/tunables.py): `hermesalpha_width`, `hermesalpha_target_lots`, `hermesalpha_max_lots`, `hermesalpha_min_credit_pct`, `hermesalpha_time_exit_dte`, `hermesalpha_sl_mult` were read directly from `self.config` in `hermes_alpha.py` but absent from the tunables catalog, bypassing the operator-facing settings API. Added to catalog.
+
+**Silent `except Exception: pass` blocks replaced with logging (20+ locations):**
+- [risk_engine.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/risk_engine.py): `obp_reserve` fetch failures now log a warning (previously silent → buying-power over-allocation risk).
+- [_engine_pipeline.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/_engine_pipeline.py): tick-error DB write failure now logged at DEBUG.
+- [overseer.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/overseer.py): `_mark_llm_ok`/`_mark_llm_error` DB failures logged at DEBUG; AI decision audit write failures logged at WARNING.
+- [agent_construction.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/agent_construction.py): LLM status DB write failures logged at DEBUG.
+- [alpha_killswitch.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/alpha_killswitch.py): killswitch audit log write failure now logged at WARNING.
+- [_engine_reactive.py](file:///Users/laguz/Git/hermestrader/hermes/service1_agent/_engine_reactive.py): order monitor `create_task` failure now logged at ERROR (previously `except RuntimeError: pass` → monitor silently never started).
+
+**Dead code removed:**
+- `main.py`: removed 5 truly dead imports (`next_open`, `session_label`, `_strategy_enabled_key`, `_open_position_pnl`, `_REJECTED_ORDER_STATUSES`) and the dead `_parse_iso` function (moved inline to test).
+- `agent_reactive.py`: removed duplicate `_utcnow_iso`, now imports from `main.py`.
+- `ml/persistence.py`: removed dead `_HAS_JOBLIB` variable.
+- `portfolio/__init__.py`: removed dead re-exports (all consumers import directly from `.safety_gateway`).
+- `control_state.py`: removed unreachable `key == "overseer_mode"` in elif at line 121 (already handled at line 104).
+- `alpha_killswitch.py`: simplified dead `getattr` else branch (all brokers return dicts).
+
+## Known false positives for AI code scanners
+
+The following patterns are intentional and should NOT be flagged as dead code or bugs:
+
+**Test-seam re-exports in `main.py`** — these symbols are imported into `main.py` but not used directly there. They exist so tests can monkeypatch them at a single path (`hermes.service1_agent.main.X`). The comment at lines 31–34 documents this. Current re-exports:
+- `market_session` (from `hermes.market_hours`) — patched by `test_instant_approvals.py`
+- `resolve_max_daily_loss`, `enforce_daily_loss_limit` (from `.agent_risk`) — imported by `test_daily_loss_kill_switch.py`
+- `_execute_approved_action` (from `.agent_approvals`) — patched by `test_instant_approvals.py`, imported by `test_c2_approval_execution.py`
+
+**`optimizer.py` `strategy_params` access** — `action.strategy_params` uses `field(default_factory=dict)` on the dataclass, making `.get()` calls safe. Not a missing-attribute bug.
+
+**Dynamic lookups via `getattr`/`__getattr__`:**
+- `WatchlistRepository.list_watchlist` — resolved dynamically via `getattr` in `_engine_pipeline.py`.
+- `TradesRepository.close_trade_from_action` — resolved dynamically via `getattr` in `agent_approvals.py`.
+- `AsyncBrokerWrapper.__getattr__` and `Tunables.__getattr__` — dynamic routing by design.
+
+**Defensively complete APIs:**
+- `date_today` in `hermes/utils.py` — clock library completeness.
+- `SimulatedClock` in `hermes/clock.py` and `hermes/db/provisioning.py` — test fixtures only.
+- `scripts/self_learning_loop.py` — cron-invoked retrospective analyzer, not dead.
+- All watcher routes (`routes/*.py`) and DB repositories (`repositories/*.py`) — dynamically resolved by `api.py` and `HermesDB`.
+- Vue.js components/views under `hermes/ui/src` — verified mapped in `router.js` and `App.vue`.
+
 
 

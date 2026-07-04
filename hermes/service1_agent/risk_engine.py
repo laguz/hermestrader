@@ -39,12 +39,13 @@ class PortfolioRiskEngine:
         self._broker_order_counts: Dict[tuple[str, str, str, str], int] = {}
 
     async def _sync_broker_orders(self) -> None:
-        self._broker_order_counts = {}
+        counts: Dict[tuple, int] = {}
         try:
             orders = await self.broker.get_normalized_active_orders()
             for o in orders:
                 key = (o["strategy_id"], o["symbol"], o["side_type"], o["expiry_iso"])
-                self._broker_order_counts[key] = self._broker_order_counts.get(key, 0) + o["lots"]
+                counts[key] = counts.get(key, 0) + o["lots"]
+            self._broker_order_counts = counts
         except Exception as exc:
             logger.exception("[RiskEngine] Failed to sync broker orders: %s", exc)
 
@@ -62,7 +63,7 @@ class PortfolioRiskEngine:
                 if reserve_val:
                     available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
             except Exception:
-                pass
+                logger.warning("[RiskEngine] obp_reserve read failed; using full buying power")
 
             db_open_trades = await self.db.trades.all_open_trades() or []
 
@@ -91,7 +92,7 @@ class PortfolioRiskEngine:
             if reserve_val:
                 available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
         except Exception:
-            pass
+            logger.warning("[RiskEngine] obp_reserve read failed; using full buying power")
 
         db_open_trades = await self.db.trades.all_open_trades() or []
         running_open_trades = list(db_open_trades)
@@ -147,7 +148,8 @@ class PortfolioRiskEngine:
                 "HERMESALPHA": 1,
             }
             config_key = f"{strat_id.lower()}_max_lots"
-            max_lots = int(self.config.get(config_key) or max_lots_map.get(strat_id, 1))
+            _raw_max_lots = self.config.get(config_key)
+            max_lots = int(_raw_max_lots) if _raw_max_lots is not None else max_lots_map.get(strat_id, 1)
 
             requirement_per_lot = 0.0
             if strat_id == "WHEEL":

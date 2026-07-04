@@ -155,6 +155,18 @@ _CATALOG: List[Tunable] = [
     _i("tt45_target_lots", 5, "LOTS", "TT45 target lots", min=1, max=100),
     _i("tt45_max_lots", 5, "LOTS", "TT45 max lots", min=1, max=100),
     _i("wheel_max_lots", 5, "LOTS", "WHEEL max lots", min=1, max=100),
+
+    # ── HERMESALPHA (priority 5; LLM-originated credit spreads) ────────────
+    _i("hermesalpha_width", 5, "HERMESALPHA", "Spread width ($)", min=1, max=50,
+       help="Dollar-width of the credit spread."),
+    _i("hermesalpha_target_lots", 1, "HERMESALPHA", "Target lots", min=1, max=100),
+    _i("hermesalpha_max_lots", 1, "HERMESALPHA", "Max lots", min=0, max=100),
+    _f("hermesalpha_min_credit_pct", 0.20, "HERMESALPHA", "Min credit %", min=0.0, max=1.0,
+       help="Reject spreads collecting less than this fraction of width."),
+    _i("hermesalpha_time_exit_dte", 2, "HERMESALPHA", "Time-exit DTE", min=0, max=30,
+       help="Close the position when DTE falls to this."),
+    _f("hermesalpha_sl_mult", 2.5, "HERMESALPHA", "Stop-loss multiplier", min=1.0, max=10.0,
+       help="Close when debit exceeds credit times this."),
 ]
 
 TUNABLES: Dict[str, Tunable] = {t.key: t for t in _CATALOG}

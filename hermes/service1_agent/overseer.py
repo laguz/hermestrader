@@ -126,13 +126,13 @@ class HermesOverseer:
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
         except Exception:
-            pass
+            logger.debug("_mark_llm_ok DB write failed", exc_info=True)
 
     async def _mark_llm_error(self, exc: Exception) -> None:
         try:
             await self.db.settings.set_setting("llm_last_error", (str(exc) or repr(exc))[:500])
         except Exception:
-            pass
+            logger.debug("_mark_llm_error DB write failed", exc_info=True)
 
     async def _chat_with_timeout(self, messages: List[Dict[str, str]],
                                  images: List[Any] = None) -> str:
@@ -355,7 +355,7 @@ class HermesOverseer:
         try:
             await self.db.decisions.write_ai_decision("HERMESALPHA", symbol, "autonomous", decision)
         except Exception:
-            pass
+            logger.warning("AI decision audit write failed for %s", symbol, exc_info=True)
 
         if str(decision.get("action") or "").lower() != "trade":
             return None
@@ -390,7 +390,8 @@ class HermesOverseer:
             await self.db.decisions.write_ai_decision(
                 "HERMESALPHA", trade.get("symbol", ""), "autonomous", decision)
         except Exception:
-            pass
+            logger.warning("AI decision audit write failed for %s",
+                           trade.get("symbol", ""), exc_info=True)
 
         action = "close" if str(decision.get("action") or "").lower() == "close" else "hold"
         return {"action": action, "rationale": decision.get("rationale", "")}

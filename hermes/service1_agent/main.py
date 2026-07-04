@@ -22,7 +22,7 @@ from hermes.service1_agent.core import IronCondorBuilder
 from hermes.service1_agent.strategies import (
     CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
 )
-from hermes.market_hours import market_session, next_open, session_label
+from hermes.market_hours import market_session
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -39,14 +39,10 @@ from .agent_settings import (
     SETTING_LLM_VISION, SETTING_LLM_TIMEOUT, SETTING_LLM_OK_TS,
     SETTING_LLM_ERROR, SETTING_SOUL, SETTING_AUTONOMY, SETTING_PAUSED,
     SETTING_APPROVAL_MODE, SETTING_LLM_OUT_OF_LOOP,
-    _strategy_enabled_key, _read_overseer_settings,
+    _read_overseer_settings,
 )
-from .agent_risk import (
-    resolve_max_daily_loss, _open_position_pnl, enforce_daily_loss_limit,
-)
-from .agent_approvals import (
-    _REJECTED_ORDER_STATUSES, _execute_approved_action,
-)
+from .agent_risk import resolve_max_daily_loss, enforce_daily_loss_limit
+from .agent_approvals import _execute_approved_action
 from .agent_construction import (
     _live_armed, _resolve_mode_credentials, _build_broker,
     _build_stream_client, _build_llm, build,
@@ -116,25 +112,11 @@ def set_trigger() -> None:
 
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+from hermes.utils import utcnow_iso as _utcnow_iso
 
 
-def _parse_iso(s: Optional[str]) -> Optional[datetime]:
-    """Parse an ISO-8601 string into a timezone-aware datetime, or return None.
 
-    Python <3.11's ``datetime.fromisoformat`` rejects the trailing ``Z``
-    used by most external services; normalise it to ``+00:00`` first so
-    timestamps round-tripped through other tools still parse.
-    """
-    if not s:
-        return None
-    try:
-        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
-        dt = datetime.fromisoformat(normalised)
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
+
 
 
 

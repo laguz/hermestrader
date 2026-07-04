@@ -43,10 +43,8 @@ from typing import Any, Dict, Mapping, Optional
 
 try:                                                  # pragma: no cover - optional
     import joblib                                     # type: ignore
-    _HAS_JOBLIB = True
 except ImportError:                                   # pragma: no cover
     import pickle as joblib                           # type: ignore
-    _HAS_JOBLIB = False
 
 from hermes.ml.feature_catalog import schema_hash
 

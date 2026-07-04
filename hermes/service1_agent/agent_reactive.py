@@ -32,8 +32,8 @@ from hermes.market_hours import ET
 log = logging.getLogger("hermes.agent.main")
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+from hermes.utils import utcnow_iso as _utcnow_iso
+
 
 
 async def prewarm_quote_chain_cache(engine, db, conf: Dict[str, Any], shutdown_event) -> None:
