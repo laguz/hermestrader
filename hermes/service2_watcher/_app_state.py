@@ -56,8 +56,6 @@ SETTING_AUTONOMY = "agent_autonomy"
 SETTING_ALPHA_AUTONOMOUS_LIVE = "alpha_autonomous_live"
 SETTING_PAUSED = "agent_paused"
 SETTING_APPROVAL_MODE = "approval_mode"
-SETTING_ML_OK_TS = "ml_last_ok_ts"
-SETTING_ML_ERROR = "ml_last_error"
 
 
 # ── Static dashboard assets ──────────────────────────────────────────────────

@@ -42,6 +42,35 @@ def _server_reachable() -> bool:
         return False
 
 
+def _safe_dispose_async_engine(engine) -> None:
+    try:
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            loop.create_task(engine.dispose())
+        else:
+            asyncio.run(engine.dispose())
+    except Exception:
+        pass
+@pytest.fixture(autouse=True)
+async def cleanup_tasks():
+    yield
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await asyncio.sleep(0.01)
+        tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task(loop)]
+        if tasks:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    except RuntimeError:
+        pass
+
+
 @pytest.fixture(scope="session")
 def pg_available():
     """Skip the dependent test unless a Timescale server is reachable."""
@@ -81,10 +110,7 @@ def _db_template(pg_available):
         if schema:
             apply_schema_addendum(dsn)
         db.engine.dispose()
-        try:
-            asyncio.run(db.async_engine.dispose())
-        except Exception:  # noqa: BLE001 — best-effort; must dispose before locking
-            pass
+        _safe_dispose_async_engine(db.async_engine)
         lock_as_template(dsn)
         built[schema] = dsn
         return dsn
@@ -129,10 +155,7 @@ def make_db(_db_template):
             db.engine.dispose()
         except Exception:  # noqa: BLE001 — teardown is best-effort
             pass
-        try:
-            asyncio.run(db.async_engine.dispose())
-        except Exception:  # noqa: BLE001
-            pass
+        _safe_dispose_async_engine(db.async_engine)
         try:
             drop_ephemeral_db(dsn)
         except Exception:  # noqa: BLE001

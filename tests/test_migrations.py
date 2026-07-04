@@ -145,6 +145,8 @@ async def test_run_migrations_self_heals_columns_and_tables(ephemeral_dsn):
     finally:
         eng.dispose()
         db.engine.dispose()
+        from .conftest import _safe_dispose_async_engine
+        _safe_dispose_async_engine(db.async_engine)
 
 
 async def test_run_migrations_is_idempotent(db):
