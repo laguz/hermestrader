@@ -359,3 +359,25 @@ async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
     assert "HERMES_CS7_CLOSE_TP-2pctW" in actions[0].tag
 
 
+
+
+# ── strategy _log task references ────────────────────────────────────────────
+async def test_strategy_log_holds_strong_refs_to_db_write_tasks():
+    # _log() fires the DB write with create_task(); the loop only weak-refs
+    # tasks, so without a held reference a log line could be GC'd unwritten.
+    s, _broker, _db = _build(CreditSpreads7)
+
+    gate = asyncio.Event()
+
+    async def slow_write_log(*_args, **_kwargs):
+        await gate.wait()
+
+    s.db.logs.write_log = slow_write_log
+    s._log("hello")
+
+    assert len(s._pending_log_tasks) == 1
+
+    gate.set()
+    await asyncio.gather(*s._pending_log_tasks)
+    await asyncio.sleep(0)
+    assert not s._pending_log_tasks  # done-callback discarded the reference

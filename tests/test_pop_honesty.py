@@ -12,7 +12,7 @@ own implied delta. These tests pin the fixes:
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 

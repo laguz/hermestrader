@@ -50,7 +50,3 @@ class SimulatedClock:
         if tz is not None:
             return utc_dt.astimezone(tz)
         return utc_dt
-
-    def set_time(self, dt: datetime.datetime) -> None:
-        """Update the simulated clock time."""
-        self._current_dt = dt

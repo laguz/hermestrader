@@ -46,3 +46,12 @@ async def test_find_expiry_in_dte_range_matches_the_eastern_trading_day():
     s = _build(SimulatedClock(_LATE_EVENING_ET_UTC), expirations=["2026-06-15"])
     expiry = await s.find_expiry_in_dte_range("AAPL", min_dte=7, max_dte=7)
     assert expiry == "2026-06-15"
+
+
+def test_dte_from_expiry_uses_eastern_trading_day_not_utc_calendar_day():
+    # Same boundary window: 01:30 UTC on June 9th is still June 8th ET, so a
+    # June 15th expiry is 7 DTE — the raw-UTC bug recorded 6 on the Trade row.
+    from hermes.service1_agent.strategies._helpers import _dte_from_expiry
+
+    assert _dte_from_expiry("2026-06-15", asof=_LATE_EVENING_ET_UTC) == 7
+    assert _dte_from_expiry(date(2026, 6, 15), asof=_LATE_EVENING_ET_UTC) == 7

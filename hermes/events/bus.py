@@ -189,6 +189,11 @@ class EventBus:
         # process. Backpressure here just makes events wait in self._queue
         # (cheap) instead of becoming live tasks (not cheap).
         self._dispatch_sem = asyncio.Semaphore(max_concurrent_dispatch)
+        # The event loop holds only a weak reference to tasks, so a bare
+        # create_task() in _process_events could be garbage-collected before
+        # it runs — silently dropping the event, leaking its semaphore permit,
+        # and leaving task_done() uncalled (stop()'s queue.join() then hangs).
+        self._dispatch_tasks: set[asyncio.Task] = set()
 
     def subscribe(self, event_type: Type[E], handler: EventHandler) -> None:
         """Register an async handler for a specific event type."""
@@ -220,7 +225,9 @@ class EventBus:
                     continue
 
                 await self._dispatch_sem.acquire()
-                asyncio.create_task(self._dispatch_event(event, handlers))
+                task = asyncio.create_task(self._dispatch_event(event, handlers))
+                self._dispatch_tasks.add(task)
+                task.add_done_callback(self._dispatch_tasks.discard)
             except asyncio.CancelledError:
                 break
             except Exception as e:

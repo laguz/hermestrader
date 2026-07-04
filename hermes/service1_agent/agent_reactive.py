@@ -25,6 +25,7 @@ from hermes.common import (
     IPC_ACTION_TRIGGER_APPROVALS,
     IPC_ACTION_TRIGGER_ML,
 )
+from hermes.market_hours import ET
 
 # Reuse the run loop's logger name so operator log filters (e.g. "[PRE-WARM]"
 # under hermes.agent.main) keep matching after the extraction.
@@ -80,7 +81,10 @@ async def prewarm_quote_chain_cache(engine, db, conf: Dict[str, Any], shutdown_e
                     if expirations:
                         cache.set_expirations(sym, expirations, now_ts)
 
-                        today = datetime.utcnow().date()
+                        # ET trading day, not the raw UTC date — after ~8pm ET
+                        # the UTC rollover shifts every DTE by one and expiries
+                        # at the 5/50 window edges get mis-included/excluded.
+                        today = datetime.now(timezone.utc).astimezone(ET).date()
                         if hasattr(wrapper.broker, "current_date") and wrapper.broker.current_date:
                             today = wrapper.broker.current_date.date()
 
