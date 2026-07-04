@@ -3,7 +3,7 @@ import os
 import logging
 from cryptography.fernet import Fernet
 
-from hermes.clock import Clock, RealClock, SimulatedClock
+from hermes.clock import Clock, RealClock
 
 _GLOBAL_CLOCK: Clock = RealClock()
 

@@ -28,15 +28,15 @@ except ImportError:
     sys.modules["mcp.server"] = MagicMock()
 
 try:
-    import mcp.server.fastmcp
+    import mcp.server.fastmcp  # noqa: F401
 except ImportError:
     sys.modules["mcp.server.fastmcp"] = MagicMock()
 
 if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
     sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
 
-from hermes.utils import sync_soul_file_to_db, check_for_updates
-from hermes.mcp import server
+from hermes.utils import sync_soul_file_to_db, check_for_updates  # noqa: E402
+from hermes.mcp import server  # noqa: E402
 
 async def test_sync_soul_file_to_db(tmp_path, monkeypatch):
     # Setup a mock database

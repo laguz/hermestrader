@@ -27,9 +27,10 @@ from contextlib import asynccontextmanager
 import os
 
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
 
 from hermes.common import STRATEGY_PRIORITIES
 
@@ -131,7 +132,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 (Path(STATIC_DIR) / "assets").mkdir(parents=True, exist_ok=True)
 app.mount("/assets", StaticFiles(directory=str(Path(STATIC_DIR) / "assets")), name="assets")
 
-from hermes.mcp.server import mcp
+from hermes.mcp.server import mcp  # noqa: E402
 app.mount("/mcp", mcp.sse_app())
 
 # Routers are mounted in declaration order; FastAPI doesn't care about
@@ -149,8 +150,7 @@ app.include_router(analytics.router)
 app.include_router(charts.router)
 app.include_router(admin.router)
 
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi import HTTPException
+
 
 @app.get("/favicon.svg")
 def favicon_svg():

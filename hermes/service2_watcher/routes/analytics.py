@@ -23,6 +23,12 @@ import numpy as np
 from fastapi import APIRouter
 from fastapi.responses import Response
 
+from hermes.db.models import HermesDB
+from hermes.ml.pop_calibration import sync_pop_calibrator_from_settings
+from hermes.ml.pop_engine import augment_levels_with_pop
+
+from .._app_state import DSN, WATCHLIST, db
+
 _NO_CACHE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
 
 
@@ -77,11 +83,7 @@ def _safe_json_response(content: Any, headers: Dict[str, str] = None) -> Respons
     return Response(content=body, media_type="application/json",
                     headers=headers or {})
 
-from hermes.db.models import HermesDB
-from hermes.ml.pop_calibration import sync_pop_calibrator_from_settings
-from hermes.ml.pop_engine import augment_levels_with_pop
 
-from .._app_state import DSN, WATCHLIST, db
 
 router = APIRouter()
 logger = logging.getLogger("hermes.c2.api")

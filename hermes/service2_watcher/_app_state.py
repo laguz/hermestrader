@@ -21,13 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from hermes.config import settings
 from hermes.db.models import HermesDB
 
 logger = logging.getLogger("hermes.c2.api")
 
 
-# ── Environment ───────────────────────────────────────────────────────────────
-from hermes.config import settings
 
 DSN = settings.hermes_dsn
 WATCHLIST = settings.watchlist_list

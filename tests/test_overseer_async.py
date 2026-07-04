@@ -161,7 +161,7 @@ async def test_veto_suppresses_repeat_entry():
     await engine.submit([_action("RIOT")])
     await asyncio.sleep(0.1)
     assert len(broker.placed) == 0
-    assert len([l for l in db.logs if "[AI VETOED]" in l]) == 1
+    assert len([log_entry for log_entry in db.logs if "[AI VETOED]" in log_entry]) == 1
 
     # Second identical submission: suppressed before review — no new veto log,
     # and a [VETO-SUPPRESSED] entry instead.
@@ -169,8 +169,8 @@ async def test_veto_suppresses_repeat_entry():
     await engine.submit([_action("RIOT")])
     await asyncio.sleep(0.1)
     assert len(broker.placed) == 0
-    assert len([l for l in db.logs if "[AI VETOED]" in l]) == 1   # still just one
-    assert len([l for l in db.logs if "[VETO-SUPPRESSED]" in l]) == 1
+    assert len([log_entry for log_entry in db.logs if "[AI VETOED]" in log_entry]) == 1   # still just one
+    assert len([log_entry for log_entry in db.logs if "[VETO-SUPPRESSED]" in log_entry]) == 1
     assert llm.last_messages is None   # overseer was never consulted again
 
     await overseer.stop()

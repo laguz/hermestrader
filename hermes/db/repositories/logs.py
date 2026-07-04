@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 from typing import Optional
+
+from hermes.utils import utc_now
+
 
 from sqlalchemy import select
 
@@ -14,9 +18,6 @@ from .base import Repository
 logger = logging.getLogger("hermes.db")
 
 
-import threading
-from datetime import timedelta
-from hermes.utils import utc_now
 
 _last_log_ts: datetime | None = None
 _log_ts_lock = threading.Lock()
