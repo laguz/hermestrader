@@ -200,7 +200,7 @@ class TimeSeriesEngine:
         """Fetch the first daily bar on or after the target date/timestamp."""
         if not dt:
             return None
-        target = _as_utc(dt if isinstance(dt, datetime) else dt)
+        target = _as_utc(dt)
         stmt = text(
             "SELECT ts, open, high, low, close, volume, vwap_close FROM bars_daily "
             "WHERE symbol = :symbol AND ts >= :target ORDER BY ts ASC LIMIT 1"
