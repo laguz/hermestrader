@@ -109,6 +109,10 @@ An audit in July 2026 removed the unused `mark_outcome` in `hermes/ml/ledger.py`
 Kept deliberately as false positives / complete APIs:
 - `WatchlistRepository.list_watchlist` and `TradesRepository.close_trade_from_action` — these are looked up dynamically via `getattr` in `_engine_pipeline.py` and `agent_approvals.py`.
 - `date_today` in `hermes/utils.py` — matches clock library completeness.
-- `SimulatedClock` in `hermes/clock.py` and provisioning functions in `hermes/db/provisioning.py` — used exclusively by test suite fixtures.
+- `SimulatedClock` in `hermes/clock.py` and `hermes/db/provisioning.py` — used exclusively by test suite fixtures.
 - `__getattr__` methods in `AsyncBrokerWrapper` and `Tunables` — dynamic routing.
+- `scripts/self_learning_loop.py` — retrospective closed-trade analyzer run via cron job to update operator doctrine (`soul_md`).
+- All watcher routes (`routes/*.py`) and DB repositories (`repositories/*.py`) — resolved dynamically by `api.py` and `HermesDB` context.
+- Vue.js components/views under `hermes/ui/src` — verified as completely mapped in `router.js` and `App.vue`.
+
 
