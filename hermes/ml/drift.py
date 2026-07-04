@@ -131,18 +131,5 @@ class DriftDetector:
         """Subset of ``evaluate`` whose KS statistic exceeds ``threshold``."""
         return [r for r in self.evaluate(current) if r.ks_statistic >= threshold]
 
-    def summary(self, current: pd.DataFrame, *, threshold: float = 0.2,
-                ) -> Dict[str, object]:
-        """Diagnostics-friendly summary."""
-        reports = self.evaluate(current)
-        alarms = [r for r in reports if r.ks_statistic >= threshold]
-        return {
-            "threshold": float(threshold),
-            "n_features": len(reports),
-            "n_alarms": len(alarms),
-            "alarms": [r.to_dict() for r in alarms],
-            "reports": [r.to_dict() for r in reports],
-        }
-
 
 __all__ = ["DriftDetector", "DriftReport"]

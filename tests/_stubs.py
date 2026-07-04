@@ -196,8 +196,13 @@ def alias_db_namespaces(mock):
     ``db.<method>`` on the same child mock — exactly the flat behaviour the
     tests were written against. Returns the mock for chaining.
     """
+    from unittest.mock import AsyncMock, MagicMock
     for ns in _REPO_NS_NAMES:
         setattr(mock, ns, mock)
+    if isinstance(mock, AsyncMock):
+        mock.get_settings.return_value = {}
+        mock.get_setting.return_value = None
+        mock.engine = MagicMock()
     return mock
 
 

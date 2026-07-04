@@ -19,17 +19,6 @@ def now(tz: datetime.tzinfo | None = None) -> datetime.datetime:
     """Return current local/aware time, honoring virtual time if set."""
     return _GLOBAL_CLOCK.now(tz)
 
-def set_virtual_time(dt: datetime.datetime | None) -> None:
-    """Set the virtual time for testing or simulation mode.
-
-    Pass None to reset and restore system time tracking.
-    """
-    global _GLOBAL_CLOCK
-    if dt is None:
-        _GLOBAL_CLOCK = RealClock()
-    else:
-        _GLOBAL_CLOCK = SimulatedClock(dt)
-
 
 
 logger = logging.getLogger("hermes.utils")
