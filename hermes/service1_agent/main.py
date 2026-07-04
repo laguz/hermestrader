@@ -349,8 +349,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     watchlist_syms = set(conf.get("watchlist", []))
     try:
         watchlist_syms.update(await db.trades.tracked_option_symbols())
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Failed to load tracked option symbols: %s", exc)
 
     stream_client = _build_stream_client(broker, db, event_bus, watchlist_syms)
     await stream_client.start()
@@ -448,8 +448,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     try:
         await ipc.unsubscribe(IPC_CHANNEL_AGENT_COMMANDS, _ipc_callback)
         await ipc.disconnect()
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("Failed to unsubscribe or disconnect from IPC during shutdown: %s", exc)
 
 
 if __name__ == "__main__":

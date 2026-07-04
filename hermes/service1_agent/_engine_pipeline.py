@@ -837,7 +837,8 @@ class PipelineController:
                             _should_ingest = _ingest_age_h >= 20
                         except ValueError:
                             _should_ingest = True
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Failed to check daily bar ingest age: %s", exc)
                     _should_ingest = True
 
                 if _should_ingest:
@@ -918,7 +919,8 @@ class PipelineController:
                                 _should_run_charts = _age_days >= _CHART_ANALYSIS_INTERVAL_DAYS
                         else:
                             _should_run_charts = True
-                except Exception:
+                except Exception as exc:
+                    logger.warning("Failed to check chart analysis timestamp: %s", exc)
                     _should_run_charts = True
 
                 if _should_run_charts:

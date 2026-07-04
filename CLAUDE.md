@@ -198,3 +198,7 @@ An audit in July 2026 resolved 26 additional confirmed bugs and codebase improve
 
 
 
+
+An audit in July 2026 resolved 14 confirmed bugs:
+- **Falsy-zero checks**: Fixed Kelly score `delta` lookup in `optimizer.py`, `delta` and `price` fallback checks in `mcp_client.py`, and spot price check in `strategy_base.py` to use explicit `is not None` checks.
+- **Silent Exception Logging**: Replaced silent `except Exception: pass` catches with warning logging in startup option tracking and shutdown IPC commands (`main.py`), database schema creation (`models.py`), `target_lots` column missing query fallback (`watchlist.py`), approvals routes IPC commands (`routes/approvals.py`), machine learning status writes (`xgb_features.py`), and ingest/analysis timestamp check failures (`_engine_pipeline.py`).

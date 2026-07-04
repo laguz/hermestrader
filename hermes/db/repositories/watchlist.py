@@ -52,7 +52,8 @@ class WatchlistRepository(Repository):
                 rows = result.fetchall()
                 for r in rows:
                     out[r[0]] = {"target_lots": r[1]}
-            except Exception:
+            except Exception as exc:
+                logger.warning("target_lots column query failed, falling back: %s", exc)
                 await s.rollback()
                 result = await s.execute(sa_text(
                     "SELECT symbol FROM strategy_watchlists WHERE strategy_id = :sid"

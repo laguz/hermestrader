@@ -217,7 +217,11 @@ class MCPBrokerClient(AbstractBroker):
         return [
             MarketQuote(
                 symbol=str(q.get("symbol") or ""),
-                price=float(q.get("price") or q.get("last") or 0.0),
+                price=float(
+                    q.get("price") if q.get("price") is not None
+                    else q.get("last") if q.get("last") is not None
+                    else 0.0
+                ),
                 bid=float(q.get("bid") or 0.0),
                 ask=float(q.get("ask") or 0.0),
                 volume=int(q.get("volume") or 0),
@@ -250,7 +254,11 @@ class MCPBrokerClient(AbstractBroker):
                 option_type=str(leg.get("option_type") or leg.get("type") or "put"),
                 bid=float(leg.get("bid") or 0.0),
                 ask=float(leg.get("ask") or 0.0),
-                delta=float(leg.get("delta") or (leg.get("greeks") or {}).get("delta") or 0.0),
+                delta=float(
+                    leg.get("delta") if leg.get("delta") is not None
+                    else (leg.get("greeks") or {}).get("delta") if (leg.get("greeks") or {}).get("delta") is not None
+                    else 0.0
+                ),
                 greeks=leg.get("greeks"),
                 **{k: v for k, v in leg.items() if k not in (
                     "symbol", "strike", "option_type", "bid", "ask", "delta", "greeks"
