@@ -45,9 +45,6 @@ class _StubDB(RepoNamespaceMixin):
     async def fetch_pending(self, *_args, **_kwargs):
         return []
 
-def _mm() -> MoneyManager:
-    return MoneyManager(broker=_StubBroker([]), db=_StubDB(), config={})
-
 
 async def test_sync_accepts_sanitised_hyphen_tag():
     """Tradier rewrites HERMES_CS75 → HERMES-CS75 before persisting it."""
@@ -187,4 +184,6 @@ async def test_engine_sync_positions_handles_non_list():
         def get_positions(self):
             return "Error string"
     engine = CascadingEngine(broker=BadBroker(), db=_StubDB(), strategies=[], money_manager=None)
-    await engine.sync_positions()
+    positions, active_legs = await engine.sync_positions()
+    assert positions == []
+    assert active_legs == set()

@@ -183,13 +183,22 @@ class ControlState:
         self.llm_config["model"] = (llm_settings.get("llm_model") or "").strip()
         from hermes.utils import decrypt_value
         self.llm_config["api_key"] = decrypt_value((llm_settings.get("llm_api_key") or "").strip())
-        try:
-            self.llm_config["temperature"] = float(llm_settings.get("llm_temperature") or 0.2)
-        except ValueError:
+        temp_val = llm_settings.get("llm_temperature")
+        if temp_val is not None and str(temp_val).strip() != "":
+            try:
+                self.llm_config["temperature"] = float(temp_val)
+            except ValueError:
+                self.llm_config["temperature"] = 0.2
+        else:
             self.llm_config["temperature"] = 0.2
-        try:
-            self.llm_config["timeout_s"] = float(llm_settings.get("llm_timeout_s") or 30.0)
-        except ValueError:
+
+        timeout_val = llm_settings.get("llm_timeout_s")
+        if timeout_val is not None and str(timeout_val).strip() != "":
+            try:
+                self.llm_config["timeout_s"] = float(timeout_val)
+            except ValueError:
+                self.llm_config["timeout_s"] = 30.0
+        else:
             self.llm_config["timeout_s"] = 30.0
         self.llm_config["vision"] = llm_settings.get("llm_vision", "true").lower() != "false"
         

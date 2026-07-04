@@ -151,5 +151,25 @@ async def test_run_migrations_self_heals_columns_and_tables(ephemeral_dsn):
 
 async def test_run_migrations_is_idempotent(db):
     """Second pass over an already-current DB is a clean no-op."""
+    from sqlalchemy import inspect
+
     await db.run_migrations()
+
+    def get_db_schema_details(conn):
+        insp = inspect(conn)
+        tables = insp.get_table_names()
+        columns = {}
+        for table in tables:
+            columns[table] = {col["name"] for col in insp.get_columns(table)}
+        return tables, columns
+
+    async with db.async_engine.connect() as conn:
+        tables_before, columns_before = await conn.run_sync(get_db_schema_details)
+
     await db.run_migrations()    # must not raise
+
+    async with db.async_engine.connect() as conn:
+        tables_after, columns_after = await conn.run_sync(get_db_schema_details)
+
+    assert set(tables_before) == set(tables_after)
+    assert columns_before == columns_after

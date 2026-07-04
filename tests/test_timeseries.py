@@ -6,13 +6,13 @@ from hermes.db.timeseries import TimeSeriesEngine
 
 
 @pytest.fixture
-def test_db(make_db):
+def timeseries_db(make_db):
     # schema=True provisions the raw bars_* hypertables the engine reads/writes.
     return make_db(schema=True)
 
 
-async def test_save_and_load_daily_bars(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_save_and_load_daily_bars(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
     symbol = "TSLA"
 
     # 1. Save new daily bars
@@ -53,8 +53,8 @@ async def test_save_and_load_daily_bars(test_db):
     assert loaded.iloc[-1]["close"] == 999.0
 
 
-async def test_last_price_and_price_on_date(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_last_price_and_price_on_date(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
     symbol = "AAPL"
 
     base_date = datetime.utcnow() - timedelta(days=5)
@@ -85,8 +85,8 @@ async def test_last_price_and_price_on_date(test_db):
     assert await engine.get_price_on_date(symbol, target_dt_before) is None
 
 
-async def test_save_and_load_intraday_bars(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_save_and_load_intraday_bars(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
     symbol = "MSFT"
 
     base_date = datetime.utcnow() - timedelta(days=5)
@@ -106,21 +106,21 @@ async def test_save_and_load_intraday_bars(test_db):
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
 
 
-async def test_intraday_bars_empty_returns_empty_frame(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_intraday_bars_empty_returns_empty_frame(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
     loaded = await engine.intraday_bars("NOPE", lookback_days=10)
     assert loaded is not None
     assert loaded.empty
     assert list(loaded.columns) == ["open", "high", "low", "close", "volume"]
 
 
-async def test_daily_bars_missing_symbol_returns_none(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_daily_bars_missing_symbol_returns_none(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
     assert await engine.daily_bars("NOPE", lookback_days=10) is None
 
 
-async def test_get_total_bars_count(test_db):
-    engine = TimeSeriesEngine(test_db)
+async def test_get_total_bars_count(timeseries_db):
+    engine = TimeSeriesEngine(timeseries_db)
 
     # 0 counts on empty
     daily, intra = await engine.get_total_bars_count()

@@ -14,10 +14,6 @@ class DummyContext:
     def __init__(self, config):
         self.config = config
 
-class DummyEngine:
-    def __init__(self, config):
-        self.ctx = DummyContext(config)
-
 
 # --- Bug 1 ---
 def test_bug_1_reactive_max_lots_zero():

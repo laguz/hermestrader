@@ -244,8 +244,9 @@ async def get_debug_info() -> Dict[str, Any]:
             ))
             raw = res_raw.fetchall()
             result["logs"] = [r[0] for r in raw]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Failed to query recent bot logs for status endpoint")
+            result["logs"] = []
 
         try:
             import json as _json

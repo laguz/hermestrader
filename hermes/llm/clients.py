@@ -154,7 +154,19 @@ class OpenAICompatibleLLM:
 
         try:
             data = r.json()
-            return data["choices"][0]["message"]["content"]
+            choices = data.get("choices")
+            if not choices or not isinstance(choices, list):
+                raise KeyError("choices missing or not a list")
+            first_choice = choices[0]
+            if not isinstance(first_choice, dict):
+                raise KeyError("choices[0] not a dict")
+            message = first_choice.get("message")
+            if not isinstance(message, dict):
+                raise KeyError("message missing or not a dict")
+            content = message.get("content")
+            if content is None:
+                raise KeyError("content missing from message")
+            return content
         except Exception as exc:
             raise LLMConnectionError(
                 f"malformed completion response: {exc}; body={r.text[:400]!r}"
