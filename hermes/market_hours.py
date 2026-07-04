@@ -68,10 +68,26 @@ NYSE_HOLIDAYS: frozenset[date] = frozenset([
     date(2026, 12, 25), # Christmas
 ])
 
+# NYSE early-close days (regular session ends 13:00 ET) — extend alongside
+# NYSE_HOLIDAYS. Typically July 3, the day after Thanksgiving, and
+# Christmas Eve, whenever they fall on a weekday and aren't already a full
+# holiday (2026-07-03 is a full closure above, so it is not listed here).
+NYSE_EARLY_CLOSES: frozenset[date] = frozenset([
+    date(2024, 7, 3),
+    date(2024, 11, 29),
+    date(2024, 12, 24),
+    date(2025, 7, 3),
+    date(2025, 11, 28),
+    date(2025, 12, 24),
+    date(2026, 11, 27),
+    date(2026, 12, 24),
+])
+
 # Session boundaries (Eastern time)
 _PRE_OPEN    = time(4,  0)   # pre-market starts
 _REGULAR_OPEN  = time(9, 30)   # regular session opens
 _REGULAR_CLOSE = time(16,  0)  # regular session closes
+_EARLY_CLOSE   = time(13,  0)  # regular session closes on NYSE_EARLY_CLOSES days
 _AFTER_CLOSE   = time(20,  0)  # after-hours ends
 
 
@@ -105,6 +121,7 @@ def market_session(now: Optional[datetime] = None) -> dict:
     today = now.date()
     t = now.time().replace(second=0, microsecond=0)
     trading = is_trading_day(today)
+    regular_close = _EARLY_CLOSE if today in NYSE_EARLY_CLOSES else _REGULAR_CLOSE
 
     if not trading:
         session = "closed"
@@ -115,7 +132,7 @@ def market_session(now: Optional[datetime] = None) -> dict:
     elif t < _REGULAR_OPEN:
         session = "pre_market"
         is_open = False
-    elif t < _REGULAR_CLOSE:
+    elif t < regular_close:
         session = "regular"
         is_open = True
     elif t < _AFTER_CLOSE:

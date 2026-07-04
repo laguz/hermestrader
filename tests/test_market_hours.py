@@ -127,3 +127,24 @@ def test_session_label():
     now = datetime(2025, 1, 11, 10, 0, tzinfo=ET)
     label = session_label(now)
     assert "CLOSED" in label
+
+def test_early_close_days():
+    # Friday, 2026-11-27 (day after Thanksgiving) — regular closes 13:00 ET.
+    now = datetime(2026, 11, 27, 12, 0, tzinfo=ET)
+    assert is_market_open(now) is True
+
+    now = datetime(2026, 11, 27, 13, 0, tzinfo=ET)
+    session = market_session(now)
+    assert session["session"] == "after_hours"
+    assert session["is_open"] is False
+
+    now = datetime(2026, 11, 27, 14, 30, tzinfo=ET)
+    assert is_market_open(now) is False
+
+    # Thursday, 2026-12-24 (Christmas Eve) — same 13:00 close.
+    now = datetime(2026, 12, 24, 13, 30, tzinfo=ET)
+    assert is_market_open(now) is False
+
+    # A normal day is unaffected: 14:30 ET is still regular.
+    now = datetime(2026, 11, 30, 14, 30, tzinfo=ET)
+    assert is_market_open(now) is True
