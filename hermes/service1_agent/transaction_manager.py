@@ -164,14 +164,22 @@ class TransactionManager:
         elif "opened_at" not in trade_fields_copy:
             trade_fields_copy["opened_at"] = utc_now().isoformat()
 
-        # Emit event
-        if po:
-            event = OrderFilledEvent(
-                pending_order_id=po.id,
-                trade_id=trade_id,
-                trade_fields=_to_json_safe(trade_fields_copy)
+        # Emit even when no PENDING row matched (e.g. it expired during a slow
+        # broker round-trip) — the projection is what persists the Trade row,
+        # so gating on ``po`` would silently drop a broker-accepted position
+        # from the book. ``pending_order_id=0`` mirrors ``close()``.
+        if not po:
+            logger.warning(
+                "[FSM fill] no PENDING order matched %s %s side=%s — "
+                "recording Trade %s without a pending link",
+                strategy_id, symbol, side, trade_id,
             )
-            await EventStoreManager.record_event(session, event)
+        event = OrderFilledEvent(
+            pending_order_id=po.id if po else 0,
+            trade_id=trade_id,
+            trade_fields=_to_json_safe(trade_fields_copy)
+        )
+        await EventStoreManager.record_event(session, event)
 
         q = select(Trade).where(Trade.id == trade_id)
         res = await session.execute(q)

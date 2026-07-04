@@ -216,3 +216,47 @@ async def test_record_order_response_orphan_close(db):
         assert po_updated is not None
         assert po_updated.status == "SUBMITTED"
 
+
+
+@pytest.mark.asyncio
+async def test_fill_without_pending_still_records_trade(db):
+    """A broker-accepted entry must produce a Trade row and ledger event even
+    when no PENDING order matches (e.g. it expired mid-round-trip). The
+    projection is what persists the Trade, so the OrderFilledEvent must be
+    emitted with pending_order_id=0 rather than skipped."""
+    from hermes.service1_agent.trade_action import TradeAction
+    from sqlalchemy import select
+
+    await db.watchlist.ensure_strategies({"CS75": 1})
+
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="MSFT",
+        order_class="multileg",
+        legs=[
+            {"option_symbol": "MSFT260620P00400000", "side": "sell_to_open", "quantity": 2},
+            {"option_symbol": "MSFT260620P00395000", "side": "buy_to_open", "quantity": 2},
+        ],
+        price=1.25,
+        side="sell",
+        quantity=2,
+        order_type="credit",
+        tag="HERMES_CS75",
+        strategy_params={"side_type": "put"},
+    )
+    response = {"order": {"status": "submitted", "id": "broker-ord-777"}}
+
+    # No place_order beforehand — there is deliberately no PENDING row.
+    await db.trades.record_order_response(action, response)
+
+    async with db.AsyncSession() as s:
+        q = select(Trade).filter(Trade.symbol == "MSFT", Trade.strategy_id == "CS75")
+        res = await s.execute(q)
+        trade = res.scalars().first()
+        assert trade is not None
+        assert trade.status == "OPEN"
+        assert trade.entry_credit == 1.25
+
+        events = await EventStoreManager.load_events(s)
+        fills = [e for e in events if getattr(e, "trade_id", None) == trade.id]
+        assert any(getattr(e, "pending_order_id", None) == 0 for e in fills)
