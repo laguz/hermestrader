@@ -48,8 +48,8 @@ class MockStreamClient:
                         tracked = await self.db.trades.tracked_option_symbols()
                         watchlist_syms.update(wl)
                         watchlist_syms.update(tracked)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to query database for streaming symbols: %s", e)
                 
                 if not watchlist_syms:
                     watchlist_syms = {"SPY"}

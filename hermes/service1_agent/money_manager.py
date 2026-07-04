@@ -235,7 +235,10 @@ class MoneyManager:
             # POP
             pop = action.strategy_params.get("pop")
             if pop is None:
-                delta = action.strategy_params.get("delta") or action.strategy_params.get("short_delta")
+                delta_val = action.strategy_params.get("delta")
+                if delta_val is None:
+                    delta_val = action.strategy_params.get("short_delta")
+                delta = delta_val
                 if delta is not None:
                     pop = 1.0 - abs(float(delta))
                 else:
@@ -253,7 +256,7 @@ class MoneyManager:
             pop = float(pop)
 
             # Credit (price per lot)
-            credit = float(action.price or 0.01)
+            credit = float(action.price if action.price is not None else 0.01)
 
             # Width & Margin per lot
             width = action.width

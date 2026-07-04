@@ -192,5 +192,9 @@ An audit in July 2026 resolved 13 confirmed bugs and codebase improvements:
 - **Silent Exceptions Swallowing**: Replaced silent `except Exception: pass` blocks with logged warnings/exceptions across `predictor_inference.py`, `xgb_features.py`, `feature_engineer.py`, `approvals.py`, `watchlist.py`, `strategy_base.py`, and `main.py` for increased operational observability.
 - **Stale Documentation & Duplication**: Cleared stale references to `hv_rank` in `xgb_features.py` and `feature_engineer.py` docstrings, and imported `OCC_RE` from `hermes.common` in `tradier.py` to reduce code duplication.
 
+An audit in July 2026 resolved 26 additional confirmed bugs and codebase improvements across 22 new regression tests in `tests/test_audit_bug_fixes.py`:
+- **Falsy-zero checks**: Fixed `action.price` default in `money_manager.py`, `target_lots` lookup in `_credit_spread_base.py`, `lots` check in `safety_gateway.py`, orphan order `quantity` adoption in `_engine_pipeline.py`, `horizon_dte` in `ledger.py`, `dte_min`/`dte_max` checks in `hermes_alpha.py`, strategy parameter delta/short_delta in `money_manager.py`, delta check in `tt45.py`, and tracked order avg price fallback checks in `_engine_reactive.py` to use explicit `is not None` checks.
+- **Silent Exception Logging**: Replaced silent `except Exception: pass` catches with warning or debug logging in IPC publishing (`commands.py`), regime weights database lookup (`regime_weights.py`), reactive agent ML triggers and watchlist caching (`agent_reactive.py`), Safety Gateway DB logging and timestamp parsing (`broker_wrapper.py`), stream DB/Websocket connection errors (`mock_stream.py`, `tradier_stream.py`), Redis IPC backend connection failures (`ipc.py`), FastAPI watcher JSON deserialization (`routes/status.py`), conftest engine teardown (`conftest.py`), overseer JSON formatting/vision snapshots (`overseer.py`), and reactive loop deserialization (`_engine_reactive.py`).
+
 
 

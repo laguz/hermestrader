@@ -132,7 +132,7 @@ class SafetyGateway:
         for t in symbol_open_trades:
             t_width = float(t.get("width") or 0.0)
             t_credit = float(t.get("entry_credit") or 0.0)
-            t_lots = int(t.get("lots") or 1)
+            t_lots = int(t.get("lots") if t.get("lots") is not None else 1)
             existing_symbol_risk += max(0.0, (t_width - t_credit)) * t_lots * 100.0
 
         total_symbol_risk = existing_symbol_risk + risk

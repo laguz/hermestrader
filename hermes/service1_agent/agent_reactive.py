@@ -55,8 +55,8 @@ async def prewarm_quote_chain_cache(engine, db, conf: Dict[str, Any], shutdown_e
             all_wls = await db.watchlist.list_all_watchlists()
             for syms in all_wls.values():
                 watchlist_syms.update(syms)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Failed to list watchlists during quote warm-up: %s", e)
 
         symbols = sorted(list(watchlist_syms))
         if symbols:
@@ -164,7 +164,7 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
         log.info("[IPC] Received trigger ML signal reactively")
         try:
             await db.settings.set_setting("ml_force_run", "true")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Failed to set ml_force_run setting reactively: %s", e)
         from hermes.events.bus import MlRetrainTick
         event_bus.emit(MlRetrainTick(force=True))

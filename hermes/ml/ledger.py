@@ -149,7 +149,7 @@ async def fetch_for_calibration(
                 "realized_pnl": (float(r.realized_pnl)
                                  if r.realized_pnl is not None else None),
                 "spot": float(r.spot or 0.0),
-                "horizon_dte": int(r.horizon_dte or 7),
+                "horizon_dte": int(r.horizon_dte if r.horizon_dte is not None else 7),
                 "feature_vector": r.feature_vector or {},
             }
             for r in rows
@@ -180,7 +180,7 @@ async def backfill_prediction_outcomes(db: Any, lookback_days: int = 90) -> int:
 
         cached_bars = {}
         for row in unmarked_rows:
-            horizon = row.horizon_dte or 7
+            horizon = row.horizon_dte if row.horizon_dte is not None else 7
             target_date = row.ts + timedelta(days=horizon)
             if target_date > now:
                 continue

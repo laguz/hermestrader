@@ -53,8 +53,9 @@ def _safe_dispose_async_engine(engine) -> None:
             loop.create_task(engine.dispose())
         else:
             asyncio.run(engine.dispose())
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("tests.conftest").warning("Failed to dispose async engine: %s", e)
 @pytest.fixture(autouse=True)
 async def cleanup_tasks():
     yield
