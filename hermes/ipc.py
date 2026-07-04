@@ -22,6 +22,10 @@ class LocalMemoryIPCBackend:
     """In-memory IPC backend for testing and single-process mode."""
     def __init__(self):
         self._local_subscribers: Dict[str, List[Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]]] = {}
+        # The event loop holds only a weak reference to tasks, so a bare
+        # create_task() here could be garbage-collected before the callback
+        # runs. Keep a strong reference until each task completes.
+        self._pending_tasks: set[asyncio.Task] = set()
 
     @property
     def is_connected(self) -> bool:
@@ -37,7 +41,9 @@ class LocalMemoryIPCBackend:
         if channel in self._local_subscribers:
             handlers = list(self._local_subscribers[channel])
             for handler in handlers:
-                asyncio.create_task(handler(data))
+                task = asyncio.create_task(handler(data))
+                self._pending_tasks.add(task)
+                task.add_done_callback(self._pending_tasks.discard)
                 receivers += 1
         return receivers
 
@@ -61,6 +67,9 @@ class LocalMemoryIPCBackend:
 
     async def disconnect(self) -> None:
         self._local_subscribers.clear()
+        for task in list(self._pending_tasks):
+            task.cancel()
+        self._pending_tasks.clear()
         logger.info("Local Memory IPC disconnected.")
 
 
