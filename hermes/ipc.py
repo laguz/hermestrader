@@ -12,6 +12,8 @@ import logging
 import re
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+from hermes.config import settings
+
 logger = logging.getLogger("hermes.ipc")
 
 def _validate_channel(channel: str) -> None:
@@ -293,5 +295,4 @@ class AsyncIPC:
             self.backend = None
 
 # Global singleton client initialized with the settings DSN
-from hermes.config import settings
 ipc = AsyncIPC(settings.hermes_redis_dsn)

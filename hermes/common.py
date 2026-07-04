@@ -7,6 +7,10 @@ change only needs to happen in one place.
 """
 from __future__ import annotations
 
+import re as _re
+from typing import Optional as _Optional
+
+
 # ---------------------------------------------------------------------------
 # Trading modes
 # ---------------------------------------------------------------------------
@@ -96,7 +100,6 @@ IPC_ACTION_DRAIN_COMMANDS = "drain_commands"
 # land in one place.  Format: SYMBOL YYMMDD P|C STRIKE(8 digits, padded).
 # Example: ``AAPL250620P00150000`` → underlying=AAPL exp=2025-06-20 put $150.
 # ---------------------------------------------------------------------------
-import re as _re
 OCC_RE = _re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 
 # ---------------------------------------------------------------------------
@@ -111,8 +114,6 @@ OCC_RE = _re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
 # the separator handling and silently forgets a form. See CLAUDE.md safety
 # rule #5.
 # ---------------------------------------------------------------------------
-from typing import Optional as _Optional
-
 HERMES_TAG_PREFIX = "HERMES"
 
 

@@ -107,7 +107,7 @@ async def test_optimize_allocation_kelly_allocation():
     print("\n--- DEBUG OPTIMIZE ---")
     print(f"Optimized actions count: {len(optimized)}")
     for a in optimized:
-        print(f"Action: {a.symbol}, Qty: {a.quantity}, Legs Qty: {[l['quantity'] for l in a.legs]}")
+        print(f"Action: {a.symbol}, Qty: {a.quantity}, Legs Qty: {[leg['quantity'] for leg in a.legs]}")
 
     # Action A should get 4 lots
     assert len(optimized) == 1

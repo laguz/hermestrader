@@ -28,32 +28,32 @@ except ImportError:
     sys.modules["mcp.server"] = MagicMock()
 
 try:
-    import mcp.server.fastmcp
+    import mcp.server.fastmcp  # noqa: F401
 except ImportError:
     sys.modules["mcp.server.fastmcp"] = MagicMock()
 
 try:
-    import requests
+    import requests  # noqa: F401
 except ImportError:
     sys.modules["requests"] = MagicMock()
 
 try:
-    import numpy
+    import numpy  # noqa: F401
 except ImportError:
     sys.modules["numpy"] = MagicMock()
 
 try:
-    import pandas
+    import pandas  # noqa: F401
 except ImportError:
     sys.modules["pandas"] = MagicMock()
 
 try:
-    import tenacity
+    import tenacity  # noqa: F401
 except ImportError:
     sys.modules["tenacity"] = MagicMock()
 
 try:
-    import hermes.ml.pop_engine
+    import hermes.ml.pop_engine  # noqa: F401
 except ImportError:
     sys.modules["hermes.ml.pop_engine"] = MagicMock()
 
@@ -61,7 +61,7 @@ if isinstance(sys.modules.get("mcp.server.fastmcp"), MagicMock):
     sys.modules["mcp.server.fastmcp"].FastMCP = FastMCP
 
 # Now we can import the server
-from hermes.mcp import server
+from hermes.mcp import server  # noqa: E402
 
 
 def test_get_orders_happy_path(monkeypatch):

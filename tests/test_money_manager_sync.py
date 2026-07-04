@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 
-from hermes.service1_agent.core import CascadingEngine, MoneyManager
+from hermes.service1_agent.core import CascadingEngine, MoneyManager, AsyncBrokerWrapper
 from ._stubs import RepoNamespaceMixin
 
 
@@ -44,7 +44,6 @@ class _StubDB(RepoNamespaceMixin):
 
     async def fetch_pending(self, *_args, **_kwargs):
         return []
-from hermes.service1_agent.core import AsyncBrokerWrapper
 
 def _mm() -> MoneyManager:
     return MoneyManager(broker=_StubBroker([]), db=_StubDB(), config={})

@@ -7,7 +7,7 @@ sys.modules["requests"] = mock_requests
 mock_ollama = MagicMock()
 sys.modules["ollama"] = mock_ollama
 
-from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM, OpenAICompatibleLLM
+from hermes.llm.clients import _image_to_data_url, OllamaCloudLLM, OpenAICompatibleLLM  # noqa: E402
 
 def test_image_to_data_url_none():
     assert _image_to_data_url(None) is None
