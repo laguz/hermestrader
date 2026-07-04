@@ -104,3 +104,11 @@ PR's diff rather than re-deriving it.
 Kept deliberately in that same audit: `GET /api/debug` (operator triage
 endpoint, no UI caller by design) and the admin instance/upgrade routes
 (`scripts/upgrade_runner.sh` depends on them).
+
+An audit in July 2026 removed `mark_outcome` in `hermes/ml/ledger.py` (and from its `__all__` exports) as outcomes are backfilled inline in `scripts/nightly_calibrate.py` and it had no callers.
+Kept deliberately as false positives / complete APIs:
+- `WatchlistRepository.list_watchlist` and `TradesRepository.close_trade_from_action` — these are looked up dynamically via `getattr` in `_engine_pipeline.py` and `agent_approvals.py`.
+- `date_today` in `hermes/utils.py` — matches clock library completeness.
+- `SimulatedClock` in `hermes/clock.py` and provisioning functions in `hermes/db/provisioning.py` — used exclusively by test suite fixtures.
+- `__getattr__` methods in `AsyncBrokerWrapper` and `Tunables` — dynamic routing.
+

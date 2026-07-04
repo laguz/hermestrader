@@ -156,34 +156,6 @@ async def fetch_for_calibration(
         ]
 
 
-async def mark_outcome(
-    db: "HermesDB",
-    symbol: str,
-    model_name: str,
-    ts: datetime,
-    *,
-    outcome: float,
-    realized_close: Optional[float] = None,
-    realized_pnl: Optional[float] = None,
-) -> bool:
-    """Backfill the realised columns once the trade horizon expires."""
-    if PredictionLedger is None:
-        return False
-    async with db.AsyncSession() as s:
-        q = select(PredictionLedger).filter_by(ts=ts, symbol=symbol.upper(), model_name=model_name).limit(1)
-        result = await s.execute(q)
-        row = result.scalars().first()
-        if row is None:
-            return False
-        row.realized_outcome = float(outcome)
-        row.realized_at = datetime.now(timezone.utc)
-        if realized_close is not None:
-            row.realized_close = float(realized_close)
-        if realized_pnl is not None:
-            row.realized_pnl = float(realized_pnl)
-        await s.commit()
-        return True
-
 
 def ensure_table(db: "HermesDB") -> None:
     """Create the prediction_ledger table if it does not yet exist.
@@ -205,6 +177,5 @@ __all__ = [
     "PredictionLedger",
     "write_record",
     "fetch_for_calibration",
-    "mark_outcome",
     "ensure_table",
 ]
