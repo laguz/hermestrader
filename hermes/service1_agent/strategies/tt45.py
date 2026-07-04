@@ -65,7 +65,7 @@ class TastyTrade45(AbstractStrategy):
                 dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
                 self._log(f"→ {symbol}: expiry={expiry} {dte}DTE existing_sides={sorted(existing)}")
 
-                def factory(side: str):
+                def factory(side: str, symbol=symbol, expiry=expiry):
                     async def _b(symbol, expiry, lots, width):
                         chain = await self.broker.get_option_chains(symbol, expiry) or []
                         short_leg = await self.find_strike_by_delta(chain, side, entry_delta, tolerance=delta_tol)

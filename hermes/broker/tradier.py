@@ -346,8 +346,10 @@ class TradierBroker(AbstractBroker):
             return []
         
         key = "day"
-        if interval == "weekly": key = "week"
-        elif interval == "monthly": key = "month"
+        if interval == "weekly":
+            key = "week"
+        elif interval == "monthly":
+            key = "month"
         
         items = history.get(key, [])
         if isinstance(items, dict):
