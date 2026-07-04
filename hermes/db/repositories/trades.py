@@ -458,64 +458,6 @@ class TradesRepository(Repository):
             rows = result.scalars().all()
             return [self._trade_dict(r) for r in rows]
 
-    async def fetch_trade_outcomes(
-        self,
-        *,
-        strategy_id: Optional[str] = None,
-        since: Optional[datetime] = None,
-        limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
-        """Labelled ``(entry context, knobs, realized outcome)`` rows.
-
-        The training surface for outcome-driven tuning (Phase 0). Returns one
-        dict per CLOSED trade that has a realized ``pnl``, pairing the
-        at-entry ``entry_features`` snapshot with the realized result:
-
-            {
-              "trade_id", "strategy_id", "symbol", "side_type",
-              "opened_at", "closed_at", "close_reason",
-              "realized_pnl", "won" (pnl > 0),
-              "hold_days", "entry_features" {knobs, pop, short_delta, ...}
-            }
-
-        Trades opened before the ``entry_features`` column existed come back
-        with ``entry_features=None`` — callers decide whether to drop them.
-        """
-        q = select(Trade).filter(Trade.status == "CLOSED",
-                                 Trade.pnl.is_not(None))
-        if strategy_id is not None:
-            q = q.filter(Trade.strategy_id == strategy_id)
-        if since is not None:
-            q = q.filter(Trade.opened_at >= since)
-        q = q.order_by(Trade.opened_at.desc())
-        if limit is not None:
-            q = q.limit(int(limit))
-
-        async with self.AsyncSession() as s:
-            rows = (await s.execute(q)).scalars().all()
-
-        out: List[Dict[str, Any]] = []
-        for r in rows:
-            pnl = float(r.pnl) if r.pnl is not None else None
-            hold_days = None
-            if r.opened_at is not None and r.closed_at is not None:
-                hold_days = round(
-                    (r.closed_at - r.opened_at).total_seconds() / 86400.0, 3)
-            out.append({
-                "trade_id": r.id,
-                "strategy_id": r.strategy_id,
-                "symbol": r.symbol,
-                "side_type": r.side_type,
-                "opened_at": r.opened_at,
-                "closed_at": r.closed_at,
-                "close_reason": r.close_reason,
-                "realized_pnl": pnl,
-                "won": (pnl > 0.0) if pnl is not None else None,
-                "hold_days": hold_days,
-                "entry_features": r.entry_features,
-            })
-        return out
-
     async def open_legs(self, strategy_id: str, symbol: str) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
         trades = await self.open_trades(strategy_id)

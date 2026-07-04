@@ -1,12 +1,10 @@
 """Unit tests for IronCondorBuilder.
 
-The builder pairs put + call vertical spreads on the same expiry. It owns
-two responsibilities the strategies depend on:
-
-1. Margin computation — single-side risk drives BP usage (only one side
-   can be ITM at expiration).
-2. Mode A/B planning — open both sides when no incomplete IC exists, or
-   complete the missing side when one is already open.
+The builder pairs put + call vertical spreads on the same expiry via Mode A/B
+planning — open both sides when no incomplete IC exists, or complete the
+missing side when one is already open. Margin is the single riskiest side
+(only one side can be ITM at expiration), sized through
+``MoneyManager.scale_quantity``.
 """
 from __future__ import annotations
 
@@ -18,22 +16,6 @@ from hermes.service1_agent.core import (
 )
 
 from ._stubs import StubBroker, StubDB
-
-
-# ── margin_requirement ───────────────────────────────────────────────────────
-def test_margin_requirement_default_multiplier():
-    # Width $5, 2 lots, 100 multiplier → $1000.
-    assert IronCondorBuilder.margin_requirement(5.0, 2) == 1000.0
-
-
-def test_margin_requirement_micro_multiplier():
-    """Micro options (multiplier=10) get 1/10 the margin."""
-    assert IronCondorBuilder.margin_requirement(5.0, 2, multiplier=10) == 100.0
-
-
-def test_margin_requirement_zero_lots():
-    assert IronCondorBuilder.margin_requirement(5.0, 0) == 0.0
-
 
 
 # ── plan() — Mode A (no existing side) ───────────────────────────────────────

@@ -134,11 +134,6 @@ def strategy_id_from_tag(tag: _Optional[str]) -> _Optional[str]:
     return strategy_id or None
 
 
-def is_hermes_tag(tag: _Optional[str]) -> bool:
-    """True if ``tag`` is a Hermes-placed order tag (either separator form)."""
-    return strategy_id_from_tag(tag) is not None
-
-
 def close_reason_from_tag(tag: _Optional[str]) -> _Optional[str]:
     """Recover the close reason a strategy embedded in a close-order tag.
 

@@ -44,7 +44,6 @@ class ReviewRequestEvent(Event):
     strategy_id: str
     symbol: str
     trade_action: Any  # TradeAction
-    context_data: Dict[str, Any] = field(default_factory=dict)
     # 'entry' | 'management' | 'ai' — carried through review so the eventual
     # execution routes pure closes correctly instead of defaulting to 'entry'.
     action_type: str = "entry"
