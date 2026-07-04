@@ -19,7 +19,7 @@ All offline — stub broker / stub DB, fake overseer.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 
@@ -28,7 +28,7 @@ from hermes.service1_agent.control_state import ControlState
 from hermes.service1_agent.strategies import HermesAlpha
 from hermes.service1_agent import alpha_killswitch as ks
 
-from ._stubs import StubBroker, StubDB, make_trade
+from ._stubs import StubBroker, StubDB, make_trade, _et_today
 
 
 # ── fakes ────────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ async def test_autonomous_origination_prices_intent_against_chain():
     ov = _FakeOverseer(autonomy="autonomous", intent=_intent("put"))
     s, _, _ = _build_alpha(overseer=ov,
                            broker_kwargs={"expirations": [
-                               (date.today() + timedelta(days=d)).isoformat()
+                               (_et_today() + timedelta(days=d)).isoformat()
                                for d in (30, 40, 45)]})
     actions = await s.execute_entries(["AAPL"])
     assert len(actions) == 1

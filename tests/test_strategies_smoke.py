@@ -13,7 +13,7 @@ landing unnoticed.
 from __future__ import annotations
 
 import asyncio
-from datetime import date, timedelta
+from datetime import timedelta
 
 
 from hermes.service1_agent.core import IronCondorBuilder, MoneyManager
@@ -24,12 +24,12 @@ from hermes.service1_agent.strategies import (
     WheelStrategy,
 )
 
-from ._stubs import StubBroker, StubDB, make_trade
+from ._stubs import StubBroker, StubDB, make_trade, _et_today
 
 
 
 def _expirations_for(*dte_values):
-    today = date.today()
+    today = _et_today()
     return [(today + timedelta(days=d)).isoformat() for d in dte_values]
 
 

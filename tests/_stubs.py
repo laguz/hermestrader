@@ -19,8 +19,19 @@ Conventions
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
+
+
+def _et_today() -> date:
+    """ET trading day, matching StrategyBase.today() — not date.today().
+
+    On a UTC-TZ runner, system-local date.today() disagrees with the ET
+    trading day for part of every day; stubs that default off "today" must
+    anchor to the same ET date the strategy under test computes.
+    """
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +84,7 @@ class StubBroker:
         if self._expirations is not None:
             return list(self._expirations)
         # Default: emit the conventional DTE buckets each strategy expects.
-        today = date.today()
+        today = _et_today()
         return [(today + timedelta(days=d)).strftime("%Y-%m-%d")
                 for d in (7, 14, 21, 30, 35, 40, 45, 60)]
 
@@ -511,7 +522,7 @@ def make_trade(strategy_id: str, symbol: str, *,
                trade_id: int = 1) -> Dict[str, Any]:
     """Build a row matching the dict shape ``HermesDB.open_trades`` returns."""
     if expiry is None:
-        expiry = date.today() + timedelta(days=days_to_expiry)
+        expiry = _et_today() + timedelta(days=days_to_expiry)
     yymmdd = expiry.strftime("%y%m%d")
     pc = "P" if side_type == "put" else "C"
     short_leg = f"{symbol}{yymmdd}{pc}{int(round(short_strike * 1000)):08d}"
