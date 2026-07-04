@@ -365,14 +365,14 @@ class _FakeDurableRedisClient:
     async def xgroup_create(self, *args, **kwargs):
         return True
 
-    async def xreadgroup(self, *, groupname, consumername, streams, count, block):
+    async def xreadgroup(self, *, block, **_kwargs):
         if self._pending:
             messages, self._pending = self._pending, []
             return [("hermes_event_stream", messages)]
         await asyncio.sleep(block / 1000.0)
         return None
 
-    async def xack(self, stream, group, msg_id):
+    async def xack(self, _stream, _group, msg_id):
         self.xack_calls.append(msg_id)
         return 1
 

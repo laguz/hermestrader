@@ -39,8 +39,8 @@ async def test_durable_loop_redis_streams_flow():
         
     mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
     
-    async def mock_xreadgroup(groupname, consumername, streams, count=None, block=None):
-        stream_id = streams.get("hermes_event_stream")
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
         if stream_id == "0":
             return []
         elif stream_id == ">":
@@ -151,8 +151,8 @@ async def test_durable_loop_failed_tick_is_not_replayed():
 
     mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
 
-    async def mock_xreadgroup(groupname, consumername, streams, count=None, block=None):
-        stream_id = streams.get("hermes_event_stream")
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
         if stream_id == "0":
             return [("hermes_event_stream", list(pel.items()))] if pel else []
         elif stream_id == ">":
@@ -234,8 +234,8 @@ async def test_durable_loop_dataclass_serialization():
         
     mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
     
-    async def mock_xreadgroup(groupname, consumername, streams, count=None, block=None):
-        stream_id = streams.get("hermes_event_stream")
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
         if stream_id == "0":
             return []
         elif stream_id == ">":

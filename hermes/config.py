@@ -5,20 +5,17 @@ from typing import Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from hermes.common import VALID_MODES, VALID_AUTONOMY
+from hermes.common import VALID_MODES
 
 
 class HermesSettings(BaseSettings):
-    hermes_env_file: str = ".env"
     hermes_mode: str = Field(default="paper")
     hermes_dsn: str = Field(default="postgresql+psycopg://hermes:hermes@db:5432/hermes")
     hermes_redis_dsn: str = Field(default="redis://localhost:6379/0")
     hermes_tick_interval: int = Field(default=3600)
     hermes_watchlist: str = Field(default="AAPL,SPY,QQQ,NVDA,AMD,KO")
-    hermes_ai_autonomy: str = Field(default="advisory")
     hermes_dry_run: bool = Field(default=True)
     hermes_use_mcp_broker: bool = Field(default=True)
-    hermes_soul_path: str = Field(default="/app/soul.md")
     hermes_version: str = Field(default="dev")
 
     # Tradier generic credentials
@@ -36,13 +33,7 @@ class HermesSettings(BaseSettings):
     tradier_live_base_url: str = "https://api.tradier.com/v1"
 
     # LLM Settings fallback defaults
-    llm_provider: str = "mock"
     llm_base_url: str = ""
-    llm_model: str = ""
-    llm_api_key: str = ""
-    llm_temperature: float = 0.2
-    llm_vision: bool = True
-    llm_timeout_s: float = 120.0
 
     model_config = SettingsConfigDict(
         env_file=os.environ.get("HERMES_ENV_FILE", ".env"),
@@ -58,13 +49,6 @@ class HermesSettings(BaseSettings):
             raise ValueError(f"mode must be one of {VALID_MODES}")
         return v_clean
 
-    @field_validator("hermes_ai_autonomy")
-    @classmethod
-    def validate_autonomy(cls, v: str) -> str:
-        v_clean = v.lower().strip()
-        if v_clean not in VALID_AUTONOMY:
-            raise ValueError(f"autonomy must be one of {VALID_AUTONOMY}")
-        return v_clean
 
     @property
     def watchlist_list(self) -> list[str]:
