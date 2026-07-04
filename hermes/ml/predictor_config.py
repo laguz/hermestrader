@@ -38,7 +38,6 @@ class PredictorConfig:
     predict_interval_s: float = 60 * 60          # hourly during session
     retrain_interval_s: float = 7 * 24 * 3600    # weekly
     calibrate_interval_s: float = 24 * 3600      # nightly
-    drift_alarm_threshold: float = 0.2
     target_kind: str = "return"                  # "return" or "pnl"
     use_pnl_target: bool = False                 # rec #18 toggle
 
@@ -65,7 +64,6 @@ class PredictorConfig:
         cfg.predict_interval_s = _f("ml_predict_interval_s", cfg.predict_interval_s)
         cfg.retrain_interval_s = _f("ml_retrain_interval_s", cfg.retrain_interval_s)
         cfg.calibrate_interval_s = _f("ml_calibrate_interval_s", cfg.calibrate_interval_s)
-        cfg.drift_alarm_threshold = _f("ml_drift_threshold", cfg.drift_alarm_threshold)
         cfg.target_kind = _s("ml_target_kind", cfg.target_kind)
         cfg.use_pnl_target = (cfg.target_kind == "pnl")
         return cfg

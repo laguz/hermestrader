@@ -11,8 +11,8 @@ silently regressed.
 
 The catalog gives us:
 - A canonical, ordered list of feature names per stage (raw, derived, meta).
-- Units, source, and refresh cadence per feature so drift detection
-  knows what to compare and audits know what to expect.
+- Units, source, and refresh cadence per feature so audits know what
+  to expect.
 - A *schema hash* derived deterministically from the catalog. The
   persistence layer refuses to load a model whose stored hash differs
   from the current one — a renamed feature can no longer cause a silent
@@ -40,12 +40,10 @@ class FeatureSpec:
         Canonical column name. Must match the column produced by the
         FeatureEngineer / IV cache / macro source exactly.
     units:
-        Human-readable units ("ratio", "pct", "z-score"). Surfaces in the
-        /ml/diagnostics dashboard so a reviewer can spot a transformation
-        bug without running anything.
+        Human-readable units ("ratio", "pct", "z-score") so a reviewer
+        can spot a transformation bug without running anything.
     source:
-        Origin module/method. The drift detector uses this to decide
-        which dataset to KS-test against.
+        Origin module/method — provenance for audits.
     cadence:
         How often the value updates. "daily", "intraday", "static".
     nullable:

@@ -6,7 +6,7 @@ from prediction and scheduling. :class:`PredictorTrainer` is an injected
 collaborator owned by
 :class:`~hermes.ml.xgb_features.AsyncXGBPredictor`: it reads the predictor's
 state (config, broker, active universe, feature frames) and *mutates* the shared
-model/drift caches (``_models`` / ``_drift``) through a back-reference, so the
+model cache (``_models``) through a back-reference, so the
 method bodies moved out of the predictor unchanged. Mutation works through the
 read-only forwarding properties because they return the live dict objects —
 ``self._models.setdefault(...)`` mutates the predictor's dict in place.
@@ -23,8 +23,6 @@ from typing import TYPE_CHECKING, List
 import numpy as np
 import pandas as pd
 
-from hermes.ml import drift as drift_mod
-from hermes.ml import feature_catalog
 from hermes.ml import persistence
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -51,10 +49,6 @@ class PredictorTrainer:
     @property
     def _models(self):
         return self._p._models
-
-    @property
-    def _drift(self):
-        return self._p._drift
 
     @property
     def _get_active_symbols(self):
@@ -90,15 +84,6 @@ class PredictorTrainer:
             if len(base_frame) < 80:
                 warnings.append(f"{sym}: need 80 bars, got {len(base_frame)}")
                 continue
-
-            # Fit drift detector once per retrain cycle.
-            try:
-                detector = drift_mod.DriftDetector(
-                    feature_catalog.feature_names("equity"))
-                detector.fit(base_frame.drop(columns=["target"], errors="ignore"))
-                self._drift[sym] = detector
-            except Exception as exc:                # noqa: BLE001
-                logger.debug("drift fit failed for %s: %s", sym, exc)
 
             # Train one (horizon × quantile) head per combination.
             for horizon in self._cfg.horizons_dte:
