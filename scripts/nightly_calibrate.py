@@ -79,64 +79,13 @@ async def main() -> int:
 
     # 0. Backfill outcomes in prediction ledger
     try:
-        from datetime import datetime, timezone, timedelta
-        from hermes.ml.ledger import PredictionLedger
-        from sqlalchemy import select
-        
+        from hermes.ml.ledger import backfill_prediction_outcomes
         logger.info("evaluating and marking prediction ledger outcomes...")
-        async with db.AsyncSession() as session:
-            now = datetime.now(timezone.utc)
-            q = (
-                select(PredictionLedger)
-                .filter(PredictionLedger.realized_outcome.is_(None))
-            )
-            result = await session.execute(q)
-            unmarked_rows = result.scalars().all()
-            
-            marked_count = 0
-            cached_bars = {}
-            for row in unmarked_rows:
-                horizon = row.horizon_dte or 7
-                target_date = row.ts + timedelta(days=horizon)
-                if target_date > now:
-                    continue
-                
-                sym = row.symbol.upper()
-                if sym not in cached_bars:
-                    df = await db.daily_bars(sym, lookback_days=args.days + 30)
-                    cached_bars[sym] = df
-                
-                df_bars = cached_bars[sym]
-                if df_bars is None or df_bars.empty:
-                    continue
-                
-                df_future = df_bars[df_bars.index >= target_date]
-                if df_future.empty:
-                    continue
-                
-                first_bar_ts = df_future.index[0]
-                first_bar_ts_utc = first_bar_ts.to_pydatetime()
-                if first_bar_ts_utc.tzinfo is None:
-                    first_bar_ts_utc = first_bar_ts_utc.replace(tzinfo=timezone.utc)
-                
-                if first_bar_ts_utc > now:
-                    continue
-                
-                row_bar = df_future.iloc[0]
-                realized_close = float(row_bar["close"])
-                spot = float(row.spot) if row.spot else realized_close
-                outcome = 1.0 if realized_close > spot else 0.0
-                
-                row.realized_outcome = outcome
-                row.realized_close = realized_close
-                row.realized_at = datetime.now(timezone.utc)
-                marked_count += 1
-                
-            if marked_count > 0:
-                await session.commit()
-                logger.info("Marked %d new prediction outcomes", marked_count)
-            else:
-                logger.info("No new prediction outcomes to mark")
+        marked_count = await backfill_prediction_outcomes(db, lookback_days=args.days)
+        if marked_count > 0:
+            logger.info("Marked %d new prediction outcomes", marked_count)
+        else:
+            logger.info("No new prediction outcomes to mark")
     except Exception as exc:
         logger.warning("Outcome marking failed: %s", exc)
 
