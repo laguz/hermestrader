@@ -67,7 +67,7 @@ async def _account_equity(broker) -> Optional[float]:
         return None
     try:
         balances = await broker.get_account_balances() or {}
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         log.warning("alpha kill switch: get_account_balances failed: %s", exc)
         return None
     if hasattr(balances, "get"):
@@ -97,7 +97,7 @@ async def enforce_alpha_killswitch(db, broker, control_state, config) -> bool:
     days = int(cfg.get("alpha_killswitch_window_days", 7))
     try:
         stats = await db.analytics.strategy_window_stats(days=days)
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         log.warning("alpha kill switch: window stats read failed: %s", exc)
         return False
 
@@ -122,6 +122,6 @@ async def enforce_alpha_killswitch(db, broker, control_state, config) -> bool:
     log.warning(msg)
     try:
         await db.logs.write_log(ALPHA, msg)
-    except Exception:                                              # noqa: BLE001
+    except Exception:
         pass
     return True

@@ -157,7 +157,7 @@ class WheelStrategy(AbstractStrategy):
         """
         try:
             analysis = await self.broker.analyze_symbol(symbol, period="6m")
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:
             self._log(f"⚠️ {symbol}: 6M analysis failed ({exc}); delta-only strike selection.")
             return None, None
         if not analysis or "error" in analysis:
@@ -290,7 +290,7 @@ class WheelStrategy(AbstractStrategy):
         # Fetch live broker positions once for assignment detection.
         try:
             live_positions = await self.broker.get_positions() or []
-        except Exception as exc:                                   # noqa: BLE001
+        except Exception as exc:
             self._log(f"⚠️ could not fetch positions for assignment check: {exc}")
             live_positions = []
 

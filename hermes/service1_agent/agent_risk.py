@@ -47,7 +47,7 @@ async def _open_position_pnl(broker) -> Optional[float]:
         return None
     try:
         balances = await broker.get_account_balances() or {}
-    except Exception as exc:                                      # noqa: BLE001
+    except Exception as exc:
         log.warning("daily-loss check: get_account_balances failed: %s", exc)
         return None
     raw = balances.get("raw") or {}
@@ -83,7 +83,7 @@ async def enforce_daily_loss_limit(
         return False
     try:
         realized_today = await db.analytics.realized_pnl_today()
-    except Exception as exc:                                      # noqa: BLE001
+    except Exception as exc:
         log.warning("daily-loss check: realized_pnl_today failed: %s", exc)
         return False
     unrealized = await _open_position_pnl(broker)

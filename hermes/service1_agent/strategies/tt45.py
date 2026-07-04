@@ -128,7 +128,7 @@ class TastyTrade45(AbstractStrategy):
                     call_action_factory=factory("call"),
                 )
                 actions.extend([a for a in planned if a is not None])
-            except Exception as exc:                              # noqa: BLE001
+            except Exception as exc:
                 self._log(f"❌ {symbol}: unexpected error — {exc}")
         return actions
 

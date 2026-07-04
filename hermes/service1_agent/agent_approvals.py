@@ -45,7 +45,7 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     action_json = item["action_json"]
     try:
         action = TradeAction(**action_json)
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:
         log.exception("[C2] Failed to rebuild TradeAction id=%d: %s",
                       approval_id, exc)
         await db.approvals.mark_approval_executed(
@@ -98,7 +98,7 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     await db.trades.record_pending_order(action)
     try:
         resp = await async_broker.place_order_from_action(action)
-    except Exception as exc:                                   # noqa: BLE001
+    except Exception as exc:
         if is_pure_close and close_method is not None:
             await close_method(action, {"errors": str(exc)})
         else:

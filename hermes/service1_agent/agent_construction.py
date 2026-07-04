@@ -97,14 +97,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                          model, vision, timeout_s)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
-                except Exception:                               # noqa: BLE001
+                except Exception:
                     pass
                 return client, snapshot, vision
-            except Exception as exc:                            # noqa: BLE001
+            except Exception as exc:
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
-                except Exception:                               # noqa: BLE001
+                except Exception:
                     pass
 
     elif provider in ("local", "gemini", "claude") and model:
@@ -131,14 +131,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                          provider, model, effective_base, vision, timeout_s)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
-                except Exception:                               # noqa: BLE001
+                except Exception:
                     pass
                 return client, snapshot, vision
-            except Exception as exc:                            # noqa: BLE001
+            except Exception as exc:
                 log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
-                except Exception:                               # noqa: BLE001
+                except Exception:
                     pass
 
     # Fallback — mock LLM keeps the overseer operational without a backend.

@@ -59,18 +59,18 @@ async def lifespan(app: FastAPI):
     so writes from the watcher would 500 without it on a fresh DB."""
     try:
         await db.watchlist.ensure_strategies(STRATEGY_PRIORITIES)
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         logger.exception("ensure_strategies failed: %s", exc)
     try:
         await db.run_migrations()
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         logger.exception("run_migrations failed: %s", exc)
     try:
         from hermes.utils import sync_soul_file_to_db, check_for_updates
         import threading
         await sync_soul_file_to_db(db)
         threading.Thread(target=check_for_updates, daemon=True).start()
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         logger.exception("lifespan startup update/soul sync failed: %s", exc)
     # Initialize and wire DB-backed regime weights lookup if enabled
     try:
@@ -131,7 +131,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 (Path(STATIC_DIR) / "assets").mkdir(parents=True, exist_ok=True)
 app.mount("/assets", StaticFiles(directory=str(Path(STATIC_DIR) / "assets")), name="assets")
 
-from hermes.mcp.server import mcp  # noqa: E402
+from hermes.mcp.server import mcp
 app.mount("/mcp", mcp.sse_app())
 
 # Routers are mounted in declaration order; FastAPI doesn't care about

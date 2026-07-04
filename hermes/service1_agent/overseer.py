@@ -125,13 +125,13 @@ class HermesOverseer:
                 "llm_last_ok_ts",
                 datetime.now(timezone.utc).isoformat(timespec="seconds"),
             )
-        except Exception:                                          # noqa: BLE001
+        except Exception:
             pass
 
     async def _mark_llm_error(self, exc: Exception) -> None:
         try:
             await self.db.settings.set_setting("llm_last_error", (str(exc) or repr(exc))[:500])
-        except Exception:                                          # noqa: BLE001
+        except Exception:
             pass
 
     async def _chat_with_timeout(self, messages: List[Dict[str, str]],
@@ -176,7 +176,7 @@ class HermesOverseer:
         try:
             from hermes.market_hours import session_label
             mkt_line = session_label()
-        except Exception:                                        # noqa: BLE001
+        except Exception:
             mkt_line = ""
 
         parts = [self.BASE_SYSTEM_PROMPT]
@@ -223,18 +223,18 @@ class HermesOverseer:
                 if start >= 0 and end > start:
                     try:
                         return json.loads(block[start:end + 1])
-                    except Exception:                                  # noqa: BLE001
+                    except Exception:
                         pass
 
         try:
             return json.loads(clean_text)
-        except Exception:                                              # noqa: BLE001
+        except Exception:
             # Try to find a JSON block embedded in prose
             start, end = clean_text.find("{"), clean_text.rfind("}")
             if start >= 0 and end > start:
                 try:
                     return json.loads(clean_text[start:end + 1])
-                except Exception:                                      # noqa: BLE001
+                except Exception:
                     pass
         return {"verdict": "APPROVE", "rationale": "Unparseable LLM reply; defaulting."}
 
@@ -300,7 +300,7 @@ class HermesOverseer:
                 img = await self.chart_provider.snapshot(action.symbol)
                 if img is not None:
                     images.append(img)
-            except Exception:                                          # noqa: BLE001
+            except Exception:
                 pass
 
         system_prompt = await self.get_system_prompt()
@@ -348,13 +348,13 @@ class HermesOverseer:
                     {"role": "user", "content": prompt}]
         try:
             decision = self._safe_json(await self._chat_with_retry(messages))
-        except Exception as exc:                                       # noqa: BLE001
+        except Exception as exc:
             logger.warning("propose_intent LLM call failed for %s — skipping: %s", symbol, exc)
             return None
 
         try:
             await self.db.decisions.write_ai_decision("HERMESALPHA", symbol, "autonomous", decision)
-        except Exception:                                              # noqa: BLE001
+        except Exception:
             pass
 
         if str(decision.get("action") or "").lower() != "trade":
@@ -381,7 +381,7 @@ class HermesOverseer:
                     {"role": "user", "content": prompt}]
         try:
             decision = self._safe_json(await self._chat_with_retry(messages))
-        except Exception as exc:                                       # noqa: BLE001
+        except Exception as exc:
             logger.warning("decide_exit LLM call failed for %s — holding: %s",
                            trade.get("symbol"), exc)
             return {"action": "hold", "rationale": f"LLM error: {exc}"}
@@ -389,7 +389,7 @@ class HermesOverseer:
         try:
             await self.db.decisions.write_ai_decision(
                 "HERMESALPHA", trade.get("symbol", ""), "autonomous", decision)
-        except Exception:                                              # noqa: BLE001
+        except Exception:
             pass
 
         action = "close" if str(decision.get("action") or "").lower() == "close" else "hold"
@@ -436,7 +436,7 @@ class HermesOverseer:
                     {"type": "chart_analysis", **analysis},
                 )
                 logger.info("Chart analysis %s → %s", symbol, verdict)
-            except Exception as exc:                                   # noqa: BLE001
+            except Exception as exc:
                 logger.warning("Chart analysis failed for %s: %s", symbol, exc)
 
     # ── autonomous event-bus review worker ────────────────────────────────────

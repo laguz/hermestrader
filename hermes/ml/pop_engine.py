@@ -497,7 +497,7 @@ def augment_levels_with_pop(
             if math.isnan(p_base):
                 p_base = 0.84
             delta_est = 1.0 - p_base
-        except Exception:                             # noqa: BLE001
+        except Exception:
             p_base = 0.84
             delta_est = 0.16
 

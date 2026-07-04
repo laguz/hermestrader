@@ -146,7 +146,7 @@ class OpenAICompatibleLLM:
         if not r.ok:
             try:
                 detail = r.json()
-            except Exception:                                   # noqa: BLE001
+            except Exception:
                 detail = r.text
             raise LLMConnectionError(
                 f"{r.status_code} {r.reason} from {url}: {detail}"
@@ -155,7 +155,7 @@ class OpenAICompatibleLLM:
         try:
             data = r.json()
             return data["choices"][0]["message"]["content"]
-        except Exception as exc:                                # noqa: BLE001
+        except Exception as exc:
             raise LLMConnectionError(
                 f"malformed completion response: {exc}; body={r.text[:400]!r}"
             ) from exc
@@ -270,6 +270,6 @@ class OllamaCloudLLM:
             if isinstance(response, dict):
                 return response["message"]["content"]
             return response.message.content
-        except Exception as exc:                                    # noqa: BLE001
+        except Exception as exc:
             raise LLMConnectionError(f"Ollama Cloud error: {exc}") from exc
 

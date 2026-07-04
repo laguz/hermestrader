@@ -157,7 +157,7 @@ class CreditSpreadStrategy(AbstractStrategy):
                     call_action_factory=factory("call"),
                 )
                 actions.extend([a for a in planned if a is not None])
-            except Exception as exc:                                  # noqa: BLE001
+            except Exception as exc:
                 self._log(f"❌ {symbol}: {exc}")
         return actions
 
@@ -194,7 +194,7 @@ class CreditSpreadStrategy(AbstractStrategy):
             return None
         try:
             pred = get_pred(symbol)
-        except Exception:                                          # noqa: BLE001
+        except Exception:
             return None
         return dict(pred) if pred else None
 
@@ -398,7 +398,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         """
         try:
             sl_mult = float(self._tun(t, "sl_mult"))
-        except Exception:                                  # noqa: BLE001
+        except Exception:
             sl_mult = 2.5
         return min((sl_mult - 1.0) * credit, max(width - credit, 0.0))
 

@@ -58,7 +58,7 @@ class PredictorConfig:
             try:
                 v = run_maybe_async(db.get_setting, key)
                 return str(v) if v else default
-            except Exception:                     # noqa: BLE001
+            except Exception:
                 return default
 
         cfg.predict_interval_s = _f("ml_predict_interval_s", cfg.predict_interval_s)

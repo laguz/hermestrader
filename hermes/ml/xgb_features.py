@@ -106,7 +106,7 @@ class AsyncXGBPredictor:
         # every boot regardless of whether prior versions ran migrations.
         try:
             ledger_mod.ensure_table(self.db)
-        except Exception as exc:                    # noqa: BLE001
+        except Exception as exc:
             logger.warning("ledger.ensure_table failed: %s", exc)
 
         try:
@@ -242,15 +242,15 @@ class AsyncXGBPredictor:
                 if force_run:
                     try:
                         run_maybe_async(self.db.set_setting, "ml_force_run", "false")
-                    except Exception:               # noqa: BLE001
+                    except Exception:
                         pass
 
                 self._record_status(warnings)
-            except Exception as exc:                # noqa: BLE001
+            except Exception as exc:
                 logger.exception("xgb loop error: %s", exc)
                 try:
                     run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
-                except Exception:                   # noqa: BLE001
+                except Exception:
                     pass
 
             self._stop.wait(10)
@@ -276,7 +276,7 @@ class AsyncXGBPredictor:
                                 "; ".join(warnings)[:500])
             else:
                 run_maybe_async(self.db.set_setting, "ml_last_error", "")
-        except Exception:                           # noqa: BLE001
+        except Exception:
             pass
 
     # -- model lifecycle -----------------------------------------------------
@@ -311,7 +311,7 @@ class AsyncXGBPredictor:
             wls = run_maybe_async(self.db.list_all_watchlists)
             for syms in wls.values():
                 active.update(syms)
-        except Exception as exc:                    # noqa: BLE001
+        except Exception as exc:
             logger.warning("Failed to fetch strategy watchlists: %s", exc)
         return sorted(active)
 
@@ -348,7 +348,7 @@ class AsyncXGBPredictor:
                 else:
                     logger.error("history sync failed for %s: %s", sym, daily_bars)
                     return
-        except Exception as exc:                    # noqa: BLE001
+        except Exception as exc:
             logger.error("history sync failed for %s: %s", sym, exc)
             return
 
@@ -368,7 +368,7 @@ class AsyncXGBPredictor:
                         await self.db.save_intraday_bars(sym, df_intra)
                 else:
                     logger.debug("intraday sync failed for %s: %s", sym, intra_bars)
-        except Exception as exc:                    # noqa: BLE001
+        except Exception as exc:
             logger.debug("intraday sync failed for %s: %s", sym, exc)
 
     async def _sync_history_async(self, symbols: List[str]) -> None:
@@ -411,25 +411,25 @@ class AsyncXGBPredictor:
         for sym in self._get_active_symbols():
             try:
                 payload = run_maybe_async(self.db.get_setting, f"ml_calibrator__{sym}")
-            except Exception:                       # noqa: BLE001
+            except Exception:
                 payload = None
             if payload:
                 try:
                     cal = load_calibrator(json.loads(payload))
                     if cal is not None:
                         self._calibrators[sym] = cal
-                except Exception as exc:                # noqa: BLE001
+                except Exception as exc:
                     logger.debug("calibrator load failed for %s: %s", sym, exc)
 
             try:
                 meta_payload = run_maybe_async(self.db.get_setting, f"ml_meta_learner__{sym}")
-            except Exception:                       # noqa: BLE001
+            except Exception:
                 meta_payload = None
             if meta_payload:
                 try:
                     meta = MetaLearner.from_json(meta_payload)
                     set_meta_learner(meta, sym)
-                except Exception as exc:                # noqa: BLE001
+                except Exception as exc:
                     logger.debug("meta-learner load failed for %s: %s", sym, exc)
 
     # -- helpers -------------------------------------------------------------

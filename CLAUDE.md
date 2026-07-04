@@ -115,7 +115,12 @@ Kept deliberately as false positives / complete APIs:
 - All watcher routes (`routes/*.py`) and DB repositories (`repositories/*.py`) — resolved dynamically by `api.py` and `HermesDB` context.
 - Vue.js components/views under `hermes/ui/src` — verified as completely mapped in `router.js` and `App.vue`.
 
-An audit in July 2026 removed 9 dead settings fields from `HermesSettings` in `hermes/config.py` that were parsed from the environment but never read from the `settings` singleton: `hermes_env_file`, `hermes_ai_autonomy`, `hermes_soul_path`, `llm_provider`, `llm_model`, `llm_api_key`, `llm_temperature`, `llm_vision`, and `llm_timeout_s`. The `validate_autonomy` validator was also removed. Mock signatures for `xreadgroup` in `tests/test_durable_loop.py` and `tests/test_reactive_loop.py` were refactored with `*args, **kwargs` to resolve unused parameter warnings.
+An audit in July 2026 resolved four codebase bugs:
+- Fixed mutable defaults for the `body` parameter in approvals routes ([approvals.py](file:///Users/laguz/Git/hermestrader/hermes/service2_watcher/routes/approvals.py)).
+- Added `strict=True` to the watchlist analysis `zip()` call ([analytics.py](file:///Users/laguz/Git/hermestrader/hermes/service2_watcher/routes/analytics.py)).
+- Removed the unused `unrealized_pnl_pct` column from the `ExitTick` model ([orm.py](file:///Users/laguz/Git/hermestrader/hermes/db/orm.py)) and dropped it from the database table via migration `0006_drop_unrealized_pnl_pct.py`.
+- Fixed semicolons in comment lines in [schema.sql](file:///Users/laguz/Git/hermestrader/hermes/db/schema.sql) which had broken Alembic's baseline statement splitting.
+- Removed 106 unused `# noqa: BLE001` directives (and other unused ones) using Ruff `RUF100` auto-fixing.
 
 
 

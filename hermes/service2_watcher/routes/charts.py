@@ -35,7 +35,7 @@ def _get_chart_provider():
     Lazy because matplotlib is optional — installing it is a sizeable
     container-image cost, so the watcher should still boot without it.
     """
-    global _watcher_chart_provider                               # noqa: PLW0603
+    global _watcher_chart_provider
     if _watcher_chart_provider is not None:
         return _watcher_chart_provider
     try:
@@ -46,7 +46,7 @@ def _get_chart_provider():
         return _watcher_chart_provider
     except ImportError:
         return None
-    except Exception as exc:                                     # noqa: BLE001
+    except Exception as exc:
         logger.warning("Could not build watcher chart provider: %s", exc)
         return None
 
@@ -84,7 +84,7 @@ async def chart_analysis(symbol: str) -> Dict[str, Any]:
     try:
         rows = await db.decisions.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
         return {"symbol": sym, "analysis": rows[0] if rows else None}
-    except Exception as exc:                                     # noqa: BLE001
+    except Exception as exc:
         logger.warning("chart_analysis query failed for %s: %s", sym, exc)
         return {"symbol": sym, "analysis": None}
 
@@ -100,7 +100,7 @@ async def all_chart_analyses() -> Dict[str, Any]:
     try:
         all_wls = await db.watchlist.list_all_watchlists()
         symbols = sorted({s for syms in all_wls.values() for s in syms})
-    except Exception as exc:                                     # noqa: BLE001
+    except Exception as exc:
         logger.warning("Could not load DB watchlists for /api/charts: %s", exc)
         symbols = []
 
@@ -109,6 +109,6 @@ async def all_chart_analyses() -> Dict[str, Any]:
         try:
             rows = await db.decisions.recent_ai_decisions(strategy_id="CHART", symbol=sym, limit=1)
             results[sym] = rows[0] if rows else None
-        except Exception:                                        # noqa: BLE001
+        except Exception:
             results[sym] = None
     return {"analyses": results, "watchlist": symbols}

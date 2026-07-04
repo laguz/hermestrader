@@ -219,7 +219,7 @@ def load_calibrator(payload: Optional[dict]):
             return IsotonicCalibrator.from_dict(payload)
         if kind == "platt":
             return PlattCalibrator.from_dict(payload)
-    except Exception as exc:                          # noqa: BLE001
+    except Exception as exc:
         logger.warning("calibrator load failed: %s", exc)
     return None
 

@@ -38,8 +38,10 @@ class ApprovalDecisionBody(BaseModel):
 
 @router.post("/api/approvals/{approval_id}/approve")
 async def approve_trade(approval_id: int,
-                  body: ApprovalDecisionBody = ApprovalDecisionBody()
+                  body: Optional[ApprovalDecisionBody] = None
                   ) -> Dict[str, Any]:
+    if body is None:
+        body = ApprovalDecisionBody()
     row = await db.approvals.get_approval(approval_id)
     if row is None or row["status"] != "PENDING":
         raise HTTPException(
@@ -62,8 +64,10 @@ async def approve_trade(approval_id: int,
 
 @router.post("/api/approvals/{approval_id}/reject")
 async def reject_trade(approval_id: int,
-                 body: ApprovalDecisionBody = ApprovalDecisionBody()
+                 body: Optional[ApprovalDecisionBody] = None
                  ) -> Dict[str, Any]:
+    if body is None:
+        body = ApprovalDecisionBody()
     row = await db.approvals.get_approval(approval_id)
     if row is None or row["status"] != "PENDING":
         raise HTTPException(

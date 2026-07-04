@@ -104,7 +104,7 @@ async def get_status() -> Dict[str, Any]:
     try:
         mkt = market_session()
         nxt = next_open() if not mkt["is_open"] else None
-    except Exception:                                               # noqa: BLE001
+    except Exception:
         mkt = {"session": "unknown", "is_open": False,
                "et_time": "--:--", "et_date": "", "trading_day": False}
         nxt = None
@@ -221,7 +221,7 @@ async def get_debug_info() -> Dict[str, Any]:
         daily_cnt, intra_cnt = await db.ts_engine.get_total_bars_count()
         result["db"]["bars_daily"] = daily_cnt
         result["db"]["bars_intraday"] = intra_cnt
-    except Exception as e:                                        # noqa: BLE001
+    except Exception as e:
         result["db"]["bars_daily"] = 0
         result["db"]["bars_intraday"] = 0
         logger.warning("Failed to get timeseries count: %s", e)
@@ -235,7 +235,7 @@ async def get_debug_info() -> Dict[str, Any]:
                 "SELECT value FROM system_settings WHERE key='ml_last_error'"
             ))
             result["db"]["ml_last_error"] = res_err.scalar()
-        except Exception as e:                                    # noqa: BLE001
+        except Exception as e:
             result["db"]["error"] = str(e)
 
         try:
@@ -244,7 +244,7 @@ async def get_debug_info() -> Dict[str, Any]:
             ))
             raw = res_raw.fetchall()
             result["logs"] = [r[0] for r in raw]
-        except Exception:                                         # noqa: BLE001
+        except Exception:
             pass
 
         try:
@@ -255,7 +255,7 @@ async def get_debug_info() -> Dict[str, Any]:
             ), {"k": POP_CAL_STATE_KEY})
             cal_raw = res_cal.scalar()
             result["db"]["pop_calibration"] = _json.loads(cal_raw) if cal_raw else None
-        except Exception:                                         # noqa: BLE001
+        except Exception:
             result["db"]["pop_calibration"] = None
 
     return result
