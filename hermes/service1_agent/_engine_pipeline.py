@@ -770,6 +770,15 @@ class PipelineController:
             # 5b. POP outcome calibration (throttled internally; never fatal)
             await self.maybe_refit_pop_calibrator()
 
+            # 5c. Prediction ledger outcome backfilling (never fatal)
+            try:
+                from hermes.ml.ledger import backfill_prediction_outcomes
+                marked = await backfill_prediction_outcomes(ctx.db, lookback_days=90)
+                if marked > 0:
+                    logger.info("[ENGINE] Backfilled %d outcomes in prediction ledger", marked)
+            except Exception as exc:
+                logger.warning("[ENGINE] Prediction ledger outcome backfilling failed: %s", exc)
+
             # 6. Heartbeat and Market-hours gate
             mkt = market_session()
             await ctx.db.logs.write_log(

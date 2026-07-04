@@ -157,6 +157,83 @@ async def fetch_for_calibration(
 
 
 
+async def backfill_prediction_outcomes(db: Any, lookback_days: int = 90) -> int:
+    """Evaluate and mark realized outcomes for prediction ledger rows whose horizon has passed.
+
+    Returns the number of rows marked.
+    """
+    if PredictionLedger is None:
+        return 0
+
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select
+
+    marked_count = 0
+    async with db.AsyncSession() as session:
+        now = datetime.now(timezone.utc)
+        q = (
+            select(PredictionLedger)
+            .filter(PredictionLedger.realized_outcome.is_(None))
+        )
+        result = await session.execute(q)
+        unmarked_rows = result.scalars().all()
+
+        cached_bars = {}
+        for row in unmarked_rows:
+            horizon = row.horizon_dte or 7
+            target_date = row.ts + timedelta(days=horizon)
+            if target_date > now:
+                continue
+
+            sym = row.symbol.upper()
+            if sym not in cached_bars:
+                try:
+                    df = await db.daily_bars(sym, lookback_days=lookback_days + 30)
+                except Exception as exc:
+                    logger.debug("failed to fetch daily bars for %s: %s", sym, exc)
+                    df = None
+                cached_bars[sym] = df
+
+            df_bars = cached_bars[sym]
+            if df_bars is None or df_bars.empty:
+                continue
+
+            # Align timezone awareness of target_date with df_bars.index to prevent comparison TypeError
+            tz = df_bars.index.tz
+            if tz is None:
+                target_dt_cmp = target_date.replace(tzinfo=None)
+            else:
+                target_dt_cmp = target_date.astimezone(tz)
+
+            df_future = df_bars[df_bars.index >= target_dt_cmp]
+            if df_future.empty:
+                continue
+
+            first_bar_ts = df_future.index[0]
+            first_bar_ts_utc = first_bar_ts.to_pydatetime()
+            if first_bar_ts_utc.tzinfo is None:
+                first_bar_ts_utc = first_bar_ts_utc.replace(tzinfo=timezone.utc)
+
+            if first_bar_ts_utc > now:
+                continue
+
+            row_bar = df_future.iloc[0]
+            realized_close = float(row_bar["close"])
+            spot = float(row.spot) if row.spot else realized_close
+            outcome = 1.0 if realized_close > spot else 0.0
+
+            row.realized_outcome = outcome
+            row.realized_close = realized_close
+            row.realized_at = datetime.now(timezone.utc)
+            marked_count += 1
+
+        if marked_count > 0:
+            await session.commit()
+            logger.info("Marked %d new prediction outcomes", marked_count)
+
+    return marked_count
+
+
 def ensure_table(db: "HermesDB") -> None:
     """Create the prediction_ledger table if it does not yet exist.
 
@@ -177,5 +254,6 @@ __all__ = [
     "PredictionLedger",
     "write_record",
     "fetch_for_calibration",
+    "backfill_prediction_outcomes",
     "ensure_table",
 ]

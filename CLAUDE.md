@@ -105,7 +105,7 @@ Kept deliberately in that same audit: `GET /api/debug` (operator triage
 endpoint, no UI caller by design) and the admin instance/upgrade routes
 (`scripts/upgrade_runner.sh` depends on them).
 
-An audit in July 2026 removed `mark_outcome` in `hermes/ml/ledger.py` (and from its `__all__` exports) as outcomes are backfilled inline in `scripts/nightly_calibrate.py` and it had no callers.
+An audit in July 2026 removed the unused `mark_outcome` in `hermes/ml/ledger.py`. To close the ML measurement loop, a new batch-oriented `backfill_prediction_outcomes` function was implemented in `hermes/ml/ledger.py`, wired into `PipelineController.handle_clock_tick_internal` (the agent heartbeat) to run every tick, and reused in `scripts/nightly_calibrate.py`.
 Kept deliberately as false positives / complete APIs:
 - `WatchlistRepository.list_watchlist` and `TradesRepository.close_trade_from_action` — these are looked up dynamically via `getattr` in `_engine_pipeline.py` and `agent_approvals.py`.
 - `date_today` in `hermes/utils.py` — matches clock library completeness.
