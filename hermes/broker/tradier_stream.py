@@ -54,8 +54,8 @@ class TradierStreamClient:
         if self._ws:
             try:
                 await self._ws.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to close websocket connection: %s", e)
             self._ws = None
         if self._task:
             self._task.cancel()

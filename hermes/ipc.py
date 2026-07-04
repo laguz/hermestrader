@@ -112,8 +112,8 @@ class RedisIPCBackend:
             if self.client is not None:
                 try:
                     await self.client.aclose()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to close Redis client during connect error recovery: %s", e)
             self.client = None
             logger.error("Redis IPC connection failed: %s", exc)
             raise ConnectionError(f"Failed to connect to Redis IPC at {self.redis_dsn}: {exc}") from exc
@@ -216,8 +216,8 @@ class RedisIPCBackend:
                 if pubsub is not None:
                     try:
                         await pubsub.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to close Redis pubsub in listener loop: %s", e)
         logger.info("Redis IPC listener loop stopped.")
 
     async def disconnect(self) -> None:
@@ -234,8 +234,8 @@ class RedisIPCBackend:
         if self.client is not None:
             try:
                 await self.client.aclose()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to close Redis client during disconnect: %s", e)
             self.client = None
             
         self.is_connected = False

@@ -240,7 +240,15 @@ class ReactiveController:
                                     symbol=str(broker_order.get("symbol", info.get("symbol", ""))).upper(),
                                     side=str(broker_order.get("side", info.get("side", ""))),
                                     quantity=int(broker_order.get("quantity", info.get("quantity", 0))),
-                                    price=float(broker_order.get("avg_fill_price") or broker_order.get("price") or 0.0),
+                                    price=float(
+                                        broker_order.get("avg_fill_price")
+                                        if broker_order.get("avg_fill_price") is not None
+                                        else (
+                                            broker_order.get("price")
+                                            if broker_order.get("price") is not None
+                                            else 0.0
+                                        )
+                                    ),
                                     status=status
                                 )
                                 if self.ctx.event_bus:
@@ -317,8 +325,8 @@ class ReactiveController:
                         from datetime import datetime
                         try:
                             inst.timestamp = datetime.fromisoformat(orig_timestamp)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Failed to deserialize timestamp: %s", e)
                     return inst
                 return v
             return v

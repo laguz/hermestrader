@@ -102,7 +102,7 @@ class TastyTrade45(AbstractStrategy):
                             )
                             return None
                         greeks = short_leg.get("greeks") or {}
-                        delta_val = abs(float(greeks.get("delta") or entry_delta))
+                        delta_val = abs(float(greeks.get("delta") if greeks.get("delta") is not None else entry_delta))
                         pop_val = 1.0 - delta_val
 
                         return TradeAction(

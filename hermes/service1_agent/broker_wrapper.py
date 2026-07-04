@@ -105,8 +105,8 @@ class AsyncBrokerWrapper:
             try:
                 if isinstance(dt, datetime):
                     return dt.timestamp()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to extract timestamp from broker current_date: %s", e)
         return time.time()
 
     def update_cached_quote(self, symbol: str, data: Dict[str, Any]) -> None:
@@ -316,8 +316,8 @@ class AsyncBrokerWrapper:
                         decision_msg,
                         level="INFO" if report.decision == "APPROVED" else "WARNING",
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to write Safety Gateway decision log to DB: %s", e)
 
             if report.decision == "REJECTED":
                 raise SafetyValidationError(f"Order rejected by Safety Gateway: {'; '.join(report.violations)}")

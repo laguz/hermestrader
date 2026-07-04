@@ -115,8 +115,8 @@ async def get_status() -> Dict[str, Any]:
     if update_status_raw:
         try:
             update_status = json.loads(update_status_raw)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to parse update_status setting: %s", e)
 
     return {
         "hermes_running": hermes_running,

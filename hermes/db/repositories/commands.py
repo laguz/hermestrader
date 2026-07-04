@@ -43,8 +43,11 @@ class CommandsRepository(Repository):
             from hermes.ipc import ipc
             await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS,
                               {"action": IPC_ACTION_DRAIN_COMMANDS})
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("hermes.db.repositories.commands").warning(
+                "Failed to publish agent command drain event to IPC: %s", e
+            )
         return cmd_id
 
     async def enqueue_setting(self, key: str, value: Any) -> int:

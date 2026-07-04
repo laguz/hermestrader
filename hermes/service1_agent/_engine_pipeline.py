@@ -178,7 +178,7 @@ class PipelineController:
                     )
                 ),
                 side=str(order.get("side") or "sell"),
-                quantity=int(order.get("quantity") or 1),
+                quantity=int(order.get("quantity") if order.get("quantity") is not None else 1),
                 order_type="credit",
                 expiry=expiry,
                 tag=tag,

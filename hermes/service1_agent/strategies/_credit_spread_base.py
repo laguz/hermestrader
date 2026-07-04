@@ -178,7 +178,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         else:
             symbol = sym_raw
             symbol_meta = detailed_wl.get(symbol, {})
-            target_lots = symbol_meta.get("target_lots") or target_lots_global
+            target_lots = symbol_meta.get("target_lots") if symbol_meta.get("target_lots") is not None else target_lots_global
         return symbol, target_lots
 
     def _latest_xgb_pred(self, symbol: str) -> Optional[Dict[str, Any]]:

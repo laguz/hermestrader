@@ -223,8 +223,8 @@ class HermesOverseer:
                 if start >= 0 and end > start:
                     try:
                         return json.loads(block[start:end + 1])
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed parsing json in code blocks: %s", e)
 
         try:
             return json.loads(clean_text)
@@ -234,8 +234,8 @@ class HermesOverseer:
             if start >= 0 and end > start:
                 try:
                     return json.loads(clean_text[start:end + 1])
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed parsing json in embedded section: %s", e)
         return {"verdict": "APPROVE", "rationale": "Unparseable LLM reply; defaulting."}
 
     # ── review existing rule-driven actions ───────────────────────────────────
@@ -300,8 +300,8 @@ class HermesOverseer:
                 img = await self.chart_provider.snapshot(action.symbol)
                 if img is not None:
                     images.append(img)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed fetching chart snapshot: %s", e)
 
         system_prompt = await self.get_system_prompt()
         messages = [{"role": "system", "content": system_prompt},

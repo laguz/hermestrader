@@ -180,8 +180,8 @@ class CachedRegimeWeightsLookup:
                     weights = lookup(self.db, symbol, period)
                     self.cache[key] = weights
                     return list(weights)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to lookup regime weights for %s/%s: %s", symbol, period, e)
         except Exception as exc:
             logger.warning("CachedRegimeWeightsLookup call failed: %s", exc)
 
