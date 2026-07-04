@@ -282,3 +282,44 @@ redundant local re-imports of already-module-level names in `main.py`,
 `_engine_reactive.py` (defeats lazy formatting); missing return-type annotations on two
 `hermes_alpha.py` override hooks; a broad `except Exception` in
 `_credit_spread_base.py` around a tunable `float()` conversion.
+
+A July 2026 audit (DeepSeek scan, hand-verified line-by-line — the report's three
+"TRUE BUGS" turned out to be false positives, see below) resolved 1 dead-code finding
+and 6 style-only falsy-zero occurrences. No regression tests were written for the
+style-only fixes (same rationale as the `risk_engine.py:163` precedent above — the
+fallback default already equals the `or` default, so there's no behavior to regress):
+- **Dead type alias**: removed `_RegimeWeightLookup = Callable[[str, str],
+  List[float]]` in `pop_engine.py` (and the now-unused `Callable` import) — zero
+  references anywhere; `_regime_weight_lookup` is typed `Any`, not this alias.
+- **Falsy-zero style consistency** on `TradeAction.price`/`.width` (both
+  `Optional[float]`, so `0.0` is genuinely falsy — unlike the settings-read case
+  below): `optimizer.py` (credit/width), `safety_gateway.py` (5 occurrences: width/
+  credit/price × multileg/option/equity branches, plus `t_width`/`t_credit` from a
+  dict), `risk_engine.py:236-237` (`width`/`entry_credit` in the running-open-trades
+  audit dict), and `_engine_reactive.py:825` (`if action.width:` → `if action.width
+  is not None:`) — the twin of the `risk_engine.py:163` instance fixed in the prior
+  audit, same pattern in a different file.
+
+**Report claims checked against source and found wrong — these are false positives,
+not bugs; don't re-flag them:**
+- **`routes/llm.py:57` (`temperature`) and `:61` (`timeout_s`)** — the report claims
+  `float(await db.settings.get_setting(...) or default)` silently discards an
+  operator-set `0.0`. It doesn't: `SettingsRepository.get_setting` returns
+  `Optional[str]`, and every writer stores numbers via `str(value)` (see
+  `routes/llm.py`'s `PUT` handler: `updates[SETTING_LLM_TEMPERATURE] =
+  str(body.temperature)`). A stored `0.0` becomes the string `"0.0"`, which is
+  **truthy** — `"0.0" or 0.2` evaluates to `"0.0"`, not `0.2`. The `or` only falls
+  back on a genuinely absent setting (`None`) or an explicitly empty string, which is
+  correct. The falsy-zero pattern only bites when the underlying value is a real
+  numeric `0`/`0.0` (e.g. `TradeAction.price`/`.width` above); it does not apply to
+  values that round-trip through `str()` on write and are read back as `Optional[str]`.
+- **`predictor_inference.py:145`** (`ml_current_vol__{symbol}` vol lookup) — same
+  string/DB-read shape as above, so not a live falsy-zero bug even in principle.
+  Additionally, grep confirms this key has **no writer anywhere in the codebase** —
+  `get_setting` always returns `None` here today, so the `or 0.30` fallback always
+  fires regardless of the `or` pattern. Not a bug; if anything, evidence the setting
+  is currently unused/unwired, not something to "fix" by changing the `or`.
+- If another scan resurfaces these three `routes/llm.py` / `predictor_inference.py`
+  lines as falsy-zero bugs, the report is confusing a DB-string read with a raw
+  numeric read — verify the source type (`Optional[str]` vs `Optional[float]`) before
+  trusting the pattern-match.

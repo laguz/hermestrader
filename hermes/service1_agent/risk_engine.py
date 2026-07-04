@@ -233,8 +233,8 @@ class PortfolioRiskEngine:
                 running_open_trades.append({
                     "symbol": action.symbol,
                     "side_type": action.strategy_params.get("side_type"),
-                    "width": action.width or 0.0,
-                    "entry_credit": action.price or 0.0,
+                    "width": action.width if action.width is not None else 0.0,
+                    "entry_credit": action.price if action.price is not None else 0.0,
                     "lots": scaled,
                     "expiry": action.expiry
                 })

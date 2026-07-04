@@ -45,8 +45,8 @@ class PortfolioOptimizer:
         optimized_actions: List[TradeAction] = []
         for action in actions:
             sym = action.symbol
-            credit = float(action.price or 0.0)
-            width = float(action.width or 0.0)
+            credit = float(action.price if action.price is not None else 0.0)
+            width = float(action.width if action.width is not None else 0.0)
             risk_per_lot = max(0.0, (width - credit) * 100.0)
             requested_lots = action.quantity
             

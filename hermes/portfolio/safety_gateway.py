@@ -81,22 +81,22 @@ class SafetyGateway:
         # Risk for credit spread: (width - entry_credit) * qty * 100
         risk = 0.0
         if action.order_class == "multileg":
-            width = float(action.width or 0.0)
-            credit = float(action.price or 0.0)
+            width = float(action.width if action.width is not None else 0.0)
+            credit = float(action.price if action.price is not None else 0.0)
             qty = int(action.quantity) if action.quantity is not None else 1
             if credit > width:
                 credit = width
             risk = (width - credit) * qty * 100.0
         elif action.order_class == "option":
             qty = int(action.quantity) if action.quantity is not None else 1
-            price = float(action.price or 0.0)
+            price = float(action.price if action.price is not None else 0.0)
             if action.side == "buy" or (action.legs and "to_open" in (action.legs[0].get("side") or "").lower()):
                 risk = price * qty * 100.0
             else:
                 risk = 1000.0 * qty
         else:
             qty = int(action.quantity) if action.quantity is not None else 1
-            price = float(action.price or 0.0)
+            price = float(action.price if action.price is not None else 0.0)
             risk = price * qty
 
         metrics["calculated_risk"] = risk
@@ -130,8 +130,8 @@ class SafetyGateway:
 
         existing_symbol_risk = 0.0
         for t in symbol_open_trades:
-            t_width = float(t.get("width") or 0.0)
-            t_credit = float(t.get("entry_credit") or 0.0)
+            t_width = float(t.get("width") if t.get("width") is not None else 0.0)
+            t_credit = float(t.get("entry_credit") if t.get("entry_credit") is not None else 0.0)
             t_lots = int(t.get("lots") if t.get("lots") is not None else 1)
             existing_symbol_risk += max(0.0, (t_width - t_credit)) * t_lots * 100.0
 
