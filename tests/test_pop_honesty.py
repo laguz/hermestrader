@@ -20,7 +20,7 @@ from hermes.ml.pop_engine import FeatureVector, augment_levels_with_pop, predict
 from hermes.service1_agent.core import IronCondorBuilder, MoneyManager
 from hermes.service1_agent.strategies import CreditSpreads7
 
-from ._stubs import StubBroker, StubDB
+from ._stubs import StubBroker, StubDB, _et_today
 
 
 # ── combiner honesty ─────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ def test_augment_stashes_xgb_prob_on_analysis():
 
 # ── strategy gate on chain delta ─────────────────────────────────────────────
 def _expirations_for(*dte_values):
-    today = date.today()
+    today = _et_today()
     return [(today + timedelta(days=d)).isoformat() for d in dte_values]
 
 

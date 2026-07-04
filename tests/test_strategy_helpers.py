@@ -14,7 +14,7 @@ from hermes.service1_agent.core import (
 )
 from hermes.service1_agent.strategies._helpers import nearest_strike, parse_occ
 
-from ._stubs import StubBroker, StubDB, make_chain
+from ._stubs import StubBroker, StubDB, make_chain, _et_today
 
 
 class _Concrete(AbstractStrategy):
@@ -83,7 +83,7 @@ def test_nearest_strike_returns_none_for_empty_chain():
 
 # ── find_expiry_in_dte_range ─────────────────────────────────────────────────
 async def test_find_expiry_picks_max_in_window():
-    today = date.today()
+    today = _et_today()
     expirations = [(today + timedelta(days=d)).isoformat()
                    for d in (10, 20, 30, 40, 50)]
     broker = StubBroker(expirations=expirations)
@@ -94,7 +94,7 @@ async def test_find_expiry_picks_max_in_window():
 
 
 async def test_find_expiry_picks_min_when_requested():
-    today = date.today()
+    today = _et_today()
     expirations = [(today + timedelta(days=d)).isoformat()
                    for d in (10, 20, 30, 40, 50)]
     broker = StubBroker(expirations=expirations)
@@ -104,7 +104,7 @@ async def test_find_expiry_picks_min_when_requested():
 
 
 async def test_find_expiry_returns_none_when_window_empty():
-    today = date.today()
+    today = _et_today()
     expirations = [(today + timedelta(days=d)).isoformat() for d in (10, 200)]
     broker = StubBroker(expirations=expirations)
     s = _make_strategy(broker=broker)
@@ -112,7 +112,7 @@ async def test_find_expiry_returns_none_when_window_empty():
 
 
 async def test_find_expiry_skips_invalid_dates():
-    today = date.today()
+    today = _et_today()
     expirations = ["2026", (today + timedelta(days=40)).isoformat(), "invalid-date"]
     broker = StubBroker(expirations=expirations)
     s = _make_strategy(broker=broker)
@@ -152,7 +152,7 @@ async def test_find_strike_by_delta_returns_none_when_outside_tolerance():
 
 
 async def test_find_strike_by_delta_local_fallback():
-    expiry_date = date.today() + timedelta(days=30)
+    expiry_date = _et_today() + timedelta(days=30)
     yymmdd = expiry_date.strftime("%y%m%d")
     occ = f"AAPL{yymmdd}P00090000"
     
