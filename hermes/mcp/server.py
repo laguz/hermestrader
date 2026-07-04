@@ -61,7 +61,7 @@ async def _broker() -> TradierBroker:
     mode = settings.hermes_mode
     if mode not in _BROKERS:
         token, account, url = settings.get_tradier_credentials()
-        dry_run = settings.hermes_dry_run if mode == "live" else False
+        dry_run = settings.hermes_dry_run
         cfg = {
             "tradier_access_token": token,
             "tradier_account_id": account,

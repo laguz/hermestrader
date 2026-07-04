@@ -60,7 +60,12 @@ class TimeSeriesEngine:
         if df is None or df.empty:
             return []
 
-        if df.index.name == "ts" or "ts" not in df.columns:
+        if df.index.name == "ts" and "ts" in df.columns:
+            # Both the index and a column are named "ts" — reset_index() would
+            # raise ValueError on the resulting duplicate column, so drop the
+            # index and keep the existing "ts" column.
+            reset = df.reset_index(drop=True)
+        elif df.index.name == "ts" or "ts" not in df.columns:
             reset = df.reset_index()
             if "ts" not in reset.columns and "index" in reset.columns:
                 reset = reset.rename(columns={"index": "ts"})

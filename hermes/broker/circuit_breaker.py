@@ -67,3 +67,7 @@ class CircuitBreaker:
                 await db.logs.write_log("ENGINE", "[CRITICAL] Circuit Breaker tripped: Agent automatically PAUSED", level="ERROR")
             except Exception as e:
                 logger.error("Failed to automatically pause agent in database: %s", e)
+        else:
+            logger.warning(
+                "Circuit breaker tripped with no db handle — agent was NOT automatically paused."
+            )

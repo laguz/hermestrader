@@ -152,7 +152,10 @@ def test_mcp_server_broker_mode_aware_paper(monkeypatch):
         assert cfg["tradier_access_token"] == "paper-tok"
         assert cfg["tradier_account_id"] == "paper-acct"
         assert cfg["tradier_base_url"] == "https://sandbox.tradier.com/v1"
-        assert cfg["dry_run"] is False
+        # hermes_dry_run defaults to True and isn't set here, so paper mode
+        # must honor that default rather than force it off (previously forced
+        # to False for any non-"live" mode, weakening the dry_run default).
+        assert cfg["dry_run"] is True
 
 def test_mcp_server_broker_mode_aware_live(monkeypatch):
     monkeypatch.setenv("HERMES_MODE", "live")

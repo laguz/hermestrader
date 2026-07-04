@@ -202,3 +202,83 @@ An audit in July 2026 resolved 26 additional confirmed bugs and codebase improve
 An audit in July 2026 resolved 14 confirmed bugs:
 - **Falsy-zero checks**: Fixed Kelly score `delta` lookup in `optimizer.py`, `delta` and `price` fallback checks in `mcp_client.py`, and spot price check in `strategy_base.py` to use explicit `is not None` checks.
 - **Silent Exception Logging**: Replaced silent `except Exception: pass` catches with warning logging in startup option tracking and shutdown IPC commands (`main.py`), database schema creation (`models.py`), `target_lots` column missing query fallback (`watchlist.py`), approvals routes IPC commands (`routes/approvals.py`), machine learning status writes (`xgb_features.py`), and ingest/analysis timestamp check failures (`_engine_pipeline.py`).
+
+A July 2026 audit (DeepSeek scan, hand-verified against source line-by-line before
+fixing anything — several of the report's claims did not match the actual code)
+fixed 9 confirmed bugs with regression tests in `tests/test_verified_audit_bugs.py`.
+Each test was confirmed to fail when its fix was reverted, not just pass with it in place:
+- **`utcnow_iso()` bypassed the virtual clock** (`utils.py`): called `datetime.now(timezone.utc)`
+  directly instead of `utc_now()`/`_GLOBAL_CLOCK`, leaking real wall-clock time into
+  backtests under a `SimulatedClock`. Fixed to route through `utc_now()`.
+- **`engine.overseer` accessed without a None guard** in `main.py`'s
+  `_handle_settings_changed`: guarded `.stop()`/`.start()` with `if engine.overseer is
+  not None` but then touched `.llm`/`.vision_enabled`/`.autonomy`/`.soul`/`.overseer_mode`
+  unconditionally right after — `CascadingEngine.overseer` defaults to `None` in its
+  constructor, so this is reachable, not just theoretical.
+- **`stream_client.stop()` called during the startup race window** in `main.py`'s
+  `_handle_mode_change`: `stream_client` is `None` from `_run_async` startup until the
+  synchronous assignment further down; a `ModeChangedEvent` arriving in that window
+  crashed with `AttributeError`. Added a `None` guard.
+- **`hermes_alpha.py` `width` falsy-zero** (line ~117): `int(intent.get("width") or
+  default_width)` silently replaced an overseer-specified `width=0` with the default —
+  every sibling field on the same lines already used `is not None`.
+- **`mcp/server.py` forced `dry_run=False` outside `"live"` mode** (`_broker()`, line
+  ~64): weakened the operator's `hermes_dry_run` setting (default `True`) to `False`
+  for paper mode and any unrecognized mode, contradicting the "never weaken `dry_run`
+  defaults" safety rule above. Fixed to always honor `settings.hermes_dry_run`.
+  **A pre-existing test (`test_dual_and_updates.py::test_mcp_server_broker_mode_aware_paper`)
+  had asserted `dry_run is False` for paper mode — i.e. it had locked in the bug as
+  expected behavior.** Updated to assert `True`. If you see other tests asserting a
+  weakened `dry_run` for non-`"live"` modes, they're pinning this same bug — fix the
+  assertion, not the code.
+- **`analytics.py` exit_price falsy-zero fabricated P&L** (`get_strategy_performance_metrics`,
+  lines ~107, 190): `exit_price=t.exit_price or 0.0` converted `None` (unresolved exit)
+  into `0.0`, bypassing `_compute_realized_pnl`'s own `None` guard and reporting a
+  fabricated ~$200/lot P&L for trades with no recorded exit fill.
+- **Circuit breaker silently degraded when `db` is `None`** (`circuit_breaker.py`
+  `_trip()`): tripped to `OPEN` but only logged/paused inside the `if db is not None`
+  branch — no signal at all when `db` was `None`. Added a `logger.warning` on the `else`.
+- **`OllamaCloudLLM.timeout_s` never reached the network call** (`llm/clients.py`):
+  stored on `self` and accepted as a per-call `chat()` kwarg but never passed to the
+  underlying `ollama.Client` — unlike `OpenAICompatibleLLM`, which does apply it. Fixed
+  by passing `timeout=` at `Client` construction, and building a scoped client for a
+  per-call override that differs from the instance default.
+- **`timeseries.py` `reset_index` collision** (`_normalize_for_write`): if a DataFrame's
+  index and a column were both named `"ts"`, `df.reset_index()` raises `ValueError`
+  (pandas ≥1.5, duplicate column) instead of normalizing. Added a branch that drops the
+  index in that case.
+
+**Also applied (style-only, no behavioral change — no regression test written because
+there's nothing to regress):** `risk_engine.py`'s `if action.width:` → `if action.width
+is not None:` (line ~163). The pre-`if` default for `requirement_per_lot` is already
+`0.0`, identical to what `width=0.0 * 100.0` produces, so this specific instance has no
+observable effect; it's kept only for consistency with the codebase's established
+falsy-zero convention. Don't waste time hunting for a functional difference here.
+
+**Report claims that were checked against source and found wrong — don't re-flag:**
+- `market_hours.py`'s off-hours override reading `os.environ` directly is not a bug: it's
+  the *only* mechanism (no competing DB/UI toggle exists anywhere in the watcher or
+  `tunables.py` catalog — verified by grep), and the docstrings at the top of the file
+  and on `offhours_trading_allowed()` say so explicitly.
+- `_engine_pipeline.py` line 826 is unrelated bar-ingest scheduling code, not an
+  `action.width` falsy-zero bug — `action.width` doesn't appear anywhere in that file.
+  (The real falsy-zero `action.width` pattern lives in `risk_engine.py`, see above.)
+- The local imports in `_engine_pipeline.py`'s `handle_clock_tick_internal` (~lines
+  687–733) aren't redundant — those names aren't imported at module level in that file,
+  so nothing is duplicated.
+- `SubmitTradeActionsCommand.execute_directly` (`events/bus.py`) is not dead: read at
+  `core.py:275`, set at `_engine_ai.py:101`.
+
+**Confirmed-real but deliberately left unfixed this pass (dead code / pure style, not
+"bugs" — revisit only if asked to clean up dead code again):** `OrderTrackedEvent`
+(`_engine_reactive.py` / `events/bus.py`) is defined, subscribed, and handled but never
+published anywhere; `ControlState.approved_actions` is populated and logged but never
+read (the pipeline calls `db.approvals.fetch_approved_actions()` directly instead);
+`db/orm.py`'s module-level `logger` is unused; unreachable `if quotes else {}` ternaries
+in `tradier.py`/`mcp_client.py` after an earlier `if not quotes: return`; dead `db`
+param on `AsyncIPC.connect`; dead `target` param on `MockStreamClient.__init__`;
+redundant local re-imports of already-module-level names in `main.py`,
+`status.py`, `trades.py`, `projections.py`; f-strings inside `logger.exception(...)` in
+`_engine_reactive.py` (defeats lazy formatting); missing return-type annotations on two
+`hermes_alpha.py` override hooks; a broad `except Exception` in
+`_credit_spread_base.py` around a tunable `float()` conversion.

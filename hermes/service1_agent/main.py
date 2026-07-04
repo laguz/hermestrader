@@ -270,7 +270,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                     s.broker.broker = new_broker
 
                 # Stop and rebuild stream client
-                await stream_client.stop()
+                if stream_client is not None:
+                    await stream_client.stop()
                 watchlist_syms = set(conf.get("watchlist", []))
                 try:
                     watchlist_syms.update(await db.trades.tracked_option_symbols())
@@ -302,10 +303,9 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             current_llm_snapshot = new_snapshot
             current_vision = new_vision
 
-            engine.overseer.llm = current_llm
-            engine.overseer.vision_enabled = current_vision
-
             if engine.overseer is not None:
+                engine.overseer.llm = current_llm
+                engine.overseer.vision_enabled = current_vision
                 await engine.overseer.start()
 
             await db.logs.write_log(
@@ -314,9 +314,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
             )
 
         new_overseer_cfg = await _read_overseer_settings(db, conf)
-        engine.overseer.autonomy = new_overseer_cfg["autonomy"]
-        engine.overseer.soul = new_overseer_cfg["soul"]
-        engine.overseer.overseer_mode = new_overseer_cfg.get("overseer_mode", "single")
+        if engine.overseer is not None:
+            engine.overseer.autonomy = new_overseer_cfg["autonomy"]
+            engine.overseer.soul = new_overseer_cfg["soul"]
+            engine.overseer.overseer_mode = new_overseer_cfg.get("overseer_mode", "single")
         engine.approval_mode = new_overseer_cfg["approval_mode"]
         engine.llm_out_of_loop = new_overseer_cfg["llm_out_of_loop"]
 
