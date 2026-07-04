@@ -280,7 +280,7 @@ class MCPBrokerClient(AbstractBroker):
                 "place_equity_order",
                 symbol=action.symbol,
                 side=action.side,
-                quantity=int(action.quantity or 1),
+                quantity=int(action.quantity) if action.quantity is not None else 1,
                 order_type=action.order_type or "market",
                 price=float(action.price) if action.price is not None else None,
                 duration=action.duration or "day",
@@ -293,7 +293,7 @@ class MCPBrokerClient(AbstractBroker):
                 symbol=action.symbol,
                 option_symbol=leg["option_symbol"],
                 side=leg.get("action") or leg.get("side") or "buy_to_open",
-                quantity=int(leg.get("quantity", action.quantity or 1)),
+                quantity=int(leg.get("quantity") if leg.get("quantity") is not None else (action.quantity if action.quantity is not None else 1)),
                 price=float(action.price) if action.price is not None else None,
                 order_type=action.order_type or "limit",
                 duration=action.duration or "day",
@@ -306,7 +306,7 @@ class MCPBrokerClient(AbstractBroker):
                 legs=[
                     {
                         "option_symbol": leg["option_symbol"],
-                        "quantity": int(leg.get("quantity", action.quantity or 1)),
+                        "quantity": int(leg.get("quantity") if leg.get("quantity") is not None else (action.quantity if action.quantity is not None else 1)),
                         "action": leg.get("action") or leg.get("side") or "buy_to_open",
                     }
                     for leg in legs

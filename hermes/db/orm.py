@@ -382,7 +382,7 @@ def _compute_realized_pnl(*, entry_credit, entry_debit,
     closing fill price wasn't supplied) — analytics already treats NULL
     correctly, so we'd rather show "unknown" than a fabricated 0.
     """
-    if exit_price is None or not lots:
+    if exit_price is None or lots is None:
         return None
     try:
         lots_i = int(lots)

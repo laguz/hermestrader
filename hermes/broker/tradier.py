@@ -38,7 +38,7 @@ from .models import (
 
 logger = logging.getLogger("hermes.broker.tradier")
 
-OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([PC])(\d{8})$")
+from hermes.common import OCC_RE
 
 _RETRY_POLICY = dict(
     retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
@@ -234,7 +234,7 @@ class TradierBroker(AbstractBroker):
                     order_id=str(o.get("id") or o.get("order_id") or ""),
                     symbol=str(o.get("symbol", "")),
                     status=str(o.get("status", "")),
-                    quantity=int(o.get("quantity", 1) or 1),
+                    quantity=int(o.get("quantity") if o.get("quantity") is not None else 1),
                     price=float(o.get("price") if o.get("price") is not None else (o.get("avg_fill_price") if o.get("avg_fill_price") is not None else 0.0)),
                     side=str(o.get("side", "")),
                     tag=str(o.get("tag", "")),

@@ -187,5 +187,10 @@ The following patterns are intentional and should NOT be flagged as dead code or
 - All watcher routes (`routes/*.py`) and DB repositories (`repositories/*.py`) — dynamically resolved by `api.py` and `HermesDB`.
 - Vue.js components/views under `hermes/ui/src` — verified mapped in `router.js` and `App.vue`.
 
+An audit in July 2026 resolved 13 confirmed bugs and codebase improvements:
+- **Falsy-zero Quantity Defaults**: Fixed order response parsing in `tradier.py`, order class actions (equity/option/multileg) in `mcp_client.py`, risk limit checks in `safety_gateway.py`, quantity logs in `trades.py`, and realized P&L calculations in `orm.py` and `analytics.py` to preserve zero quantities and prevent fabricated P&L.
+- **Silent Exceptions Swallowing**: Replaced silent `except Exception: pass` blocks with logged warnings/exceptions across `predictor_inference.py`, `xgb_features.py`, `feature_engineer.py`, `approvals.py`, `watchlist.py`, `strategy_base.py`, and `main.py` for increased operational observability.
+- **Stale Documentation & Duplication**: Cleared stale references to `hv_rank` in `xgb_features.py` and `feature_engineer.py` docstrings, and imported `OCC_RE` from `hermes.common` in `tradier.py` to reduce code duplication.
+
 
 

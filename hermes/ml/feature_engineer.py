@@ -6,11 +6,15 @@ feature math from the threaded ``AsyncXGBPredictor`` (lifecycle, DB, model
 persistence). Everything here depends only on numpy/pandas/math — no DB, no
 threads, no XGBoost — so it can be exercised in isolation.
 
-``xgb_features`` re-exports ``FeatureRow`` / ``FeatureEngineer`` / ``hv_rank``,
+``xgb_features`` re-exports ``FeatureRow`` / ``FeatureEngineer``,
 so existing imports (``from hermes.ml.xgb_features import FeatureEngineer``)
 keep resolving unchanged.
 """
 from __future__ import annotations
+
+import logging
+
+logger = logging.getLogger("hermes.ml.feature_engineer")
 
 import math
 from dataclasses import dataclass
@@ -102,7 +106,8 @@ class FeatureEngineer:
         if not isinstance(intraday.index, pd.DatetimeIndex):
             try:
                 intraday.index = pd.to_datetime(intraday.index)
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to parse datetime index in last_30min_volume_pct: %s", exc)
                 return pd.Series(dtype=float, name="last30_pct")
 
         idx_et = intraday.index

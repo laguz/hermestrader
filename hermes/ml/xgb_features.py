@@ -1,8 +1,8 @@
 """
 [XGBoost-Feature-Engine v2]
 
-The pure feature-engineering layer (``FeatureRow`` / ``FeatureEngineer`` /
-``hv_rank``) now lives in ``hermes/ml/feature_engineer.py`` and is re-exported
+The pure feature-engineering layer (``FeatureRow`` / ``FeatureEngineer``)
+now lives in ``hermes/ml/feature_engineer.py`` and is re-exported
 here, so ``from hermes.ml.xgb_features import FeatureEngineer`` keeps working.
 This module owns the predictor layer:
 
@@ -184,16 +184,16 @@ class AsyncXGBPredictor:
             if force_run:
                 try:
                     run_maybe_async(self.db.set_setting, "ml_force_run", "false")
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to reset ml_force_run: %s", exc)
 
             self._record_status(warnings)
         except Exception as exc:
             logger.exception("xgb cycle error: %s", exc)
             try:
                 run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to record ml_last_error: %s", e)
 
     def stop(self) -> None:
         self._stop.set()
@@ -276,8 +276,8 @@ class AsyncXGBPredictor:
                                 "; ".join(warnings)[:500])
             else:
                 run_maybe_async(self.db.set_setting, "ml_last_error", "")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to record ML status: %s", exc)
 
     # -- model lifecycle -----------------------------------------------------
     def _model_name(self, horizon: int, quantile: float) -> str:
