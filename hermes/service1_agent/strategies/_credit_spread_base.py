@@ -139,7 +139,7 @@ class CreditSpreadStrategy(AbstractStrategy):
                     f"price=${price:.2f} min_credit=${min_credit:.2f}"
                 )
 
-                def factory(side: str):
+                def factory(side: str, symbol=symbol, expiry=expiry, min_credit=min_credit, analysis=analysis, price=price, t=t):
                     async def _build(symbol, expiry, lots, width):
                         return await self._build_spread_action(
                             symbol=symbol, expiry=expiry, side=side, lots=lots,

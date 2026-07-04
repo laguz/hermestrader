@@ -305,11 +305,11 @@ class MCPBrokerClient(AbstractBroker):
                 symbol=action.symbol,
                 legs=[
                     {
-                        "option_symbol": l["option_symbol"],
-                        "quantity": int(l.get("quantity", action.quantity or 1)),
-                        "action": l.get("action") or l.get("side") or "buy_to_open",
+                        "option_symbol": leg["option_symbol"],
+                        "quantity": int(leg.get("quantity", action.quantity or 1)),
+                        "action": leg.get("action") or leg.get("side") or "buy_to_open",
                     }
-                    for l in legs
+                    for leg in legs
                 ],
                 price=float(action.price) if action.price is not None else 0.0,
                 order_type=action.order_type or "credit",
