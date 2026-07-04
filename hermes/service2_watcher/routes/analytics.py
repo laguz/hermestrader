@@ -224,7 +224,7 @@ async def get_analytics() -> Response:
                 for r in raw_closed
             ]
 
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         logger.exception("analytics query failed: %s", exc)
         result["error"] = str(exc)
 
@@ -235,7 +235,7 @@ async def get_analytics() -> Response:
             if hasattr(row.get("day"), "isoformat"):
                 row["day"] = row["day"].isoformat()
             row["realized_pnl"] = float(row.get("realized_pnl") or 0)
-    except Exception:                                              # noqa: BLE001
+    except Exception:
         result["pnl_series"] = []
 
     return _safe_json_response(result)
@@ -325,7 +325,7 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
             return_exceptions=True,
         )
         results: Dict[str, Any] = {}
-        for sym, res in zip(sorted_symbols, raw):
+        for sym, res in zip(sorted_symbols, raw, strict=True):
             if isinstance(res, Exception):
                 results[sym] = {"error": str(res)}
             else:
@@ -342,6 +342,6 @@ async def get_watchlist_analysis(period: str = "6m") -> Response:
                 results[sym] = augment_levels_with_pop(ans, xgb_pred, period=period)
 
         return _safe_json_response(results, headers=_NO_CACHE_HEADERS)
-    except Exception as exc:                                       # noqa: BLE001
+    except Exception as exc:
         logger.exception("watchlist analysis failed: %s", exc)
         return _safe_json_response({"error": str(exc)}, headers=_NO_CACHE_HEADERS)

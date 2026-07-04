@@ -244,7 +244,7 @@ class HermesChartProvider:
             for sym in symbols:
                 try:
                     asyncio.run(self._render_and_cache(sym))
-                except Exception as exc:                         # noqa: BLE001
+                except Exception as exc:
                     logger.debug("Chart warm-up failed for %s: %s", sym, exc)
         t = threading.Thread(target=_warm, name="chart-warmup", daemon=True)
         t.start()
@@ -270,7 +270,7 @@ class HermesChartProvider:
                 self._cache[symbol] = (time.monotonic(), png)
             logger.debug("Chart rendered for %s: %d bytes", symbol, len(png))
             return png
-        except Exception as exc:                                 # noqa: BLE001
+        except Exception as exc:
             logger.warning("Chart render failed for %s: %s", symbol, exc)
             return None
 

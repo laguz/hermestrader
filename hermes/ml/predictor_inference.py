@@ -126,7 +126,7 @@ class PredictorInference:
             }
             try:
                 run_maybe_async(self.db.write_prediction, sym, yhat_med, predicted_price, spot)
-            except Exception:                       # noqa: BLE001
+            except Exception:
                 pass
 
             self._write_ledger_row(sym, x_last, prob_med, prob_lo, prob_hi,
@@ -143,7 +143,7 @@ class PredictorInference:
         are respected (no more 0.5 + return*5)."""
         try:
             vol = float(run_maybe_async(self.db.get_setting, f"ml_current_vol__{symbol}") or 0.30)
-        except Exception:                           # noqa: BLE001
+        except Exception:
             vol = 0.30
         sigma_horizon = max(0.005, vol * math.sqrt(horizon_dte / 365.0))
         z = float(yhat) / sigma_horizon
@@ -175,5 +175,5 @@ class PredictorInference:
                                 for k, v in feature_vec.items()
                                 if not isinstance(v, str)},
             ))
-        except Exception as exc:                    # noqa: BLE001
+        except Exception as exc:
             logger.debug("ledger write failed for %s: %s", symbol, exc)

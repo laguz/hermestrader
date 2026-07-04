@@ -22,7 +22,7 @@ from hermes.service1_agent.core import IronCondorBuilder
 from hermes.service1_agent.strategies import (
     CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
 )
-from hermes.market_hours import market_session, next_open, session_label  # noqa: F401
+from hermes.market_hours import market_session, next_open, session_label
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -32,7 +32,7 @@ log = logging.getLogger("hermes.agent.main")
 # surface (`from ...main import X`) and test monkeypatches
 # (`patch("...main.X")`) keep resolving, and the run loop below can keep
 # calling them by bare name.
-from .agent_settings import (  # noqa: F401,E402
+from .agent_settings import (
     SETTING_MODE, SETTING_TRADIER_OK_TS, SETTING_TRADIER_ERROR,
     SETTING_AGENT_STARTED_AT, SETTING_LLM_PROVIDER, SETTING_LLM_BASE_URL,
     SETTING_LLM_MODEL, SETTING_LLM_API_KEY, SETTING_LLM_TEMPERATURE,
@@ -41,18 +41,18 @@ from .agent_settings import (  # noqa: F401,E402
     SETTING_APPROVAL_MODE, SETTING_LLM_OUT_OF_LOOP,
     _strategy_enabled_key, _read_overseer_settings,
 )
-from .agent_risk import (  # noqa: F401,E402
+from .agent_risk import (
     resolve_max_daily_loss, _open_position_pnl, enforce_daily_loss_limit,
 )
-from .agent_approvals import (  # noqa: F401,E402
+from .agent_approvals import (
     _REJECTED_ORDER_STATUSES, _execute_approved_action,
 )
-from .agent_construction import (  # noqa: F401,E402
+from .agent_construction import (
     _live_armed, _resolve_mode_credentials, _build_broker,
     _build_stream_client, _build_llm, build,
     _load_and_validate_runtime_config,
 )
-from .agent_reactive import (  # noqa: F401,E402
+from .agent_reactive import (
     prewarm_quote_chain_cache, handle_ipc_command,
 )
 
@@ -179,7 +179,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Apply schema migrations before anything else
     try:
         await db.run_migrations()
-    except Exception as exc:                                      # noqa: BLE001
+    except Exception as exc:
         log.exception("run_migrations failed at startup: %s", exc)
     # Startup update check and soul syncing
     try:
@@ -187,11 +187,11 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         import threading
         await sync_soul_file_to_db(db)
         threading.Thread(target=check_for_updates, daemon=True).start()
-    except Exception as exc:                                      # noqa: BLE001
+    except Exception as exc:
         log.exception("Agent startup update/soul sync failed: %s", exc)
     try:
         await db.watchlist.ensure_strategies(STRATEGY_PRIORITIES)
-    except Exception as exc:                                      # noqa: BLE001
+    except Exception as exc:
         log.exception("ensure_strategies failed at startup: %s", exc)
 
     # Phase 3 Configuration Validation at startup
@@ -499,7 +499,7 @@ if __name__ == "__main__":
         log.info("HermesChartProvider started — warming up charts for %s", conf["watchlist"])
     except ImportError:
         log.warning("matplotlib not installed — chart vision disabled (pip install matplotlib)")
-    except Exception as _chart_exc:                              # noqa: BLE001
+    except Exception as _chart_exc:
         log.warning("HermesChartProvider init failed — vision disabled: %s", _chart_exc)
 
     # ML Predictor — will be started inside _run_async reactively.

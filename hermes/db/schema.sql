@@ -56,7 +56,7 @@ SELECT create_hypertable('bars_intraday', 'ts', if_not_exists => TRUE,
 -- ---------------------------------------------------------------------
 -- Hypertable conversions for the ORM-owned, time-partitioned tables.
 -- Each table is created (with its composite PK over the partitioning
--- column) by the ORM; this turns it into a TimescaleDB hypertable.
+-- column) by the ORM. This turns it into a TimescaleDB hypertable.
 -- ---------------------------------------------------------------------
 SELECT create_hypertable('trades',         'opened_at',    if_not_exists => TRUE, migrate_data => TRUE);
 SELECT create_hypertable('pending_orders', 'submitted_at', if_not_exists => TRUE, migrate_data => TRUE);
@@ -80,7 +80,7 @@ SELECT add_compression_policy('predictions',   INTERVAL '30 days', if_not_exists
 -- time_bucket() on the hypertable's primary time dimension, but `trades`
 -- is partitioned by opened_at while PnL must be bucketed by closed_at.
 -- The closed-trade volume is small enough that the unmaterialized view is
--- fine; if it ever isn't, switch to a refresh-on-demand materialized view.
+-- fine. If it ever isn't, switch to a refresh-on-demand materialized view.
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE VIEW pnl_daily AS
 SELECT date_trunc('day', closed_at)::timestamptz AS day,

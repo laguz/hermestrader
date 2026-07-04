@@ -206,7 +206,7 @@ def load_model(
     try:
         with artefact_path.open("rb") as fh:
             model = joblib.load(fh)
-    except Exception as exc:                          # noqa: BLE001
+    except Exception as exc:
         logger.warning("artefact load failed for %s/%s: %s",
                        symbol, model_name, exc)
         if quarantine:

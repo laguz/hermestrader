@@ -84,7 +84,7 @@ class PipelineController:
                 top = o.get("option_symbol")
                 if top:
                     active_legs.add(top)
-        except Exception:                              # noqa: BLE001
+        except Exception:
             logger.exception("[ENGINE] active-order leg fetch failed")
         await ctx.db.trades.upsert_positions(positions, active_order_legs=active_legs)
         return positions, active_legs
@@ -178,7 +178,7 @@ class PipelineController:
             resp = {"order": {"id": order.get("id") or order.get("order_id"), "status": "filled"}}
             try:
                 await ctx.db.trades.record_order_response(action, resp)
-            except Exception:                              # noqa: BLE001
+            except Exception:
                 logger.exception("[ENGINE] orphan adoption failed for order %s", order.get("id"))
                 continue
 
@@ -197,7 +197,7 @@ class PipelineController:
         async def _run_strategy_management(s):
             try:
                 return await s.manage_positions()
-            except Exception as exc:                     # noqa: BLE001
+            except Exception as exc:
                 logger.exception("Management failure in %s: %s", s.NAME, exc)
                 return []
 
@@ -222,7 +222,7 @@ class PipelineController:
                 wl = getter(strategy_id)
                 if inspect.iscoroutine(wl):
                     wl = await wl
-        except Exception as exc:                          # noqa: BLE001
+        except Exception as exc:
             logger.exception("watchlist read failed for %s: %s", strategy_id, exc)
             return list(default)
         return (wl or []) or list(default)
@@ -306,7 +306,7 @@ class PipelineController:
             try:
                 knobs = (await _resolve_tunables(
                     ctx.db, ctx.config, group=a.strategy_id)).as_dict()
-            except Exception:                                  # noqa: BLE001
+            except Exception:
                 knobs = None
 
             credit = a.price if (a.order_type or "").lower() == "credit" else None
@@ -323,7 +323,7 @@ class PipelineController:
                 extra=({"ev": sp["ev"]} if sp.get("ev") is not None else None),
             )
             a.strategy_params = sp
-        except Exception:                                      # noqa: BLE001
+        except Exception:
             logger.debug("entry-feature snapshot failed for %s", a.symbol,
                          exc_info=True)
 
@@ -374,7 +374,7 @@ class PipelineController:
                 try:
                     veto_reason = await ctx.db.approvals.active_veto(
                         a.strategy_id, a.symbol, veto_side, a.expiry)
-                except Exception:                                  # noqa: BLE001
+                except Exception:
                     logger.exception("[VETO] active_veto lookup failed for %s", a.symbol)
                     veto_reason = None
                 if veto_reason:
@@ -551,7 +551,7 @@ class PipelineController:
             return
         try:
             resp = await ctx.broker.place_order_from_action(a)
-        except Exception as exc:                           # noqa: BLE001
+        except Exception as exc:
             # Broker raised before we got an order id. Free the PENDING row so
             # capacity recovers; a Trade row was never written, nothing to roll
             # back.
@@ -665,7 +665,7 @@ class PipelineController:
                 f"(wins={result['wins']} losses={result['losses']}, "
                 f"log-loss {result['log_loss_raw']:.4f}→{result['log_loss_cal']:.4f})",
             )
-        except Exception as exc:                              # noqa: BLE001
+        except Exception as exc:
             logger.warning("[POP-CAL] refit skipped: %s", exc)
 
     # ── slow heartbeat tick (operator guards wrapping the pipeline) ───────────
@@ -712,7 +712,7 @@ class PipelineController:
             ).total_seconds() >= CONTROL_STATE_BACKSTOP_S:
                 try:
                     await ctx.control_state.load_from_db(ctx.db, ctx.config)
-                except Exception as exc:                          # noqa: BLE001
+                except Exception as exc:
                     logger.warning("[ENGINE] control_state backstop reload failed: %s", exc)
 
             # 2. Pause check
@@ -739,7 +739,7 @@ class PipelineController:
                 from hermes.service1_agent.alpha_killswitch import enforce_alpha_killswitch
                 await enforce_alpha_killswitch(
                     ctx.db, ctx.broker.broker, ctx.control_state, ctx.config)
-            except Exception as exc:                              # noqa: BLE001
+            except Exception as exc:
                 logger.warning("[ENGINE] alpha kill switch check failed: %s", exc)
 
             # 4. Clean stale pending orders & approvals
@@ -859,7 +859,7 @@ class PipelineController:
                             _df = _df.set_index("ts")
                             await ctx.db.timeseries.save_daily_bars(_sym, _df)
                             _ingested += 1
-                        except Exception as _bar_exc:  # noqa: BLE001
+                        except Exception as _bar_exc:
                             logger.warning("Bar ingest failed for %s: %s", _sym, _bar_exc)
                     from datetime import datetime, timezone
                     await ctx.db.settings.set_setting(_BAR_INGEST_KEY, datetime.now(timezone.utc).isoformat())

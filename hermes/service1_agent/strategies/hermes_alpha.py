@@ -84,7 +84,7 @@ class HermesAlpha(CreditSpreadStrategy):
                 action = await self._build_from_intent(symbol, intent, width, target_lots)
                 if action is not None:
                     actions.append(action)
-            except Exception as exc:                                  # noqa: BLE001
+            except Exception as exc:
                 self._log(f"❌ {symbol}: {exc}")
         return actions
 

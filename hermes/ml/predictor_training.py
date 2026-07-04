@@ -97,7 +97,7 @@ class PredictorTrainer:
                 for q in self._cfg.quantiles:
                     try:
                         model = self._fit_quantile_model(xgb, X, y, q)
-                    except Exception as exc:        # noqa: BLE001
+                    except Exception as exc:
                         warnings.append(f"{sym}: q{q} fit failed: {exc}")
                         continue
                     self._models.setdefault(sym, {})[(horizon, q)] = (
@@ -167,5 +167,5 @@ def _rmse(model, X: pd.DataFrame, y: pd.Series) -> float:
     try:
         yhat = model.predict(X)
         return float(np.sqrt(np.mean((yhat - y.values) ** 2)))
-    except Exception:                               # noqa: BLE001
+    except Exception:
         return float("nan")

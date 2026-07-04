@@ -83,14 +83,14 @@ async def sync_pop_calibrator_from_settings(db) -> bool:
 
     try:
         raw = await db.settings.get_setting(POP_CAL_STATE_KEY)
-    except Exception:                                          # noqa: BLE001
+    except Exception:
         return False
     if not raw or raw == _synced_state_raw:
         return False
     try:
         state = json.loads(raw)
         calibrator = PlattCalibrator.from_dict(state["calibrator"])
-    except Exception:                                          # noqa: BLE001
+    except Exception:
         logger.warning("pop_calibration settings blob unparseable; ignoring")
         return False
     set_pop_calibrator(calibrator)

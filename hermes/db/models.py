@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import sessionmaker
 
 # Re-exported so ``from hermes.db.models import Base, Trade, ...`` keeps working.
-from hermes.db.orm import (  # noqa: F401
+from hermes.db.orm import (
     AIDecision, Base, BotLog, EventLedger, ExitTick, OperatorCommand,
     PendingApproval, PendingOrder, Prediction, Strategy, StrategyWatchlist,
     SystemSetting, Trade, VetoSuppression, _close_reason_from_tag,
@@ -82,7 +82,7 @@ class HermesDB:
 
         try:
             Base.metadata.create_all(self.engine, checkfirst=True)
-        except Exception:                                       # noqa: BLE001
+        except Exception:
             # Don't crash on import — the next real query surfaces the cause.
             pass
         self.engine.dispose()

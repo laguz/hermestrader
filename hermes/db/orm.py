@@ -164,9 +164,7 @@ class ExitTick(Base):
     from — the data prerequisite for sequential exit-timing RL.
 
     ``action`` is ``'hold'`` (the rules kept the position this tick) or
-    ``'close'`` (a close was issued this tick). ``unrealized_pnl_pct`` is the
-    fraction of entry credit currently retained as profit:
-    ``(entry_credit - spread_mid) / entry_credit``.
+    ``'close'`` (a close was issued this tick).
 
     PK is a plain autoincrement Integer (not the BIGSERIAL/Sequence the other
     hypertables use); SQLAlchemy maps it to ``BIGSERIAL`` on Postgres.
@@ -180,7 +178,6 @@ class ExitTick(Base):
     strategy_id = Column(String, nullable=False)
     symbol = Column(String, nullable=False)
     dte = Column(Integer)
-    unrealized_pnl_pct = Column(Float)
     debit = Column(Float)
     entry_credit = Column(Float)
     action = Column(String, nullable=False, default="hold")   # 'hold' | 'close'

@@ -99,7 +99,7 @@ class TimeSeriesEngine:
         try:
             async with self._engine.begin() as conn:
                 await conn.execute(stmt, rows)
-        except Exception as exc:                                  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Failed to upsert daily bars for %s: %s", symbol.upper(), exc)
 
     async def save_intraday_bars(self, symbol: str, df: pd.DataFrame) -> None:
@@ -116,7 +116,7 @@ class TimeSeriesEngine:
         try:
             async with self._engine.begin() as conn:
                 await conn.execute(stmt, rows)
-        except Exception as exc:                                  # noqa: BLE001
+        except Exception as exc:
             logger.exception("Failed to upsert intraday bars for %s: %s", symbol.upper(), exc)
 
     # ---- read helpers -------------------------------------------------------

@@ -96,7 +96,7 @@ def lookup(db: "HermesDB", symbol: str, period: str) -> List[float]:
             row = (s.query(RegimeWeights)
                    .filter_by(symbol=symbol.upper(), period=period_key)
                    .first())
-    except Exception as exc:                          # noqa: BLE001
+    except Exception as exc:
         logger.debug("regime_weights lookup failed: %s", exc)
         return list(default)
     if row is None or (row.hits + row.misses) < 30:
@@ -258,7 +258,7 @@ def ensure_table(db: "HermesDB") -> None:
         return
     try:
         RegimeWeights.__table__.create(bind=db.engine, checkfirst=True)
-    except Exception as exc:                          # noqa: BLE001
+    except Exception as exc:
         logger.warning("could not ensure regime_weights table: %s", exc)
 
 

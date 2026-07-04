@@ -255,7 +255,7 @@ class CascadingEngine:
                         raise ValueError(f"unknown command_type {ctype!r}")
                     await self.db.commands.mark_applied(cid)
                     applied += 1
-                except Exception as exc:                        # noqa: BLE001
+                except Exception as exc:
                     logger.exception("[CMD] operator command %d failed: %s", cid, exc)
                     await self.db.commands.mark_failed(cid, str(exc))
             return applied
