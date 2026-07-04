@@ -53,7 +53,9 @@ class PortfolioOptimizer:
             # Simple Kelly-like adjustment
             pop = action.strategy_params.get("pop")
             if pop is None:
-                delta = action.strategy_params.get("delta") or action.strategy_params.get("short_delta")
+                delta = action.strategy_params.get("delta")
+                if delta is None:
+                    delta = action.strategy_params.get("short_delta")
                 pop = 1.0 - abs(float(delta)) if delta is not None else 0.70
             
             score = max(0.01, 1.0 - (1.0 - float(pop)) * (width / max(0.01, credit)))

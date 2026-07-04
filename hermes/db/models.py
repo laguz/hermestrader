@@ -82,9 +82,9 @@ class HermesDB:
 
         try:
             Base.metadata.create_all(self.engine, checkfirst=True)
-        except Exception:
+        except Exception as exc:
             # Don't crash on import — the next real query surfaces the cause.
-            pass
+            logger.warning("Initial schema creation failed (will retry on query): %s", exc)
         self.engine.dispose()
 
     # ------------------------------------------------------------------

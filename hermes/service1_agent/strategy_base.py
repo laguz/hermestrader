@@ -182,7 +182,11 @@ class AbstractStrategy(ABC):
                     try:
                         quotes = await self.broker.get_quote(symbol)
                         if quotes:
-                            spot = float(quotes[0].get("last") or quotes[0].get("close") or 0)
+                            spot = float(
+                                quotes[0].get("last") if quotes[0].get("last") is not None
+                                else quotes[0].get("close") if quotes[0].get("close") is not None
+                                else 0.0
+                            )
                             if spot > 0:
                                 today = self.today()
                                 dte = (expiry_date - today).days

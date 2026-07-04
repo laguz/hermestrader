@@ -242,16 +242,16 @@ class AsyncXGBPredictor:
                 if force_run:
                     try:
                         run_maybe_async(self.db.set_setting, "ml_force_run", "false")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning("Failed to clear ml_force_run setting in DB: %s", exc)
 
                 self._record_status(warnings)
             except Exception as exc:
                 logger.exception("xgb loop error: %s", exc)
                 try:
                     run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
-                except Exception:
-                    pass
+                except Exception as db_exc:
+                    logger.warning("Failed to record ml_last_error in DB: %s", db_exc)
 
             self._stop.wait(10)
 
