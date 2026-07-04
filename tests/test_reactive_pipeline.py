@@ -141,9 +141,9 @@ async def test_reactive_order_monitor_flow():
         # Now change status to filled in get_orders
         mock_orders[0]["status"] = "filled"
         
-        # Wait for order monitor loop to poll it and emit the event
-        for _ in range(30):
-            if len(order_fills) > 0:
+        # Wait for order monitor loop to poll it, emit the event, and engine to finish processing entries
+        for _ in range(50):
+            if len(order_fills) > 0 and strategy.execute_entries_called:
                 break
             await asyncio.sleep(0.1)
             

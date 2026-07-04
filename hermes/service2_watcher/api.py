@@ -72,9 +72,23 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:                                       # noqa: BLE001
         logger.exception("lifespan startup update/soul sync failed: %s", exc)
-    # ML forecasting/diagnostics were removed in the Phase-0 teardown: POP is
-    # chain-only (hermes.ml.pop_engine) with its static regime-weight fallback,
-    # so there are no ML tables to ensure and no DB-backed lookup to wire.
+    # Initialize and wire DB-backed regime weights lookup if enabled
+    try:
+        regime_weights_env = os.environ.get("HERMES_REGIME_WEIGHTS", "false").lower() == "true"
+        regime_weights_setting = (await db.settings.get_setting("regime_weights_enabled") or "false").lower() == "true"
+        if regime_weights_env or regime_weights_setting:
+            from hermes.ml import pop_engine, regime_weights
+            regime_weights.ensure_table(db)
+            lookup_fn = regime_weights.make_lookup_fn(db, event_bus=None)
+            if hasattr(lookup_fn, "initialize"):
+                await lookup_fn.initialize()
+            pop_engine.set_regime_weight_lookup(lookup_fn)
+            logger.info("DB-backed regime weights lookup wired and warmed up in Watcher.")
+        else:
+            logger.info("DB-backed regime weights lookup is disabled in Watcher.")
+    except Exception as _rw_exc:
+        logger.warning("DB-backed regime weights lookup init failed in Watcher, falling back to static defaults: %s", _rw_exc)
+
     # Connect to Inter-Process Communication (IPC) broker
     from hermes.ipc import ipc
     await ipc.connect(db)
