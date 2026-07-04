@@ -12,7 +12,7 @@ import asyncio
 import logging
 import math
 from abc import ABC, abstractmethod
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional
 
 from hermes.clock import Clock, RealClock
@@ -27,6 +27,13 @@ if TYPE_CHECKING:
     from .overseer import HermesOverseer
 
 logger = logging.getLogger("hermes.agent.strategy")
+
+try:
+    from zoneinfo import ZoneInfo
+    _ET = ZoneInfo("America/New_York")
+except Exception:                       # ZoneInfoNotFoundError or ImportError
+    from datetime import timedelta as _timedelta
+    _ET = timezone(_timedelta(hours=-5))  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +87,18 @@ class AbstractStrategy(ABC):
         return self.clock.utc_now()
 
     def today(self) -> date:
-        return self.now().date()
+        """The current US Eastern trading-calendar date.
+
+        ``self.now()`` is UTC (naive unless a test broker's ``current_date``
+        says otherwise). Between ~8pm and midnight ET, UTC has already rolled
+        to the next calendar day while the trading day hasn't — take the date
+        from the ET conversion, not the raw UTC instant, or every DTE
+        computation is off by one during that window.
+        """
+        now = self.now()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return now.astimezone(_ET).date()
 
     def _log(self, msg: str) -> None:
         ts = self.now().strftime("%Y-%m-%d %H:%M:%S")

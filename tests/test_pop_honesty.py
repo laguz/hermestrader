@@ -13,6 +13,7 @@ own implied delta. These tests pin the fixes:
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -68,8 +69,10 @@ def test_augment_stashes_xgb_prob_on_analysis():
 
 
 # ── strategy gate on chain delta ─────────────────────────────────────────────
+# Anchor to the ET trading day (matches StrategyBase.today()), not
+# date.today() — on a UTC-TZ runner those disagree for part of every day.
 def _expirations_for(*dte_values):
-    today = date.today()
+    today = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
     return [(today + timedelta(days=d)).isoformat() for d in dte_values]
 
 

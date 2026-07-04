@@ -14,7 +14,8 @@ strike. These tests pin:
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -24,8 +25,10 @@ from hermes.service1_agent.strategies import CreditSpreads7, CreditSpreads75
 from ._stubs import StubBroker, StubDB
 
 
+# Anchor to the ET trading day (matches StrategyBase.today()), not
+# date.today() — on a UTC-TZ runner those disagree for part of every day.
 def _expirations_for(*dte_values):
-    today = date.today()
+    today = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
     return [(today + timedelta(days=d)).isoformat() for d in dte_values]
 
 
