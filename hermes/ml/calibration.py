@@ -26,7 +26,6 @@ Brier-loose 0.71 every time.
 """
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence

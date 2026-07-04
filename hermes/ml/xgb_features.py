@@ -38,7 +38,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 
 from hermes.ml import drift as drift_mod
-from hermes.ml import feature_catalog
 from hermes.ml import ledger as ledger_mod
 from hermes.ml import persistence
 from hermes.ml.calibration import load_calibrator
