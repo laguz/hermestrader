@@ -6,7 +6,6 @@ Routes
 - ``GET /api/status``       — single roll-up of agent/Tradier/LLM/market state
 - ``GET /api/health``       — liveness probe for the watcher itself
 - ``GET /api/logs``         — recent bot_logs lines (activity feed)
-- ``GET /api/balances``     — live Tradier balances + computed true-available BP
 - ``GET /api/debug``        — diagnostic counters used when triaging issues
 
 The status roll-up is the single read most clients hit, so keep it cheap.
@@ -203,36 +202,6 @@ async def get_logs(limit: int = 100) -> List[Dict[str, Any]]:
     # recent_logs returns a single concatenated string; the dashboard's
     # activity feed wants one entry per line.
     return [{"text": line} for line in (raw or "").splitlines()]
-
-
-@router.get("/api/balances")
-async def get_balances() -> Dict[str, Any]:
-    """Live Tradier balances + the computed true-available BP.
-
-    Diagnostic endpoint — the operator uses this when capacity decisions
-    look wrong (e.g. "why is CS75 saying insufficient BP?").
-    """
-    try:
-        from hermes.service1_agent.main import _build_broker
-        conf = {
-            "mode": os.environ.get("HERMES_MODE", "paper"),
-            "dry_run": os.environ.get("HERMES_DRY_RUN", "").lower() == "true",
-        }
-        broker = _build_broker(conf, conf["mode"])
-        balances = await broker.get_account_balances() or {}
-        obp = max(0.0, float(balances.get("option_buying_power", 0.0)))
-        return {
-            "ok": True,
-            "account_type": balances.get("account_type"),
-            "option_buying_power": obp,
-            "true_available_bp": obp,
-            "stock_buying_power": balances.get("stock_buying_power"),
-            "total_equity": balances.get("total_equity"),
-            "cash": balances.get("cash"),
-            "raw": balances.get("raw", {}),
-        }
-    except Exception as exc:                                      # noqa: BLE001
-        return {"ok": False, "error": str(exc)}
 
 
 @router.get("/api/debug")

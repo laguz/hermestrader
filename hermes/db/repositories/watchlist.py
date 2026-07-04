@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from hermes.common import IPC_CHANNEL_AGENT_COMMANDS
 from hermes.common import STRATEGY_PRIORITIES as _COMMON_STRATEGY_PRIORITIES
-from hermes.db.orm import Strategy, StrategyWatchlist
+from hermes.db.orm import Strategy
 
 from .base import Repository
 
@@ -84,24 +84,6 @@ class WatchlistRepository(Repository):
                 out.setdefault(sid, []).append(sym)
             return out
 
-    async def add_to_watchlist(self, strategy_id: str, symbol: str) -> bool:
-        sym = (symbol or "").strip().upper()
-        if not sym:
-            raise ValueError("symbol must be non-empty")
-        async with self.AsyncSession() as s:
-            result = await s.execute(select(Strategy).filter_by(strategy_id=strategy_id).limit(1))
-            if not result.scalars().first():
-                priority = self._DEFAULT_STRATEGY_PRIORITIES.get(strategy_id, 99)
-                s.add(Strategy(strategy_id=strategy_id, priority=priority,
-                               status="ACTIVE"))
-                await s.flush()
-            result = await s.execute(select(StrategyWatchlist).filter_by(strategy_id=strategy_id, symbol=sym).limit(1))
-            exists = result.scalars().first()
-            if exists:
-                return False
-            s.add(StrategyWatchlist(strategy_id=strategy_id, symbol=sym))
-            await s.commit()
-            return True
     async def set_watchlist(self, strategy_id: str, symbols: List[str]) -> List[str]:
         clean = sorted({(s or "").strip().upper() for s in symbols if (s or "").strip()})
         async with self.AsyncSession() as s:

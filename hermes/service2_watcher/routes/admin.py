@@ -43,29 +43,10 @@ from ipaddress import ip_address, ip_network
 from pathlib import Path
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Body, HTTPException, Request
-
-from hermes.service2_watcher._app_state import db
+from fastapi import APIRouter, HTTPException, Request
 
 logger = logging.getLogger("hermes.c2.admin")
 router = APIRouter()
-
-
-# ── ML-interval setting keys (mirror PredictorConfig.from_db) ───────
-_ML_INTERVAL_KEYS = {
-    "predict_interval_s": "ml_predict_interval_s",
-    "retrain_interval_s": "ml_retrain_interval_s",
-    "calibrate_interval_s": "ml_calibrate_interval_s",
-    "target_kind": "ml_target_kind",
-}
-
-# Reasonable bounds so a fat-fingered POST can't disable the predictor
-# entirely or cause the loop to hammer the broker.
-_ML_INTERVAL_BOUNDS = {
-    "predict_interval_s": (60.0, 24 * 3600.0),
-    "retrain_interval_s": (3600.0, 30 * 24 * 3600.0),
-    "calibrate_interval_s": (600.0, 7 * 24 * 3600.0),
-}
 
 
 # ── Configuration (env-driven so paper and live can diverge) ──────────
@@ -180,64 +161,3 @@ def request_upgrade(request: Request) -> Dict[str, Any]:
     marker.write_text(json.dumps(payload, indent=2))
     logger.info("admin: upgrade queued: %s", payload)
     return {"accepted": True, "current": payload}
-
-
-# ── ML-interval admin (recommendation #17) ────────────────────────────
-
-
-@router.get("/api/admin/ml-intervals")
-async def get_ml_intervals() -> Dict[str, Any]:
-    """Return the live values stored in system_settings.
-
-    Empty / missing keys mean "use the PredictorConfig default" — we
-    surface ``null`` so the dashboard can render that distinction.
-    """
-    out: Dict[str, Any] = {}
-    for label, key in _ML_INTERVAL_KEYS.items():
-        try:
-            raw = await db.settings.get_setting(key)
-        except Exception:                                          # noqa: BLE001
-            raw = None
-        out[label] = raw if raw not in (None, "") else None
-    return out
-
-
-@router.post("/api/admin/ml-intervals")
-async def set_ml_intervals(
-    request: Request,
-    body: Dict[str, Any] = Body(default_factory=dict),
-) -> Dict[str, Any]:
-    """Update ML-loop intervals at runtime. Restricted to trusted CIDRs.
-
-    The predictor reads PredictorConfig.from_db on every loop iteration
-    so changes take effect within ~10s without a restart (recommendation
-    #8 — decoupled tasks have independent intervals).
-    """
-    _require_trusted(request)
-
-    if not isinstance(body, dict) or not body:
-        raise HTTPException(400, "expected non-empty JSON body")
-
-    applied: Dict[str, Any] = {}
-    for label, value in body.items():
-        if label not in _ML_INTERVAL_KEYS:
-            raise HTTPException(400, f"unknown setting {label!r}")
-        key = _ML_INTERVAL_KEYS[label]
-        bounds = _ML_INTERVAL_BOUNDS.get(label)
-        if bounds is not None:
-            try:
-                fv = float(value)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(400, f"{label}: not a number") from exc
-            lo, hi = bounds
-            if not (lo <= fv <= hi):
-                raise HTTPException(
-                    400, f"{label}: must be in [{lo}, {hi}], got {fv}")
-            await db.commands.enqueue_setting(key, str(fv))
-            applied[label] = fv
-        else:
-            await db.commands.enqueue_setting(key, str(value))
-            applied[label] = value
-
-    logger.info("admin: ml-intervals updated: %s", applied)
-    return {"applied": applied}

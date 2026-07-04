@@ -2,7 +2,6 @@
 
 Routes
 ------
-- ``GET /api/strategies``                 — list each strategy with priority + enable flag
 - ``PUT /api/strategies/{strategy_id}``   — toggle one strategy on/off
 - ``GET /api/lots``                       — read per-strategy target/max lot sizes
 - ``PUT /api/lots``                       — update target/max lots for a strategy
@@ -17,7 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from hermes.common import STRATEGIES, STRATEGY_PRIORITIES
+from hermes.common import STRATEGIES
 
 from .._app_state import db, strategy_enabled_key
 
@@ -25,20 +24,6 @@ router = APIRouter()
 
 
 # ── Strategy on/off ──────────────────────────────────────────────────────────
-# ── Strategy on/off ──────────────────────────────────────────────────────────
-@router.get("/api/strategies")
-async def get_strategies() -> List[Dict[str, Any]]:
-    out = []
-    for sid in STRATEGIES:
-        enabled_val = await db.settings.get_setting(strategy_enabled_key(sid))
-        out.append({
-            "id": sid,
-            "priority": STRATEGY_PRIORITIES[sid],
-            "enabled": (enabled_val or "true").lower() != "false",
-        })
-    return out
-
-
 class StrategyToggleBody(BaseModel):
     enabled: bool
 

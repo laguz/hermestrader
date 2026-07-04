@@ -45,7 +45,6 @@ from .routes import (
     soul,
     status,
     strategies,
-    tunables,
     watchlist,
 )
 
@@ -144,7 +143,6 @@ app.include_router(watchlist.router)
 app.include_router(soul.router)
 app.include_router(agent.router)
 app.include_router(strategies.router)
-app.include_router(tunables.router)
 app.include_router(llm.router)
 app.include_router(analytics.router)
 app.include_router(charts.router)
