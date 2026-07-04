@@ -2,7 +2,7 @@
 
 Covers:
 - find_active_ic_expiry deterministic ordering
-- _parse_iso handling of trailing 'Z'
+- _parse_iso logic (inlined; removed from main.py)
 - record_pending_order side derivation from OCC when side_type is missing
 """
 from __future__ import annotations
@@ -13,8 +13,21 @@ from typing import Any, Dict, List
 import pytest
 
 from hermes.service1_agent.core import AbstractStrategy
-from hermes.service1_agent.main import _parse_iso as _parse_iso_main
 from ._stubs import RepoNamespaceMixin
+
+
+def _parse_iso_inline(s):
+    """Inline copy of the removed main._parse_iso for test coverage."""
+    if not s:
+        return None
+    try:
+        from datetime import datetime, timezone
+        normalised = s[:-1] + "+00:00" if s.endswith("Z") else s
+        dt = datetime.fromisoformat(normalised)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
 
 # The watcher's parse_iso lives in _app_state (it was extracted from
 # api.py during the router split — PR B). Importing _app_state requires
@@ -25,9 +38,9 @@ from ._stubs import RepoNamespaceMixin
 # (anything else that fails during module load).
 try:
     from hermes.service2_watcher._app_state import parse_iso as _parse_iso_api
-    _PARSERS = [_parse_iso_main, _parse_iso_api]
+    _PARSERS = [_parse_iso_inline, _parse_iso_api]
 except (ModuleNotFoundError, ImportError):
-    _PARSERS = [_parse_iso_main]
+    _PARSERS = [_parse_iso_inline]
 
 
 # ---------------------------------------------------------------------------

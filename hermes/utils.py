@@ -173,3 +173,9 @@ async def sync_soul_file_to_db(db) -> None:
                 await db.logs.write_log("ENGINE", f"Loaded soul.md from host repository file into database ({len(file_soul.encode())}B)")
         except Exception as exc:
             logger.warning("Failed to sync soul.md to database: %s", exc)
+
+
+def utcnow_iso() -> str:
+    """Return current UTC time as an ISO-8601 string, rounded to seconds."""
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+

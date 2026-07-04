@@ -946,4 +946,4 @@ class PipelineController:
                 await ctx.db.settings.set_setting("tradier_last_error", exc_str)
                 await ctx.db.logs.write_log("ENGINE", f"tick failed: {exc}", level="ERROR")
             except Exception:
-                pass
+                logger.debug("tick-error DB write also failed", exc_info=True)

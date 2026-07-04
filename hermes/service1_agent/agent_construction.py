@@ -98,14 +98,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:
-                    pass
+                    log.debug("LLM status DB write failed", exc_info=True)
                 return client, snapshot, vision
             except Exception as exc:
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
                 except Exception:
-                    pass
+                    log.debug("LLM status DB write failed", exc_info=True)
 
     elif provider in ("local", "gemini", "claude") and model:
         # All three speak the OpenAI /chat/completions protocol, so a single
@@ -132,14 +132,14 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:
-                    pass
+                    log.debug("LLM status DB write failed", exc_info=True)
                 return client, snapshot, vision
             except Exception as exc:
                 log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
                 try:
                     await db.settings.set_setting(SETTING_LLM_ERROR, f"build failed: {exc}")
                 except Exception:
-                    pass
+                    log.debug("LLM status DB write failed", exc_info=True)
 
     # Fallback — mock LLM keeps the overseer operational without a backend.
     from hermes.service1_agent.mock_broker import MockLLM

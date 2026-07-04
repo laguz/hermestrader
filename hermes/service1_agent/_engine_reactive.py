@@ -118,7 +118,8 @@ class ReactiveController:
             try:
                 self._order_monitor_task = asyncio.create_task(self._order_monitor_loop())
             except RuntimeError:
-                pass
+                logger.error("order monitor failed to start — no running event loop",
+                             exc_info=True)
 
     async def handle_tick_started(self, event: TickStartedEvent) -> None:
         fut = event.future or asyncio.get_running_loop().create_future()

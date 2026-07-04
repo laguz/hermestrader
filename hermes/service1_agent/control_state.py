@@ -118,7 +118,7 @@ class ControlState:
                 self.lot_settings[key] = int(value)
             except ValueError:
                 pass
-        elif key.startswith("llm_") or key == "overseer_mode":
+        elif key.startswith("llm_"):
             field = key.replace("llm_", "")
             if field in self.llm_config:
                 if field in ("temperature", "timeout_s"):
