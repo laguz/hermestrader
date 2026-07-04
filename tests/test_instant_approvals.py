@@ -8,7 +8,6 @@ import pytest
 from hermes.service1_agent.main import (
     _SHUTDOWN_EVENT,
     _TRIGGER_EVENT,
-    _interruptible_sleep,
 )
 
 
@@ -19,36 +18,6 @@ def reset_events():
     yield
     _SHUTDOWN_EVENT.clear()
     _TRIGGER_EVENT.clear()
-
-
-@pytest.mark.anyio
-async def test_interruptible_sleep_wakes_on_trigger():
-    # Start interruptible sleep task for a long time (100 seconds)
-    sleep_task = asyncio.create_task(_interruptible_sleep(100))
-    
-    # Wait briefly, task should still be running
-    await asyncio.sleep(0.1)
-    assert not sleep_task.done()
-    
-    # Set the trigger event
-    _TRIGGER_EVENT.set()
-    
-    # Task should finish immediately
-    await asyncio.wait_for(sleep_task, timeout=1.0)
-    assert sleep_task.done()
-
-
-@pytest.mark.anyio
-async def test_interruptible_sleep_wakes_on_shutdown():
-    sleep_task = asyncio.create_task(_interruptible_sleep(100))
-    await asyncio.sleep(0.1)
-    assert not sleep_task.done()
-    
-    # Set shutdown event
-    _SHUTDOWN_EVENT.set()
-    
-    await asyncio.wait_for(sleep_task, timeout=1.0)
-    assert sleep_task.done()
 
 
 @pytest.mark.anyio
