@@ -197,8 +197,8 @@ class AbstractStrategy(ABC):
                                         if sigma > 0:
                                             local_greeks = black_scholes_greeks(spot, strike, T, 0.05, sigma, option_type)
                                             raw_delta = local_greeks.get("delta")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.warning("Failed to calculate delta for %s: %s", o.get("symbol"), exc)
 
             if raw_delta is None:
                 continue          # skip options with no greek data at all

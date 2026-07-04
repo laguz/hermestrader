@@ -83,19 +83,19 @@ class SafetyGateway:
         if action.order_class == "multileg":
             width = float(action.width or 0.0)
             credit = float(action.price or 0.0)
-            qty = int(action.quantity or 1)
+            qty = int(action.quantity) if action.quantity is not None else 1
             if credit > width:
                 credit = width
             risk = (width - credit) * qty * 100.0
         elif action.order_class == "option":
-            qty = int(action.quantity or 1)
+            qty = int(action.quantity) if action.quantity is not None else 1
             price = float(action.price or 0.0)
             if action.side == "buy" or (action.legs and "to_open" in (action.legs[0].get("side") or "").lower()):
                 risk = price * qty * 100.0
             else:
                 risk = 1000.0 * qty
         else:
-            qty = int(action.quantity or 1)
+            qty = int(action.quantity) if action.quantity is not None else 1
             price = float(action.price or 0.0)
             risk = price * qty
 

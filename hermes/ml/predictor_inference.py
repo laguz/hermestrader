@@ -126,8 +126,8 @@ class PredictorInference:
             }
             try:
                 run_maybe_async(self.db.write_prediction, sym, yhat_med, predicted_price, spot)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to write prediction to DB for %s: %s", sym, exc, exc_info=True)
 
             self._write_ledger_row(sym, x_last, prob_med, prob_lo, prob_hi,
                                    yhat_med, spot)

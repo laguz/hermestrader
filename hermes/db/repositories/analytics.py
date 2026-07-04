@@ -119,7 +119,7 @@ class AnalyticsRepository(Repository):
 
             entry_credit_val = float(t.entry_credit) if t.entry_credit is not None else 0.0
             entry_debit_val = float(t.entry_debit) if t.entry_debit is not None else 0.0
-            lots_val = int(t.lots or 1)
+            lots_val = int(t.lots) if t.lots is not None else 1
 
             if entry_credit_val > 0 and width_val is not None:
                 risk_capital = (width_val - entry_credit_val) * lots_val * 100.0
@@ -191,14 +191,14 @@ class AnalyticsRepository(Repository):
                             lots=int(t.lots or 0)
                         )
                     if pnl_val is None and t.entry_credit is not None:
-                        pnl_val = float(t.entry_credit) * int(t.lots or 1) * 100.0
+                        pnl_val = float(t.entry_credit) * (int(t.lots) if t.lots is not None else 1) * 100.0
                     if pnl_val is not None:
                         option_pnl_sum += pnl_val
 
                     if t.side_type == "put" and (t.close_reason == "RECONCILED_BROKER_FLAT" or (t.closed_at and t.expiry and t.closed_at.date() >= t.expiry)):
                         expiry_price = await self._db.timeseries.get_price_on_date(t.symbol, t.expiry)
                         if expiry_price is not None and expiry_price < float(t.short_strike or 0.0):
-                            shares_bought = int(t.lots or 1) * 100
+                            shares_bought = (int(t.lots) if t.lots is not None else 1) * 100
                             cost = float(t.short_strike) * shares_bought
                             net_shares += shares_bought
                             stock_cash_flow -= cost
@@ -206,7 +206,7 @@ class AnalyticsRepository(Repository):
                     elif t.side_type == "call" and (t.close_reason == "RECONCILED_BROKER_FLAT" or (t.closed_at and t.expiry and t.closed_at.date() >= t.expiry)):
                         expiry_price = await self._db.timeseries.get_price_on_date(t.symbol, t.expiry)
                         if expiry_price is not None and expiry_price > float(t.short_strike or 0.0):
-                            shares_sold = int(t.lots or 1) * 100
+                            shares_sold = (int(t.lots) if t.lots is not None else 1) * 100
                             proceeds = float(t.short_strike) * shares_sold
                             net_shares -= shares_sold
                             stock_cash_flow += proceeds

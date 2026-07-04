@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
+import logging
+
+logger = logging.getLogger("hermes.db.repositories.approvals")
 from hermes.utils import utc_now
 
 from sqlalchemy import select
@@ -217,8 +220,8 @@ class ApprovalsRepository(Repository):
             try:
                 from hermes.ipc import ipc
                 await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to publish ApprovalDecidedEvent to IPC: %s", exc)
             return True
 
     async def fetch_approved_actions(self) -> List[Dict[str, Any]]:
@@ -258,8 +261,8 @@ class ApprovalsRepository(Repository):
                 try:
                     from hermes.ipc import ipc
                     await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to publish ApprovalDecidedEvent to IPC: %s", exc)
 
     async def list_approvals_async(self, status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         return await self.list_approvals(status, limit)

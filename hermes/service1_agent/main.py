@@ -274,8 +274,8 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 watchlist_syms = set(conf.get("watchlist", []))
                 try:
                     watchlist_syms.update(await db.trades.tracked_option_symbols())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.warning("Failed to query tracked option symbols for watchlist: %s", exc)
                 stream_client = _build_stream_client(new_broker, db, event_bus, watchlist_syms)
                 await stream_client.start()
 

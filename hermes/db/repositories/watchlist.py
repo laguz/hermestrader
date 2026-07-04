@@ -3,6 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Dict, List
+import logging
+
+logger = logging.getLogger("hermes.db.repositories.watchlist")
 
 from sqlalchemy import select
 
@@ -110,6 +113,6 @@ class WatchlistRepository(Repository):
             try:
                 from hermes.ipc import ipc
                 await ipc.publish(IPC_CHANNEL_AGENT_COMMANDS, payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to publish WatchlistChangedEvent to IPC: %s", exc)
         return clean

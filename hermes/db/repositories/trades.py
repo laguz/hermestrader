@@ -240,7 +240,7 @@ class TradesRepository(Repository):
             or order_status in self._REJECT_STATUSES
         )
 
-        lots = action.quantity or 1
+        lots = action.quantity if action.quantity is not None else 1
         for leg in (action.legs or []):
             leg_side = (leg.get("side") or "").lower()
             if "sell" in leg_side or "open" in leg_side or "close" in leg_side:
