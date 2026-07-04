@@ -15,7 +15,6 @@ import pytest
 from hermes.common import (
     close_reason_from_tag,
     is_close_tag,
-    is_hermes_tag,
     strategy_id_from_tag,
 )
 
@@ -44,19 +43,6 @@ from hermes.common import (
 ])
 def test_strategy_id_from_tag(tag, expected):
     assert strategy_id_from_tag(tag) == expected
-
-
-@pytest.mark.parametrize("tag, expected", [
-    ("HERMES_CS75", True),
-    ("HERMES-CS75", True),  # both separator forms count as Hermes tags
-    ("HERMES_CS75_CLOSE_TP-50", True),
-    ("HERMES_", False),     # prefix only, no strategy
-    ("", False),
-    (None, False),
-    ("manual", False),
-])
-def test_is_hermes_tag(tag, expected):
-    assert is_hermes_tag(tag) is expected
 
 
 @pytest.mark.parametrize("tag, expected", [
@@ -162,7 +148,7 @@ def test_no_module_reimplements_tag_separator_handling():
 
     assert not offenders, (
         "Inline order-tag parsing detected — route through the helpers in "
-        "hermes.common (strategy_id_from_tag / is_hermes_tag / is_close_tag / "
+        "hermes.common (strategy_id_from_tag / is_close_tag / "
         "close_reason_from_tag) so both the HERMES_ and HERMES- forms stay "
         "handled in one place (CLAUDE.md safety rule #5):\n  "
         + "\n  ".join(offenders)

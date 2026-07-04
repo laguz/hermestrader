@@ -96,8 +96,6 @@ def _db_template(pg_available):
     exactly: ``schema=False`` clones carry only the ORM tables, ``schema=True``
     clones also carry the ``bars_*`` hypertables / ``pnl_daily`` view.
     """
-    import asyncio
-
     from hermes.db.models import HermesDB
 
     built: dict[bool, str] = {}
@@ -134,8 +132,6 @@ def make_db(_db_template):
     gets its own fresh database — cloned from the matching session template
     (see ``_db_template``) — and every database created is dropped at teardown.
     """
-    import asyncio
-
     from hermes.db.models import HermesDB
 
     created: list[tuple[str, "HermesDB"]] = []

@@ -6,8 +6,8 @@ Covers the data loop that turns each closed trade into a labelled
 1. ``entry_feature_snapshot`` assembles the snapshot and derives DTE +
    credit/width, dropping ``None`` fields.
 2. ``record_order_response`` persists ``strategy_params['entry_features']``
-   onto the Trade row, and ``fetch_trade_outcomes`` reads it back paired with
-   the realized P&L once the trade closes.
+   onto the Trade row, and ``closed_trades_entry_features`` reads it back
+   paired with the realized P&L once the trade closes.
 3. ``CascadingEngine._attach_entry_features`` stamps the snapshot (incl.
    resolved knobs) onto an entry action before it is routed.
 """
@@ -103,30 +103,18 @@ async def test_entry_features_persist_and_resolve_to_outcome(db):
     await _seed_open_trade(db, feats)
 
     # Open trade carries the snapshot; not yet an outcome (no pnl).
-    assert await db.trades.fetch_trade_outcomes() == []
+    assert await db.trades.closed_trades_entry_features() == []
 
     await db.trades.close_trade_from_action(
         _close_action(), {"order": {"status": "filled", "id": "def456"}})
 
-    rows = await db.trades.fetch_trade_outcomes()
+    rows = await db.trades.closed_trades_entry_features()
     assert len(rows) == 1
     row = rows[0]
     assert row["strategy_id"] == "CS75"
-    assert row["won"] is True                         # credit 1.25 > exit 0.40
-    assert row["realized_pnl"] == pytest.approx((1.25 - 0.40) * 2 * 100)
-    assert row["close_reason"] == "TP-50"
+    assert row["pnl"] == pytest.approx((1.25 - 0.40) * 2 * 100)
     assert row["entry_features"]["pop"] == 0.78
     assert row["entry_features"]["knobs"]["cs75_pop_target"] == 0.75
-
-
-@pytest.mark.asyncio
-async def test_fetch_trade_outcomes_filters_by_strategy(db):
-    await _seed_open_trade(db, {"schema": 1})
-    await db.trades.close_trade_from_action(
-        _close_action(), {"order": {"status": "filled", "id": "y"}})
-
-    assert len(await db.trades.fetch_trade_outcomes(strategy_id="CS75")) == 1
-    assert await db.trades.fetch_trade_outcomes(strategy_id="WHEEL") == []
 
 
 # --------------------------------------------------------------------------- #

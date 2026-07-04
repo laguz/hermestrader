@@ -338,7 +338,7 @@ class MoneyManager:
                 leg["quantity"] = requested_lots
             allocated_actions.append(action)
 
-        for action, score, margin_per_lot, pop, credit, requested_lots in sorted_actions:
+        for action, score, margin_per_lot, _pop, credit, requested_lots in sorted_actions:
             # Fractional Kelly target margin = kelly_fraction * score * avail_bp
             target_margin = kelly_fraction * score * avail_bp
             target_lots = int(round(target_margin, 2) // margin_per_lot)
@@ -396,16 +396,6 @@ class IronCondorBuilder:
 
     def __init__(self, money_manager: MoneyManager):
         self.mm = money_manager
-
-    @staticmethod
-    def margin_requirement(width: float, lots: int, multiplier: int = 100) -> float:
-        """Single-side margin for an iron condor on equal-width spreads.
-
-        `multiplier` is the contract size from the option chain (standard
-        equity options = 100; micro options may differ).  Defaults to 100 so
-        existing callers that don't pass it continue to work correctly.
-        """
-        return float(width) * int(multiplier) * int(lots)
 
     async def plan(
         self,

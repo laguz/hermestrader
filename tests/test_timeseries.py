@@ -141,24 +141,3 @@ async def test_get_total_bars_count(test_db):
     assert intra == 3  # 1 symbol * 3 bars
 
 
-async def test_get_bar_on_or_after(test_db):
-    engine = TimeSeriesEngine(test_db)
-    symbol = "NVDA"
-    dates = pd.date_range("2026-05-01", periods=3, freq="D")
-    df = pd.DataFrame({
-        "ts": dates,
-        "open": [10.0, 11.0, 12.0],
-        "high": [15.0, 16.0, 17.0],
-        "low": [9.0, 10.0, 11.0],
-        "close": [12.0, 13.0, 14.0],
-        "volume": [100, 110, 120],
-        "vwap_close": [11.5, 12.5, 13.5],
-    })
-    await engine.save_daily_bars(symbol, df)
-
-    bar = await engine.get_bar_on_or_after(symbol, datetime(2026, 5, 2))
-    assert bar is not None
-    assert bar["close"] == 13.0
-
-    # No bar on or after the last date + buffer
-    assert await engine.get_bar_on_or_after(symbol, datetime(2026, 6, 1)) is None

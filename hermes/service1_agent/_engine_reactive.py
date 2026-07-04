@@ -409,7 +409,7 @@ class ReactiveController:
                 if not has_messages:
                     continue
 
-                for stream_name, messages in response:
+                for _stream_name, messages in response:
                     for msg_id, payload in messages:
                         event_type = payload.get("event_type")
                         payload_json = payload.get("payload")
@@ -745,7 +745,7 @@ class ReactiveController:
 
         if self.ctx.config.get("portfolio_optimization"):
             all_proposed_actions = []
-            for s, actions in results:
+            for _s, actions in results:
                 all_proposed_actions.extend(actions)
 
             if not all_proposed_actions:

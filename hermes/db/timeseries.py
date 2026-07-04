@@ -196,26 +196,3 @@ class TimeSeriesEngine:
             intra = (await conn.execute(text("SELECT COUNT(*) FROM bars_intraday"))).scalar()
         return int(daily or 0), int(intra or 0)
 
-    async def get_bar_on_or_after(self, symbol: str, dt: Any) -> Optional[Dict[str, Any]]:
-        """Fetch the first daily bar on or after the target date/timestamp."""
-        if not dt:
-            return None
-        target = _as_utc(dt)
-        stmt = text(
-            "SELECT ts, open, high, low, close, volume, vwap_close FROM bars_daily "
-            "WHERE symbol = :symbol AND ts >= :target ORDER BY ts ASC LIMIT 1"
-        )
-        async with self._engine.connect() as conn:
-            res = await conn.execute(stmt, {"symbol": symbol.upper(), "target": target})
-            row = res.fetchone()
-        if row is None:
-            return None
-        return {
-            "ts": row[0],
-            "open": None if row[1] is None else float(row[1]),
-            "high": None if row[2] is None else float(row[2]),
-            "low": None if row[3] is None else float(row[3]),
-            "close": None if row[4] is None else float(row[4]),
-            "volume": None if row[5] is None else int(row[5]),
-            "vwap_close": None if row[6] is None else float(row[6]),
-        }

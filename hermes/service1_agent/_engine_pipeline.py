@@ -249,7 +249,7 @@ class PipelineController:
         results = await asyncio.gather(*[_run_strategy_entries(s) for s in ctx.strategies])
 
         all_proposed_actions = []
-        for s, actions in results:
+        for _s, actions in results:
             all_proposed_actions.extend(actions)
 
         # Keep the risk engine's per-strategy lot caps in sync with the

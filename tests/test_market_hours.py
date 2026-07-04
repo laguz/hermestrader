@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from hermes.market_hours import (
-    ET, is_trading_day, market_session, is_market_open, next_open, session_label
+    ET, is_trading_day, market_session, next_open, session_label
 )
 
 def test_is_trading_day():
@@ -13,30 +13,30 @@ def test_is_trading_day():
     # Wednesday, 2025-01-01 - New Year's Day (Holiday)
     assert is_trading_day(date(2025, 1, 1)) is False
 
-def test_is_market_open():
+def test_is_open_flag():
     # Tuesday, 2025-01-07 10:00 AM ET - Regular session
     now = datetime(2025, 1, 7, 10, 0, tzinfo=ET)
-    assert is_market_open(now) is True
+    assert market_session(now)["is_open"] is True
 
     # Tuesday, 2025-01-07 09:30 AM ET - Regular session start
     now = datetime(2025, 1, 7, 9, 30, tzinfo=ET)
-    assert is_market_open(now) is True
+    assert market_session(now)["is_open"] is True
 
     # Tuesday, 2025-01-07 04:00 PM ET - Regular session end
     now = datetime(2025, 1, 7, 16, 0, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
     # Tuesday, 2025-01-07 08:00 AM ET - Pre-market
     now = datetime(2025, 1, 7, 8, 0, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
     # Tuesday, 2025-01-07 05:00 PM ET - After-hours
     now = datetime(2025, 1, 7, 17, 0, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
     # Saturday, 2025-01-11 10:00 AM ET - Weekend
     now = datetime(2025, 1, 11, 10, 0, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
 def test_market_session():
     # Regular session
@@ -131,7 +131,7 @@ def test_session_label():
 def test_early_close_days():
     # Friday, 2026-11-27 (day after Thanksgiving) — regular closes 13:00 ET.
     now = datetime(2026, 11, 27, 12, 0, tzinfo=ET)
-    assert is_market_open(now) is True
+    assert market_session(now)["is_open"] is True
 
     now = datetime(2026, 11, 27, 13, 0, tzinfo=ET)
     session = market_session(now)
@@ -139,12 +139,12 @@ def test_early_close_days():
     assert session["is_open"] is False
 
     now = datetime(2026, 11, 27, 14, 30, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
     # Thursday, 2026-12-24 (Christmas Eve) — same 13:00 close.
     now = datetime(2026, 12, 24, 13, 30, tzinfo=ET)
-    assert is_market_open(now) is False
+    assert market_session(now)["is_open"] is False
 
     # A normal day is unaffected: 14:30 ET is still regular.
     now = datetime(2026, 11, 30, 14, 30, tzinfo=ET)
-    assert is_market_open(now) is True
+    assert market_session(now)["is_open"] is True

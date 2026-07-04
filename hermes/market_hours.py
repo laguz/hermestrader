@@ -3,7 +3,6 @@ hermes/market_hours.py — US equity market session awareness.
 
 Provides:
   - market_session()   : current session label + open flag
-  - is_market_open()   : True only during regular hours
   - next_open()        : datetime of next regular-session open
   - should_block_trades(): defence-in-depth gate every order submission
                           path can call — returns (blocked, reason) so
@@ -149,11 +148,6 @@ def market_session(now: Optional[datetime] = None) -> dict:
         "et_date": today.isoformat(),
         "trading_day": trading,
     }
-
-
-def is_market_open(now: Optional[datetime] = None) -> bool:
-    """True only during the regular session (9:30–16:00 ET on trading days)."""
-    return market_session(now)["is_open"]
 
 
 def next_open(now: Optional[datetime] = None) -> datetime:
