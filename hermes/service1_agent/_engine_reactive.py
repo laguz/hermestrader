@@ -546,6 +546,8 @@ class ReactiveController:
                 cmd = ExecuteOrderFillCommand(event=payload["event"])
                 bus.emit(cmd)
                 res = await cmd.future
+            else:
+                logger.warning("[ENGINE] Unrecognized event_type %r; dropping", event_type)
 
             if fut and not fut.done():
                 fut.set_result(res)
@@ -732,7 +734,13 @@ class ReactiveController:
     async def process_reactive_entries(self, symbol: str) -> None:
         """Executes entries reactively for a single symbol that crossed support/resistance."""
         async def _check_watchlist(s):
-            wl = await self.engine._watchlist_for(s.strategy_id, [symbol])
+            try:
+                wl = await self.engine._watchlist_for(s.strategy_id, [symbol])
+            except Exception as exc:
+                logger.exception(
+                    "Watchlist lookup failure in %s for %s: %s", s.NAME, symbol, exc
+                )
+                return None
             return s if symbol in wl else None
 
         check_results = await asyncio.gather(*[_check_watchlist(s) for s in self.ctx.strategies])

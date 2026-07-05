@@ -250,11 +250,13 @@ class TradierBroker(AbstractBroker):
             )
         return orders_list
 
+    @retry(**_RETRY_POLICY)
     async def cancel_order(self, order_id: str) -> Dict[str, Any]:
         client = self._get_client()
         url = f"/accounts/{self.account_id}/orders/{order_id}"
         r = await client.delete(url)
-        r.raise_for_status()
+        if not r.is_success:
+            self._raise_with_body(r, "DELETE", url)
         return r.json() or {}
 
     async def get_option_expirations(self, symbol: str) -> List[str]:
