@@ -219,7 +219,7 @@ async def backfill_prediction_outcomes(db: Any, lookback_days: int = 90) -> int:
 
             row_bar = df_future.iloc[0]
             realized_close = float(row_bar["close"])
-            spot = float(row.spot) if row.spot else realized_close
+            spot = float(row.spot) if row.spot is not None else realized_close
             outcome = 1.0 if realized_close > spot else 0.0
 
             row.realized_outcome = outcome

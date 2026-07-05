@@ -323,3 +323,61 @@ not bugs; don't re-flag them:**
   lines as falsy-zero bugs, the report is confusing a DB-string read with a raw
   numeric read — verify the source type (`Optional[str]` vs `Optional[float]`) before
   trusting the pattern-match.
+
+A July 2026 audit pass 2 (multi-agent scan, hand-verified against source before
+fixing) resolved 4 confirmed bugs with regression tests in
+`tests/test_july2026_audit_pass2.py`. Each test was confirmed to fail when its fix
+was reverted:
+- **`ledger.py` `backfill_prediction_outcomes` falsy-zero `spot`**: `spot =
+  float(row.spot) if row.spot else realized_close` replaced a genuinely recorded
+  `spot=0.0` with `realized_close`, making `outcome = 1.0 if realized_close > spot
+  else 0.0` compare `realized_close` against itself — always `0.0`, regardless of
+  real price movement. Fixed to `if row.spot is not None else`. (The sibling
+  falsy-zero-shaped reads in `fetch_for_calibration`, `float(r.spot or 0.0)` /
+  `float(r.predicted_prob or 0.0)`, are **not** bugs: their `or` fallback is `0.0`,
+  identical to what a genuine `0.0` already produces, so there's nothing to
+  regress — same precedent as `risk_engine.py:163` below.)
+- **`_engine_reactive.py` `_process_event` silently dropped unrecognized
+  `event_type`**: the if/elif chain covers exactly `TICK`/`CLOCK_TICK`/
+  `AI_APPROVAL`/`MARKET_DATA`/`ORDER_FILL`; anything else (a malformed or
+  corrupted Redis Streams payload) fell through with `res=None` and
+  `fut.set_result(None)` — acked as if successfully processed, no log signal.
+  Added an `else: logger.warning(...)` branch.
+- **`_engine_reactive.py` `process_reactive_entries` watchlist-lookup gather had
+  no exception isolation**: `_check_watchlist(s)` called `self.engine._watchlist_for`
+  with no try/except, and the `asyncio.gather(...)` collecting all strategies had
+  no `return_exceptions=True` — unlike the very next `gather` one function down
+  (`_run_reactive_entries`), which explicitly catches per-strategy so one failure
+  can't take out the rest. A single strategy's transient DB error during watchlist
+  lookup aborted reactive entry evaluation for **every** strategy on that
+  support/resistance trigger, not just the one that failed. Wrapped
+  `_check_watchlist` in the same try/log/return-`None` pattern as its sibling.
+- **`tradier.py` `cancel_order` bypassed the shared retry policy and structured
+  error-body logging** that every other network call in the file uses (`_get` via
+  `@retry(**_RETRY_POLICY)`, all paths via `_raise_with_body`). Added both.
+  Deliberately scoped to `cancel_order` only, not order-placement (`_post`): a
+  DELETE is idempotent (re-cancelling an already-cancelled order is harmless), but
+  blindly retrying a POST that places a real order is not — if the first attempt
+  actually succeeded broker-side and only the response was lost, a retry could
+  double-place the order. **`_post`'s lack of a retry decorator is intentional,
+  not a bug** — don't "fix" it by wrapping order-placing calls in `_RETRY_POLICY`;
+  that trades a clean failure for a duplicate-order risk, which is strictly worse
+  in a system whose whole safety posture is "never place an order the operator
+  didn't intend."
+- **Also fixed (no regression test — pure observability, same rationale as the
+  `risk_engine.py:163`-class style-only fixes)**: `scripts/nightly_calibrate.py`'s
+  `find_key_levels` call was the only one of 9 exception handlers in the file with
+  no `logger.warning` on catch; added one for consistency. The sibling bare
+  `except Exception: return []` around the `PredictionLedger` import in
+  `_enumerate_symbols` is **not** the same anomaly — it mirrors the established
+  `if Base is not None` / `if PredictionLedger is None: return` ORM-unavailable
+  degrade-safely pattern used throughout `ledger.py` itself, not a silent-swallow bug.
+
+**Areas re-checked this pass with no new findings** (don't re-audit from scratch
+next time unless something material changed): core tick pipeline / strategies /
+`MoneyManager` / `risk_engine.py` (including re-verifying the `alpha_autonomous_live`
++ `autonomy=='autonomous'` dual-gate is still intact), the Vue UI under
+`hermes/ui/src` against `router.js`/`App.vue`, all watcher API routes, `scripts/
+self_learning_loop.py`, `scripts/upgrade_runner.sh`, and the broader `hermes/ml/`
+surface (`pop_engine.py`, `predictor_inference.py`, `feature_engineer.py`,
+`xgb_features.py`) plus `hermes/charts/provider.py`.

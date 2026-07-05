@@ -136,7 +136,8 @@ async def main() -> int:
                 
                 try:
                     key_levels = find_key_levels(df_asof["close"], df_asof["volume"])
-                except Exception:
+                except Exception as exc:                              # noqa: BLE001
+                    logger.warning("key level detection failed for %s: %s", sym, exc)
                     key_levels = []
                 
                 fv_dict = r.get("feature_vector") or {}
