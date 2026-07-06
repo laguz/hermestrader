@@ -122,3 +122,38 @@ async def test_clear_cache():
     dummy.analyze_symbol.reset_mock()
     await wrapper.analyze_symbol("AAPL", "6m")
     dummy.analyze_symbol.assert_called_once_with("AAPL", "6m")
+
+
+@pytest.mark.anyio
+async def test_analysis_cache_ttl_and_simulated_time():
+    dummy = DummyBroker()
+    dummy.current_date = datetime(2026, 6, 7, 10, 0, 0)
+    wrapper = AsyncBrokerWrapper(dummy)
+    
+    dummy.analyze_symbol.return_value = {"symbol": "AAPL", "avg_vol": 0.25}
+    
+    # 1. First call - cache miss
+    res1 = await wrapper.analyze_symbol("AAPL", "6m")
+    assert res1 == {"symbol": "AAPL", "avg_vol": 0.25}
+    dummy.analyze_symbol.assert_called_once_with("AAPL", "6m")
+    
+    # 2. Second call - cache hit
+    dummy.analyze_symbol.reset_mock()
+    res2 = await wrapper.analyze_symbol("AAPL", "6m")
+    assert res2 == {"symbol": "AAPL", "avg_vol": 0.25}
+    dummy.analyze_symbol.assert_not_called()
+    
+    # 3. Advance time by 200s (past the standard 120s TTL) - should still hit the analysis cache
+    dummy.current_date = dummy.current_date + timedelta(seconds=200)
+    dummy.analyze_symbol.reset_mock()
+    res3 = await wrapper.analyze_symbol("AAPL", "6m")
+    assert res3 == {"symbol": "AAPL", "avg_vol": 0.25}
+    dummy.analyze_symbol.assert_not_called()
+    
+    # 4. Advance time past the 3600s analysis TTL (e.g. 3700s total) - should miss due to expiry
+    dummy.current_date = dummy.current_date + timedelta(seconds=3500)
+    dummy.analyze_symbol.reset_mock()
+    res4 = await wrapper.analyze_symbol("AAPL", "6m")
+    assert res4 == {"symbol": "AAPL", "avg_vol": 0.25}
+    dummy.analyze_symbol.assert_called_once_with("AAPL", "6m")
+

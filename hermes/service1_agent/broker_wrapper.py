@@ -28,6 +28,7 @@ class BrokerCache:
         self.expirations: Dict[str, tuple[float, List[str]]] = {}
         self.analysis: Dict[tuple[str, str], tuple[float, Dict[str, Any]]] = {}
         self.ttl = int(os.environ.get("HERMES_CACHE_TTL_S", 120))
+        self.analysis_ttl = int(os.environ.get("HERMES_ANALYSIS_CACHE_TTL_S", 3600))
 
     def get_chain(self, symbol: str, expiry: str, now: float) -> Optional[List[Dict[str, Any]]]:
         key = (symbol, expiry)
@@ -64,7 +65,7 @@ class BrokerCache:
         key = (symbol, period)
         if key in self.analysis:
             ts, val = self.analysis[key]
-            if now - ts < self.ttl:
+            if now - ts < self.analysis_ttl:
                 return val
         return None
 
