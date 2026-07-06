@@ -219,16 +219,20 @@ async def test_durable_loop_failed_tick_is_not_replayed():
 
 @pytest.mark.asyncio
 async def test_durable_loop_dataclass_serialization():
+    import time
+
     from hermes.events.bus import MarketDataEvent
-    
+
     mock_redis = AsyncMock()
     mock_redis.xgroup_create = AsyncMock()
     mock_redis.xack = AsyncMock()
 
     stream_db = []
-    
+
+    # Real Redis assigns ids from its wall clock; a fresh id also keeps this
+    # MARKET_DATA message clear of the consumer's staleness shedding.
     async def mock_xadd(name, fields, id='*', **_kwargs):
-        msg_id = f"1686984023000-{len(stream_db)}"
+        msg_id = f"{int(time.time() * 1000)}-{len(stream_db)}"
         stream_db.append((msg_id, fields))
         return msg_id
         
@@ -296,3 +300,112 @@ async def test_durable_loop_dataclass_serialization():
         except asyncio.CancelledError:
             pass
 
+
+
+@pytest.mark.asyncio
+async def test_durable_loop_sheds_stale_market_data():
+    """Stale MARKET_DATA messages are acked and resolved without processing.
+
+    Regression: a market-data backlog (CPU-saturating XGB retrain, market-open
+    burst) collapsed the durable consumer into one full
+    ``_PROCESS_EVENT_TIMEOUT_S`` timeout per message — producer-side bus
+    handlers piled up awaiting their redis round-trip futures, the Execute*
+    commands queued behind the flood, and heartbeat ticks never dispatched
+    again. Quotes older than ``_MARKET_DATA_SHED_AFTER_S`` are superseded by
+    fresher ones and must be shed, while stale TICK/CLOCK_TICK messages must
+    still be processed.
+    """
+    import time
+
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+
+    acked = []
+
+    async def mock_xack(name, group, msg_id):
+        acked.append(msg_id)
+
+    mock_redis.xack = AsyncMock(side_effect=mock_xack)
+
+    now_ms = int(time.time() * 1000)
+    stale_md_id = f"{now_ms - 600_000}-0"
+    fresh_md_id = f"{now_ms}-0"
+    stale_tick_id = f"{now_ms - 600_000}-1"
+    xadd_ids = [stale_md_id, fresh_md_id, stale_tick_id]
+
+    stream_db = []
+    xadd_count = 0
+
+    async def mock_xadd(name, fields, id='*', **_kwargs):
+        nonlocal xadd_count
+        msg_id = xadd_ids[xadd_count]
+        xadd_count += 1
+        stream_db.append((msg_id, fields))
+        return msg_id
+
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
+        if stream_id == "0":
+            return []
+        elif stream_id == ">":
+            if stream_db:
+                res = [("hermes_event_stream", list(stream_db))]
+                stream_db.clear()
+                return res
+            await asyncio.sleep(0.01)
+            return []
+        return []
+
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    strat = DummyStrategy("CS75", 1, "CS75")
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+
+    engine = CascadingEngine(
+        broker=AsyncMock(),
+        db=db_mock,
+        strategies=[strat],
+        config={"portfolio_optimization": False},
+    )
+    engine.ipc_client = mock_ipc
+
+    processed = []
+
+    async def mock_process_event(event_type, payload):
+        processed.append(event_type)
+        fut = payload.get("future")
+        if fut and not fut.done():
+            fut.set_result("processed")
+
+    engine.reactive._process_event = mock_process_event
+    engine._ensure_event_loop()
+
+    stale_res = await asyncio.wait_for(
+        engine.publish_event("MARKET_DATA", {"event": {"symbol": "SPY"}}), timeout=2.0
+    )
+    fresh_res = await asyncio.wait_for(
+        engine.publish_event("MARKET_DATA", {"event": {"symbol": "SPY"}}), timeout=2.0
+    )
+    tick_res = await asyncio.wait_for(
+        engine.publish_event("TICK", {"watchlist": ["SPY"]}), timeout=2.0
+    )
+
+    assert stale_res is None, "stale MARKET_DATA must resolve to None without processing"
+    assert fresh_res == "processed", "fresh MARKET_DATA must be processed"
+    assert tick_res == "processed", "stale TICK must never be shed"
+    assert processed == ["MARKET_DATA", "TICK"], f"unexpected processing: {processed}"
+    assert set(acked) == {stale_md_id, fresh_md_id, stale_tick_id}, "every message must be acked"
+
+    if engine.loop_task:
+        engine.loop_task.cancel()
+        try:
+            await engine.loop_task
+        except asyncio.CancelledError:
+            pass

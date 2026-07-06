@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Dict
+import time
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from hermes.events.bus import (
     OrderFillEvent,
@@ -63,6 +64,18 @@ class ReactiveController:
     # stuck/deadlocked message can never wedge every future message behind it.
     _PROCESS_EVENT_TIMEOUT_S = 90.0
 
+    # Quotes are only useful fresh: a MARKET_DATA message that sat in the
+    # stream longer than this is already superseded by newer ticks (and the
+    # periodic heartbeat re-evaluates every position regardless), so the
+    # durable consumer sheds it instead of processing it. Without shedding, a
+    # transient stall (CPU-saturating ML retrain, market-open burst) leaves a
+    # backlog where every message costs a full _PROCESS_EVENT_TIMEOUT_S:
+    # producer-side bus handlers pile up awaiting their round-trip futures,
+    # fresh quotes queue behind stale ones faster than 1-per-90s drains them,
+    # and CLOCK_TICKs starve forever. Only MARKET_DATA is shed — TICK /
+    # CLOCK_TICK / AI_APPROVAL / ORDER_FILL must run no matter how late.
+    _MARKET_DATA_SHED_AFTER_S = 30.0
+
     # Caps the durable Redis stream so it can't grow unboundedly (xadd has no
     # implicit trim). Generous relative to normal throughput — the consumer
     # loop keeps PENDING at ~1 message under healthy operation — so this only
@@ -101,6 +114,15 @@ class ReactiveController:
     def _is_durable_loop(self) -> bool:
         ipc = self.ctx.ipc_client
         return ipc is not None and ipc.is_connected
+
+    @staticmethod
+    def _durable_msg_age_s(msg_id: Any) -> Optional[float]:
+        """Age of a Redis Stream entry from its server-assigned id (ms-epoch)."""
+        try:
+            raw = msg_id.decode() if isinstance(msg_id, (bytes, bytearray)) else str(msg_id)
+            return max(0.0, time.time() - int(raw.split("-", 1)[0]) / 1000.0)
+        except (ValueError, AttributeError):
+            return None
 
     def _ensure_event_loop(self) -> None:
         if self._is_durable_loop():
@@ -423,6 +445,18 @@ class ReactiveController:
                         event_type = payload.get("event_type")
                         payload_json = payload.get("payload")
                         try:
+                            if event_type == "MARKET_DATA":
+                                age_s = self._durable_msg_age_s(msg_id)
+                                if age_s is not None and age_s > self._MARKET_DATA_SHED_AFTER_S:
+                                    logger.info(
+                                        "[ENGINE] Shedding stale MARKET_DATA %s "
+                                        "(%.0fs old > %.0fs) — superseded by fresher quotes.",
+                                        msg_id, age_s, self._MARKET_DATA_SHED_AFTER_S,
+                                    )
+                                    fut = self._pending_futures.get(msg_id)
+                                    if fut and not fut.done():
+                                        fut.set_result(None)
+                                    continue  # the finally block still acks + pops
                             raw_data = json.loads(payload_json) if payload_json else {}
                             data = self._deserialize_value(raw_data)
 
