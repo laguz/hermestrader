@@ -411,14 +411,18 @@ async def test_durable_loop_bounds_a_deadlocked_process_event():
 
     engine.reactive._process_event = hangs_forever
 
+    # A fresh wall-clock id (like real Redis assigns) so the message exercises
+    # the processing-timeout bound instead of the staleness shedding path.
+    import time
+    msg_id = f"{int(time.time() * 1000)}-1"
     fake_client = _FakeDurableRedisClient(
-        msg_id="1-1", event_type="MARKET_DATA",
+        msg_id=msg_id, event_type="MARKET_DATA",
         payload={"event": {"symbol": "AAPL", "price": 100.0}},
     )
     engine.ctx.ipc_client = _FakeIpcClient(fake_client)
 
     pending_fut = asyncio.get_running_loop().create_future()
-    engine.reactive._pending_futures["1-1"] = pending_fut
+    engine.reactive._pending_futures[msg_id] = pending_fut
 
     loop_task = asyncio.create_task(engine.reactive._redis_event_consumer_loop())
     try:
@@ -433,8 +437,8 @@ async def test_durable_loop_bounds_a_deadlocked_process_event():
 
         # Acked despite the timeout — otherwise this exact message replays
         # (and re-deadlocks) forever on every future restart.
-        assert fake_client.xack_calls == ["1-1"]
-        assert "1-1" not in engine.reactive._pending_futures
+        assert fake_client.xack_calls == [msg_id]
+        assert msg_id not in engine.reactive._pending_futures
     finally:
         loop_task.cancel()
         try:
