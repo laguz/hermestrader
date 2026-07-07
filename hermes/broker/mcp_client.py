@@ -33,21 +33,26 @@ class MCPBrokerClient(AbstractBroker):
         self.config = config or {}
         self.current_date = None
         self._ctx = None
-        self._read_write = None
         self._session = None
-        # Guards session bootstrap/call/reset below: the stdio subprocess
-        # speaks one request/response at a time over a single pipe, and
-        # _call_mcp is invoked from multiple independently-scheduled asyncio
-        # Tasks on the same loop (e.g. ReactiveController's order-monitor
-        # loop task polling get_orders() every ~1s, concurrently with the
-        # event-consumer loop task's own broker calls). Without this lock,
-        # two tasks can both observe `self._session is None`, each start
-        # their own stdio_client/ClientSession bootstrap, and race on
-        # assigning self._ctx/self._session — orphaning one session (never
-        # exited) and, in production, tripping anyio's cross-task
-        # cancel-scope RuntimeError when the orphaned generator is later
-        # garbage-collected from a different task than it was entered in.
-        self._call_lock = asyncio.Lock()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # The stdio subprocess speaks one request/response at a time over a
+        # single pipe, and _call_mcp is invoked from multiple independently-
+        # scheduled asyncio Tasks on the same loop (e.g. ReactiveController's
+        # order-monitor loop task polling get_orders() every ~1s, concurrently
+        # with the event-consumer loop task's own broker calls). anyio's
+        # stdio_client/ClientSession context managers bind their cancel scopes
+        # to the *Task* that entered them — if one Task ever __aexit__s a
+        # session/ctx that a different Task __aenter__'d (e.g. a timeout fires
+        # on Task B for a session Task A bootstrapped), anyio raises
+        # "Attempted to exit cancel scope in a different task than it was
+        # entered in". A plain lock only serializes *access*; it doesn't stop
+        # different callers from being the ones to open vs. close the same
+        # context. So every bootstrap/call/teardown is funneled through one
+        # dedicated owner Task (_owner_loop) via a queue — enter and exit
+        # always happen inside that single Task, no matter which caller Task
+        # asked.
+        self._queue: Optional[asyncio.Queue] = None
+        self._owner_task: Optional[asyncio.Task] = None
 
     @property
     def dry_run(self) -> bool:
@@ -60,77 +65,154 @@ class MCPBrokerClient(AbstractBroker):
         await self.close()
 
     async def close(self) -> None:
-        if self._session is not None:
+        """Ask the owner Task to shut itself down and tear down its own session.
+
+        Only ever touches the shared queue/task handles here — never the
+        session/ctx directly — so __aexit__ always runs inside the Task that
+        __aenter__'d them.
+        """
+        task = self._owner_task
+        queue = self._queue
+        self._owner_task = None
+        self._queue = None
+        if task is None:
+            return
+        if queue is not None:
+            await queue.put(None)  # shutdown sentinel
+        try:
+            await asyncio.wait_for(task, timeout=self._CLOSE_TIMEOUT_S)
+        except Exception as e:
+            logger.debug("Error waiting for MCP owner task to close: %s", e)
+            task.cancel()
+
+    def _ensure_owner(self, loop: asyncio.AbstractEventLoop) -> None:
+        if self._owner_task is None or self._owner_task.done():
+            self._queue = asyncio.Queue()
+            self._owner_task = loop.create_task(self._owner_loop())
+
+    async def _bootstrap(self) -> tuple:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+        import sys
+
+        python_exe = sys.executable or "python3"
+        server_params = StdioServerParameters(
+            command=python_exe,
+            args=["-m", "hermes.mcp.server"],
+            env=os.environ.copy()
+        )
+
+        # asyncio.timeout() (not wait_for) deliberately: wait_for wraps its
+        # coroutine in a brand-new Task via ensure_future, so pairing a
+        # wait_for-wrapped __aenter__ with a separately wait_for-wrapped
+        # __aexit__ runs them in two *different* ephemeral Tasks even when
+        # both calls originate from this same owner coroutine — anyio's
+        # cancel scopes bind to whichever Task called __aenter__, and exiting
+        # from a different one trips the same cross-task RuntimeError this
+        # class is otherwise built to avoid. asyncio.timeout() sets a
+        # deadline on the *current* task instead of spawning a new one, so
+        # every anyio scope entered here stays owned by this one Task for its
+        # entire enter-to-exit lifetime.
+        ctx = stdio_client(server_params)
+        session = None
+        try:
+            async with asyncio.timeout(self._CALL_TIMEOUT_S):
+                read, write = await ctx.__aenter__()
+            session = ClientSession(read, write)
+            await session.__aenter__()
+            async with asyncio.timeout(self._CALL_TIMEOUT_S):
+                await session.initialize()
+        except BaseException:
+            # A bootstrap that fails partway (e.g. the subprocess spawn or
+            # handshake itself times out) still leaves stdio_client's
+            # internal anyio TaskGroup/cancel scope open. Tear it down right
+            # here, in the same Task that opened it, instead of dropping the
+            # reference and letting Python's asyncgen GC hook close it later
+            # from an unrelated task — that's what produced the "closing of
+            # asynchronous generator" cross-task RuntimeError in production.
+            await self._teardown(session, ctx)
+            raise
+
+        self._ctx, self._session = ctx, session
+        return session, ctx
+
+    async def _teardown(self, session, ctx) -> tuple:
+        if session is not None:
             try:
-                await asyncio.wait_for(
-                    self._session.__aexit__(None, None, None),
-                    timeout=self._CLOSE_TIMEOUT_S,
-                )
+                async with asyncio.timeout(self._CLOSE_TIMEOUT_S):
+                    await session.__aexit__(None, None, None)
             except Exception as e:
                 logger.debug("Error exiting MCP ClientSession: %s", e)
-            self._session = None
-        if self._ctx is not None:
+        if ctx is not None:
             try:
-                await asyncio.wait_for(
-                    self._ctx.__aexit__(None, None, None),
-                    timeout=self._CLOSE_TIMEOUT_S,
-                )
+                async with asyncio.timeout(self._CLOSE_TIMEOUT_S):
+                    await ctx.__aexit__(None, None, None)
             except Exception as e:
                 logger.debug("Error exiting MCP stdio client: %s", e)
-            self._ctx = None
-            self._read_write = None
+        self._session = None
+        self._ctx = None
+        return None, None
+
+    async def _owner_loop(self) -> None:
+        """Owns the stdio session end-to-end: this Task is the only one that
+        ever enters or exits the stdio_client/ClientSession contexts."""
+        session, ctx = None, None
+        try:
+            while True:
+                item = await self._queue.get()
+                if item is None:
+                    break
+                tool_name, kwargs, fut, force_reset = item
+
+                if force_reset and session is not None:
+                    session, ctx = await self._teardown(session, ctx)
+
+                try:
+                    if session is None:
+                        session, ctx = await self._bootstrap()
+                    async with asyncio.timeout(self._CALL_TIMEOUT_S):
+                        result = await session.call_tool(tool_name, arguments=kwargs)
+                except asyncio.TimeoutError as exc:
+                    # The stdio subprocess is wedged (stalled sandbox response,
+                    # or a handshake that never completes). Reset the session
+                    # so the next call gets a fresh process instead of
+                    # retrying the same dead pipe and hanging again
+                    # immediately; surface this like any other broker failure
+                    # instead of hanging the caller forever.
+                    logger.error(
+                        "[MCP] %s timed out after %ss — resetting session",
+                        tool_name, self._CALL_TIMEOUT_S,
+                    )
+                    session, ctx = await self._teardown(session, ctx)
+                    if not fut.done():
+                        fut.set_exception(exc)
+                    continue
+                except Exception as exc:
+                    if not fut.done():
+                        fut.set_exception(exc)
+                    continue
+
+                if not fut.done():
+                    fut.set_result(result)
+        finally:
+            await self._teardown(session, ctx)
 
     async def _call_mcp(self, tool_name: str, **kwargs) -> Any:
-        async with self._call_lock:
-            current_loop = None
-            try:
-                current_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                pass
+        current_loop = asyncio.get_running_loop()
+        # A genuine loop change (or a test simulating one) invalidates
+        # whatever session the owner Task is holding — but the owner Task
+        # itself is the only thing allowed to close it, so signal via the
+        # queued request rather than reaching in and closing it here.
+        force_reset = self._loop is not None and self._loop != current_loop
+        self._loop = current_loop
+        self._ensure_owner(current_loop)
 
-            if self._session is not None and getattr(self, "_loop", None) != current_loop:
-                await self.close()
+        fut: asyncio.Future = current_loop.create_future()
+        await self._queue.put((tool_name, kwargs, fut, force_reset))
+        result = await fut
+        return self._decode_result(result)
 
-            try:
-                if self._session is None:
-                    self._loop = current_loop
-                    from mcp import ClientSession, StdioServerParameters
-                    from mcp.client.stdio import stdio_client
-                    import sys
-
-                    python_exe = sys.executable or "python3"
-                    server_params = StdioServerParameters(
-                        command=python_exe,
-                        args=["-m", "hermes.mcp.server"],
-                        env=os.environ.copy()
-                    )
-
-                    self._ctx = stdio_client(server_params)
-                    self._read_write = await asyncio.wait_for(
-                        self._ctx.__aenter__(), timeout=self._CALL_TIMEOUT_S)
-                    read, write = self._read_write
-                    self._session = ClientSession(read, write)
-                    await self._session.__aenter__()
-                    await asyncio.wait_for(
-                        self._session.initialize(), timeout=self._CALL_TIMEOUT_S)
-
-                result = await asyncio.wait_for(
-                    self._session.call_tool(tool_name, arguments=kwargs),
-                    timeout=self._CALL_TIMEOUT_S,
-                )
-            except asyncio.TimeoutError:
-                # The stdio subprocess is wedged (stalled sandbox response, or a
-                # handshake that never completes). Reset the session so the next
-                # call gets a fresh process instead of retrying the same dead
-                # pipe and hanging again immediately; surface this like any other
-                # broker failure instead of hanging the caller forever.
-                logger.error(
-                    "[MCP] %s timed out after %ss — resetting session",
-                    tool_name, self._CALL_TIMEOUT_S,
-                )
-                await self.close()
-                raise
-
+    def _decode_result(self, result: Any) -> Any:
         # Prefer structured content: FastMCP serialises the tool's actual return
         # value here losslessly. This server wraps every return — dicts, lists
         # and scalars alike — under a single "result" key.

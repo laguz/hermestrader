@@ -108,6 +108,101 @@ async def test_mcp_client_subprocess_lifecycle():
             await client.close()
 
 
+async def test_mcp_client_concurrent_tasks_survive_real_timeout_reset():
+    """Regression for the production incident: ReactiveController's
+    order-monitor loop task (polling get_orders() ~1s) and the main
+    event-consumer loop task both call into one shared MCPBrokerClient. This
+    uses the real subprocess (not mocks — AsyncMock's __aenter__/__aexit__
+    don't exercise anyio's real cancel-scope task-affinity check at all), so
+    a hung call from either Task must reset cleanly without ever raising
+    anyio's 'Attempted to exit cancel scope in a different task than it was
+    entered in' — which is what wedged the client (and, transitively,
+    MARKET_DATA/CLOCK_TICK processing) in production."""
+    env_override = {
+        "TRADIER_ACCESS_TOKEN": "mock-token",
+        "TRADIER_ACCOUNT_ID": "mock-account",
+        "TRADIER_BASE_URL": "https://sandbox.tradier.com/v1"
+    }
+    with patch.dict(os.environ, env_override):
+        client = MCPBrokerClient()
+        client._CALL_TIMEOUT_S = 0.05
+        try:
+            async def poller_task_call():
+                return await client.get_option_expirations("AAPL")
+
+            async def consumer_task_call():
+                return await client.get_account_balances()
+
+            # Two independently-scheduled Tasks, mirroring the order-monitor
+            # loop task vs. event-consumer loop task in production — neither
+            # is the Task that bootstraps the session, since bootstrap only
+            # happens lazily inside whichever call the owner loop processes
+            # first.
+            results = await asyncio.gather(
+                asyncio.create_task(poller_task_call()),
+                asyncio.create_task(consumer_task_call()),
+                return_exceptions=True,
+            )
+            for res in results:
+                assert isinstance(res, asyncio.TimeoutError), (
+                    f"expected a clean TimeoutError, got {res!r}"
+                )
+        finally:
+            # close() must complete without the cross-task anyio RuntimeError
+            # propagating out.
+            await client.close()
+        assert client._session is None
+        assert client._ctx is None
+
+
+async def test_mcp_client_partial_bootstrap_timeout_tears_down_immediately():
+    """Regression: if the stdio subprocess spawns fine (ctx.__aenter__
+    succeeds) but the MCP handshake (session.initialize()) hangs and times
+    out, the partially-built session/ctx must be torn down right then, in the
+    Task that created them — not dropped as bare local variables for
+    Python's asyncgen GC hook to close later from an unrelated Task (which is
+    exactly what trips anyio's cross-task cancel-scope RuntimeError). Spies
+    on the real ClientSession.__aexit__ instead of scraping for the error
+    message, since whether Python's cyclic GC actually runs (and when) isn't
+    deterministic within a test, but whether _bootstrap explicitly tore down
+    its partial state is."""
+    from mcp import ClientSession
+
+    exit_calls = []
+    real_aexit = ClientSession.__aexit__
+
+    async def spy_aexit(self, *args, **kwargs):
+        exit_calls.append(self)
+        return await real_aexit(self, *args, **kwargs)
+
+    async def hangs_forever(self, *args, **kwargs):
+        await asyncio.sleep(3600)
+
+    env_override = {
+        "TRADIER_ACCESS_TOKEN": "mock-token",
+        "TRADIER_ACCOUNT_ID": "mock-account",
+        "TRADIER_BASE_URL": "https://sandbox.tradier.com/v1"
+    }
+    with patch.dict(os.environ, env_override), \
+         patch.object(ClientSession, "__aexit__", spy_aexit), \
+         patch.object(ClientSession, "initialize", hangs_forever):
+        client = MCPBrokerClient()
+        # Real subprocess spawn (ctx.__aenter__) comfortably finishes well
+        # under this; the patched initialize() never will.
+        client._CALL_TIMEOUT_S = 2.0
+        try:
+            with pytest.raises(asyncio.TimeoutError):
+                await client.get_account_balances()
+
+            assert exit_calls, (
+                "session.initialize() timed out but ClientSession.__aexit__ "
+                "was never called — the partially-built session was left "
+                "for garbage collection instead of torn down immediately"
+            )
+        finally:
+            await client.close()
+
+
 async def test_mcp_client_multiblock_object_fallback():
     """When structured content is absent, each content block decodes
     independently into its own object."""
