@@ -262,6 +262,77 @@ async def test_mcp_client_recreates_session_on_loop_change():
         
         assert mock_session1.__aexit__.called
         assert mock_session2.call_tool.called
-        
+
         await client.close()
+
+
+async def test_mcp_client_serializes_concurrent_task_calls():
+    """Regression: _call_mcp only guarded against a different *event loop*
+    (via self._loop), not concurrent *tasks* on the same loop. In production
+    the order-monitor loop task (ReactiveController._order_monitor_loop,
+    polling get_orders() every ~1s) runs as an independent asyncio.Task
+    alongside the main event-consumer loop task, and both call into the same
+    MCPBrokerClient instance. Without serialization, two tasks can both
+    observe `self._session is None` and each bootstrap their own
+    stdio_client/ClientSession, orphaning one (never exited) and racing on
+    self._ctx/self._session assignment — which is what trips anyio's
+    cross-task cancel-scope RuntimeError on teardown. _call_mcp must
+    serialize so only one session is ever created and calls never overlap."""
+    client = MCPBrokerClient()
+
+    created_sessions = []
+    concurrent_calls = 0
+    max_concurrent = 0
+
+    def make_session():
+        session = AsyncMock()
+
+        async def call_tool(*args, **kwargs):
+            nonlocal concurrent_calls, max_concurrent
+            concurrent_calls += 1
+            max_concurrent = max(max_concurrent, concurrent_calls)
+            await asyncio.sleep(0.05)
+            concurrent_calls -= 1
+            resp = MagicMock()
+            resp.structuredContent = {"result": {"status": "ok"}}
+            return resp
+
+        session.call_tool = call_tool
+        return session
+
+    class _SlowStdioCtx:
+        async def __aenter__(self):
+            await asyncio.sleep(0.05)  # simulate slow subprocess bootstrap
+            return (MagicMock(), MagicMock())
+
+        async def __aexit__(self, *_exc):
+            return None
+
+    def stdio_client_factory(*_args, **_kwargs):
+        return _SlowStdioCtx()
+
+    def client_session_factory(*_args, **_kwargs):
+        session = make_session()
+        created_sessions.append(session)
+        return session
+
+    with patch("mcp.client.stdio.stdio_client", side_effect=stdio_client_factory), \
+         patch("mcp.ClientSession", side_effect=client_session_factory):
+
+        await asyncio.gather(
+            client.get_account_balances(),
+            client.get_account_balances(),
+        )
+
+    assert len(created_sessions) == 1, (
+        f"expected exactly one shared session, got {len(created_sessions)} — "
+        "concurrent tasks raced past the `if self._session is None` check "
+        "and each bootstrapped their own stdio session"
+    )
+    assert max_concurrent == 1, (
+        "call_tool invocations overlapped across tasks — the shared stdio "
+        "pipe was entered concurrently instead of being serialized"
+    )
+
+    await client.close()
 

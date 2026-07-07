@@ -35,6 +35,19 @@ class MCPBrokerClient(AbstractBroker):
         self._ctx = None
         self._read_write = None
         self._session = None
+        # Guards session bootstrap/call/reset below: the stdio subprocess
+        # speaks one request/response at a time over a single pipe, and
+        # _call_mcp is invoked from multiple independently-scheduled asyncio
+        # Tasks on the same loop (e.g. ReactiveController's order-monitor
+        # loop task polling get_orders() every ~1s, concurrently with the
+        # event-consumer loop task's own broker calls). Without this lock,
+        # two tasks can both observe `self._session is None`, each start
+        # their own stdio_client/ClientSession bootstrap, and race on
+        # assigning self._ctx/self._session — orphaning one session (never
+        # exited) and, in production, tripping anyio's cross-task
+        # cancel-scope RuntimeError when the orphaned generator is later
+        # garbage-collected from a different task than it was entered in.
+        self._call_lock = asyncio.Lock()
 
     @property
     def dry_run(self) -> bool:
@@ -68,54 +81,55 @@ class MCPBrokerClient(AbstractBroker):
             self._read_write = None
 
     async def _call_mcp(self, tool_name: str, **kwargs) -> Any:
-        current_loop = None
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            pass
+        async with self._call_lock:
+            current_loop = None
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
 
-        if self._session is not None and getattr(self, "_loop", None) != current_loop:
-            await self.close()
+            if self._session is not None and getattr(self, "_loop", None) != current_loop:
+                await self.close()
 
-        try:
-            if self._session is None:
-                self._loop = current_loop
-                from mcp import ClientSession, StdioServerParameters
-                from mcp.client.stdio import stdio_client
-                import sys
+            try:
+                if self._session is None:
+                    self._loop = current_loop
+                    from mcp import ClientSession, StdioServerParameters
+                    from mcp.client.stdio import stdio_client
+                    import sys
 
-                python_exe = sys.executable or "python3"
-                server_params = StdioServerParameters(
-                    command=python_exe,
-                    args=["-m", "hermes.mcp.server"],
-                    env=os.environ.copy()
+                    python_exe = sys.executable or "python3"
+                    server_params = StdioServerParameters(
+                        command=python_exe,
+                        args=["-m", "hermes.mcp.server"],
+                        env=os.environ.copy()
+                    )
+
+                    self._ctx = stdio_client(server_params)
+                    self._read_write = await asyncio.wait_for(
+                        self._ctx.__aenter__(), timeout=self._CALL_TIMEOUT_S)
+                    read, write = self._read_write
+                    self._session = ClientSession(read, write)
+                    await self._session.__aenter__()
+                    await asyncio.wait_for(
+                        self._session.initialize(), timeout=self._CALL_TIMEOUT_S)
+
+                result = await asyncio.wait_for(
+                    self._session.call_tool(tool_name, arguments=kwargs),
+                    timeout=self._CALL_TIMEOUT_S,
                 )
-
-                self._ctx = stdio_client(server_params)
-                self._read_write = await asyncio.wait_for(
-                    self._ctx.__aenter__(), timeout=self._CALL_TIMEOUT_S)
-                read, write = self._read_write
-                self._session = ClientSession(read, write)
-                await self._session.__aenter__()
-                await asyncio.wait_for(
-                    self._session.initialize(), timeout=self._CALL_TIMEOUT_S)
-
-            result = await asyncio.wait_for(
-                self._session.call_tool(tool_name, arguments=kwargs),
-                timeout=self._CALL_TIMEOUT_S,
-            )
-        except asyncio.TimeoutError:
-            # The stdio subprocess is wedged (stalled sandbox response, or a
-            # handshake that never completes). Reset the session so the next
-            # call gets a fresh process instead of retrying the same dead
-            # pipe and hanging again immediately; surface this like any other
-            # broker failure instead of hanging the caller forever.
-            logger.error(
-                "[MCP] %s timed out after %ss — resetting session",
-                tool_name, self._CALL_TIMEOUT_S,
-            )
-            await self.close()
-            raise
+            except asyncio.TimeoutError:
+                # The stdio subprocess is wedged (stalled sandbox response, or a
+                # handshake that never completes). Reset the session so the next
+                # call gets a fresh process instead of retrying the same dead
+                # pipe and hanging again immediately; surface this like any other
+                # broker failure instead of hanging the caller forever.
+                logger.error(
+                    "[MCP] %s timed out after %ss — resetting session",
+                    tool_name, self._CALL_TIMEOUT_S,
+                )
+                await self.close()
+                raise
 
         # Prefer structured content: FastMCP serialises the tool's actual return
         # value here losslessly. This server wraps every return — dicts, lists
