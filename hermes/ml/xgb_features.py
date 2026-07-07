@@ -381,7 +381,24 @@ class AsyncXGBPredictor:
             async with sem:
                 await self._sync_one_symbol(sym, start_date, end_date, intra_start)
 
-        await asyncio.gather(*(_bounded(sym) for sym in symbols))
+        try:
+            await asyncio.gather(*(_bounded(sym) for sym in symbols))
+        finally:
+            # _sync_history wraps this whole coroutine in a fresh
+            # asyncio.run() every cycle, on a threadpool executor thread —
+            # a new event loop each time. If self.broker (MCPBrokerClient,
+            # in mcp-broker mode) is left holding an open stdio session/owner
+            # Task when this coroutine returns, asyncio.run()'s own teardown
+            # force-cancels whatever's still running on this loop before
+            # closing it — including that owner Task, mid-cleanup, on a loop
+            # that's about to disappear. Closing explicitly, on this same
+            # loop, before asyncio.run() gets a chance to force it, is what
+            # avoids that: the next cycle's fresh asyncio.run() then starts
+            # with nothing left over to reconcile.
+            try:
+                await self.broker.close()
+            except Exception as exc:
+                logger.debug("Error closing ML broker after history sync: %s", exc)
 
     def _sync_history(self) -> None:
         if not hasattr(self.db, "save_daily_bars"):

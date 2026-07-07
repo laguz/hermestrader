@@ -83,6 +83,39 @@ async def test_cycle_flag_resets_after_completion(predictor):
     assert predictor._cycle_in_progress is False
 
 
+async def test_sync_history_async_closes_broker_even_on_symbol_failure(predictor):
+    """Regression: _sync_history runs _sync_history_async inside a fresh
+    asyncio.run() every cycle, from a threadpool executor thread — a brand
+    new event loop each time. If self.broker (MCPBrokerClient in
+    mcp-broker mode) is left holding an open stdio session/owner Task when
+    this coroutine returns, asyncio.run()'s own teardown force-cancels
+    whatever's still running on that loop — including the owner Task,
+    mid-cleanup, on a loop that's about to be destroyed — which is what
+    produced anyio's cross-task cancel-scope RuntimeError repeatedly in
+    production (every ~90s, via a completely different path than the
+    order-monitor/event-consumer Task race the mcp_client.py fix addresses).
+    _sync_history_async must always close the broker itself before
+    returning, regardless of whether every symbol synced cleanly, so
+    nothing is left over for asyncio.run() to force-cancel."""
+    close_calls = []
+
+    async def tracked_close():
+        close_calls.append(True)
+
+    predictor.broker.close = tracked_close
+
+    async def one_symbol_raises(sym, *args, **kwargs):
+        if sym == "AAPL":
+            raise RuntimeError("boom")
+
+    predictor._sync_one_symbol = one_symbol_raises
+
+    with pytest.raises(RuntimeError):
+        await predictor._sync_history_async(["AAPL", "SPY"])
+
+    assert close_calls, "broker.close() must run even when a symbol sync fails"
+
+
 async def test_sync_one_symbol_bounds_a_hanging_broker_call(predictor, monkeypatch):
     """MCPBrokerClient._call_mcp has no timeout of its own, so a stalled
     sandbox response makes broker.get_history() hang forever. Without a
