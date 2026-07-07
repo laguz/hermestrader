@@ -361,18 +361,24 @@ async def test_mcp_client_recreates_session_on_loop_change():
         await client.close()
 
 
-async def test_mcp_client_serializes_concurrent_task_calls():
-    """Regression: _call_mcp only guarded against a different *event loop*
-    (via self._loop), not concurrent *tasks* on the same loop. In production
-    the order-monitor loop task (ReactiveController._order_monitor_loop,
-    polling get_orders() every ~1s) runs as an independent asyncio.Task
-    alongside the main event-consumer loop task, and both call into the same
-    MCPBrokerClient instance. Without serialization, two tasks can both
-    observe `self._session is None` and each bootstrap their own
-    stdio_client/ClientSession, orphaning one (never exited) and racing on
-    self._ctx/self._session assignment — which is what trips anyio's
-    cross-task cancel-scope RuntimeError on teardown. _call_mcp must
-    serialize so only one session is ever created and calls never overlap."""
+async def test_mcp_client_multiplexes_concurrent_calls_over_one_session():
+    """Two invariants, one shared session.
+
+    (1) Bootstrap stays single-flight: concurrent tasks must not race past
+    the session-is-None check and each spawn their own stdio subprocess —
+    that's the orphaned-session bug that produced anyio's cross-task
+    cancel-scope RuntimeError.
+
+    (2) Calls themselves must OVERLAP, not queue single-file. MCP is JSON-RPC
+    with per-request ids (ClientSession routes each response to its own
+    stream) and the FastMCP server dispatches every request on its own task,
+    so serializing call_tool was pure loss — in production the one-at-a-time
+    channel meant every caller in the process (order-monitor polling
+    get_orders ~1s, the tick pipeline, reactive MARKET_DATA handlers, ML
+    history sync) queued behind ~1s-per-call throughput, and MARKET_DATA
+    processing blew its 90s budget waiting for the channel rather than doing
+    work. An earlier version of this test asserted max_concurrent == 1,
+    pinning that starvation as expected behavior."""
     client = MCPBrokerClient()
 
     created_sessions = []
@@ -421,13 +427,70 @@ async def test_mcp_client_serializes_concurrent_task_calls():
 
     assert len(created_sessions) == 1, (
         f"expected exactly one shared session, got {len(created_sessions)} — "
-        "concurrent tasks raced past the `if self._session is None` check "
+        "concurrent tasks raced past the session-is-None check "
         "and each bootstrapped their own stdio session"
     )
-    assert max_concurrent == 1, (
-        "call_tool invocations overlapped across tasks — the shared stdio "
-        "pipe was entered concurrently instead of being serialized"
+    assert max_concurrent == 2, (
+        "concurrent call_tool invocations were serialized instead of "
+        "multiplexed over the shared session — this re-creates the "
+        "single-file channel that starved MARKET_DATA processing"
     )
 
     await client.close()
+
+
+async def test_mcp_client_timeout_reset_is_generation_guarded():
+    """A hung call must reset the session without clobbering the *replacement*
+    session a later call is already using. The reset command carries the
+    generation the timed-out caller actually held; if the owner has since
+    torn down and re-bootstrapped, a stale reset must be a no-op — otherwise
+    every straggler timing out from an old generation would keep killing the
+    fresh session out from under healthy callers."""
+    client = MCPBrokerClient()
+    client._CALL_TIMEOUT_S = 0.1
+
+    created_sessions = []
+
+    def make_session(hang: bool):
+        session = AsyncMock()
+
+        async def call_tool(*args, **kwargs):
+            if hang:
+                await asyncio.sleep(3600)
+            resp = MagicMock()
+            resp.structuredContent = {"result": {"status": "ok"}}
+            return resp
+
+        session.call_tool = call_tool
+        return session
+
+    def client_session_factory(*_args, **_kwargs):
+        # First session hangs every call; the replacement works.
+        session = make_session(hang=len(created_sessions) == 0)
+        created_sessions.append(session)
+        return session
+
+    with patch("mcp.client.stdio.stdio_client") as mock_stdio, \
+         patch("mcp.ClientSession", side_effect=client_session_factory):
+        mock_stdio.return_value.__aenter__.return_value = (MagicMock(), MagicMock())
+
+        with pytest.raises(asyncio.TimeoutError):
+            await client.get_account_balances()
+        assert client._session is None, (
+            "timed-out call did not reset the session"
+        )
+
+        res = await client.get_account_balances()
+        assert res["status"] == "ok"
+        assert len(created_sessions) == 2
+
+        # A stale reset for generation 1 must not tear down generation 2.
+        stale_reset: asyncio.Future = asyncio.get_running_loop().create_future()
+        await client._queue.put(("reset", 1, stale_reset))
+        await stale_reset
+        assert client._session is not None, (
+            "a stale-generation reset tore down the healthy replacement session"
+        )
+
+        await client.close()
 

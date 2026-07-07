@@ -28,6 +28,13 @@ class MCPBrokerClient(AbstractBroker):
     # stalled response wedging the tick loop forever.
     _CALL_TIMEOUT_S = 30.0
     _CLOSE_TIMEOUT_S = 5.0
+    # In-flight requests are multiplexed over the one stdio session — MCP is
+    # JSON-RPC with per-request ids (ClientSession routes each response to
+    # its own per-request stream) and the FastMCP server dispatches every
+    # incoming request on its own task, so concurrency is protocol-safe end
+    # to end. The bound exists to keep a burst (MARKET_DATA fan-out across
+    # the whole watchlist) from stacking dozens of Tradier calls at once.
+    _MAX_CONCURRENT_CALLS = 6
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
@@ -35,24 +42,23 @@ class MCPBrokerClient(AbstractBroker):
         self._ctx = None
         self._session = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        # The stdio subprocess speaks one request/response at a time over a
-        # single pipe, and _call_mcp is invoked from multiple independently-
-        # scheduled asyncio Tasks on the same loop (e.g. ReactiveController's
-        # order-monitor loop task polling get_orders() every ~1s, concurrently
-        # with the event-consumer loop task's own broker calls). anyio's
-        # stdio_client/ClientSession context managers bind their cancel scopes
-        # to the *Task* that entered them — if one Task ever __aexit__s a
-        # session/ctx that a different Task __aenter__'d (e.g. a timeout fires
-        # on Task B for a session Task A bootstrapped), anyio raises
-        # "Attempted to exit cancel scope in a different task than it was
-        # entered in". A plain lock only serializes *access*; it doesn't stop
-        # different callers from being the ones to open vs. close the same
-        # context. So every bootstrap/call/teardown is funneled through one
-        # dedicated owner Task (_owner_loop) via a queue — enter and exit
-        # always happen inside that single Task, no matter which caller Task
-        # asked.
+        # anyio's stdio_client/ClientSession context managers bind their
+        # cancel scopes to the *Task* that entered them — if one Task ever
+        # __aexit__s a session/ctx that a different Task __aenter__'d (e.g. a
+        # timeout fires on Task B for a session Task A bootstrapped), anyio
+        # raises "Attempted to exit cancel scope in a different task than it
+        # was entered in". So the session *lifecycle* (bootstrap/teardown) is
+        # owned by one dedicated Task (_owner_loop), driven through a command
+        # queue — enter and exit always happen inside that single Task, no
+        # matter which caller asked. The calls themselves do NOT go through
+        # the owner: session.call_tool is safe to await from any Task
+        # concurrently (see _MAX_CONCURRENT_CALLS above), and serializing
+        # them was what starved MARKET_DATA processing — every caller in the
+        # process (order-monitor polling, tick pipeline, reactive handlers,
+        # ML history sync) queued behind a single ~1s-per-call channel.
         self._queue: Optional[asyncio.Queue] = None
         self._owner_task: Optional[asyncio.Task] = None
+        self._call_sem: Optional[asyncio.Semaphore] = None
 
     @property
     def dry_run(self) -> bool:
@@ -88,6 +94,7 @@ class MCPBrokerClient(AbstractBroker):
     def _ensure_owner(self, loop: asyncio.AbstractEventLoop) -> None:
         if self._owner_task is None or self._owner_task.done():
             self._queue = asyncio.Queue()
+            self._call_sem = asyncio.Semaphore(self._MAX_CONCURRENT_CALLS)
             self._owner_task = loop.create_task(self._owner_loop())
 
     async def _bootstrap(self) -> tuple:
@@ -154,62 +161,95 @@ class MCPBrokerClient(AbstractBroker):
         return None, None
 
     async def _owner_loop(self) -> None:
-        """Owns the stdio session end-to-end: this Task is the only one that
-        ever enters or exits the stdio_client/ClientSession contexts."""
+        """Owns the stdio session *lifecycle*: this Task is the only one that
+        ever enters or exits the stdio_client/ClientSession contexts. Callers
+        round-trip an ("ensure", ...) command to obtain the live session, then
+        await session.call_tool from their own Task — the MCP client
+        multiplexes concurrent requests by JSON-RPC id, so calls don't need
+        (and must not pay for) single-file access. The generation counter lets
+        a timed-out caller request a reset without racing a sibling that
+        already triggered one: a reset only tears down the session generation
+        the caller actually used."""
         session, ctx = None, None
+        generation = 0
         try:
             while True:
                 item = await self._queue.get()
                 if item is None:
                     break
-                tool_name, kwargs, fut, force_reset = item
-
-                if force_reset and session is not None:
-                    session, ctx = await self._teardown(session, ctx)
-
+                op, arg, fut = item
                 try:
-                    if session is None:
-                        session, ctx = await self._bootstrap()
-                    async with asyncio.timeout(self._CALL_TIMEOUT_S):
-                        result = await session.call_tool(tool_name, arguments=kwargs)
-                except asyncio.TimeoutError as exc:
-                    # The stdio subprocess is wedged (stalled sandbox response,
-                    # or a handshake that never completes). Reset the session
-                    # so the next call gets a fresh process instead of
-                    # retrying the same dead pipe and hanging again
-                    # immediately; surface this like any other broker failure
-                    # instead of hanging the caller forever.
-                    logger.error(
-                        "[MCP] %s timed out after %ss — resetting session",
-                        tool_name, self._CALL_TIMEOUT_S,
-                    )
-                    session, ctx = await self._teardown(session, ctx)
-                    if not fut.done():
-                        fut.set_exception(exc)
-                    continue
+                    if op == "ensure":
+                        if session is None:
+                            session, ctx = await self._bootstrap()
+                            generation += 1
+                        if not fut.done():
+                            fut.set_result((session, generation))
+                    elif op == "reset":
+                        if session is not None and arg == generation:
+                            session, ctx = await self._teardown(session, ctx)
+                        if not fut.done():
+                            fut.set_result(None)
+                    else:
+                        logger.warning("[MCP] Unknown owner command %r; dropping", op)
+                        if not fut.done():
+                            fut.set_result(None)
                 except Exception as exc:
+                    # _bootstrap tears down its own partial state on failure,
+                    # so session/ctx locals are still None here.
                     if not fut.done():
                         fut.set_exception(exc)
-                    continue
-
-                if not fut.done():
-                    fut.set_result(result)
         finally:
             await self._teardown(session, ctx)
 
     async def _call_mcp(self, tool_name: str, **kwargs) -> Any:
         current_loop = asyncio.get_running_loop()
-        # A genuine loop change (or a test simulating one) invalidates
-        # whatever session the owner Task is holding — but the owner Task
-        # itself is the only thing allowed to close it, so signal via the
-        # queued request rather than reaching in and closing it here.
-        force_reset = self._loop is not None and self._loop != current_loop
+        if (self._loop is not None and self._loop is not current_loop
+                and self._queue is not None):
+            # The owner Task belongs to another event loop (e.g. a previous
+            # asyncio.run() inside the ML executor thread). Nothing on it can
+            # be awaited from here; best-effort ask it to shut itself down —
+            # if its loop still runs, it tears down its own session in its
+            # own Task; if the loop is already gone, asyncio.run()'s teardown
+            # cancelled it and _owner_loop's finally did the cleanup there.
+            try:
+                self._queue.put_nowait(None)
+            except Exception as e:
+                logger.debug("Could not signal stale-loop MCP owner: %s", e)
+            self._owner_task = None
+            self._queue = None
         self._loop = current_loop
         self._ensure_owner(current_loop)
+        queue = self._queue
 
-        fut: asyncio.Future = current_loop.create_future()
-        await self._queue.put((tool_name, kwargs, fut, force_reset))
-        result = await fut
+        ensure_fut: asyncio.Future = current_loop.create_future()
+        await queue.put(("ensure", None, ensure_fut))
+        session, generation = await ensure_fut
+
+        async with self._call_sem:
+            try:
+                async with asyncio.timeout(self._CALL_TIMEOUT_S):
+                    result = await session.call_tool(tool_name, arguments=kwargs)
+            except asyncio.TimeoutError:
+                # The stdio subprocess is wedged (stalled sandbox response, or
+                # a handshake that never completes). Ask the owner to reset the
+                # session so the next call gets a fresh process instead of
+                # retrying the same dead pipe; surface this like any other
+                # broker failure instead of hanging the caller forever. Other
+                # calls in flight on this generation will fail as their
+                # streams close — they surface as ordinary broker errors at
+                # call sites that already handle them.
+                logger.error(
+                    "[MCP] %s timed out after %ss — resetting session",
+                    tool_name, self._CALL_TIMEOUT_S,
+                )
+                reset_fut: asyncio.Future = current_loop.create_future()
+                await queue.put(("reset", generation, reset_fut))
+                try:
+                    await reset_fut
+                except Exception as e:
+                    logger.debug("MCP session reset after timeout failed: %s", e)
+                raise
         return self._decode_result(result)
 
     def _decode_result(self, result: Any) -> Any:
