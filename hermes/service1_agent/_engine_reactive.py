@@ -33,9 +33,6 @@ from hermes.events.bus import (
     AIApprovalEvent,
     MarketDataEvent,
     OrderTrackedEvent,
-    ExecuteTickCommand,
-    ExecuteClockTickCommand,
-    ExecuteAIApprovalCommand,
     ExecuteMarketDataCommand,
     ExecuteOrderFillCommand,
     ProcessReactiveEntriesEvent,
@@ -55,13 +52,17 @@ logger = logging.getLogger("hermes.agent.core")
 class ReactiveController:
     """Event-loop runtime + reactive market-data / order-fill handlers."""
 
-    # _process_event round-trips back through the same EventBus (it emits an
-    # Execute*Command and awaits its future) that the *outer* handler used to
-    # get here in the first place — a burst of concurrent events can exhaust
+    # _process_event used to round-trip back through the same EventBus (emit
+    # an Execute*Command and await its future) that the *outer* handler used
+    # to get here in the first place — a burst of concurrent events exhausted
     # the bus's dispatch semaphore with outer handlers all blocked on their
     # own redis round-trip, deadlocking the single-threaded durable consumer
-    # loop forever (no exception, 0% CPU, no further ticks). Bound it so one
-    # stuck/deadlocked message can never wedge every future message behind it.
+    # loop (no exception, 0% CPU, no further ticks). _process_event and the
+    # internal handlers it reaches now call each command's single subscriber
+    # directly instead of re-entering the bus, so that deadlock can't form —
+    # this bound remains as the backstop so one genuinely stuck message (a
+    # wedged broker call, a hung DB write) can never wedge every future
+    # message behind it.
     _PROCESS_EVENT_TIMEOUT_S = 90.0
 
     # Quotes are only useful fresh: a MARKET_DATA message that sat in the
@@ -555,41 +556,34 @@ class ReactiveController:
                 logger.exception(f"[ENGINE] Event consumer loop error: {exc}")
 
     async def _process_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        # Every branch bypasses the EventBus/semaphore and calls its single
+        # subscriber's internal method directly. Routing through
+        # bus.emit()+cmd.future re-enters the very semaphore a MARKET_DATA
+        # burst saturates (see the class docstring above) — every permit held
+        # by outer MARKET_DATA dispatches awaiting *their own* durable
+        # round-trip, so the durable consumer can't get a permit to dispatch
+        # the Execute*Command it just emitted: a circular deadlock, bounded
+        # only by _PROCESS_EVENT_TIMEOUT_S. CLOCK_TICK got this bypass first
+        # (its starvation took the whole agent "offline" in the watcher);
+        # MARKET_DATA/ORDER_FILL/AI_APPROVAL/TICK deadlocked the same way —
+        # in production every single MARKET_DATA event burned the full 90s
+        # budget in that wait and was then acked with nothing done, so no
+        # reactive management ran at all during market hours. Each command
+        # here has exactly one subscriber (a thin wrapper that calls the same
+        # internal method), so calling it directly loses nothing.
         fut = payload.get("future")
-        bus = self.ctx.event_bus
         try:
             res = None
             if event_type == "TICK":
-                watchlist = payload["watchlist"]
-                cmd = ExecuteTickCommand(watchlist=watchlist)
-                bus.emit(cmd)
-                res = await cmd.future
+                res = await self.engine._run_tick_internal(payload["watchlist"])
             elif event_type == "CLOCK_TICK":
-                # Bypass the EventBus/semaphore for this internal re-dispatch.
-                # Routing through bus.emit()+cmd.future re-enters the very
-                # semaphore a MARKET_DATA burst can saturate (see the class
-                # docstring above) — every permit held by outer MARKET_DATA
-                # dispatches awaiting *their own* durable round-trip, so the
-                # durable consumer can't get a permit to emit
-                # ExecuteClockTickCommand either, and CLOCK_TICK starves
-                # behind a backlog it has nothing to do with.
-                # ExecuteClockTickCommand has exactly one subscriber
-                # (CascadingEngine.handle_execute_clock_tick), which just
-                # calls this same method, so calling it directly loses
-                # nothing.
                 res = await self.engine._handle_clock_tick_internal(payload["event"])
             elif event_type == "AI_APPROVAL":
-                cmd = ExecuteAIApprovalCommand(event=payload["event"])
-                bus.emit(cmd)
-                res = await cmd.future
+                res = await self.engine._handle_ai_approval_internal(payload["event"])
             elif event_type == "MARKET_DATA":
-                cmd = ExecuteMarketDataCommand(event=payload["event"])
-                bus.emit(cmd)
-                res = await cmd.future
+                res = await self._handle_market_data_internal(payload["event"])
             elif event_type == "ORDER_FILL":
-                cmd = ExecuteOrderFillCommand(event=payload["event"])
-                bus.emit(cmd)
-                res = await cmd.future
+                res = await self._handle_order_fill_internal(payload["event"])
             else:
                 logger.warning("[ENGINE] Unrecognized event_type %r; dropping", event_type)
 
@@ -694,9 +688,12 @@ class ReactiveController:
                 logger.exception("Management failure in %s for %s: %s", s.NAME, symbol, exc)
 
         if mgmt_actions:
+            # Direct handler call, not bus.emit()+await future: this runs
+            # inside the durable consumer's processing budget, and the bus
+            # semaphore may be fully held by outer MARKET_DATA dispatches
+            # that only this consumer can unblock (see _process_event).
             cmd = SubmitTradeActionsCommand(actions=mgmt_actions, action_type="management")
-            self.ctx.event_bus.emit(cmd)
-            await cmd.future
+            await self.engine.handle_submit_trade_actions(cmd)
 
         if old_price is not None and old_price != event.price:
             try:
@@ -721,9 +718,11 @@ class ReactiveController:
 
             if crossed:
                 try:
-                    ev_entries = ProcessReactiveEntriesEvent(symbol=symbol)
-                    self.ctx.event_bus.emit(ev_entries)
-                    await ev_entries.future
+                    # Direct call for the same semaphore-deadlock reason as
+                    # the management branch above; handle_process_reactive_
+                    # entries is this event's only subscriber and just wraps
+                    # this same method.
+                    await self.process_reactive_entries(symbol)
                 except Exception as exc:
                     logger.exception("Failed to process reactive entries for %s: %s", symbol, exc)
 
@@ -733,10 +732,16 @@ class ReactiveController:
             "[ENGINE] Order fill event received for order %s (%s %d shares/contracts of %s)",
             event.broker_order_id, event.side, event.quantity, event.symbol,
         )
+        # Every step below calls its command's single-subscriber handler
+        # directly, not bus.emit()+await future: this whole method runs
+        # inside the durable consumer's processing budget, and the bus
+        # semaphore may be fully held by outer MARKET_DATA dispatches that
+        # only this consumer can unblock (see _process_event). The handlers
+        # resolve each command's future themselves, so results still come
+        # back through cmd.future.
         try:
             cmd = SyncPositionsCommand()
-            self.ctx.event_bus.emit(cmd)
-            await cmd.future
+            await self.engine.handle_sync_positions(cmd)
         except Exception as exc:
             logger.exception("[ENGINE] Failed to sync positions on order fill event: %s", exc)
 
@@ -748,19 +753,17 @@ class ReactiveController:
 
         try:
             cmd = ReconcileOrphansCommand()
-            self.ctx.event_bus.emit(cmd)
-            await cmd.future
+            await self.engine.handle_reconcile_orphans(cmd)
         except Exception as exc:
             logger.exception("[ENGINE] Failed to reconcile orphans on order fill event: %s", exc)
 
         try:
             cmd = ProcessManagementCommand()
-            self.ctx.event_bus.emit(cmd)
+            await self.engine.handle_process_management(cmd)
             mgmt = await cmd.future
             if mgmt:
                 cmd_submit = SubmitTradeActionsCommand(actions=mgmt, action_type="management")
-                self.ctx.event_bus.emit(cmd_submit)
-                await cmd_submit.future
+                await self.engine.handle_submit_trade_actions(cmd_submit)
                 logger.info("[ENGINE] Reactively processed management post order fill: submitted %d actions", len(mgmt))
         except Exception as exc:
             logger.exception("[ENGINE] Failed to process management on order fill event: %s", exc)
@@ -769,7 +772,7 @@ class ReactiveController:
             watchlist = await self.ctx.db.watchlist.all_watchlist_symbols()
             if watchlist:
                 cmd = ProcessEntriesCommand(watchlist=watchlist)
-                self.ctx.event_bus.emit(cmd)
+                await self.engine.handle_process_entries(cmd)
                 num_entries = await cmd.future
                 logger.info("[ENGINE] Reactively processed entries post order fill: placed %d entries", num_entries)
         except Exception as exc:
@@ -827,9 +830,10 @@ class ReactiveController:
                     )
                 optimized_actions = optimized_actions[:max_per_tick]
 
+            # Direct handler call — runs inside the durable consumer's budget,
+            # where the bus semaphore may be saturated (see _process_event).
             cmd = SubmitTradeActionsCommand(actions=optimized_actions, action_type="entry")
-            self.ctx.event_bus.emit(cmd)
-            await cmd.future
+            await self.engine.handle_submit_trade_actions(cmd)
             if optimized_actions:
                 await self.ctx.mm.sync_broker_orders()
         else:
@@ -898,8 +902,7 @@ class ReactiveController:
                         scaled_actions = scaled_actions[:remaining]
 
                     cmd = SubmitTradeActionsCommand(actions=scaled_actions, action_type="entry")
-                    self.ctx.event_bus.emit(cmd)
-                    await cmd.future
+                    await self.engine.handle_submit_trade_actions(cmd)
                     tick_submitted += len(scaled_actions)
 
                     if scaled_actions:

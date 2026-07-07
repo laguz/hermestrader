@@ -500,3 +500,155 @@ async def test_clock_tick_survives_saturated_dispatch_semaphore():
         bus._dispatch_sem.release()
         await bus.stop()
 
+
+
+@pytest.mark.asyncio
+async def test_market_data_survives_saturated_dispatch_semaphore():
+    """Completion of the PR-#206 fix (paper, 2026-07-07): CLOCK_TICK got the
+    direct-call bypass, but _process_event's MARKET_DATA branch still
+    round-tripped through the bus (emit ExecuteMarketDataCommand + await
+    cmd.future) — under a burst, every dispatch permit is held by outer
+    MarketDataEvent handlers awaiting durable round-trips that only this
+    consumer can resolve, so *every single* MARKET_DATA event burned the full
+    _PROCESS_EVENT_TIMEOUT_S budget in that circular wait and was acked with
+    nothing done. Observed on the paper agent as a metronomic 90s-interval
+    timeout with zero reactive management running during market hours.
+
+    MARKET_DATA processing — including the transitive submit of management
+    actions, which used to be a second bus round-trip inside
+    _handle_market_data_internal — must complete even while every
+    dispatch-semaphore permit is held by unrelated stuck events.
+    """
+    from hermes.service1_agent.core import TradeAction
+
+    db = StubDB()
+    broker = StubBroker()
+    db.watchlist.set_watchlist("DUMMY", ["AAPL"])
+    bus = EventBus(max_concurrent_dispatch=1)
+    bus.start()
+
+    strategy = DummyStrategy(broker, db)
+    mgmt_action = TradeAction(
+        strategy_id="DUMMY", symbol="AAPL", side="sell",
+        order_class="equity", legs=[], quantity=1, price=100.0,
+    )
+
+    async def manage_with_action():
+        strategy.manage_positions_called = True
+        return [mgmt_action]
+
+    strategy.manage_positions = manage_with_action
+
+    engine = CascadingEngine(
+        broker=broker, db=db, strategies=[strategy],
+        approval_mode=False, event_bus=bus,
+        config={"max_orders_per_tick": 5},
+    )
+
+    submitted = []
+
+    async def fake_submit(cmd):
+        submitted.extend(cmd.actions)
+        if cmd.future and not cmd.future.done():
+            cmd.future.set_result(None)
+
+    engine.handle_submit_trade_actions = fake_submit
+    # Make the strategy hold AAPL so the management sweep runs for it.
+    engine.reactive._strategies_holding_symbol = AsyncMock(return_value=[strategy])
+
+    await bus._dispatch_sem.acquire()
+    try:
+        assert bus._dispatch_sem.locked()
+
+        fut = asyncio.get_running_loop().create_future()
+        ev = MarketDataEvent(symbol="AAPL", price=100.0)
+        await asyncio.wait_for(
+            engine.reactive._process_event(
+                "MARKET_DATA", {"event": ev, "future": fut}
+            ),
+            timeout=1.0,
+        )
+
+        assert strategy.manage_positions_called, (
+            "MARKET_DATA must reach _handle_market_data_internal directly"
+        )
+        assert submitted == [mgmt_action], (
+            "management actions must reach handle_submit_trade_actions "
+            "without a bus round-trip"
+        )
+        assert fut.done() and fut.exception() is None
+    finally:
+        bus._dispatch_sem.release()
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_tick_ai_approval_order_fill_survive_saturated_dispatch_semaphore():
+    """Same deadlock, remaining _process_event branches: TICK, AI_APPROVAL
+    and ORDER_FILL also used to re-enter the saturated bus. Each must reach
+    its single subscriber's internal method directly."""
+    db = StubDB()
+    broker = StubBroker()
+    bus = EventBus(max_concurrent_dispatch=1)
+    bus.start()
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[], event_bus=bus)
+
+    calls = []
+
+    async def fake_tick(watchlist):
+        calls.append(("tick", watchlist))
+        return {"entries": 0}
+
+    async def fake_ai(event):
+        calls.append(("ai", event))
+        return None
+
+    async def fake_fill(event):
+        calls.append(("fill", event))
+        return None
+
+    engine._run_tick_internal = fake_tick
+    engine._handle_ai_approval_internal = fake_ai
+    engine.reactive._handle_order_fill_internal = fake_fill
+
+    await bus._dispatch_sem.acquire()
+    try:
+        assert bus._dispatch_sem.locked()
+        loop = asyncio.get_running_loop()
+
+        fut = loop.create_future()
+        await asyncio.wait_for(
+            engine.reactive._process_event(
+                "TICK", {"watchlist": ["AAPL"], "future": fut}
+            ),
+            timeout=1.0,
+        )
+        assert fut.done() and fut.result() == {"entries": 0}
+
+        fut = loop.create_future()
+        await asyncio.wait_for(
+            engine.reactive._process_event(
+                "AI_APPROVAL", {"event": object(), "future": fut}
+            ),
+            timeout=1.0,
+        )
+        assert fut.done() and fut.exception() is None
+
+        fill_ev = OrderFillEvent(
+            broker_order_id="1", symbol="AAPL", side="buy",
+            quantity=1, price=100.0, status="filled",
+        )
+        fut = loop.create_future()
+        await asyncio.wait_for(
+            engine.reactive._process_event(
+                "ORDER_FILL", {"event": fill_ev, "future": fut}
+            ),
+            timeout=1.0,
+        )
+        assert fut.done() and fut.exception() is None
+
+        assert [c[0] for c in calls] == ["tick", "ai", "fill"]
+    finally:
+        bus._dispatch_sem.release()
+        await bus.stop()
