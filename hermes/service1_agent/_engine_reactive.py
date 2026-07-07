@@ -565,9 +565,19 @@ class ReactiveController:
                 bus.emit(cmd)
                 res = await cmd.future
             elif event_type == "CLOCK_TICK":
-                cmd = ExecuteClockTickCommand(event=payload["event"])
-                bus.emit(cmd)
-                res = await cmd.future
+                # Bypass the EventBus/semaphore for this internal re-dispatch.
+                # Routing through bus.emit()+cmd.future re-enters the very
+                # semaphore a MARKET_DATA burst can saturate (see the class
+                # docstring above) — every permit held by outer MARKET_DATA
+                # dispatches awaiting *their own* durable round-trip, so the
+                # durable consumer can't get a permit to emit
+                # ExecuteClockTickCommand either, and CLOCK_TICK starves
+                # behind a backlog it has nothing to do with.
+                # ExecuteClockTickCommand has exactly one subscriber
+                # (CascadingEngine.handle_execute_clock_tick), which just
+                # calls this same method, so calling it directly loses
+                # nothing.
+                res = await self.engine._handle_clock_tick_internal(payload["event"])
             elif event_type == "AI_APPROVAL":
                 cmd = ExecuteAIApprovalCommand(event=payload["event"])
                 bus.emit(cmd)

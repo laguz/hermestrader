@@ -2,7 +2,7 @@ import asyncio
 import json
 import pytest
 from unittest.mock import AsyncMock
-from hermes.events.bus import EventBus, MarketDataEvent, OrderFillEvent
+from hermes.events.bus import EventBus, MarketDataEvent, OrderFillEvent, ClockTickEvent
 from hermes.service1_agent.core import CascadingEngine, AbstractStrategy
 from ._stubs import StubDB, StubBroker
 
@@ -445,5 +445,58 @@ async def test_durable_loop_bounds_a_deadlocked_process_event():
             await loop_task
         except asyncio.CancelledError:
             pass
+        await bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_clock_tick_survives_saturated_dispatch_semaphore():
+    """Production incident (paper, 2026-07-07): a pre-market MARKET_DATA
+    burst held every permit of EventBus's dispatch semaphore (outer
+    MarketDataEvent handlers each blocked awaiting their own durable-consumer
+    round-trip). _process_event's old CLOCK_TICK branch re-entered that same
+    saturated bus (bus.emit(ExecuteClockTickCommand) + await cmd.future),
+    so the durable consumer could never get a permit to dispatch it either —
+    a genuine circular deadlock. Each attempt was eventually bounded by
+    _PROCESS_EVENT_TIMEOUT_S (see test_durable_loop_bounds_a_deadlocked_
+    process_event above), but the very next tick hit the same saturated
+    semaphore and starved too: no tick completed for over an hour, and the
+    watcher showed the agent as offline.
+
+    CLOCK_TICK must complete even while every dispatch-semaphore permit is
+    held by unrelated stuck events.
+    """
+    db = StubDB()
+    broker = StubBroker()
+    bus = EventBus(max_concurrent_dispatch=1)
+    bus.start()
+
+    engine = CascadingEngine(broker=broker, db=db, strategies=[], event_bus=bus)
+
+    tick_calls = []
+
+    async def _fake_clock_tick_internal(event):
+        tick_calls.append(event)
+        return {"managed": 0, "entries": 0}
+
+    engine._handle_clock_tick_internal = _fake_clock_tick_internal
+
+    # Saturate the bus's only dispatch permit, like a backlog of outer
+    # MarketDataEvent handlers each awaiting their own stuck round-trip.
+    await bus._dispatch_sem.acquire()
+    try:
+        assert bus._dispatch_sem.locked()
+
+        fut = asyncio.get_running_loop().create_future()
+        await asyncio.wait_for(
+            engine.reactive._process_event(
+                "CLOCK_TICK", {"event": ClockTickEvent(), "future": fut}
+            ),
+            timeout=1.0,
+        )
+
+        assert tick_calls, "CLOCK_TICK must reach _handle_clock_tick_internal directly"
+        assert fut.done() and fut.result() == {"managed": 0, "entries": 0}
+    finally:
+        bus._dispatch_sem.release()
         await bus.stop()
 
