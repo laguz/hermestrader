@@ -504,10 +504,13 @@ class CreditSpreadStrategy(AbstractStrategy):
                         f"debit ${mid_debit:.2f} >= entry credit ${entry_credit:.2f})"
                     )
                 else:
-                    actions.append(self._close_action(trade, exec_debit, close_reason))
+                    max_price = None
+                    if "TP" in close_reason:
+                        max_price = round(entry_credit - self._tp_profit(entry_credit, width, dte, t), 2)
+                    actions.append(self._close_action(trade, exec_debit, close_reason, max_price=max_price))
         return actions
 
-    def _close_action(self, trade, debit, reason) -> TradeAction:
+    def _close_action(self, trade, debit, reason, max_price=None) -> TradeAction:
         # Cap the close limit at the spread width: a W-wide credit spread can
         # never be worth more than W to close, so never bid above it (a 5-wide
         # must not go out at 5.10). The 5% marketability buffer applies only up
@@ -517,6 +520,8 @@ class CreditSpreadStrategy(AbstractStrategy):
         width = trade.get("width")
         if width:
             price = min(price, round(float(width), 2))
+        if max_price is not None:
+            price = min(price, round(float(max_price), 2))
         return TradeAction(
             strategy_id=self.strategy_id, symbol=trade["symbol"],
             order_class="multileg",
