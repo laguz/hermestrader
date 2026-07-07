@@ -359,6 +359,34 @@ async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
     assert "HERMES_CS7_CLOSE_TP-2pctW" in actions[0].tag
 
 
+async def test_cs75_tp_exit_price_capped_at_target():
+    db = StubDB()
+    # Entry credit is 0.40, width is 5.00
+    # TP target is 50% for DTE 30 (since 21 <= 30 <= 45), so TP threshold is 0.20
+    trade = make_trade("CS75", "AAPL", entry_credit=0.40, width=5.00, short_strike=90.0, long_strike=85.0, days_to_expiry=30)
+    db.set_open_trades("CS75", [trade])
+    s, broker, _ = _build(CreditSpreads75, db=db)
+
+    # 1. Quote with exec_debit = 0.23 - 0.01 = 0.22 (does not clear 0.20 target)
+    s.broker._shared_cache.quotes.clear()
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.17, "ask": 0.23},
+        {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.05},
+    ]
+    actions = await s.manage_positions()
+    assert actions == []
+
+    # 2. Quote with exec_debit = 0.21 - 0.01 = 0.20 (clears 0.20 target)
+    # Price 0.20 * 1.05 = 0.21, but capped at 0.20.
+    s.broker._shared_cache.quotes.clear()
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.19, "ask": 0.21},
+        {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.03},
+    ]
+    actions = await s.manage_positions()
+    assert len(actions) == 1
+    assert "HERMES_CS75_CLOSE_TP-50" in actions[0].tag
+    assert actions[0].price == 0.20
 
 
 # ── strategy _log task references ────────────────────────────────────────────
