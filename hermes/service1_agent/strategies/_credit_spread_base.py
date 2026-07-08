@@ -477,25 +477,17 @@ class CreditSpreadStrategy(AbstractStrategy):
                     f"exec_debit ${exec_debit:.2f} >= width ${width:.2f} (max loss)"
                 )
                 close_reason = None
-            # Take-Profit real-fill cap: mid_debit can clear the TP threshold on a
-            # wide bid-ask market (nobody would actually fill you there) while the
-            # real cost — exec_debit — is several times higher. Re-run this
-            # strategy's own close rule against exec_debit and only keep the TP
-            # if the *real* number also clears the same threshold, not merely
-            # "less than what was collected" (which let a real fill many times
-            # the TP level still register as a "profit take").
-            if close_reason and "TP" in close_reason:
-                exec_reason = (
-                    self._close_reason(trade, dte, exec_debit, entry_credit, width, t)
-                    if exec_debit is not None else None
-                )
-                if not exec_reason or "TP" not in exec_reason:
-                    self._log(
-                        f"ℹ️ {trade['symbol']} {trade.get('side_type')}: TP suppressed — "
-                        f"mid_debit ${mid_debit:.2f} hit the TP target but exec_debit "
-                        f"${exec_debit:.2f} does not clear it (wide market; real fill isn't at target)"
-                    )
-                    close_reason = None
+            # No exec_debit recheck for TP: the close order's limit price below
+            # is always capped at the TP target via max_price, regardless of
+            # how wide exec_debit is — so a wide market can't make this
+            # overpay. It just posts a resting limit at the real target price;
+            # if the market never reaches it the order won't fill, and
+            # TransactionManager.upsert_positions() re-arms the trade back to
+            # OPEN once it notices the close order stopped resting. Requiring
+            # exec_debit to independently clear the same threshold before
+            # ever trying only delayed genuine TPs on structurally wide
+            # (e.g. cheap/illiquid) option markets without buying any extra
+            # price safety.
             if close_reason:
                 # Morning pricing guard: before 10:30 AM ET, don't close unless in profit.
                 if self.is_morning_unreliable() and mid_debit >= entry_credit:
