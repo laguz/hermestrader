@@ -149,9 +149,9 @@ def check_for_updates() -> None:
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "error": error_msg
         }
-        import asyncio
-        asyncio.run(db.settings.set_setting("update_status", json.dumps(payload)))
-        asyncio.run(db.logs.write_log("ENGINE", f"Startup update check completed. Update available: {update_available}"))
+        from hermes.ml.predictor_config import run_maybe_async
+        run_maybe_async(db.settings.set_setting, "update_status", json.dumps(payload))
+        run_maybe_async(db.logs.write_log, "ENGINE", f"Startup update check completed. Update available: {update_available}")
     except Exception as e:
         logger.warning("Failed to save update status to DB: %s", e)
 

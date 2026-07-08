@@ -109,7 +109,8 @@ class AbstractStrategy(ABC):
             self._pending_log_tasks.add(task)
             task.add_done_callback(self._pending_log_tasks.discard)
         except RuntimeError:
-            asyncio.run(self.db.logs.write_log(self.strategy_id, msg))
+            from hermes.ml.predictor_config import run_maybe_async
+            run_maybe_async(self.db.logs.write_log, self.strategy_id, msg)
 
     async def find_expiry_in_dte_range(self, symbol: str, min_dte: int, max_dte: int,
                                  prefer: str = "max") -> Optional[str]:

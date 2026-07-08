@@ -20,6 +20,7 @@ import io
 import logging
 import time
 import threading
+import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple
 
@@ -238,16 +239,33 @@ class HermesChartProvider:
         self._cache: Dict[str, Tuple[float, bytes]] = {}
 
     def start(self, symbols) -> None:
-        """Warm up the cache for `symbols` in a background thread."""
-        def _warm():
-            import asyncio
-            for sym in symbols:
-                try:
-                    asyncio.run(self._render_and_cache(sym))
-                except Exception as exc:
-                    logger.debug("Chart warm-up failed for %s: %s", sym, exc)
-        t = threading.Thread(target=_warm, name="chart-warmup", daemon=True)
-        t.start()
+        """Warm up the cache for `symbols`."""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._warm_async(symbols))
+        except RuntimeError:
+            def _warm():
+                import asyncio
+                from hermes.ml.predictor_config import _MAIN_LOOP
+                for sym in symbols:
+                    try:
+                        if _MAIN_LOOP is not None and _MAIN_LOOP.is_running():
+                            coro = self._render_and_cache(sym)
+                            future = asyncio.run_coroutine_threadsafe(coro, _MAIN_LOOP)
+                            future.result()
+                        else:
+                            asyncio.run(self._render_and_cache(sym))
+                    except Exception as exc:
+                        logger.debug("Chart warm-up failed for %s: %s", sym, exc)
+            t = threading.Thread(target=_warm, name="chart-warmup", daemon=True)
+            t.start()
+
+    async def _warm_async(self, symbols) -> None:
+        for sym in symbols:
+            try:
+                await self._render_and_cache(sym)
+            except Exception as exc:
+                logger.debug("Chart warm-up failed for %s: %s", sym, exc)
 
     async def snapshot(self, symbol: str) -> Optional[bytes]:
         """Return cached PNG bytes, re-rendering if stale. Returns None on failure."""
