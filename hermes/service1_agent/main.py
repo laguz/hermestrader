@@ -437,13 +437,47 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     trigger_task = asyncio.create_task(_trigger_monitor_loop())
 
+    # Liveness watchdog: if the durable event consumer wedges (the class of
+    # bug fixed in PR #209 for MARKET_DATA — CLOCK_TICK silently stops being
+    # dispatched while the process stays up and `docker ps` shows healthy),
+    # nothing else notices. Force-exit past a stale threshold so Docker's
+    # `restart: unless-stopped` policy brings back a clean process instead of
+    # the agent sitting wedged until a human happens to check on it.
+    async def _liveness_watchdog_loop() -> None:
+        from hermes.service1_agent.liveness import seconds_since_last_tick
+        threshold_s = max(3 * runtime_config.tick_interval, 1800)
+        while not _ASYNC_SHUTDOWN_EVENT.is_set():
+            try:
+                await asyncio.sleep(60)
+                if _ASYNC_SHUTDOWN_EVENT.is_set():
+                    break
+                stale_s = seconds_since_last_tick()
+                if stale_s > threshold_s:
+                    log.critical(
+                        "[WATCHDOG] No clock tick processed in %.0fs (threshold %.0fs) "
+                        "— the durable event consumer appears wedged; forcing process "
+                        "exit so Docker can restart it.", stale_s, threshold_s,
+                    )
+                    os._exit(1)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                log.exception("[WATCHDOG] liveness check failed")
+
+    watchdog_task = asyncio.create_task(_liveness_watchdog_loop())
+
     # Wait for the shutdown signal
     await _ASYNC_SHUTDOWN_EVENT.wait()
 
-    # Clean up trigger monitor, stream client, scheduler, overseer, event bus on exit
+    # Clean up trigger monitor, watchdog, stream client, scheduler, overseer, event bus on exit
     trigger_task.cancel()
+    watchdog_task.cancel()
     try:
         await trigger_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await watchdog_task
     except asyncio.CancelledError:
         pass
 

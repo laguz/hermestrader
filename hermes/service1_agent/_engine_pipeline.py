@@ -723,6 +723,12 @@ class PipelineController:
         from hermes.market_hours import market_session, next_open
         from datetime import datetime, timezone
         import time
+        from hermes.service1_agent.liveness import mark_tick_alive
+
+        # Reaching this point proves the durable event consumer dispatched a
+        # CLOCK_TICK — the liveness watchdog in main.py uses this to detect a
+        # wedged consumer (see liveness.py) and self-heal via process restart.
+        mark_tick_alive()
 
         if not ctx.control_state:
             logger.warning("[ENGINE] handle_clock_tick: control_state is not set on the engine.")
