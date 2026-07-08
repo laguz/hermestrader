@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from typing import Any, Dict, Optional
 
 from hermes.common import (
@@ -131,7 +132,34 @@ from hermes.utils import utcnow_iso as _utcnow_iso
 # toggle takes effect within one tick interval.
 # ---------------------------------------------------------------------------
 def run(chart_provider, conf: Dict[str, Any]) -> None:
-    asyncio.run(_run_async(chart_provider, conf))
+    """Supervised run loop: an unhandled exception anywhere in `_run_async`
+    (startup or the main body) must not take the whole process down — that's
+    exactly what happened 2026-07-08 (a stray `NameError` in chart_provider
+    startup killed the container outright with nothing to bring it back).
+    Catch, log loudly, and restart in-process with capped backoff instead of
+    exiting, so a bug can't cost trading uptime while it's being fixed. A
+    clean shutdown (SIGTERM/SIGINT — `_run_async` returns normally once
+    `_SHUTDOWN_EVENT` is set) still exits normally, and a crash racing with
+    an in-flight shutdown request doesn't get retried either.
+    """
+    backoff_s = 2.0
+    while True:
+        try:
+            asyncio.run(_run_async(chart_provider, conf))
+            return
+        except Exception:
+            if _SHUTDOWN_EVENT.is_set():
+                log.critical(
+                    "[SUPERVISOR] Agent raised while a shutdown was already "
+                    "in progress — exiting instead of restarting.", exc_info=True)
+                return
+            log.critical(
+                "[SUPERVISOR] Agent crashed with an unhandled exception — "
+                "restarting in-process in %.0fs instead of leaving the "
+                "container dead. THIS NEEDS A ROOT-CAUSE FIX.",
+                backoff_s, exc_info=True)
+            time.sleep(backoff_s)
+            backoff_s = min(backoff_s * 2, 60.0)
 
 
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
