@@ -137,7 +137,7 @@ async def test_bug_8_agent_reactive_ml_warn(caplog):
     from hermes.service1_agent.agent_reactive import handle_ipc_command
     event_bus = MagicMock()
     with caplog.at_level(logging.WARNING):
-        await handle_ipc_command({"action": "trigger_ml"}, MagicMock(), db, {}, event_bus)
+        await handle_ipc_command({"action": "trigger_ml"}, MagicMock(), db, {}, event_bus, MagicMock())
         assert any("Failed to set ml_force_run setting reactively" in r.message for r in caplog.records)
 
 @pytest.mark.asyncio

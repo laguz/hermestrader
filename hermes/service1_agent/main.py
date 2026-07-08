@@ -350,7 +350,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     await ipc.connect(db)
 
     async def _ipc_callback(data: dict):
-        await handle_ipc_command(data, control_state, db, conf, event_bus)
+        await handle_ipc_command(data, control_state, db, conf, event_bus, engine)
 
     await ipc.subscribe(IPC_CHANNEL_AGENT_COMMANDS, _ipc_callback)
 

@@ -681,11 +681,45 @@ class PipelineController:
     # trading work is delegated back to ``engine._run_tick_internal`` (and the
     # phase methods ``engine.sync_positions`` / ``engine.reconcile_orphans``) so
     # those remain the single seams tests monkeypatch.
+    async def execute_approved_actions(self) -> int:
+        """Send every operator-``APPROVED`` action to the broker; returns the count attempted.
+
+        Shared by the slow heartbeat (below) and the reactive IPC
+        ``trigger_approvals`` signal published right after an operator
+        decides an approval — so a decision reaches the broker within
+        seconds instead of waiting for the next heartbeat
+        (``tick_interval_s``, e.g. 900s). Safe to call from both places
+        concurrently: ``fetch_approved_actions()`` only returns rows still
+        in ``APPROVED`` status, so whichever call processes a row first
+        flips its status and the other finds nothing left to do for it.
+
+        Each action is isolated in its own try/except: one action raising
+        (broker/DB hiccup outside ``_execute_approved_action``'s own
+        internal handling) must not stop the rest of the batch from being
+        attempted — previously a single failure partway through silently
+        dropped every approval queued after it until the next heartbeat.
+        """
+        from hermes.service1_agent.agent_approvals import _execute_approved_action
+        ctx = self.ctx
+        attempted = 0
+        try:
+            approved_actions = await ctx.db.approvals.fetch_approved_actions()
+        except Exception as exc:
+            logger.warning("Fetching approved actions failed: %s", exc)
+            return 0
+        for item in approved_actions:
+            attempted += 1
+            try:
+                await _execute_approved_action(item, broker=ctx.broker.broker, db=ctx.db)
+            except Exception as exc:
+                logger.warning("Executing approved action id=%s failed: %s",
+                                item.get("id"), exc)
+        return attempted
+
     async def handle_clock_tick_internal(self, event: ClockTickEvent) -> None:
         engine = self.engine
         ctx = self.ctx
         from hermes.service1_agent.agent_risk import enforce_daily_loss_limit
-        from hermes.service1_agent.agent_approvals import _execute_approved_action
         from hermes.market_hours import market_session, next_open
         from datetime import datetime, timezone
         import time
@@ -774,13 +808,10 @@ class PipelineController:
                 except Exception as ping_exc:
                     logger.warning("[ENGINE] Periodic LLM ping failed: %s", ping_exc)
 
-            # 5. Execute approved actions
-            try:
-                approved_actions = await ctx.db.approvals.fetch_approved_actions()
-                for item in approved_actions:
-                    await _execute_approved_action(item, broker=ctx.broker.broker, db=ctx.db)
-            except Exception as exc:
-                logger.warning("Executing approved actions failed: %s", exc)
+            # 5. Execute approved actions — backstop for the reactive IPC
+            # trigger (execute_approved_actions() above), in case that signal
+            # was dropped or the agent was down when the operator decided.
+            await self.execute_approved_actions()
 
             # 5b. POP outcome calibration (throttled internally; never fatal)
             await self.maybe_refit_pop_calibrator()

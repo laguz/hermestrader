@@ -114,7 +114,7 @@ async def prewarm_quote_chain_cache(engine, db, conf: Dict[str, Any], shutdown_e
         log.warning("[PRE-WARM] General cache pre-warm tick failed: %s", exc)
 
 
-async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any], event_bus) -> None:
+async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any], event_bus, engine) -> None:
     """Dispatch an inbound IPC message from the agent-commands channel.
 
     Either a serialized DB event (``event_type`` + ``payload``) to re-emit on the
@@ -154,6 +154,12 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
         event_bus.emit(DrainOperatorCommandsCommand())
     elif action == IPC_ACTION_TRIGGER_APPROVALS:
         log.info("[IPC] Received trigger approvals signal reactively")
+        # This must actually send the approved action(s) to the broker, not
+        # just refresh a cache: it's the whole reason the watcher fires this
+        # signal right after an operator decision, instead of leaving the
+        # trade to wait for the next slow heartbeat tick (tick_interval_s,
+        # e.g. 900s).
+        await engine.execute_approved_actions()
         await control_state.refresh_approvals(db)
     elif action == IPC_ACTION_SYNC_SETTINGS:
         log.info("[IPC] Received sync settings signal reactively")
