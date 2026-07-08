@@ -172,9 +172,10 @@ class MCPBrokerClient(AbstractBroker):
         the caller actually used."""
         session, ctx = None, None
         generation = 0
+        queue = self._queue
         try:
             while True:
-                item = await self._queue.get()
+                item = await queue.get()
                 if item is None:
                     break
                 op, arg, fut = item
@@ -201,6 +202,16 @@ class MCPBrokerClient(AbstractBroker):
                         fut.set_exception(exc)
         finally:
             await self._teardown(session, ctx)
+            if queue is not None:
+                while not queue.empty():
+                    try:
+                        item = queue.get_nowait()
+                        if item is not None:
+                            op, arg, fut = item
+                            if fut and not fut.done():
+                                fut.set_exception(RuntimeError("MCP client owner loop terminated"))
+                    except asyncio.QueueEmpty:
+                        break
 
     async def _call_mcp(self, tool_name: str, **kwargs) -> Any:
         current_loop = asyncio.get_running_loop()
@@ -212,8 +223,9 @@ class MCPBrokerClient(AbstractBroker):
             # if its loop still runs, it tears down its own session in its
             # own Task; if the loop is already gone, asyncio.run()'s teardown
             # cancelled it and _owner_loop's finally did the cleanup there.
+            old_queue = self._queue
             try:
-                self._queue.put_nowait(None)
+                old_queue.put_nowait(None)
             except Exception as e:
                 logger.debug("Could not signal stale-loop MCP owner: %s", e)
             self._owner_task = None

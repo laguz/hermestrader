@@ -123,6 +123,11 @@ class AsyncXGBPredictor:
     # -- public --------------------------------------------------------------
     def start(self, event_bus: Optional[Any] = None) -> None:
         self._load_models()
+        try:
+            self._main_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._main_loop = None
+
         if event_bus is not None:
             from hermes.events.bus import MlRetrainTick
             event_bus.subscribe(MlRetrainTick, self.handle_ml_retrain_tick)
@@ -406,11 +411,17 @@ class AsyncXGBPredictor:
             return
 
         symbols = self._get_active_symbols()
-        # One event loop for the whole batch — previously every broker/DB
-        # call went through run_maybe_async's per-call asyncio.run(), which
-        # serialized all symbols and tore a loop down and rebuilt one for
-        # every single request.
-        asyncio.run(self._sync_history_async(symbols))
+        main_loop = getattr(self, "_main_loop", None)
+        if main_loop is not None and main_loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(
+                self._sync_history_async(symbols), main_loop
+            )
+            try:
+                future.result()
+            except Exception as exc:
+                logger.error("ML history sync failed on main loop: %s", exc)
+        else:
+            asyncio.run(self._sync_history_async(symbols))
         logger.info("history sync complete")
 
     # -- calibration ---------------------------------------------------------
