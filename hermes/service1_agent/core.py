@@ -508,6 +508,9 @@ class CascadingEngine:
     async def _execute_or_queue(self, a: TradeAction, action_type: str, approval_id: Optional[int] = None) -> None:
         return await self.pipeline._execute_or_queue(a, action_type, approval_id=approval_id)
 
+    async def execute_approved_actions(self) -> int:
+        return await self.pipeline.execute_approved_actions()
+
     # ----- top level entry point used by main.py and the scheduler ----------
     async def tick(self, watchlist: Sequence[str]) -> Dict[str, int]:
         if self.event_bus is not None:
