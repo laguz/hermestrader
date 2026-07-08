@@ -319,36 +319,43 @@ async def test_wheel_allows_puts_when_sufficient_buying_power():
     assert len(actions) == 1
 
 
-async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
+async def test_cs7_tp_closes_at_target_regardless_of_market_width():
+    # TP triggers off mid_debit alone (matches how entry credit is measured);
+    # there is no separate exec_debit re-check. That's safe because the close
+    # order's limit price is always capped at the TP target via max_price in
+    # _close_action — a wide exec_debit can only make the order rest unfilled
+    # longer, never overpay. See _credit_spread_base.py manage_positions().
     db = StubDB()
     trade = make_trade("CS7", "AAPL", entry_credit=0.12, width=1.00, short_strike=90.0, long_strike=89.0, days_to_expiry=5)
     db.set_open_trades("CS7", [trade])
     s, broker, _ = _build(CreditSpreads7, db=db)
 
-    # 1. Quote with exec_debit = 0.35 - 0.03 = 0.32 >= 0.12 entry credit
-    # (mid_debit is (0.35+0.05)/2 - (0.33+0.03)/2 = 0.20 - 0.18 = 0.02, which is <= 0.02 TP threshold)
+    # 1. mid_debit = (0.10+0.14)/2 - (0.05+0.09)/2 = 0.12 - 0.07 = 0.05, above
+    # the $0.02 (2% of $1 width) TP threshold — no TP yet regardless of width.
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.10, "ask": 0.14},
+        {"symbol": trade["long_leg"], "bid": 0.05, "ask": 0.09},
+    ]
+    actions = await s.manage_positions()
+    assert actions == []
+
+    # 2. Wide market: exec_debit = 0.35 - 0.03 = 0.32, but
+    # mid_debit = (0.35+0.05)/2 - (0.33+0.03)/2 = 0.20 - 0.18 = 0.02, at the
+    # TP threshold. TP fires; the order still only offers $0.02 (capped by
+    # max_price), not the $0.32 real spread — it just may not fill if the
+    # market stays this wide.
+    s.broker._shared_cache.quotes.clear()
     broker.get_quote = lambda symbols: [
         {"symbol": trade["short_leg"], "bid": 0.05, "ask": 0.35},
         {"symbol": trade["long_leg"], "bid": 0.03, "ask": 0.33},
     ]
     actions = await s.manage_positions()
-    assert actions == []  # Suppressed because it would close at a loss
+    assert len(actions) == 1
+    assert "HERMES_CS7_CLOSE_TP-2pctW" in actions[0].tag
+    assert actions[0].price == 0.02
 
-    # 2. Quote with exec_debit = 0.04 - 0.01 = 0.03, mid_debit = 0.01 <= 0.02 (mid
-    # fires TP) but the real exec_debit ($0.03) does NOT itself clear the $0.02
-    # (2% of $1 width) TP threshold — still profitable vs. the $0.12 entry
-    # credit, but not really "at target". Must stay suppressed.
-    s.broker._shared_cache.quotes.clear()
-    broker.get_quote = lambda symbols: [
-        {"symbol": trade["short_leg"], "bid": 0.02, "ask": 0.04},
-        {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.03},
-    ]
-    actions = await s.manage_positions()
-    assert actions == []  # Suppressed: real exec_debit doesn't clear the TP threshold
-
-    # 3. Quote with exec_debit = 0.03 - 0.01 = 0.02, which DOES clear the $0.02
-    # threshold exactly — the real, fillable price is genuinely at target, so
-    # this one should close.
+    # 3. Narrow market: exec_debit = 0.03 - 0.01 = 0.02, also at target — same
+    # capped price as the wide-market case above.
     s.broker._shared_cache.quotes.clear()
     broker.get_quote = lambda symbols: [
         {"symbol": trade["short_leg"], "bid": 0.02, "ask": 0.03},
@@ -357,9 +364,13 @@ async def test_cs7_tp_exit_suppressed_when_debit_represents_loss():
     actions = await s.manage_positions()
     assert len(actions) == 1
     assert "HERMES_CS7_CLOSE_TP-2pctW" in actions[0].tag
+    assert actions[0].price == 0.02
 
 
 async def test_cs75_tp_exit_price_capped_at_target():
+    # TP triggers off mid_debit alone (no exec_debit re-check — see
+    # test_cs7_tp_closes_at_target_regardless_of_market_width for why that's
+    # safe: the close order's limit price is always capped at the TP target).
     db = StubDB()
     # Entry credit is 0.40, width is 5.00
     # TP target is 50% for DTE 30 (since 21 <= 30 <= 45), so TP threshold is 0.20
@@ -367,16 +378,30 @@ async def test_cs75_tp_exit_price_capped_at_target():
     db.set_open_trades("CS75", [trade])
     s, broker, _ = _build(CreditSpreads75, db=db)
 
-    # 1. Quote with exec_debit = 0.23 - 0.01 = 0.22 (does not clear 0.20 target)
+    # 1. mid_debit = (0.25+0.31)/2 - (0.05+0.09)/2 = 0.28 - 0.07 = 0.21, above
+    # the $0.20 TP threshold — no TP yet.
+    broker.get_quote = lambda symbols: [
+        {"symbol": trade["short_leg"], "bid": 0.25, "ask": 0.31},
+        {"symbol": trade["long_leg"], "bid": 0.05, "ask": 0.09},
+    ]
+    actions = await s.manage_positions()
+    assert actions == []
+
+    # 2. Wide market: exec_debit = 0.23 - 0.01 = 0.22, but
+    # mid_debit = (0.17+0.23)/2 - (0.01+0.05)/2 = 0.20 - 0.03 = 0.17, at
+    # target. TP fires; the order still only offers the capped $0.20, not the
+    # wider $0.22 real spread.
     s.broker._shared_cache.quotes.clear()
     broker.get_quote = lambda symbols: [
         {"symbol": trade["short_leg"], "bid": 0.17, "ask": 0.23},
         {"symbol": trade["long_leg"], "bid": 0.01, "ask": 0.05},
     ]
     actions = await s.manage_positions()
-    assert actions == []
+    assert len(actions) == 1
+    assert "HERMES_CS75_CLOSE_TP-50" in actions[0].tag
+    assert actions[0].price == 0.20
 
-    # 2. Quote with exec_debit = 0.21 - 0.01 = 0.20 (clears 0.20 target)
+    # 3. Quote with exec_debit = 0.21 - 0.01 = 0.20 (clears 0.20 target)
     # Price 0.20 * 1.05 = 0.21, but capped at 0.20.
     s.broker._shared_cache.quotes.clear()
     broker.get_quote = lambda symbols: [
