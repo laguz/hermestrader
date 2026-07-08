@@ -20,13 +20,27 @@ class ApprovalsRepository(Repository):
     async def has_pending_approval(self, strategy_id: str, symbol: str,
                              side_type: Optional[str],
                              expiry: Optional[str]) -> bool:
+        """True if a proposal for this (strategy, symbol[, side, expiry]) is
+        already in flight — queued, under AI review, or operator-approved but
+        not yet executed.
+
+        ``APPROVED`` must count as in-flight, not just ``PENDING``/
+        ``PENDING_AI_REVIEW``: actual broker execution only happens on the
+        slow heartbeat tick (``tick_interval_s``, e.g. every 15 min), while a
+        reactive per-quote loop re-evaluates management closes every few
+        seconds. Without this, approving a close left a few-second window
+        where the row was no longer PENDING but not yet EXECUTED either, so
+        the very next reactive tick queued a fresh duplicate approval for the
+        same still-open trade — repeating every cycle until the heartbeat
+        finally caught up.
+        """
         async with self.AsyncSession() as s:
             result = await s.execute(
                 select(PendingApproval)
                 .filter(
                     PendingApproval.strategy_id == strategy_id,
                     PendingApproval.symbol == symbol,
-                    PendingApproval.status.in_(["PENDING", "PENDING_AI_REVIEW"])
+                    PendingApproval.status.in_(["PENDING", "PENDING_AI_REVIEW", "APPROVED"])
                 )
             )
             rows = result.scalars().all()
