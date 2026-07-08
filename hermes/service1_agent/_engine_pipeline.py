@@ -767,6 +767,13 @@ class PipelineController:
             except Exception as exc:
                 logger.warning("expire_stale_approvals failed: %s", exc)
 
+            # 4b. LLM client liveness check
+            if ctx.overseer is not None:
+                try:
+                    await asyncio.wait_for(ctx.overseer.ping(), timeout=10.0)
+                except Exception as ping_exc:
+                    logger.warning("[ENGINE] Periodic LLM ping failed: %s", ping_exc)
+
             # 5. Execute approved actions
             try:
                 approved_actions = await ctx.db.approvals.fetch_approved_actions()

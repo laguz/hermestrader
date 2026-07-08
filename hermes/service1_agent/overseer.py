@@ -112,6 +112,22 @@ class HermesOverseer:
         self._worker_task: Optional[asyncio.Task] = None
 
     # ── LLM transport ─────────────────────────────────────────────────────────
+    async def ping(self) -> None:
+        """Lightweight ping to verify the LLM is reachable and update last_ok_ts."""
+        if self.llm is None:
+            return
+        messages = [{"role": "user", "content": "ping"}]
+        timeout_s = 5.0
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(self.llm.chat, messages, images=[]),
+                timeout=timeout_s,
+            )
+            await self._mark_llm_ok()
+        except Exception as exc:
+            logger.warning("LLM liveness ping failed: %s", exc)
+            await self._mark_llm_error(exc)
+
     async def _mark_llm_ok(self) -> None:
         """Record a successful LLM round-trip for the watcher's health indicator.
 
