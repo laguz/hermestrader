@@ -135,6 +135,10 @@ def run(chart_provider, conf: Dict[str, Any]) -> None:
 
 
 async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
+    # Register the main event loop globally for cross-thread run_maybe_async routing
+    from hermes.ml.predictor_config import set_main_loop
+    set_main_loop(asyncio.get_running_loop())
+
     global _ASYNC_TRIGGER_EVENT, _ASYNC_SHUTDOWN_EVENT
     _ASYNC_TRIGGER_EVENT = asyncio.Event()
     _ASYNC_SHUTDOWN_EVENT = asyncio.Event()
@@ -172,6 +176,10 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         await db.watchlist.ensure_strategies(STRATEGY_PRIORITIES)
     except Exception as exc:
         log.exception("ensure_strategies failed at startup: %s", exc)
+
+    if chart_provider is not None:
+        chart_provider.start(conf["watchlist"])
+        log.info("HermesChartProvider started — warming up charts for %s", conf["watchlist"])
 
     # Phase 3 Configuration Validation at startup
     try:
@@ -475,8 +483,6 @@ if __name__ == "__main__":
         _chart_db = HermesDB(os.environ.get("HERMES_DSN",
                                             "postgresql+psycopg://hermes:hermes@localhost:5432/hermes"))
         _chart_provider = HermesChartProvider(_chart_db, lookback_days=210, cache_ttl_s=300)
-        _chart_provider.start(conf["watchlist"])
-        log.info("HermesChartProvider started — warming up charts for %s", conf["watchlist"])
     except ImportError:
         log.warning("matplotlib not installed — chart vision disabled (pip install matplotlib)")
     except Exception as _chart_exc:

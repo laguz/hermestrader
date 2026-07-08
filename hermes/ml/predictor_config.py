@@ -12,18 +12,39 @@ from dataclasses import dataclass
 from typing import Any, Tuple
 
 
+_MAIN_LOOP = None
+
+
+def set_main_loop(loop):
+    global _MAIN_LOOP
+    _MAIN_LOOP = loop
+
+
 def run_maybe_async(func, *args, **kwargs):
     """Run an async or sync function from a synchronous context."""
     import asyncio
     import inspect
 
     if inspect.iscoroutinefunction(func):
-        return asyncio.run(func(*args, **kwargs))
+        coro = func(*args, **kwargs)
+    else:
+        res = func(*args, **kwargs)
+        if inspect.iscoroutine(res):
+            coro = res
+        else:
+            return res
 
-    res = func(*args, **kwargs)
-    if inspect.iscoroutine(res):
-        return asyncio.run(res)
-    return res
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    global _MAIN_LOOP
+    if _MAIN_LOOP is not None and _MAIN_LOOP.is_running() and current_loop is not _MAIN_LOOP:
+        future = asyncio.run_coroutine_threadsafe(coro, _MAIN_LOOP)
+        return future.result()
+
+    return asyncio.run(coro)
 
 
 @dataclass

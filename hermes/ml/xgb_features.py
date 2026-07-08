@@ -125,6 +125,8 @@ class AsyncXGBPredictor:
         self._load_models()
         try:
             self._main_loop = asyncio.get_running_loop()
+            from hermes.ml.predictor_config import set_main_loop
+            set_main_loop(self._main_loop)
         except RuntimeError:
             self._main_loop = None
 
