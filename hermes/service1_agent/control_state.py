@@ -53,7 +53,6 @@ class ControlState:
             "vision": True,
             "api_key": "",
         }
-        self.approved_actions = []
         self.max_daily_loss = None
         self.lot_settings = {
             "cs75_target_lots": 10, "cs75_max_lots": 10,
@@ -131,10 +130,6 @@ class ControlState:
                 else:
                     self.llm_config[field] = value
 
-    async def refresh_approvals(self, db) -> None:
-        self.approved_actions = await db.approvals.fetch_approved_actions()
-        logger.info("[ControlState] Refreshed approved actions: %d items", len(self.approved_actions))
-
     async def load_from_db(self, db, conf: Dict[str, Any]) -> None:
         settings = await db.settings.get_settings(
             ["hermes_mode", "agent_paused", "agent_autonomy", "approval_mode",
@@ -204,9 +199,6 @@ class ControlState:
         
         # Load watchlists
         self.watchlist = await db.watchlist.list_all_watchlists()
-        
-        # Load approvals
-        await self.refresh_approvals(db)
-        
+
         self.last_sync_ts = datetime.now(timezone.utc)
-        logger.info("[ControlState] Loaded settings, watchlists, and approvals from DB successfully.")
+        logger.info("[ControlState] Loaded settings and watchlists from DB successfully.")

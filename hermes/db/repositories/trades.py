@@ -588,8 +588,7 @@ class TradesRepository(Repository):
             return int(row.lots) if row else 0
 
     async def latest_closed_trade_time(self, strategy_id: str, symbol: str) -> Optional[datetime]:
-        from sqlalchemy import select, desc
-        from ..orm import Trade
+        from sqlalchemy import desc
         async with self.AsyncSession() as session:
             q = select(Trade.closed_at).where(
                 Trade.strategy_id == strategy_id,

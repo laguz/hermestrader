@@ -398,7 +398,7 @@ class CreditSpreadStrategy(AbstractStrategy):
         """
         try:
             sl_mult = float(self._tun(t, "sl_mult"))
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             sl_mult = 2.5
         return min((sl_mult - 1.0) * credit, max(width - credit, 0.0))
 

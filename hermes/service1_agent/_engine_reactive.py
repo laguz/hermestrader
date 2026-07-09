@@ -32,7 +32,6 @@ from hermes.events.bus import (
     ClockTickEvent,
     AIApprovalEvent,
     MarketDataEvent,
-    OrderTrackedEvent,
     ExecuteMarketDataCommand,
     ExecuteOrderFillCommand,
     ProcessReactiveEntriesEvent,
@@ -115,7 +114,6 @@ class ReactiveController:
             bus.subscribe(AIApprovalEvent, self.handle_ai_approval)
             bus.subscribe(MarketDataEvent, self.handle_market_data)
             bus.subscribe(OrderFillEvent, self.handle_order_fill)
-            bus.subscribe(OrderTrackedEvent, self.handle_order_tracked)
             # Reactive: command/event handlers.
             bus.subscribe(ExecuteMarketDataCommand, self.handle_execute_market_data)
             bus.subscribe(ExecuteOrderFillCommand, self.handle_execute_order_fill)
@@ -213,15 +211,6 @@ class ReactiveController:
             if not fut.done():
                 fut.set_exception(exc)
             raise
-
-    async def handle_order_tracked(self, event: OrderTrackedEvent) -> None:
-        self._tracked_orders[event.order_id] = {
-            "symbol": event.symbol,
-            "side": event.side,
-            "quantity": event.quantity
-        }
-        logger.info("[RUNTIME] Registered order %s in reactive monitor", event.order_id)
-        self._ensure_order_monitor()
 
     async def _order_monitor_loop(self) -> None:
         logger.info("[ENGINE] Starting reactive order monitor loop")
@@ -330,7 +319,6 @@ class ReactiveController:
             ClockTickEvent,
             AIApprovalEvent,
             MarketDataEvent,
-            OrderTrackedEvent,
         )
         from hermes.service1_agent.trade_action import TradeAction
 
@@ -340,7 +328,6 @@ class ReactiveController:
             "ClockTickEvent": ClockTickEvent,
             "AIApprovalEvent": AIApprovalEvent,
             "TickStartedEvent": TickStartedEvent,
-            "OrderTrackedEvent": OrderTrackedEvent,
             "TradeAction": TradeAction,
         }
 
@@ -603,13 +590,13 @@ class ReactiveController:
                     if current_task is not None and current_task.cancelling():
                         raise asyncio.CancelledError()
                 except Exception as exc:
-                    logger.exception(f"[ENGINE] Error processing event {event_type}: {exc}")
+                    logger.exception("[ENGINE] Error processing event %s: %s", event_type, exc)
                 finally:
                     self.queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.exception(f"[ENGINE] Event consumer loop error: {exc}")
+                logger.exception("[ENGINE] Event consumer loop error: %s", exc)
 
     async def _process_event(self, event_type: str, payload: Dict[str, Any]) -> None:
         # Every branch bypasses the EventBus/semaphore and calls its single

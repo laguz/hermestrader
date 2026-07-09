@@ -269,7 +269,6 @@ class ProjectionsRepository:
         no explicit wipe. The caller owns the commit. Returns the event count.
         """
         from sqlalchemy import delete
-        from hermes.db.orm import Trade, PendingOrder
         from hermes.db.events import EventStoreManager
 
         await session.execute(delete(Trade))

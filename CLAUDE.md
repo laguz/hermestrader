@@ -269,19 +269,29 @@ falsy-zero convention. Don't waste time hunting for a functional difference here
 - `SubmitTradeActionsCommand.execute_directly` (`events/bus.py`) is not dead: read at
   `core.py:275`, set at `_engine_ai.py:101`.
 
-**Confirmed-real but deliberately left unfixed this pass (dead code / pure style, not
-"bugs" — revisit only if asked to clean up dead code again):** `OrderTrackedEvent`
-(`_engine_reactive.py` / `events/bus.py`) is defined, subscribed, and handled but never
-published anywhere; `ControlState.approved_actions` is populated and logged but never
-read (the pipeline calls `db.approvals.fetch_approved_actions()` directly instead);
-`db/orm.py`'s module-level `logger` is unused; unreachable `if quotes else {}` ternaries
-in `tradier.py`/`mcp_client.py` after an earlier `if not quotes: return`; dead `db`
-param on `AsyncIPC.connect`; dead `target` param on `MockStreamClient.__init__`;
-redundant local re-imports of already-module-level names in `main.py`,
-`status.py`, `trades.py`, `projections.py`; f-strings inside `logger.exception(...)` in
-`_engine_reactive.py` (defeats lazy formatting); missing return-type annotations on two
-`hermes_alpha.py` override hooks; a broad `except Exception` in
-`_credit_spread_base.py` around a tunable `float()` conversion.
+**Confirmed-real, deferred from that pass, then resolved on request (2026-07-09,
+dead code / pure style — no regression tests, nothing behavioral to regress):**
+`OrderTrackedEvent` removed (`events/bus.py` class + `_engine_reactive.py` import,
+subscription, `handle_order_tracked`, deserialize-map entry — it was never published
+anywhere; the order monitor is still started via `_engine_pipeline.py`'s orphan
+adoption and its own initial broker scan); `ControlState.approved_actions` and
+`refresh_approvals()` removed (populated/logged but never read — the pipeline calls
+`db.approvals.fetch_approved_actions()` directly; the `trigger_approvals` IPC handler
+now only calls `engine.execute_approved_actions()`); `db/orm.py` unused module-level
+`logger` (+ its `logging` import) removed; unreachable `if quotes else {}` ternaries
+in `tradier.py`/`mcp_client.py` `get_delta` simplified; dead `db` param dropped from
+`AsyncIPC.connect` (callers in `main.py`/`api.py` updated); dead `target` param
+dropped from `MockStreamClient.__init__` (the "GRPCStreamClient compatibility" its
+comment claimed no longer exists anywhere); redundant local re-imports removed in
+`main.py` (`threading`), `routes/status.py` (`json` ×2 — the `_json` alias now uses
+the module-level import), `repositories/trades.py` (`select`, `Trade`),
+`repositories/projections.py` (`Trade`, `PendingOrder`); the two f-strings inside
+`logger.exception(...)` in `_engine_reactive.py` converted to lazy `%s` args;
+return-type annotations added to the `hermes_alpha.py` no-cover override hooks
+(`_resolve_entry_expiry`, `_completion_window`, `_close_reason`, matching the base
+class signatures); `_credit_spread_base.py`'s broad `except Exception` around the
+`sl_mult` tunable `float()` narrowed to `(KeyError, TypeError, ValueError)` —
+`KeyError` included because `_tun` is a raw `t[key]` lookup.
 
 A July 2026 audit (DeepSeek scan, hand-verified line-by-line — the report's three
 "TRUE BUGS" turned out to be false positives, see below) resolved 1 dead-code finding

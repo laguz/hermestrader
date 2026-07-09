@@ -109,7 +109,6 @@ async def get_status() -> Dict[str, Any]:
                "et_time": "--:--", "et_date": "", "trading_day": False}
         nxt = None
 
-    import json
     update_status_raw = await db.settings.get_setting_async("update_status")
     update_status = None
     if update_status_raw:
@@ -249,13 +248,12 @@ async def get_debug_info() -> Dict[str, Any]:
             result["logs"] = []
 
         try:
-            import json as _json
             from hermes.ml.pop_calibration import POP_CAL_STATE_KEY
             res_cal = await s.execute(sa_text(
                 "SELECT value FROM system_settings WHERE key=:k"
             ), {"k": POP_CAL_STATE_KEY})
             cal_raw = res_cal.scalar()
-            result["db"]["pop_calibration"] = _json.loads(cal_raw) if cal_raw else None
+            result["db"]["pop_calibration"] = json.loads(cal_raw) if cal_raw else None
         except Exception:
             result["db"]["pop_calibration"] = None
 

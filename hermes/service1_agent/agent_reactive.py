@@ -160,7 +160,6 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
         # trade to wait for the next slow heartbeat tick (tick_interval_s,
         # e.g. 900s).
         await engine.execute_approved_actions()
-        await control_state.refresh_approvals(db)
     elif action == IPC_ACTION_SYNC_SETTINGS:
         log.info("[IPC] Received sync settings signal reactively")
         await control_state.load_from_db(db, conf)
