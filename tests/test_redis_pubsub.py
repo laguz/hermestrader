@@ -87,6 +87,6 @@ async def test_decide_approval_emits_publish(db):
             mock_ipc.publish.assert_called_once()
             args, _ = mock_ipc.publish.call_args
             assert args[0] == "agent_commands"
-            assert args[1]["event_type"] == "ApprovalDecidedEvent"
+            assert args[1]["event_type"] == "APPROVAL_DECIDED"
             assert args[1]["payload"]["approval_id"] == 42
             assert args[1]["payload"]["status"] == "APPROVED"

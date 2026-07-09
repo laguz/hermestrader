@@ -98,16 +98,16 @@ class WatchlistRepository(Repository):
                                status="ACTIVE"))
                 await s.flush()
                 
-            from hermes.db.events import EventStoreManager, WatchlistChangedEvent
+            from hermes.db.events import EventStoreManager, WatchlistChangedEvent, CLASS_TO_EVENT_TYPE
             ev = WatchlistChangedEvent(
                 strategy_id=strategy_id,
                 symbols=clean,
                 updated_at=datetime.utcnow().isoformat()
             )
             await EventStoreManager.record_event(s, ev)
-            
+
             payload = {
-                "event_type": "WatchlistChangedEvent",
+                "event_type": CLASS_TO_EVENT_TYPE[ev.__class__],
                 "payload": ev.model_dump(mode="json")
             }
             await s.commit()

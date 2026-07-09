@@ -217,7 +217,7 @@ class ApprovalsRepository(Repository):
             if row is None or row.status != "PENDING":
                 return False
                 
-            from hermes.db.events import EventStoreManager, ApprovalDecidedEvent
+            from hermes.db.events import EventStoreManager, ApprovalDecidedEvent, CLASS_TO_EVENT_TYPE
             ev = ApprovalDecidedEvent(
                 approval_id=approval_id,
                 status=decision,
@@ -225,9 +225,9 @@ class ApprovalsRepository(Repository):
                 decided_at=utc_now().isoformat()
             )
             await EventStoreManager.record_event(s, ev)
-            
+
             payload = {
-                "event_type": "ApprovalDecidedEvent",
+                "event_type": CLASS_TO_EVENT_TYPE[ev.__class__],
                 "payload": ev.model_dump(mode="json")
             }
             await s.commit()
@@ -258,7 +258,7 @@ class ApprovalsRepository(Repository):
             result = await s.execute(select(PendingApproval).filter_by(id=approval_id).limit(1))
             row = result.scalars().first()
             if row:
-                from hermes.db.events import EventStoreManager, ApprovalDecidedEvent
+                from hermes.db.events import EventStoreManager, ApprovalDecidedEvent, CLASS_TO_EVENT_TYPE
                 ev = ApprovalDecidedEvent(
                     approval_id=approval_id,
                     status="EXECUTED" if success else "FAILED",
@@ -266,9 +266,9 @@ class ApprovalsRepository(Repository):
                     executed_at=utc_now().isoformat()
                 )
                 await EventStoreManager.record_event(s, ev)
-                
+
                 payload = {
-                    "event_type": "ApprovalDecidedEvent",
+                    "event_type": CLASS_TO_EVENT_TYPE[ev.__class__],
                     "payload": ev.model_dump(mode="json")
                 }
                 await s.commit()
