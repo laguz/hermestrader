@@ -373,6 +373,31 @@ was reverted:
   `if Base is not None` / `if PredictionLedger is None: return` ORM-unavailable
   degrade-safely pattern used throughout `ledger.py` itself, not a silent-swallow bug.
 
+A July 2026 follow-up (2026-07-09) fixed 1 confirmed bug with a regression test in
+`tests/test_durable_loop.py` (confirmed to fail with the fix reverted):
+- **Durable consumer stranded the publisher's future on pre-`_process_event`
+  exceptions** (`_engine_reactive.py` `_redis_event_consumer_loop`): an exception
+  raised before `_process_event` ran (corrupt stream payload failing `json.loads`,
+  deserialization error) was only logged; the `finally` block then popped the future
+  from `_pending_futures` unresolved, so `publish_event` sat awaiting it for the full
+  `_PUBLISH_RESULT_TIMEOUT_S` (300s), holding its EventBus dispatch permit — enough
+  corrupt entries in one window re-creates the 2026-07-08 all-permits-held bus
+  freeze, just timeout-bounded. The consumer now resolves the pending future with
+  the exception before popping. (Exceptions from *inside* `_process_event` were
+  already resolved by its own except-block — that path was and is fine.)
+- Also added `test_publish_event_stress_no_leaks_under_races_and_handler_errors`
+  (30 concurrent publishes × mixed race outcomes × injected handler failures →
+  `_pending_futures` must end empty), generalizing the single-interleaving corr_id
+  race test, and removed the dead `event_bus` fixture in `tests/test_event_bus.py`
+  (no test ever took it as a parameter; every test builds its own local bus).
+- **Considered and deliberately not done**: merging the audit-named test files
+  (`test_deepseek_v4_bugs.py`, `test_medium_bug_fixes.py`, `test_audit_bug_fixes.py`,
+  `test_verified_audit_bugs.py`, `test_july2026_audit_pass2.py`) into per-subsystem
+  files. These filenames are the provenance trail this document's audit entries
+  reference; moving 51 tests would stale those records and risk breaking
+  monkeypatch/fixture paths for organizational benefit only. Don't re-propose the
+  merge without also reconciling every reference above.
+
 **Areas re-checked this pass with no new findings** (don't re-audit from scratch
 next time unless something material changed): core tick pipeline / strategies /
 `MoneyManager` / `risk_engine.py` (including re-verifying the `alpha_autonomous_live`
