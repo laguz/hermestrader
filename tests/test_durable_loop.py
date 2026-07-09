@@ -506,3 +506,197 @@ async def test_durable_loop_sheds_stale_market_data():
             await engine.loop_task
         except asyncio.CancelledError:
             pass
+
+
+@pytest.mark.asyncio
+async def test_corrupt_durable_payload_fails_publisher_fast():
+    """A payload the consumer can't deserialize must fail the publisher's
+    future immediately, not strand it.
+
+    Regression: an exception raised *before* ``_process_event`` runs (corrupt
+    payload failing ``json.loads``) was only logged; the consumer's finally
+    block then popped the future from ``_pending_futures`` unresolved, so the
+    publisher sat awaiting it for the full ``_PUBLISH_RESULT_TIMEOUT_S``
+    (300s) — holding its EventBus dispatch permit the whole time. Enough
+    corrupt entries inside one window re-creates the 2026-07-08 all-permits-
+    held bus freeze, just timeout-bounded. The consumer now resolves the
+    pending future with the exception before popping it.
+    """
+    import time
+
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+    mock_redis.xack = AsyncMock()
+
+    stream_db = []
+
+    async def mock_xadd(name, fields, id="*", **_kwargs):
+        msg_id = f"{int(time.time() * 1000)}-{len(stream_db)}"
+        corrupted = dict(fields)
+        corrupted["payload"] = '{"watchlist": ["SPY"'  # truncated JSON
+        stream_db.append((msg_id, corrupted))
+        return msg_id
+
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
+        if stream_id == ">" and stream_db:
+            res = [("hermes_event_stream", list(stream_db))]
+            stream_db.clear()
+            return res
+        await asyncio.sleep(0.01)
+        return []
+
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    engine = CascadingEngine(
+        broker=AsyncMock(),
+        db=db_mock,
+        strategies=[DummyStrategy("CS75", 1, "CS75")],
+        config={"portfolio_optimization": False},
+    )
+    engine.ipc_client = mock_ipc
+    engine._ensure_event_loop()
+
+    with pytest.raises(ValueError):  # json.JSONDecodeError subclasses ValueError
+        await asyncio.wait_for(
+            engine.publish_event("TICK", {"watchlist": ["SPY"]}), timeout=2.0
+        )
+    assert engine.reactive._pending_futures == {}, (
+        "future must be resolved-then-popped, not stranded for the publisher "
+        "to time out on"
+    )
+
+    if engine.loop_task:
+        engine.loop_task.cancel()
+        try:
+            await engine.loop_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_publish_event_stress_no_leaks_under_races_and_handler_errors():
+    """Generalized leak check: N concurrent publishes under mixed race
+    outcomes and injected handler failures must all complete promptly and
+    leave ``_pending_futures`` empty.
+
+    The corr_id race fix has a single-interleaving regression test above
+    (``test_publish_event_survives_consumer_winning_the_race``); this class
+    of bug has recurred in different guises (permit leak 2026-07-08, circular
+    dispatch deadlock PR #209), and its production failure mode is "leaks
+    under load", not "leaks on one interleaving". Here every odd-indexed
+    publish loses the scheduling race (xadd doesn't resume until the consumer
+    has processed and acked), every third handler invocation raises, and
+    handlers finish out of order — afterwards every publisher must hold its
+    own result or its own error, and no future or dispatch permit may leak.
+    """
+    import time
+
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+
+    stream_db = []
+    acked_events: dict[str, asyncio.Event] = {}
+
+    async def mock_xack(name, group, msg_id):
+        ev = acked_events.get(msg_id)
+        if ev:
+            ev.set()
+
+    mock_redis.xack = AsyncMock(side_effect=mock_xack)
+
+    seq = {"n": 0}
+
+    async def mock_xadd(name, fields, id="*", **_kwargs):
+        i = seq["n"]
+        seq["n"] += 1
+        msg_id = f"{int(time.time() * 1000)}-{i}"
+        acked_events[msg_id] = asyncio.Event()
+        stream_db.append((msg_id, dict(fields)))
+        if i % 2 == 1:
+            # Publisher loses the race: the consumer fully processes and acks
+            # before this coroutine resumes from its xadd await.
+            await asyncio.wait_for(acked_events[msg_id].wait(), timeout=5.0)
+        return msg_id
+
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
+        if stream_id == ">" and stream_db:
+            batch = stream_db[: kwargs.get("count") or 5]
+            del stream_db[: len(batch)]
+            return [("hermes_event_stream", batch)]
+        await asyncio.sleep(0.005)
+        return []
+
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    engine = CascadingEngine(
+        broker=AsyncMock(),
+        db=db_mock,
+        strategies=[DummyStrategy("CS75", 1, "CS75")],
+        config={"portfolio_optimization": False},
+    )
+    engine.ipc_client = mock_ipc
+
+    async def mock_process_event(event_type, payload):
+        fut = payload.get("future")
+        i = int(payload["watchlist"][0])
+        # Vary completion order so publishes resolve out of submission order.
+        await asyncio.sleep(0.001 * (i % 3))
+        try:
+            if i % 3 == 0:
+                raise RuntimeError(f"boom-{i}")
+            res = f"ok-{i}"
+        except Exception as exc:
+            if fut and not fut.done():
+                fut.set_exception(exc)
+            raise
+        if fut and not fut.done():
+            fut.set_result(res)
+
+    engine.reactive._process_event = mock_process_event
+    engine._ensure_event_loop()
+
+    n = 30
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(engine.publish_event("TICK", {"watchlist": [str(i)]}) for i in range(n)),
+            return_exceptions=True,
+        ),
+        timeout=10.0,
+    )
+
+    for i, res in enumerate(results):
+        if i % 3 == 0:
+            assert isinstance(res, RuntimeError) and str(res) == f"boom-{i}", (
+                f"publish {i}: expected its own injected error, got {res!r}"
+            )
+        else:
+            assert res == f"ok-{i}", f"publish {i}: got {res!r}"
+
+    assert engine.reactive._pending_futures == {}, (
+        "leaked futures — each would pin an EventBus dispatch permit"
+    )
+
+    if engine.loop_task:
+        engine.loop_task.cancel()
+        try:
+            await engine.loop_task
+        except asyncio.CancelledError:
+            pass

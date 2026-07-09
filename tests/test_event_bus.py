@@ -1,16 +1,5 @@
 import asyncio
-import pytest
 from hermes.events.bus import EventBus, MarketDataEvent
-
-@pytest.fixture
-def event_bus():
-    bus = EventBus()
-    bus.start()
-    yield bus
-    # Note: we don't await bus.stop() here directly since pytest fixtures aren't async by default
-    # but we can clean up in tests if needed.
-    if bus._task and not bus._task.done():
-        bus._task.cancel()
 
 async def test_event_bus_subscription_and_dispatch():
     bus = EventBus()

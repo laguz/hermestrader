@@ -547,6 +547,17 @@ class ReactiveController:
 
                         except Exception as exc:
                             logger.exception("[ENGINE] Error processing durable event %s: %s", msg_id, exc)
+                            # A failure before _process_event runs (corrupt
+                            # payload failing json.loads, deserialization
+                            # error) otherwise reaches the finally with the
+                            # future unresolved — the pop strands the
+                            # publisher awaiting it for the full
+                            # _PUBLISH_RESULT_TIMEOUT_S, holding its EventBus
+                            # dispatch permit the whole time. Exceptions from
+                            # inside _process_event already resolved it.
+                            err_fut = self._pending_futures.get(fut_key)
+                            if err_fut and not err_fut.done():
+                                err_fut.set_exception(exc)
                         finally:
                             try:
                                 await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
