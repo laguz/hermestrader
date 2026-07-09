@@ -103,11 +103,13 @@ async def test_durable_loop_redis_streams_flow():
 
     # Verify Redis client calls
     mock_redis.xgroup_create.assert_called_once()
-    mock_redis.xadd.assert_called_once_with(
-        "hermes_event_stream",
-        {"event_type": "TICK", "payload": '{"watchlist": ["AAPL"]}'},
-        maxlen=10_000, approximate=True,
-    )
+    mock_redis.xadd.assert_called_once()
+    xadd_args, xadd_kwargs = mock_redis.xadd.call_args
+    assert xadd_args[0] == "hermes_event_stream"
+    assert xadd_args[1]["event_type"] == "TICK"
+    assert xadd_args[1]["payload"] == '{"watchlist": ["AAPL"]}'
+    assert xadd_args[1]["corr_id"], "publisher must stamp a correlation id"
+    assert xadd_kwargs == {"maxlen": 10_000, "approximate": True}
     mock_redis.xack.assert_called_once_with("hermes_event_stream", "hermes_engine_group", "1686984023000-0")
 
     # Clean up background task
@@ -300,6 +302,101 @@ async def test_durable_loop_dataclass_serialization():
         except asyncio.CancelledError:
             pass
 
+
+
+@pytest.mark.asyncio
+async def test_publish_event_survives_consumer_winning_the_race():
+    """The round-trip future must resolve even when the consumer processes and
+    acks the entry before ``publish_event`` resumes from its xadd await.
+
+    Regression: futures were registered in ``_pending_futures`` keyed by the
+    server-assigned msg_id *after* ``await client.xadd(...)`` returned. The
+    consumer sits parked in ``xreadgroup(block=...)``, so Redis hands it the
+    entry the instant the xadd lands — if the consumer's read wins the
+    scheduling race, it finds no future, processes, acks, and pops; the
+    publisher then registers a future nobody will ever resolve and awaits it
+    forever, permanently holding one EventBus dispatch permit per lost race.
+    A few minutes of MARKET_DATA traffic leaked all 50 permits and froze every
+    event type on the bus (no CLOCK_TICK, no ML ticks) until the liveness
+    watchdog kill-looped the agent every ~46 minutes (2026-07-08). Futures are
+    now keyed by a publisher-generated corr_id registered before the xadd.
+    """
+    import time
+
+    mock_redis = AsyncMock()
+    mock_redis.xgroup_create = AsyncMock()
+
+    stream_db = []
+    acked = asyncio.Event()
+
+    async def mock_xack(name, group, msg_id):
+        acked.set()
+
+    mock_redis.xack = AsyncMock(side_effect=mock_xack)
+
+    async def mock_xadd(name, fields, id="*", **_kwargs):
+        msg_id = f"{int(time.time() * 1000)}-{len(stream_db)}"
+        stream_db.append((msg_id, dict(fields)))
+        # Force the publisher to lose the race: don't resume publish_event
+        # until the consumer has fully processed and acked the entry.
+        await asyncio.wait_for(acked.wait(), timeout=2.0)
+        return msg_id
+
+    mock_redis.xadd = AsyncMock(side_effect=mock_xadd)
+
+    async def mock_xreadgroup(*_args, **kwargs):
+        stream_id = kwargs["streams"].get("hermes_event_stream")
+        if stream_id == "0":
+            return []
+        elif stream_id == ">":
+            if stream_db:
+                res = [("hermes_event_stream", list(stream_db))]
+                stream_db.clear()
+                return res
+            await asyncio.sleep(0.01)
+            return []
+        return []
+
+    mock_redis.xreadgroup = AsyncMock(side_effect=mock_xreadgroup)
+
+    mock_ipc = MagicMock()
+    mock_ipc.is_connected = True
+    mock_ipc.client = mock_redis
+
+    strat = DummyStrategy("CS75", 1, "CS75")
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+
+    engine = CascadingEngine(
+        broker=AsyncMock(),
+        db=db_mock,
+        strategies=[strat],
+        config={"portfolio_optimization": False},
+    )
+    engine.ipc_client = mock_ipc
+
+    async def mock_process_event(event_type, payload):
+        fut = payload.get("future")
+        if fut and not fut.done():
+            fut.set_result("processed")
+
+    engine.reactive._process_event = mock_process_event
+    engine._ensure_event_loop()
+
+    res = await asyncio.wait_for(
+        engine.publish_event("TICK", {"watchlist": ["SPY"]}), timeout=5.0
+    )
+    assert res == "processed", "publisher lost its result to the ack race"
+    assert engine.reactive._pending_futures == {}, (
+        "leaked future — its EventBus dispatch permit would be held forever"
+    )
+
+    if engine.loop_task:
+        engine.loop_task.cancel()
+        try:
+            await engine.loop_task
+        except asyncio.CancelledError:
+            pass
 
 
 @pytest.mark.asyncio
