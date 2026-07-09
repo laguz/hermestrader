@@ -398,6 +398,31 @@ A July 2026 follow-up (2026-07-09) fixed 1 confirmed bug with a regression test 
   monkeypatch/fixture paths for organizational benefit only. Don't re-propose the
   merge without also reconciling every reference above.
 
+A July 2026 duplicate-code audit (2026-07-09, jscpd + hand-verification; 19 clones
+found at 1% overall duplication) consolidated 4 and deliberately kept the rest:
+- **Consolidated** (behavior-preserving, full suite green): `xgb_features.py` `_loop`
+  body was a verbatim ~40-line copy of `_run_ml_cycle` → now calls it;
+  `risk_engine.py`'s balances/`obp_reserve`/open-trades fetch appeared in both the
+  optimizer and priority branches → `_available_bp_and_open_trades()`; the per-action
+  entry-sizing preamble (requested-lots → `max_lots` map/config override →
+  `requirement_per_lot`) was duplicated between `risk_engine.py` and
+  `_engine_reactive.py` — the falsy-zero `max_lots` bug had to be fixed once per copy —
+  → `resolve_entry_sizing()` in `money_manager.py`, used by both; `trades.py`'s
+  order-response parsing (×2), lots-resolution (×3), and side-derivation (×3) blocks
+  → `_parse_order_response`/`_resolve_lots`/`_derive_side_type` helpers whose
+  parameters preserve the real per-caller differences (close-leg matching only in
+  `close_trade_from_action`, `action.side` fallback only in `record_pending_order`).
+- **Kept deliberately — don't re-flag as dupes**: `tradier.py` `_place_option`/
+  `_place_equity` shared tail (order-placing code; a refactor there trades clarity
+  for risk in the file whose safety posture matters most); `approvals.py` repo
+  `record_veto`/`active_veto` preambles (same query shape, *different* matching
+  semantics — exact vs wildcard); `routes/approvals.py` approve/reject bodies
+  (distinct logs/payloads, low value); `hermes/ipc.py` backend `subscribe`/
+  `unsubscribe` (two backends implementing one interface); `trades.py::_trade_dict`
+  vs `routes/analytics.py` open-trades dict (agent-side ORM vs watcher-side raw SQL —
+  consolidating couples the two services); import-block "clones" in
+  `agent_construction.py`/`agent_risk.py` and `api.py`/`routes/__init__.py`.
+
 **Areas re-checked this pass with no new findings** (don't re-audit from scratch
 next time unless something material changed): core tick pipeline / strategies /
 `MoneyManager` / `risk_engine.py` (including re-verifying the `alpha_autonomous_live`
