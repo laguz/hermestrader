@@ -50,6 +50,7 @@ class SettingsRepository(Repository):
                 PauseChangedEvent,
                 AutonomyChangedEvent,
                 StrategyToggledEvent,
+                CLASS_TO_EVENT_TYPE,
             )
             import re
             
@@ -91,7 +92,7 @@ class SettingsRepository(Repository):
             await EventStoreManager.record_event(s, ev)
             
             payload = {
-                "event_type": ev.__class__.__name__,
+                "event_type": CLASS_TO_EVENT_TYPE[ev.__class__],
                 "payload": ev.model_dump(mode="json")
             }
             await s.commit()
