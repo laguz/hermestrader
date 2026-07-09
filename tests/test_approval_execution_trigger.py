@@ -59,7 +59,6 @@ async def test_execute_approved_actions_isolates_per_item_failures(monkeypatch):
 @pytest.mark.anyio
 async def test_ipc_trigger_approvals_executes_broker_action_not_just_cache():
     control_state = MagicMock()
-    control_state.refresh_approvals = AsyncMock()
     db = MagicMock()
     event_bus = MagicMock()
     engine = MagicMock()

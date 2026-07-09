@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI):
 
     # Connect to Inter-Process Communication (IPC) broker
     from hermes.ipc import ipc
-    await ipc.connect(db)
+    await ipc.connect()
 
     yield
 

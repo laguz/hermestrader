@@ -195,7 +195,6 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
     # Startup update check and soul syncing
     try:
         from hermes.utils import sync_soul_file_to_db, check_for_updates
-        import threading
         await sync_soul_file_to_db(db)
         threading.Thread(target=check_for_updates, daemon=True).start()
     except Exception as exc:
@@ -375,7 +374,7 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     # Connect IPC
     from hermes.ipc import ipc
-    await ipc.connect(db)
+    await ipc.connect()
 
     async def _ipc_callback(data: dict):
         await handle_ipc_command(data, control_state, db, conf, event_bus, engine)

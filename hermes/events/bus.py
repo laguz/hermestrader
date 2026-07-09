@@ -129,14 +129,6 @@ class ProcessReactiveEntriesEvent(Event):
 
 
 @dataclass
-class OrderTrackedEvent(Event):
-    order_id: str
-    symbol: str
-    side: str
-    quantity: int
-
-
-@dataclass
 class SyncPositionsCommand(Event):
     pass
 

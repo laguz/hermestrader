@@ -28,7 +28,7 @@ Tag round-trips as ``HERMES_HERMESALPHA`` / ``HERMES-HERMESALPHA``; closes as
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ._credit_spread_base import CreditSpreadStrategy, TradeAction
 from ._helpers import nearest_strike, parse_occ
@@ -264,14 +264,14 @@ class HermesAlpha(CreditSpreadStrategy):
     def _dte_summary(self, t) -> str:                                  # pragma: no cover
         return "AI"
 
-    async def _resolve_entry_expiry(self, symbol: str, t):             # pragma: no cover
+    async def _resolve_entry_expiry(self, symbol: str, t) -> Optional[str]:  # pragma: no cover
         return None
 
-    def _completion_window(self, t):                                   # pragma: no cover
+    def _completion_window(self, t) -> Tuple[int, int]:                # pragma: no cover
         return (0, 0)
 
     def _min_credit(self, dte: int, width: float, t) -> float:         # pragma: no cover
         return 0.0
 
-    def _close_reason(self, trade, dte, debit, entry_credit, width, t): # pragma: no cover
+    def _close_reason(self, trade, dte, debit, entry_credit, width, t) -> Optional[str]:  # pragma: no cover
         return None

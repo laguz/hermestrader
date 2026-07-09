@@ -11,8 +11,7 @@ class MockStreamClient:
     Mock stream client that periodically generates mock quotes for the watchlist
     and emits them to the event bus, replicating the behavior of the real stream client.
     """
-    def __init__(self, event_bus, watchlist: List[str], db: Optional[Any] = None, target: Optional[str] = None):
-        # Keep target parameter for compatibility with GRPCStreamClient signature
+    def __init__(self, event_bus, watchlist: List[str], db: Optional[Any] = None):
         self.event_bus = event_bus
         self.watchlist = list(watchlist) if watchlist else []
         self.db = db

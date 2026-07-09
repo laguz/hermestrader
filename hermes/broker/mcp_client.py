@@ -385,7 +385,7 @@ class MCPBrokerClient(AbstractBroker):
         quotes = await self.get_quote(option_symbol)
         if not quotes:
             return 0.0
-        greeks = (quotes[0].get("greeks") or {}) if quotes else {}
+        greeks = quotes[0].get("greeks") or {}
         return float(greeks.get("delta", 0.0) or 0.0)
 
     async def get_option_expirations(self, symbol: str) -> List[str]:
