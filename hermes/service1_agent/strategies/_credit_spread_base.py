@@ -294,6 +294,9 @@ class CreditSpreadStrategy(AbstractStrategy):
             if delta < delta_min or delta > delta_max:
                 continue
 
+            iv = greeks.get("mid_iv")
+            if iv is None:
+                iv = greeks.get("smv_vol")
             pop = predict_pop(FeatureVector(
                 delta=delta,
                 xgb_prob=xgb_prob,
@@ -303,6 +306,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                 side=side,
                 period=self.ANALYSIS_PERIOD.upper(),
                 symbol=symbol,
+                dte=float(dte),
+                sigma=float(iv) if iv is not None else None,
             ))
             if pop > max_pop_seen:
                 max_pop_seen = pop

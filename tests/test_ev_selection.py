@@ -139,8 +139,10 @@ async def test_all_candidates_failing_credit_logs_credit_reason():
     expiry = _expirations_for(7)[0]
     ymd = date.fromisoformat(expiry).strftime("%y%m%d")
     chain = [
-        _put(ymd, 97.0, 0.25, 0.10),   # credit 0.04 < min 0.12
-        _put(ymd, 96.0, 0.21, 0.06),
+        # Δ0.20 (not 0.25): the dte-aware d2 baseline scores 25Δ below the
+        # 0.75 gate, which would reject on POP before the credit check runs.
+        _put(ymd, 97.0, 0.20, 0.10),   # credit 0.04 < min 0.12
+        _put(ymd, 96.0, 0.17, 0.06),
     ]
     broker = StubBroker(expirations=[expiry])
     broker.get_option_chains = lambda symbol, exp: chain

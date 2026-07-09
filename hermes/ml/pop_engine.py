@@ -96,6 +96,12 @@ class FeatureVector:
     side: str = "put"
     period: str = "3M"
     symbol: str = "DEFAULT"
+    # Days to expiry of the scored option and its own annualized IV.
+    # When both are usable the delta baseline uses the lognormal d1→d2
+    # inversion (see ``delta_implied_p_otm``); when absent the engine
+    # keeps the historical linear 1-|delta| baseline.
+    dte: Optional[float] = None
+    sigma: Optional[float] = None
 
     def to_meta_dict(self) -> Dict[str, float]:
         """Project the features into the meta-learner's input space."""
@@ -214,6 +220,15 @@ def find_key_levels(
 # ---------------------------------------------------------------------------
 _PROTECTION_DISTANCE_FLOOR = 0.1   # percent-of-spot points; exposed for tests (rec #19)
 
+# Upper bound on the protection score. The raw 1/distance sum is unbounded:
+# a strength-9 cluster hugging spot saturates every level at the distance
+# floor and adds β4·(10-1) ≈ +3.6 log-odds — POP pins near 1.0 regardless of
+# delta, and the entry gate stops gating. Capping at 3.0 bounds the boost to
+# β4·2 (~+13 POP points at default weights): a strong-but-plausible reading
+# (e.g. two strength-10 levels 1% from spot) hits the cap; anything beyond it
+# is treated as saturation, not extra signal.
+_PROTECTION_SCORE_CAP = 3.0
+
 
 def calculate_strike_protection(
     key_levels: Sequence[Mapping[str, Any]],
@@ -222,7 +237,8 @@ def calculate_strike_protection(
     spread_type: str,
 ) -> float:
     """Numerical score representing how well a short strike is protected
-    by S/R clusters. ``>=1.0`` means baseline protection.
+    by S/R clusters. ``>=1.0`` means baseline protection; capped at
+    ``_PROTECTION_SCORE_CAP`` so saturated clusters can't pin POP at 1.0.
 
     Level distance is measured in **percent-of-spot points**
     (``100 × |spot − level| / spot``), not raw dollars — a support 1%
@@ -254,7 +270,7 @@ def calculate_strike_protection(
                 distance = max((price - current_price) * pct, _PROTECTION_DISTANCE_FLOOR)
                 raw_score += strength * (1.0 / distance)
 
-    score = 1.0 + (raw_score * 0.1)
+    score = 1.0 + min(raw_score * 0.1, _PROTECTION_SCORE_CAP - 1.0)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
             "strike_protection raw=%.4f score=%.4f spread=%s short=%.4f spot=%.4f",
@@ -271,6 +287,42 @@ def calculate_log_odds(probability: float) -> float:
     return float(np.log(p / (1 - p)))
 
 
+def delta_implied_p_otm(fv: FeatureVector) -> float:
+    """Market-implied P(short strike expires OTM) from the option's delta.
+
+    ``1 - |delta|`` treats delta — an N(d1) quantity — as if it were the
+    expiry-ITM probability, which is N(d2) = N(d1 - σ√t) under the same
+    Black-Scholes model the delta came from. Because d2 < d1, the linear
+    form systematically overstates put-side POP and understates call-side
+    POP (≈3-5 points at 25Δ / 25-vol / 45DTE) — enough to admit put
+    entries that are genuinely below ``pop_target``. When the caller
+    supplies ``dte`` (and ideally ``sigma``, the scored option's own IV;
+    falls back to ``current_vol``) we invert the relation instead:
+
+        P(OTM) = 1 - Φ(Φ⁻¹(|Δ|) + σ√t)   for puts
+        P(OTM) = 1 - Φ(Φ⁻¹(|Δ|) - σ√t)   for calls
+
+    Without ``dte`` this returns the historical ``1 - |delta|`` so
+    existing callers (dashboard overlay, regime scoring, shims) are
+    unchanged. The meta-learner's ``delta_implied_prob`` feature keeps
+    the linear form on purpose — its training rows are built that way.
+    """
+    d = abs(float(fv.delta))
+    p_linear = float(np.clip(1.0 - d, 0.01, 0.99))
+    if fv.dte is None or not np.isfinite(fv.dte) or fv.dte <= 0:
+        return p_linear
+    sigma = fv.sigma
+    if sigma is None or not np.isfinite(sigma) or sigma <= 0:
+        sigma = fv.current_vol
+    if sigma is None or not np.isfinite(sigma) or sigma <= 0:
+        return p_linear
+    shift = float(sigma) * math.sqrt(float(fv.dte) / 365.0)
+    sign = 1.0 if fv.side == "put" else -1.0
+    d_clipped = float(np.clip(d, 0.01, 0.99))
+    p_itm = float(norm.cdf(norm.ppf(d_clipped) + sign * shift))
+    return float(np.clip(1.0 - p_itm, 0.01, 0.99))
+
+
 def _legacy_combiner(fv: FeatureVector) -> float:
     # The vol-ratio and protection terms are *centered* on their neutral
     # values (rv=1, protection=1) so they contribute zero log-odds in a
@@ -278,8 +330,9 @@ def _legacy_combiner(fv: FeatureVector) -> float:
     # systematically inflated POP ~10-20 points above the delta-implied
     # probability (a 43Δ short scored 76% "POP" in production), pushing the
     # strategies into closer strikes than their pop_target intends. With
-    # neutral inputs (xgb=0.5, rv=1, prot=1) POP now equals 1-|delta| exactly.
-    p_base = 1.0 - abs(fv.delta)
+    # neutral inputs (xgb=0.5, rv=1, prot=1) POP equals the delta-implied
+    # probability exactly: 1-|delta| without dte, the d2 inversion with it.
+    p_base = delta_implied_p_otm(fv)
     # max() not +epsilon in the denominator, matching to_meta_dict: equal
     # vols must give rv == 1.0 exactly so the centered term is truly zero.
     rv = fv.current_vol / max(fv.avg_vol, 1e-5)
@@ -568,6 +621,7 @@ __all__ = [
     "find_key_levels",
     "calculate_strike_protection",
     "calculate_log_odds",
+    "delta_implied_p_otm",
     "predict_pop",
     "predict_pop_with_band",
     "predict_single_pop",

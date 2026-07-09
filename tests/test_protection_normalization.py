@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from hermes.ml.pop_engine import _PROTECTION_DISTANCE_FLOOR, calculate_strike_protection
+from hermes.ml.pop_engine import _PROTECTION_SCORE_CAP, calculate_strike_protection
 
 
 def _setup(spot: float):
@@ -51,12 +51,32 @@ def test_call_side_is_symmetric():
 
 
 def test_distance_floor_bounds_levels_hugging_spot():
-    # A support 0.01% below spot must saturate at the 0.1-pct-point floor,
-    # not blow the score up unboundedly.
+    # A support 0.01% below spot saturates at the 0.1-pct-point floor, and
+    # the saturated raw score (1 + 0.1×5/0.1 = 6.0 uncapped) clamps to the
+    # score cap so it can't pin POP at ~1.0 through the combiner.
     spot = 600.0
     levels = [{"price": spot * 0.9999, "type": "support", "strength": 5}]
     score = calculate_strike_protection(levels, spot, spot * 0.93, "put_credit")
-    assert score == pytest.approx(1.0 + 0.1 * (5.0 / _PROTECTION_DISTANCE_FLOOR), abs=1e-9)
+    assert score == pytest.approx(_PROTECTION_SCORE_CAP, abs=1e-9)
+
+
+def test_score_cap_bounds_stacked_strong_clusters():
+    # Several strong clusters inside the corridor must not push the score
+    # past the cap no matter how they stack.
+    spot = 100.0
+    levels = [{"price": spot - d, "type": "support", "strength": 9}
+              for d in (0.2, 0.5, 1.0, 1.5)]
+    score = calculate_strike_protection(levels, spot, 93.0, "put_credit")
+    assert score == pytest.approx(_PROTECTION_SCORE_CAP, abs=1e-9)
+
+
+def test_typical_setup_stays_below_cap():
+    # A single strength-5 support 3% out is nowhere near saturation — the
+    # cap must not distort the ordinary scoring regime.
+    levels, short_strike = _setup(100.0)
+    score = calculate_strike_protection(levels, 100.0, short_strike, "put_credit")
+    assert score < _PROTECTION_SCORE_CAP
+    assert score == pytest.approx(1.0 + 0.1 * (5.0 / 3.0), abs=1e-9)
 
 
 def test_levels_outside_the_corridor_contribute_nothing():
