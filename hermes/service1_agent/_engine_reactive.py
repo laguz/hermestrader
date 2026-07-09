@@ -84,6 +84,16 @@ class ReactiveController:
     # rather than growing Redis memory forever.
     _STREAM_MAXLEN = 10_000
 
+    # Upper bound on how long publish_event waits for its round-trip future.
+    # A future that never resolves (an entry trimmed before delivery, or any
+    # leak path not yet found) would otherwise hold its EventBus dispatch
+    # permit forever — 50 leaked permits and the whole bus freezes: no
+    # CLOCK_TICK, no ML ticks, nothing, until the liveness watchdog kill-loops
+    # the agent. Generous relative to the consumer's 90s per-event cap plus
+    # realistic backlog queueing, so it only fires when the future is
+    # genuinely orphaned; the consumer may still process the event late.
+    _PUBLISH_RESULT_TIMEOUT_S = 300.0
+
     def __init__(self, engine: "CascadingEngine") -> None:
         self.engine = engine
         # Shared dependency surface (db / broker / mm / event_bus / config /
@@ -363,11 +373,27 @@ class ReactiveController:
 
         if self._is_durable_loop():
             import json
+            import uuid
             client = self.ctx.ipc_client.client
             fut = asyncio.get_running_loop().create_future()
 
             filtered_payload = {k: v for k, v in payload.items() if k != "future"}
             serializable_payload = self._serialize_value(filtered_payload)
+
+            # The future must be registered BEFORE the xadd, keyed by a
+            # client-generated correlation id rather than the server-assigned
+            # msg_id: the consumer sits parked in xreadgroup(block=...), so
+            # Redis can deliver the entry and the consumer can process, ack,
+            # and pop it before this coroutine ever resumes from the xadd
+            # await. Under the old post-xadd msg_id keying, losing that race
+            # left this coroutine awaiting a future nobody would ever resolve,
+            # permanently holding one EventBus dispatch permit per lost race —
+            # a few minutes of MARKET_DATA traffic leaked all 50 permits and
+            # froze every event type on the bus until the liveness watchdog
+            # killed the process (the ~46-minute offline kill-loop of
+            # 2026-07-08).
+            corr_id = uuid.uuid4().hex
+            self._pending_futures[corr_id] = fut
 
             # Bound the stream — xadd never trims on its own, so without maxlen
             # every event (including high-frequency MARKET_DATA ticks) stays in
@@ -375,18 +401,32 @@ class ReactiveController:
             # the cheap form: Redis trims whole macro-nodes instead of walking
             # the stream, and the single in-flight consumer entry is always the
             # most recent add, so it's never at risk of being trimmed away.
-            msg_id = await client.xadd(
-                "hermes_event_stream",
-                {
-                    "event_type": event_type,
-                    "payload": json.dumps(serializable_payload, default=str)
-                },
-                maxlen=self._STREAM_MAXLEN,
-                approximate=True,
-            )
+            try:
+                await client.xadd(
+                    "hermes_event_stream",
+                    {
+                        "event_type": event_type,
+                        "payload": json.dumps(serializable_payload, default=str),
+                        "corr_id": corr_id,
+                    },
+                    maxlen=self._STREAM_MAXLEN,
+                    approximate=True,
+                )
+            except BaseException:
+                self._pending_futures.pop(corr_id, None)
+                raise
 
-            self._pending_futures[msg_id] = fut
-            return await fut
+            try:
+                return await asyncio.wait_for(fut, timeout=self._PUBLISH_RESULT_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                self._pending_futures.pop(corr_id, None)
+                logger.error(
+                    "[ENGINE] Durable %s round-trip returned no result within "
+                    "%.0fs — abandoning the wait to release this dispatch's "
+                    "bus permit (the consumer may still process the event "
+                    "late).", event_type, self._PUBLISH_RESULT_TIMEOUT_S,
+                )
+                raise
         else:
             fut = asyncio.get_running_loop().create_future()
             payload_with_fut = dict(payload)
@@ -445,6 +485,11 @@ class ReactiveController:
                     for msg_id, payload in messages:
                         event_type = payload.get("event_type")
                         payload_json = payload.get("payload")
+                        # Futures are keyed by the publisher's corr_id
+                        # (registered before the xadd — see publish_event);
+                        # fall back to msg_id for entries a pre-corr_id build
+                        # left in the stream.
+                        fut_key = payload.get("corr_id") or msg_id
                         try:
                             if event_type == "MARKET_DATA":
                                 age_s = self._durable_msg_age_s(msg_id)
@@ -454,14 +499,14 @@ class ReactiveController:
                                         "(%.0fs old > %.0fs) — superseded by fresher quotes.",
                                         msg_id, age_s, self._MARKET_DATA_SHED_AFTER_S,
                                     )
-                                    fut = self._pending_futures.get(msg_id)
+                                    fut = self._pending_futures.get(fut_key)
                                     if fut and not fut.done():
                                         fut.set_result(None)
                                     continue  # the finally block still acks + pops
                             raw_data = json.loads(payload_json) if payload_json else {}
                             data = self._deserialize_value(raw_data)
 
-                            fut = self._pending_futures.get(msg_id)
+                            fut = self._pending_futures.get(fut_key)
                             if fut:
                                 data["future"] = fut
 
@@ -507,7 +552,7 @@ class ReactiveController:
                                 await client.xack("hermes_event_stream", "hermes_engine_group", msg_id)
                             except Exception:
                                 logger.exception("[ENGINE] xack failed for %s", msg_id)
-                            self._pending_futures.pop(msg_id, None)
+                            self._pending_futures.pop(fut_key, None)
 
             except asyncio.CancelledError:
                 break
