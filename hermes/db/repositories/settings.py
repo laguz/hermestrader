@@ -38,7 +38,20 @@ class SettingsRepository(Repository):
             return {row.key: row.value for row in result.scalars().all()}
 
     async def set_setting(self, key: str, value: str) -> None:
+        value = str(value)
         async with self.AsyncSession() as s:
+            # No-op writes must not emit events: the agent subscribes to its
+            # own SYSTEM_SETTING_CHANGED publishes, and its settings-changed
+            # handler rewrites status keys (llm_last_error via _build_llm), so
+            # an event for an unchanged value feeds back as another write —
+            # a self-sustaining publish→handle→write loop that floods
+            # event_ledger. Nothing changed, so there is no event to record.
+            existing = await s.execute(
+                select(SystemSetting).filter_by(key=key).limit(1))
+            row = existing.scalars().first()
+            if row is not None and row.value == value:
+                return
+
             updated_at = datetime.utcnow().isoformat()
             
             # Emit Event-Sourced Event
