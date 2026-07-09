@@ -225,6 +225,74 @@ class TradesRepository(Repository):
             f"order_id={broker_order_id} status={order_status or 'ok'}",
         )
 
+    async def apply_entry_fill_price(self, broker_order_id: Optional[str],
+                                     fill_price: Optional[float]) -> bool:
+        """Reconcile ``entry_credit``/``entry_debit`` with the broker's actual
+        average fill price once the entry order reports filled.
+
+        The value recorded at submission is the *limit* price; the broker can
+        fill a credit at the limit or better (higher) and a debit at the limit
+        or better (lower). ``Trade.broker_order_id`` is written only by the
+        entry path, so a match here can never be a closing order. TP/SL
+        management and realized P&L both read these columns, so the update is
+        band-guarded: a fill through the wrong side of the limit, or an
+        implausibly large improvement (beyond 1.5× / a $0.10 allowance —
+        e.g. Tradier reporting a per-leg price on a multileg order), is
+        treated as a data anomaly and ignored with a warning. Returns True
+        only when a row was actually updated.
+        """
+        if not broker_order_id or fill_price is None:
+            return False
+        fill = float(fill_price)
+        if not (fill > 0):
+            return False
+        async with self.AsyncSession() as s:
+            q = (select(Trade)
+                 .filter(Trade.broker_order_id == str(broker_order_id),
+                         Trade.status.in_(["OPEN", "CLOSING"]))
+                 .order_by(Trade.opened_at.desc())
+                 .limit(1))
+            row = (await s.execute(q)).scalars().first()
+            if row is None:
+                return False
+            eps = 1e-9
+            if row.entry_credit is not None:
+                limit = float(row.entry_credit)
+                hi = max(limit * 1.5, limit + 0.10)
+                if not (limit - eps <= fill <= hi + eps):
+                    logger.warning(
+                        "[DB] entry fill %.4f outside credit band [%.4f, %.4f] "
+                        "for order %s (%s); keeping limit price",
+                        fill, limit, hi, broker_order_id, row.symbol)
+                    return False
+                if abs(fill - limit) <= eps:
+                    return False
+                row.entry_credit = fill
+            elif row.entry_debit is not None:
+                limit = float(row.entry_debit)
+                lo = min(limit / 1.5, limit - 0.10)
+                if not (lo - eps <= fill <= limit + eps):
+                    logger.warning(
+                        "[DB] entry fill %.4f outside debit band [%.4f, %.4f] "
+                        "for order %s (%s); keeping limit price",
+                        fill, lo, limit, broker_order_id, row.symbol)
+                    return False
+                if abs(fill - limit) <= eps:
+                    return False
+                row.entry_debit = fill
+            else:
+                # Submitted without a price (no limit recorded) — can't tell
+                # credit from debit, so leave the row alone.
+                return False
+            strategy_id, symbol = row.strategy_id, row.symbol
+            await s.commit()
+        await self._db.logs.write_log(
+            strategy_id,
+            f"[ENTRY FILL] {symbol} order_id={broker_order_id} "
+            f"limit={limit:.4f} filled={fill:.4f} — entry price reconciled",
+        )
+        return True
+
     async def close_trade_from_action(self, action, response) -> None:
         order_status, broker_order_id, rejected = self._parse_order_response(response)
         lots = self._resolve_lots(

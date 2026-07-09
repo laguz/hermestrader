@@ -775,6 +775,16 @@ class ReactiveController:
             "[ENGINE] Order fill event received for order %s (%s %d shares/contracts of %s)",
             event.broker_order_id, event.side, event.quantity, event.symbol,
         )
+        # Reconcile the recorded entry limit with the broker's actual average
+        # fill. The monitor's missing-order fallback emits price=0.0, which
+        # the guard here (and the repo's own) skips.
+        if str(event.status).lower() == "filled" and event.price is not None and event.price > 0:
+            try:
+                await self.ctx.db.trades.apply_entry_fill_price(
+                    event.broker_order_id, float(event.price))
+            except Exception as exc:
+                logger.warning("[ENGINE] entry fill-price reconcile failed for %s: %s",
+                               event.broker_order_id, exc)
         # Every step below calls its command's single-subscriber handler
         # directly, not bus.emit()+await future: this whole method runs
         # inside the durable consumer's processing budget, and the bus
