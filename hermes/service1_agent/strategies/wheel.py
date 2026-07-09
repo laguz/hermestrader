@@ -45,6 +45,7 @@ and side. Rolls bypass ``max_lots`` because they're not new exposure.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Iterable, List, Optional
 
 from ..core import AbstractStrategy, TradeAction
@@ -172,7 +173,11 @@ class WheelStrategy(AbstractStrategy):
         if t is None:
             t = await self.load_tunables()
         chain = await self.broker.get_option_chains(symbol, expiry) or []
-        short, pop = self._select_short_strike(symbol, side, chain, analysis, xgb_prob, t)
+        try:
+            dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - self.today()).days
+        except (TypeError, ValueError):
+            dte = None
+        short, pop = self._select_short_strike(symbol, side, chain, analysis, xgb_prob, t, dte=dte)
         if not short:
             return None
         # Defensive: illiquid contracts can return None for bid/ask.
@@ -211,7 +216,7 @@ class WheelStrategy(AbstractStrategy):
             expiry=expiry,
         )
 
-    def _select_short_strike(self, symbol, side, chain, analysis, xgb_prob, t):
+    def _select_short_strike(self, symbol, side, chain, analysis, xgb_prob, t, *, dte=None):
         """Pick the short strike for one wheel leg. Returns ``(option, pop)``.
 
         Delta is the anchor: gather chain strikes within ``wheel_delta_tol``
@@ -263,10 +268,16 @@ class WheelStrategy(AbstractStrategy):
                     or (abs(prot - best_prot) <= 1e-9 and abs(d - target) < abs(best_delta - target))):
                 best_opt, best_delta, best_prot = o, d, prot
 
+        best_greeks = best_opt.get("greeks") or {}
+        iv = best_greeks.get("mid_iv")
+        if iv is None:
+            iv = best_greeks.get("smv_vol")
         pop = predict_pop(FeatureVector(
             delta=best_delta, xgb_prob=prob, current_vol=current_vol,
             avg_vol=avg_vol, protection_score=best_prot, side=side,
             period="6M", symbol=symbol,
+            dte=float(dte) if dte is not None else None,
+            sigma=float(iv) if iv is not None else None,
         ))
 
         min_pop = t.wheel_min_pop

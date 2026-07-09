@@ -103,14 +103,16 @@ async def test_entry_gate_rejects_high_delta_strike_despite_inflated_level_pop()
 
 
 async def test_entry_gate_passes_and_records_honest_chain_pop():
-    """A 25Δ chain strike (implied POP 0.75) passes the 0.75 gate and the
-    recorded strategy_params.pop is the honest number, not the overlay's."""
+    """A 20Δ chain strike passes the 0.75 gate and the recorded
+    strategy_params.pop is the honest dte-aware number — the lognormal
+    P(OTM at expiry) implied by that delta, not the overlay's claim and
+    not the linear 1−|Δ| (which overstates put-side POP)."""
     broker = StubBroker(expirations=_expirations_for(7))
     broker.analyze_symbol = lambda symbol, period="6m": {
         "symbol": symbol, "current_price": 100.0,
         "current_vol": 0.20, "avg_vol": 0.20,
         # Overlay claims a wildly inflated 0.99 — must not leak into the row.
-        "key_levels": [{"price": 90.0, "type": "support", "strength": 5,
+        "key_levels": [{"price": 88.0, "type": "support", "strength": 5,
                         "pop": 0.99}],
         "samples": 100, "period": period,
     }
@@ -120,8 +122,31 @@ async def test_entry_gate_passes_and_records_honest_chain_pop():
     assert len(puts) == 1
     recorded = puts[0].strategy_params["pop"]
     short_delta = puts[0].strategy_params["short_delta"]
-    assert recorded == pytest.approx(1.0 - short_delta, abs=1e-6)
+    # d1→d2 inversion at σ=0.20 (chain carries no IV → current_vol), 7 DTE.
+    from math import sqrt
+    from scipy.stats import norm
+    expected = 1.0 - norm.cdf(norm.ppf(short_delta) + 0.20 * sqrt(7 / 365))
+    assert recorded == pytest.approx(expected, abs=1e-6)
+    assert recorded < 1.0 - short_delta          # never above the linear bound
     assert recorded != pytest.approx(0.99, abs=1e-3)
+
+
+async def test_entry_gate_rejects_25_delta_put_at_075_target():
+    """The linear 1−|Δ| baseline scored a 25Δ put at exactly 0.75 and let it
+    through; the d2 inversion says its true expiry-OTM probability is ~0.74,
+    so it must now fail a 0.75 gate."""
+    broker = StubBroker(expirations=_expirations_for(7))
+    broker.analyze_symbol = lambda symbol, period="6m": {
+        "symbol": symbol, "current_price": 100.0,
+        "current_vol": 0.20, "avg_vol": 0.20,
+        # Stub chain: put delta at strike 90 = 0.5 + (90-100)/40 = 0.25.
+        "key_levels": [{"price": 90.0, "type": "support", "strength": 5}],
+        "samples": 100, "period": period,
+    }
+    s, db = _cs7(broker)
+    actions = await s.execute_entries(["AAPL"])
+    assert [a for a in actions if a.strategy_params.get("side_type") == "put"] == []
+    assert any("no ≥75% POP" in line for line in s.execution_logs)
 
 
 # ── prediction freshness / in-process source ────────────────────────────────
