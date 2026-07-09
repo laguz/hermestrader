@@ -7,7 +7,7 @@ from hermes.common import OCC_RE
 from hermes.service1_agent.trade_action import TradeAction
 from hermes.broker import BrokerAdapter
 from hermes.portfolio.safety_gateway import SafetyGateway
-from .money_manager import parse_occ_strike
+from .money_manager import resolve_entry_sizing
 
 logger = logging.getLogger("hermes.agent.risk_engine")
 
@@ -49,6 +49,20 @@ class PortfolioRiskEngine:
         except Exception as exc:
             logger.exception("[RiskEngine] Failed to sync broker orders: %s", exc)
 
+    async def _available_bp_and_open_trades(self) -> tuple[Dict[str, Any], float, list]:
+        """Account balances, buying power net of ``obp_reserve``, and open trades."""
+        balances = await self.broker.get_account_balances() or {}
+        available_bp = max(0.0, float(balances.get("option_buying_power", 0.0)))
+        try:
+            reserve_val = await self.db.settings.get_setting("obp_reserve")
+            if reserve_val:
+                available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
+        except Exception:
+            logger.warning("[RiskEngine] obp_reserve read failed; using full buying power")
+
+        db_open_trades = await self.db.trades.all_open_trades() or []
+        return balances, available_bp, db_open_trades
+
     async def evaluate_and_scale(self, actions: List[TradeAction]) -> List[TradeAction]:
         if not actions:
             return []
@@ -56,16 +70,7 @@ class PortfolioRiskEngine:
         await self._sync_broker_orders()
 
         if self.config.get("portfolio_optimization"):
-            balances = await self.broker.get_account_balances() or {}
-            available_bp = max(0.0, float(balances.get("option_buying_power", 0.0)))
-            try:
-                reserve_val = await self.db.settings.get_setting("obp_reserve")
-                if reserve_val:
-                    available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
-            except Exception:
-                logger.warning("[RiskEngine] obp_reserve read failed; using full buying power")
-
-            db_open_trades = await self.db.trades.all_open_trades() or []
+            _, available_bp, db_open_trades = await self._available_bp_and_open_trades()
 
             from hermes.portfolio.optimizer import PortfolioOptimizer
             optimizer = PortfolioOptimizer(self.config)
@@ -85,16 +90,7 @@ class PortfolioRiskEngine:
             key=lambda a: strategy_priority.get(a.strategy_id.upper(), 99)
         )
 
-        balances = await self.broker.get_account_balances() or {}
-        available_bp = max(0.0, float(balances.get("option_buying_power", 0.0)))
-        try:
-            reserve_val = await self.db.settings.get_setting("obp_reserve")
-            if reserve_val:
-                available_bp = max(0.0, available_bp - float(str(reserve_val).strip()))
-        except Exception:
-            logger.warning("[RiskEngine] obp_reserve read failed; using full buying power")
-
-        db_open_trades = await self.db.trades.all_open_trades() or []
+        balances, available_bp, db_open_trades = await self._available_bp_and_open_trades()
         running_open_trades = list(db_open_trades)
 
         safety_enabled = False
@@ -132,36 +128,11 @@ class PortfolioRiskEngine:
         validated_actions = []
 
         for action in sorted_actions:
-            requested_lots = action.quantity
-            if action.order_class == "multileg" and action.legs:
-                requested_lots = action.legs[0].get("quantity", 1)
+            requested_lots, max_lots, requirement_per_lot = \
+                resolve_entry_sizing(action, self.config)
 
             if requested_lots <= 0:
                 continue
-
-            strat_id = action.strategy_id.upper()
-            max_lots_map = {
-                "CS7": 1,
-                "CS75": 1,
-                "TT45": 1,
-                "WHEEL": 5,
-                "HERMESALPHA": 1,
-            }
-            config_key = f"{strat_id.lower()}_max_lots"
-            _raw_max_lots = self.config.get(config_key)
-            max_lots = int(_raw_max_lots) if _raw_max_lots is not None else max_lots_map.get(strat_id, 1)
-
-            requirement_per_lot = 0.0
-            if strat_id == "WHEEL":
-                if action.strategy_params.get("side_type") == "put" and action.legs:
-                    opt_symbol = action.legs[0].get("option_symbol")
-                    if opt_symbol:
-                        strike = parse_occ_strike(opt_symbol)
-                        if strike:
-                            requirement_per_lot = strike * 100.0
-            else:
-                if action.width is not None:
-                    requirement_per_lot = action.width * 100.0
 
             side_type = _action_side_type(action)
             key = (action.strategy_id, action.symbol, side_type, action.expiry)

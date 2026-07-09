@@ -903,39 +903,14 @@ class ReactiveController:
                         )
                         break
 
+                    from .money_manager import resolve_entry_sizing
                     scaled_actions = []
                     for action in actions:
-                        requested_lots = action.quantity
-                        if action.order_class == "multileg" and action.legs:
-                            requested_lots = action.legs[0].get("quantity", 1)
+                        requested_lots, max_lots, requirement_per_lot = \
+                            resolve_entry_sizing(action, self.ctx.config)
 
                         if requested_lots <= 0:
                             continue
-
-                        strat_id = action.strategy_id.upper()
-                        max_lots_map = {
-                            "CS7": 1,
-                            "CS75": 1,
-                            "TT45": 1,
-                            "WHEEL": 5,
-                            "HERMESALPHA": 1,
-                        }
-                        config_key = f"{strat_id.lower()}_max_lots"
-                        _raw_max_lots = self.ctx.config.get(config_key)
-                        max_lots = int(_raw_max_lots) if _raw_max_lots is not None else max_lots_map.get(strat_id, 1)
-
-                        requirement_per_lot = 0.0
-                        if strat_id == "WHEEL":
-                            if action.strategy_params.get("side_type") == "put" and action.legs:
-                                opt_symbol = action.legs[0].get("option_symbol")
-                                if opt_symbol:
-                                    from .money_manager import parse_occ_strike
-                                    strike = parse_occ_strike(opt_symbol)
-                                    if strike:
-                                        requirement_per_lot = strike * 100.0
-                        else:
-                            if action.width is not None:
-                                requirement_per_lot = action.width * 100.0
 
                         scaled = await self.ctx.mm.scale_quantity(
                             requested_lots=requested_lots,

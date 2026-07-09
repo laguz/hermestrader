@@ -31,6 +31,50 @@ def parse_occ_strike(symbol: str) -> Optional[float]:
     return float(strike_str) / 1000.0
 
 
+_DEFAULT_MAX_LOTS = {
+    "CS7": 1,
+    "CS75": 1,
+    "TT45": 1,
+    "WHEEL": 5,
+    "HERMESALPHA": 1,
+}
+
+
+def resolve_entry_sizing(action: TradeAction,
+                         config: Dict[str, Any]) -> tuple[int, int, float]:
+    """(requested_lots, max_lots, requirement_per_lot) for one entry action.
+
+    Single source of the per-action sizing preamble used by both the tick-path
+    RiskEngine and the reactive entry path — the falsy-zero ``max_lots`` bug
+    had to be fixed once per copy when this logic lived in each. A
+    ``{strategy}_max_lots`` config value of 0 must be honored, not replaced
+    with the default. WHEEL puts are cash-secured, so their requirement is the
+    short strike, not a spread width.
+    """
+    requested_lots = action.quantity
+    if action.order_class == "multileg" and action.legs:
+        requested_lots = action.legs[0].get("quantity", 1)
+
+    strat_id = action.strategy_id.upper()
+    _raw_max_lots = config.get(f"{strat_id.lower()}_max_lots")
+    max_lots = (int(_raw_max_lots) if _raw_max_lots is not None
+                else _DEFAULT_MAX_LOTS.get(strat_id, 1))
+
+    requirement_per_lot = 0.0
+    if strat_id == "WHEEL":
+        if action.strategy_params.get("side_type") == "put" and action.legs:
+            opt_symbol = action.legs[0].get("option_symbol")
+            if opt_symbol:
+                strike = parse_occ_strike(opt_symbol)
+                if strike:
+                    requirement_per_lot = strike * 100.0
+    else:
+        if action.width is not None:
+            requirement_per_lot = action.width * 100.0
+
+    return requested_lots, max_lots, requirement_per_lot
+
+
 # ---------------------------------------------------------------------------
 # MoneyManager — true available BP, dynamic scaling, side-aware sizing
 # ---------------------------------------------------------------------------

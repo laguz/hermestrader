@@ -214,52 +214,8 @@ class AsyncXGBPredictor:
 
     # -- background loop -----------------------------------------------------
     def _loop(self) -> None:
-        from hermes.market_hours import ET
-
         while not self._stop.is_set():
-            try:
-                self._cfg = PredictorConfig.from_db(self.db)
-                now = time.time()
-                now_et = datetime.now(ET)
-                force_run = (run_maybe_async(self.db.get_setting, "ml_force_run") == "true")
-
-                should_predict = self._should_predict(now_et, force_run)
-                should_retrain = (
-                    force_run
-                    or (now - self._last_train_ts > self._cfg.retrain_interval_s)
-                )
-                should_calibrate = (
-                    force_run
-                    or (now - self._last_calibrate_ts > self._cfg.calibrate_interval_s)
-                )
-
-                if should_predict or should_retrain or should_calibrate:
-                    self._sync_history()
-
-                warnings: List[str] = []
-                if should_retrain:
-                    warnings.extend(self.trainer.retrain_all())
-                    self._last_train_ts = now
-                if should_calibrate:
-                    self._calibrate_all()
-                    self._last_calibrate_ts = now
-                if should_predict or should_retrain:
-                    warnings.extend(self.inference.predict_all())
-
-                if force_run:
-                    try:
-                        run_maybe_async(self.db.set_setting, "ml_force_run", "false")
-                    except Exception as exc:
-                        logger.warning("Failed to clear ml_force_run setting in DB: %s", exc)
-
-                self._record_status(warnings)
-            except Exception as exc:
-                logger.exception("xgb loop error: %s", exc)
-                try:
-                    run_maybe_async(self.db.set_setting, "ml_last_error", str(exc)[:500])
-                except Exception as db_exc:
-                    logger.warning("Failed to record ml_last_error in DB: %s", db_exc)
-
+            self._run_ml_cycle()
             self._stop.wait(10)
 
     def _should_predict(self, now_et: datetime, force_run: bool) -> bool:

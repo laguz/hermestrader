@@ -23,18 +23,24 @@ logger = logging.getLogger("hermes.db")
 class TradesRepository(Repository):
     _REJECT_STATUSES = {"rejected", "error", "expired", "canceled", "cancelled"}
 
-    # ---- writes -----------------------------------------------------------
-    async def record_pending_order(self, action) -> None:
-        lots = action.quantity  # fallback
+    @staticmethod
+    def _resolve_lots(action, default, include_close: bool = False):
+        """Lots from the first sell/open (optionally close) leg, else ``default``."""
+        lots = default
         for leg in (action.legs or []):
             leg_side = (leg.get("side") or "").lower()
-            if "sell" in leg_side or "open" in leg_side:
+            if ("sell" in leg_side or "open" in leg_side
+                    or (include_close and "close" in leg_side)):
                 try:
                     lots = int(leg["quantity"])
                 except (KeyError, TypeError, ValueError):
                     pass
                 break
+        return lots
 
+    @staticmethod
+    def _derive_side_type(action, fallback_to_action_side: bool = False):
+        """Chain side ('put'/'call') from strategy_params, else the legs' OCC symbols."""
         side_value = (action.strategy_params or {}).get("side_type")
         if not side_value or side_value.lower() in {"buy", "sell"}:
             side_value = None
@@ -43,8 +49,31 @@ class TradesRepository(Repository):
                 if m:
                     side_value = "put" if m.group(3) == "P" else "call"
                     break
-            if side_value is None:
+            if side_value is None and fallback_to_action_side:
                 side_value = action.side
+        return side_value
+
+    @classmethod
+    def _parse_order_response(cls, response):
+        """(order_status, broker_order_id, rejected) from a broker order response."""
+        order = (response or {}).get("order") if isinstance(response, dict) else None
+        order_status = ""
+        broker_order_id: Optional[str] = None
+        if isinstance(order, dict):
+            order_status = str(order.get("status", "")).lower()
+            broker_order_id = (
+                str(order["id"]) if order.get("id") is not None else None
+            )
+        rejected = (
+            (isinstance(response, dict) and "errors" in response)
+            or order_status in cls._REJECT_STATUSES
+        )
+        return order_status, broker_order_id, rejected
+
+    # ---- writes -----------------------------------------------------------
+    async def record_pending_order(self, action) -> None:
+        lots = self._resolve_lots(action, default=action.quantity)
+        side_value = self._derive_side_type(action, fallback_to_action_side=True)
 
         # Detect a pure-close action (every leg is _to_close) so we can flip
         # the Trade to CLOSING in the same transaction as the PendingOrder.
@@ -103,39 +132,10 @@ class TradesRepository(Repository):
             await s.commit()
 
     async def record_order_response(self, action, response) -> None:
-        order = (response or {}).get("order") if isinstance(response, dict) else None
-        order_status = ""
-        broker_order_id: Optional[str] = None
-        if isinstance(order, dict):
-            order_status = str(order.get("status", "")).lower()
-            broker_order_id = (
-                str(order["id"]) if order.get("id") is not None else None
-            )
-
-        rejected = (
-            (isinstance(response, dict) and "errors" in response)
-            or order_status in self._REJECT_STATUSES
-        )
-
-        # Resolve lots from the first sell/open leg (matches record_pending_order)
-        lots = action.quantity if action.quantity is not None else 1
-        for leg in (action.legs or []):
-            leg_side = (leg.get("side") or "").lower()
-            if "sell" in leg_side or "open" in leg_side:
-                try:
-                    lots = int(leg["quantity"])
-                except (KeyError, TypeError, ValueError):
-                    pass
-                break
-
-        side_value = (action.strategy_params or {}).get("side_type")
-        if not side_value or side_value.lower() in {"buy", "sell"}:
-            side_value = None
-            for leg in (action.legs or []):
-                m = _OCC_RE.match(str(leg.get("option_symbol", "") or ""))
-                if m:
-                    side_value = "put" if m.group(3) == "P" else "call"
-                    break
+        order_status, broker_order_id, rejected = self._parse_order_response(response)
+        lots = self._resolve_lots(
+            action, default=action.quantity if action.quantity is not None else 1)
+        side_value = self._derive_side_type(action)
 
         sp = action.strategy_params or {}
         short_leg = sp.get("short_leg")
@@ -226,38 +226,11 @@ class TradesRepository(Repository):
         )
 
     async def close_trade_from_action(self, action, response) -> None:
-        order = (response or {}).get("order") if isinstance(response, dict) else None
-        order_status = ""
-        broker_order_id: Optional[str] = None
-        if isinstance(order, dict):
-            order_status = str(order.get("status", "")).lower()
-            broker_order_id = (
-                str(order["id"]) if order.get("id") is not None else None
-            )
-
-        rejected = (
-            (isinstance(response, dict) and "errors" in response)
-            or order_status in self._REJECT_STATUSES
-        )
-
-        lots = action.quantity if action.quantity is not None else 1
-        for leg in (action.legs or []):
-            leg_side = (leg.get("side") or "").lower()
-            if "sell" in leg_side or "open" in leg_side or "close" in leg_side:
-                try:
-                    lots = int(leg["quantity"])
-                except (KeyError, TypeError, ValueError):
-                    pass
-                break
-
-        side_value = (action.strategy_params or {}).get("side_type")
-        if not side_value or side_value.lower() in {"buy", "sell"}:
-            side_value = None
-            for leg in (action.legs or []):
-                m = _OCC_RE.match(str(leg.get("option_symbol", "") or ""))
-                if m:
-                    side_value = "put" if m.group(3) == "P" else "call"
-                    break
+        order_status, broker_order_id, rejected = self._parse_order_response(response)
+        lots = self._resolve_lots(
+            action, default=action.quantity if action.quantity is not None else 1,
+            include_close=True)
+        side_value = self._derive_side_type(action)
 
         sp = action.strategy_params or {}
         trade_id = sp.get("trade_id")
