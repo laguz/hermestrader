@@ -301,13 +301,13 @@ def _build_stream_client(broker, db, event_bus, watchlist_syms: set):
             watchlist=list(watchlist_syms)
         )
     else:
-        from hermes.broker.mock_stream import MockStreamClient
-        log.info("Initializing localized MockStreamClient")
-        return MockStreamClient(
-            event_bus=event_bus,
-            watchlist=list(watchlist_syms),
-            db=db
-        )
+        # No fabricated quotes in a trading process — MockStreamClient's
+        # synthetic 500.0 quotes poisoned the TP/SL quote cache for open
+        # option legs (2026-07-10 NFLX false-TP incident). The mock stays
+        # test-only; brokers without a real feed (MCP path) get a no-op.
+        from hermes.broker.mock_stream import NullStreamClient
+        log.info("Initializing NullStreamClient (no real quote stream for this broker)")
+        return NullStreamClient()
 
 
 async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
