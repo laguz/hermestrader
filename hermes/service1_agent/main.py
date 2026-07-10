@@ -19,9 +19,6 @@ from hermes.common import (
 )
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import IronCondorBuilder
-from hermes.service1_agent.strategies import (
-    CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
-)
 from hermes.market_hours import market_session
 
 logging.basicConfig(level=logging.INFO,
@@ -43,7 +40,7 @@ from .agent_risk import resolve_max_daily_loss, enforce_daily_loss_limit
 from .agent_approvals import _execute_approved_action
 from .agent_construction import (
     _live_armed, _resolve_mode_credentials, _build_broker,
-    _build_stream_client, _build_llm, build,
+    _build_stream_client, _build_llm, build, make_strategies,
     _load_and_validate_runtime_config,
 )
 from .agent_reactive import (
@@ -362,18 +359,15 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         engine.approval_mode = new_overseer_cfg["approval_mode"]
         engine.llm_out_of_loop = new_overseer_cfg["llm_out_of_loop"]
 
-        # Re-build engine active strategies list based on new settings
+        # Re-build engine active strategies list based on new settings.
+        # make_strategies is the single source of the concrete set — this
+        # rebuild used to keep its own hardcoded copy, which silently evicted
+        # any strategy registered only in build() (DS0, 2026-07-10) on the
+        # first settings event after startup.
         common = dict(broker=engine.broker, db=db, money_manager=engine.mm, ic_builder=IronCondorBuilder(engine.mm),
                       config=conf, overseer=engine.overseer, dry_run=conf.get("dry_run", False))
-        all_strategies = [
-            CreditSpreads75(**common),
-            CreditSpreads7(**common),
-            TastyTrade45(**common),
-            WheelStrategy(**common),
-            HermesAlpha(**common),
-        ]
         enabled = new_overseer_cfg["strategy_enabled"]
-        engine.strategies = sorted([s for s in all_strategies if enabled.get(s.NAME, True)], key=lambda s: s.PRIORITY)
+        engine.strategies = sorted([s for s in make_strategies(common) if enabled.get(s.NAME, True)], key=lambda s: s.PRIORITY)
 
     for cls in (SystemSettingChangedEvent, DoctrineUpdatedEvent, StrategyToggledEvent, AutonomyChangedEvent, PauseChangedEvent):
         event_bus.subscribe(cls, _handle_settings_changed)

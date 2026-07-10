@@ -148,6 +148,27 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     return MockLLM(), snapshot, vision
 
 
+def make_strategies(common: Dict[str, Any]) -> list:
+    """One instance of every concrete strategy, in priority order.
+
+    The single source of the strategy set: both the startup ``build()`` and
+    ``main._handle_settings_changed``'s rebuild construct from here. The two
+    sites used to keep separate hardcoded lists — DS0 was registered only in
+    ``build()``, so the first settings event after startup (the ML loop fires
+    one every ~10s) silently rebuilt the engine without it and the strategy
+    never ticked (2026-07-10). ``tests/test_ds0_strategy.py`` pins this list
+    against ``STRATEGY_PRIORITIES``.
+    """
+    return [
+        CreditSpreads75(**common),
+        CreditSpreads7(**common),
+        TastyTrade45(**common),
+        WheelStrategy(**common),
+        HermesAlpha(**common),
+        DebitSpreads0DTE(**common),
+    ]
+
+
 def build(broker, llm_client, chart_provider, config: Dict[str, Any],
           *, vision_enabled: bool = True,
           autonomy: Optional[str] = None,
@@ -177,14 +198,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
     common = dict(broker=broker, db=db, money_manager=mm, ic_builder=ic,
                   config=config, overseer=overseer,
                   dry_run=config.get("dry_run", False))
-    all_strategies = [
-        CreditSpreads75(**common),
-        CreditSpreads7(**common),
-        TastyTrade45(**common),
-        WheelStrategy(**common),
-        HermesAlpha(**common),
-        DebitSpreads0DTE(**common),
-    ]
+    all_strategies = make_strategies(common)
     # Filter out strategies the operator has disabled from the C2 panel.
     active_strategies = [s for s in all_strategies
                          if enabled.get(s.NAME, True)]
