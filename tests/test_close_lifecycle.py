@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import pytest  # noqa: F401
 
 from hermes.db.models import Trade
-from hermes.service1_agent.core import TradeAction
+from hermes.service1_agent.core import CascadingEngine, TradeAction
 
 
 SHORT = "TSLA260717C00445000"
@@ -136,6 +136,107 @@ async def test_tracked_symbols_include_closing(db):
     tracked = await db.trades.tracked_option_symbols()
     # A mid-close position is still tracked, so it isn't misflagged as an orphan.
     assert SHORT in tracked and LONG in tracked
+
+
+# ── entry-resting race (2026-07-10 incident: trade 17, CS7 NFLX 71/70) ──────
+# An entry order was accepted broker-side but never filled (Trade OPEN, its
+# legs resting via the ENTRY order), then a close was submitted (→ CLOSING).
+# Broker positions were flat because the entry hadn't filled — the reconciler
+# read that as "the close filled" and finalized the trade with a fabricated
+# P&L; the real fill then arrived and was orphan-adopted as a duplicate trade.
+# Broker-flat on a CLOSING trade must not mean "close filled" while the entry
+# order is still working.
+
+class _RaceBroker:
+    """Stub broker whose positions/orders the test mutates between syncs."""
+
+    def __init__(self):
+        self.positions: list = []
+        self.orders: list = []
+
+    def get_positions(self):
+        return self.positions
+
+    def get_orders(self):
+        return self.orders
+
+    def get_account_balances(self):
+        return {"option_buying_power": 0.0, "account_type": "margin"}
+
+
+def _entry_order(status="open"):
+    return {"status": status, "tag": "HERMES_CS75", "symbol": "TSLA",
+            "leg": [{"option_symbol": SHORT, "side": "sell_to_open", "quantity": 3},
+                    {"option_symbol": LONG, "side": "buy_to_open", "quantity": 3}]}
+
+
+def _close_order(status="open"):
+    return {"status": status, "tag": "HERMES_CS75_CLOSE_AI", "symbol": "TSLA",
+            "leg": [{"option_symbol": SHORT, "side": "buy_to_close", "quantity": 3},
+                    {"option_symbol": LONG, "side": "sell_to_close", "quantity": 3}]}
+
+
+async def test_closing_not_finalized_while_entry_order_rests(db):
+    tid = await _open_trade(db)
+    # Real submit flow: record_pending_order flips to CLOSING, then the broker
+    # accepts and close_trade_from_action stashes the close economics.
+    await db.trades.record_pending_order(_close_action(tid))
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    assert await _status(db, tid) == "CLOSING"
+
+    broker = _RaceBroker()
+    broker.orders = [_entry_order(), _close_order()]
+    engine = CascadingEngine(broker=broker, db=db, strategies=[], money_manager=None)
+
+    # Entry unfilled → broker flat; must NOT be read as "the close filled".
+    await engine.sync_positions()
+    assert await _status(db, tid) == "CLOSING"
+
+    # Entry fills; the close is still resting → keep CLOSING.
+    broker.positions = [{"symbol": SHORT, "quantity": -3},
+                        {"symbol": LONG, "quantity": 3}]
+    broker.orders = [_close_order()]
+    await engine.sync_positions()
+    assert await _status(db, tid) == "CLOSING"
+
+    # Close fills → flat with nothing resting → finalize, stashed reason kept.
+    broker.positions = []
+    broker.orders = []
+    await engine.sync_positions()
+    assert await _status(db, tid) == "CLOSED"
+    from sqlalchemy import select
+    async with db.AsyncSession() as s:
+        row = (await s.execute(select(Trade).filter(Trade.id == tid))).scalars().first()
+        assert row.close_reason == "AI_CLOSE"
+
+
+async def test_closing_reopens_when_entry_fills_but_close_died(db):
+    tid = await _open_trade(db)
+    await db.trades.record_pending_order(_close_action(tid))
+
+    broker = _RaceBroker()
+    # Close already rejected async (a close of a not-yet-existing position);
+    # only the entry order is still working.
+    broker.orders = [_entry_order()]
+    engine = CascadingEngine(broker=broker, db=db, strategies=[], money_manager=None)
+    await engine.sync_positions()
+    assert await _status(db, tid) == "CLOSING"
+
+    # Entry fills, no order resting → the close never took; re-arm for retry.
+    broker.positions = [{"symbol": SHORT, "quantity": -3},
+                        {"symbol": LONG, "quantity": 3}]
+    broker.orders = []
+    await engine.sync_positions()
+    assert await _status(db, tid) == "OPEN"
+
+
+async def test_upsert_positions_opening_legs_guard(db):
+    """Repo-level: broker-flat + legs resting via an OPENING order → hold."""
+    tid = await _open_trade(db)
+    await db.trades.close_trade_from_action(_close_action(tid), {"order": {"status": "ok"}})
+    await db.trades.upsert_positions([], active_order_legs={SHORT, LONG},
+                                     opening_order_legs={SHORT, LONG})
+    assert await _status(db, tid) == "CLOSING"
 
 
 # ── double-submit guard (record_pending_order pre-sets CLOSING) ──────────────

@@ -63,7 +63,11 @@ class PipelineController:
         # Resting/accepted orders haven't created positions yet; the
         # reconciler must treat their legs as still-alive coverage so
         # just-submitted spreads aren't flipped to CLOSED before fill.
+        # Opening-order legs are tracked separately: a CLOSING trade whose
+        # ENTRY is still resting has no position for the close to have
+        # filled, so broker-flat must not finalize it.
         active_legs: set = set()
+        opening_legs: set = set()
         try:
             active_statuses = {"open", "partially_filled", "pending",
                                 "accepted", "calculated"}
@@ -81,12 +85,17 @@ class PipelineController:
                     sym = leg.get("option_symbol")
                     if sym:
                         active_legs.add(sym)
+                        if "to_open" in str(leg.get("side", "")).lower():
+                            opening_legs.add(sym)
                 top = o.get("option_symbol")
                 if top:
                     active_legs.add(top)
+                    if "to_open" in str(o.get("side", "")).lower():
+                        opening_legs.add(top)
         except Exception:
             logger.exception("[ENGINE] active-order leg fetch failed")
-        await ctx.db.trades.upsert_positions(positions, active_order_legs=active_legs)
+        await ctx.db.trades.upsert_positions(positions, active_order_legs=active_legs,
+                                             opening_order_legs=opening_legs)
         return positions, active_legs
 
     # 2

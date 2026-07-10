@@ -421,7 +421,8 @@ class TradesRepository(Repository):
     # Called every tick (CascadingEngine.sync_positions).
     # ------------------------------------------------------------------
     async def upsert_positions(self, positions: List[Dict[str, Any]],
-                          active_order_legs: Optional[Any] = None) -> None:
+                          active_order_legs: Optional[Any] = None,
+                          opening_order_legs: Optional[Any] = None) -> None:
         """Reconcile OPEN trades against broker truth."""
         broker_qty: Dict[str, int] = {}
         for p in positions or []:
@@ -438,6 +439,7 @@ class TradesRepository(Repository):
             broker_qty[sym] = broker_qty.get(sym, 0) + abs(qty)
 
         active_legs: set = set(active_order_legs or [])
+        opening_legs: set = set(opening_order_legs or [])
         broker_legs: set = set(broker_qty.keys())
         async with self.AsyncSession() as s:
             result = await s.execute(
@@ -445,6 +447,7 @@ class TradesRepository(Repository):
             rows = result.scalars().all()
             closed = 0
             reopened = 0
+            held_pending_entry = 0
             for t in rows:
                 legs = {leg for leg in (t.short_leg, t.long_leg) if leg}
                 held = bool(legs & broker_legs)
@@ -458,6 +461,15 @@ class TradesRepository(Repository):
                     await TransactionManager.reconcile_trade(s, t, "force_close", close_reason=close_reason)
                     closed += 1
                 else:  # CLOSING — a close was submitted; confirm its fate.
+                    if legs & opening_legs:
+                        # The ENTRY order is still working broker-side, so no
+                        # position exists yet for the close to have filled —
+                        # broker-flat here means "entry unfilled", not "close
+                        # filled". Hold until the entry resolves (2026-07-10
+                        # race: finalizing here fabricated a P&L, then the
+                        # real fill was orphan-adopted as a duplicate trade).
+                        held_pending_entry += 1
+                        continue
                     if not held:
                         # Legs went flat → the close filled. Finalize, keeping
                         # the close_reason / exit / pnl stashed at submit time.
@@ -477,6 +489,7 @@ class TradesRepository(Repository):
             "ENGINE",
             f"reconciled {len(positions or [])} broker pos; "
             f"closed_orphans={closed} reopened={reopened} "
+            f"held_pending_entry={held_pending_entry} "
             f"positions_legs={len(broker_qty)} resting_legs={len(active_legs)}",
         )
 
