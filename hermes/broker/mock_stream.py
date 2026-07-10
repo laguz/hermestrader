@@ -6,6 +6,28 @@ from hermes.events.bus import MarketDataEvent
 
 logger = logging.getLogger("hermes.broker.mock_stream")
 
+
+class NullStreamClient:
+    """No-op stream for instances whose broker exposes no real quote feed.
+
+    The agent must never fabricate market data outside tests: when the MCP
+    broker path got MockStreamClient as its "stream", the synthetic
+    bid 499.9 / ask 500.1 quotes it emitted for every tracked symbol —
+    including open option legs — were written into the shared quote cache
+    (``update_cached_quote``) and consumed by ``manage_positions``' TP/SL
+    math. Two identical fake leg quotes make the close debit $0.01, so every
+    fresh CS7 spread was instantly "TP"-closed, booking fabricated P&L and
+    orphaning the real fill when it arrived (2026-07-10, NFLX). No stream is
+    strictly better than a fake one.
+    """
+
+    async def start(self) -> None:
+        logger.info("NullStreamClient active — no quote stream for this broker.")
+
+    async def stop(self) -> None:
+        pass
+
+
 class MockStreamClient:
     """
     Mock stream client that periodically generates mock quotes for the watchlist

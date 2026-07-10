@@ -31,6 +31,35 @@ def allow_offhours(monkeypatch):
     monkeypatch.setenv("HERMES_ALLOW_OFFHOURS_TRADES", "true")
 
 @pytest.mark.asyncio
+async def test_agent_never_wires_fabricated_quote_stream():
+    """A trading process must never get MockStreamClient as its stream.
+
+    Its synthetic bid 499.9 / ask 500.1 quotes for tracked option legs were
+    cached via update_cached_quote and consumed by manage_positions' TP/SL
+    math — two identical fake leg quotes make the close debit $0.01, so every
+    fresh CS7 spread was instantly "TP"-closed with fabricated P&L
+    (2026-07-10, NFLX). Brokers without a real feed get the no-op stream.
+    """
+    from hermes.service1_agent.agent_construction import _build_stream_client
+    from hermes.broker.mock_stream import MockStreamClient, NullStreamClient
+
+    bus = EventBus()
+    client = _build_stream_client(StubBroker(), StubDB(), bus, {"AAPL"})
+    assert isinstance(client, NullStreamClient)
+    assert not isinstance(client, MockStreamClient)
+
+    events = []
+    bus.subscribe(MarketDataEvent, events.append)
+    bus.start()
+    await client.start()
+    try:
+        await asyncio.sleep(0.3)
+        assert events == []            # a null stream emits nothing, ever
+    finally:
+        await client.stop()
+
+
+@pytest.mark.asyncio
 async def test_mock_stream_client_quote_flow():
     # 1. Setup Event Bus
     bus = EventBus()
