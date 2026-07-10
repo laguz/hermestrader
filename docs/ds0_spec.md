@@ -1,7 +1,9 @@
 # DS0 — QQQ 0 DTE Mean-Reversion Debit Spreads (Specification)
 
-Status: **DRAFT — awaiting operator sign-off. No code exists yet.**
-Author: designed interactively with the operator, 2026-07-10.
+Status: **IMPLEMENTED** (`hermes/service1_agent/strategies/ds0.py`,
+regression tests in `tests/test_ds0_strategy.py`).
+Author: designed interactively with the operator, 2026-07-10; implemented
+same day. Deviations from the draft are noted inline as **[impl]**.
 
 ## Concept
 
@@ -29,7 +31,11 @@ stop loss** — the debit paid is the entire accepted risk per side.
    skipped with a log line (in practice only daily-expiry underlyings — QQQ,
    SPY, IWM — will ever trade; everything else no-ops safely). All entry
    rules below apply per watchlist symbol; the per-side position limits and
-   cooldowns in rule 7 are per symbol.
+   cooldowns in rule 7 are per symbol. **[impl]** An **empty DS0 watchlist
+   means idle** — DS0 deliberately refuses the engine's fallback to the
+   global default watchlist (SPY/IWM there are tradable 0DTE symbols the
+   operator never armed), and agent startup re-seeds ``["QQQ"]`` when the
+   list is empty.
 2. **Levels**: today's support/resistance bounds come from the existing
    `analyze_symbol(period="3m")` key levels with the standard POP overlay
    (`augment_levels_with_pop`, period `"3m"`) — the same stack CS7 uses.
@@ -111,12 +117,14 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 
 ## Architecture fit
 
-- New strategy class `DS0` in `hermes/service1_agent/strategies/ds0.py`,
-  subclassing `AbstractStrategy` directly (not `CreditSpreadStrategy` — the
-  credit base's POP-target strike walk, min-credit floors, and IC Mode A/B
-  completion are all inverted for a directional debit structure). Reuse
-  `nearest_strike` / `parse_occ` from `_helpers.py` and the batched-quote
-  management pattern.
+- New strategy class `DebitSpreads0DTE` in
+  `hermes/service1_agent/strategies/ds0.py`. **[impl]** Subclasses
+  `CreditSpreadStrategy` for its shared helpers (`_parse_symbol`,
+  `_latest_xgb_pred`, `_drop_stale_pred`) exactly as HermesAlpha does,
+  overriding both engine hooks — the credit base's POP-target strike walk,
+  min-credit floors, and IC Mode A/B completion are unused (inverted for a
+  directional debit structure). Reuses `nearest_strike` from `_helpers.py`
+  and the batched-quote management pattern.
 - **Priority 6**, after HermesAlpha — lowest claim on buying power until
   proven. Registered in the cascading order; the tick pipeline order itself
   is untouched (CLAUDE.md safety rule #3).
@@ -132,9 +140,19 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 - **Approvals**: normal `approval_mode` flow — no autonomous carve-out in
   v1. An unapproved DS0 entry auto-expires after `ds0_approval_ttl`
   (default 15 min) so a stale trigger never executes hours later.
-- **Known sharp edge**: DS0 would be the first caller passing `dte=0` into
-  the POP engine's DTE-aware lognormal correction. Verify behavior at zero
-  before wiring; the engine's linear no-dte path may be the correct route.
+- **Known sharp edge — resolved [impl]**: `delta_implied_p_otm` already
+  returns the linear `1-|delta|` path for `dte <= 0` (no √t singularity);
+  DS0 passes `dte=0.0` and a regression test pins the behavior.
+- **Order-replacement contract [impl]**: the 3 PM sweep on a CLOSING trade
+  stamps `strategy_params["replace_broker_order_id"]`; both order sinks
+  (`_execute_or_queue`, `_execute_approved_action`) cancel that resting
+  close before placing the replacement and **abort if the cancel fails**
+  (a failed cancel usually means the TP just filled — placing anyway would
+  double-close).
+- **Entry TTL [impl]**: DS0 stamps `strategy_params["valid_until"]`
+  (now + `ds0_approval_ttl_s`); `_execute_approved_action` expires — never
+  executes — an approval acted on past the stamp. Generic opt-in: actions
+  without the stamp are unaffected.
 
 ## Tunables (all in the `tunables.py` catalog from day one)
 

@@ -61,6 +61,10 @@ def _i(key, default, group, label, *, min=None, max=None, help=""):
     return Tunable(key, default, int, group, label, min, max, help)
 
 
+def _s(key, default, group, label, *, help=""):
+    return Tunable(key, default, str, group, label, None, None, help)
+
+
 # ---------------------------------------------------------------------------
 # THE CATALOG — defaults are exactly the literals the strategies used before.
 # Grouped by strategy NAME so ``resolve(group="CS75")`` loads only one slice.
@@ -155,6 +159,8 @@ _CATALOG: List[Tunable] = [
     _i("tt45_target_lots", 5, "LOTS", "TT45 target lots", min=1, max=100),
     _i("tt45_max_lots", 5, "LOTS", "TT45 max lots", min=1, max=100),
     _i("wheel_max_lots", 5, "LOTS", "WHEEL max lots", min=1, max=100),
+    _i("ds0_target_lots", 1, "LOTS", "DS0 target lots", min=1, max=100),
+    _i("ds0_max_lots", 1, "LOTS", "DS0 max lots", min=0, max=100),
 
     # ── HERMESALPHA (priority 5; LLM-originated credit spreads) ────────────
     _i("hermesalpha_width", 5, "HERMESALPHA", "Spread width ($)", min=1, max=50,
@@ -167,6 +173,30 @@ _CATALOG: List[Tunable] = [
        help="Close the position when DTE falls to this."),
     _f("hermesalpha_sl_mult", 2.5, "HERMESALPHA", "Stop-loss multiplier", min=1.0, max=10.0,
        help="Close when debit exceeds credit times this."),
+
+    # ── DS0 (priority 6; 0 DTE S/R-fade debit spreads, docs/ds0_spec.md) ────
+    _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,
+       help="Day-limit price for the entry; never repriced or chased."),
+    _f("ds0_close_price", 0.40, "DS0", "Close limit ($)", min=0.01, max=10.0,
+       help="Resting take-profit credit placed as soon as the entry fills."),
+    _f("ds0_pop_target", 0.75, "DS0", "POP floor", min=0.5, max=0.99,
+       help="Min 3m POP that the touched S/R level holds."),
+    _f("ds0_width", 1.0, "DS0", "Spread width ($)", min=0.5, max=50,
+       help="Strike distance between long and short legs."),
+    _f("ds0_trigger_band", 0.003, "DS0", "Trigger band (fraction)", min=0.0, max=0.05,
+       help="Price within this fraction of an S/R level arms that side."),
+    _f("ds0_guard_band", 0.005, "DS0", "Guard band (fraction)", min=0.0, max=0.05,
+       help="Assignment guard fires when spot is within this of the near strike."),
+    _i("ds0_assignment_guard", 1, "DS0", "Assignment guard (0/1)", min=0, max=1,
+       help="3:50 PM force-close of near/in-the-money spreads (pin/assignment risk)."),
+    _i("ds0_approval_ttl_s", 900, "DS0", "Entry approval TTL (s)", min=0, max=86400,
+       help="A queued DS0 entry approved after this window is expired, not executed."),
+    _s("ds0_entry_cutoff", "14:00", "DS0", "Entry cutoff (ET HH:MM)",
+       help="No new entries at or after this time — the fade needs runway."),
+    _s("ds0_sweep_time", "15:00", "DS0", "Sweep time (ET HH:MM)",
+       help="Close anything marked above entry cost; at/below rides to expiry."),
+    _s("ds0_guard_time", "15:50", "DS0", "Guard time (ET HH:MM)",
+       help="When the assignment guard starts checking spot vs strikes."),
 ]
 
 TUNABLES: Dict[str, Tunable] = {t.key: t for t in _CATALOG}

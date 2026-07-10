@@ -225,6 +225,8 @@ class StubDB:
 
         self.pending_orders: List[Any] = []
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
+        self._closing_trades: Dict[str, List[Dict[str, Any]]] = {}
+        self._closed_trades: Dict[str, List[Dict[str, Any]]] = {}
         self._open_legs:   Dict[str, List[Dict[str, Any]]] = {}
         self._watchlists:  Dict[str, List[str]] = {}
         self._predictions: Dict[str, Dict[str, Any]] = {}
@@ -240,6 +242,12 @@ class StubDB:
             self._closed_times[(strategy_id, symbol)] = dt
     def set_open_trades(self, strategy_id: str, trades: List[Dict[str, Any]]):
         self._open_trades[strategy_id] = list(trades)
+
+    def set_closing_trades(self, strategy_id: str, trades: List[Dict[str, Any]]):
+        self._closing_trades[strategy_id] = list(trades)
+
+    def set_closed_trades(self, strategy_id: str, trades: List[Dict[str, Any]]):
+        self._closed_trades[strategy_id] = list(trades)
 
     def set_open_legs(self, strategy_id: str, symbol: str,
                       legs: List[Dict[str, Any]]):
@@ -274,8 +282,33 @@ class StubDB:
             out.extend(trades)
         return out
 
+    async def closing_trades(self, strategy_id: str):
+        return list(self._closing_trades.get(strategy_id, []))
+
+    async def count_trades_for_expiry(self, strategy_id: str, symbol: str,
+                                      side: str, expiry: str) -> int:
+        # Mirror HermesDB: every status (OPEN / CLOSING / CLOSED) counts.
+        total = 0
+        rows = (self._open_trades.get(strategy_id, [])
+                + self._closing_trades.get(strategy_id, [])
+                + self._closed_trades.get(strategy_id, []))
+        for t in rows:
+            if t.get("symbol") != symbol:
+                continue
+            if (t.get("side_type") or "").lower() != side.lower():
+                continue
+            t_expiry = t.get("expiry")
+            if hasattr(t_expiry, "isoformat"):
+                t_expiry = t_expiry.isoformat()
+            if t_expiry == expiry:
+                total += 1
+        return total
+
     async def open_legs(self, strategy_id: str, symbol: str):
         return list(self._open_legs.get((strategy_id, symbol), []))
+
+    async def list_watchlist(self, strategy_id: str):
+        return list(self._watchlists.get(strategy_id, []))
 
     async def list_watchlist_detailed(self, strategy_id: str):
         return {sym: {"target_lots": None}
