@@ -485,6 +485,28 @@ async def test_replace_aborts_when_cancel_fails():
     assert broker.placed == []
 
 
+# ── strategy-set completeness ────────────────────────────────────────────────
+def test_make_strategies_covers_every_registered_strategy():
+    """The settings-changed rebuild and build() share make_strategies; this
+    pins it against STRATEGY_PRIORITIES. The 2026-07-10 DS0 outage: the
+    rebuild kept its own hardcoded five-strategy list, so the first settings
+    event after startup (the ML loop fires one every ~10s) silently evicted
+    DS0 from the engine before its first tick."""
+    from hermes.common import STRATEGY_PRIORITIES
+    from hermes.service1_agent.agent_construction import make_strategies
+
+    broker, db = StubBroker(), StubDB()
+    cfg: dict = {}
+    mm = MoneyManager(broker, db, cfg)
+    common = dict(broker=broker, db=db, money_manager=mm,
+                  ic_builder=IronCondorBuilder(mm), config=cfg,
+                  overseer=None, dry_run=False)
+    strategies = make_strategies(common)
+    assert {s.NAME for s in strategies} == set(STRATEGY_PRIORITIES)
+    assert [s.PRIORITY for s in strategies] == sorted(
+        STRATEGY_PRIORITIES[s.NAME] for s in strategies)
+
+
 # ── first debit-opening strategy: persistence + POP engine pins ──────────────
 def test_trade_dict_exposes_entry_debit_preserving_zero():
     from hermes.db.orm import Trade
