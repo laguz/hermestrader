@@ -20,6 +20,7 @@ from hermes.service1_agent.core import (
 from hermes.service1_agent.overseer import HermesOverseer
 from hermes.service1_agent.strategies import (
     CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
+    DebitSpreads0DTE,
 )
 
 from .agent_settings import (
@@ -182,6 +183,7 @@ def build(broker, llm_client, chart_provider, config: Dict[str, Any],
         TastyTrade45(**common),
         WheelStrategy(**common),
         HermesAlpha(**common),
+        DebitSpreads0DTE(**common),
     ]
     # Filter out strategies the operator has disabled from the C2 panel.
     active_strategies = [s for s in all_strategies

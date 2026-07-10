@@ -557,6 +557,30 @@ class PipelineController:
                     notes="dry_run=True — no broker order placed",
                 )
             return
+        # Order-replacement contract (DS0's 3 PM sweep): a close carrying
+        # ``replace_broker_order_id`` supersedes a close already resting at the
+        # broker, which must be cancelled first. Cancel-or-abort: a failed
+        # cancel usually means the resting order just filled, and placing the
+        # replacement anyway would close the position twice.
+        replace_oid = (a.strategy_params or {}).get("replace_broker_order_id")
+        if replace_oid is not None:
+            try:
+                await ctx.broker.cancel_order(str(replace_oid))
+            except Exception as exc:
+                err = {"errors": f"replace-cancel failed for order {replace_oid}: {exc}"}
+                if is_pure_close and close_method is not None:
+                    await close_method(a, err)
+                else:
+                    await ctx.db.trades.record_order_response(a, err)
+                if approval_id is not None:
+                    await ctx.db.approvals.mark_approval_executed(
+                        approval_id, success=False,
+                        notes=f"replace-cancel failed: {exc}",
+                    )
+                logger.warning(
+                    "[ENGINE] replace-cancel failed for %s order %s: %s — "
+                    "replacement NOT placed", a.symbol, replace_oid, exc)
+                return
         try:
             resp = await ctx.broker.place_order_from_action(a)
         except Exception as exc:

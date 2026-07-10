@@ -201,6 +201,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         log.exception("Agent startup update/soul sync failed: %s", exc)
     try:
         await db.watchlist.ensure_strategies(STRATEGY_PRIORITIES)
+        # DS0 must never inherit the engine-wide default watchlist (its 0DTE
+        # fade only fits daily-expiry underlyings), so an empty list is seeded
+        # rather than left to fall through in _watchlist_for.
+        if not await db.watchlist.list_watchlist("DS0"):
+            await db.watchlist.set_watchlist("DS0", ["QQQ"])
+            log.info("DS0 watchlist empty — seeded default ['QQQ']")
     except Exception as exc:
         log.exception("ensure_strategies failed at startup: %s", exc)
 

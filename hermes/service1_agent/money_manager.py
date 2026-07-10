@@ -37,6 +37,7 @@ _DEFAULT_MAX_LOTS = {
     "TT45": 1,
     "WHEEL": 5,
     "HERMESALPHA": 1,
+    "DS0": 1,
 }
 
 

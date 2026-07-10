@@ -487,6 +487,38 @@ class TradesRepository(Repository):
             rows = result.scalars().all()
             return [self._trade_dict(r) for r in rows]
 
+    async def closing_trades(self, strategy_id: str) -> List[Dict[str, Any]]:
+        """Trades with a submitted-but-unfilled close order still working.
+
+        DS0's 3 PM sweep must be able to re-price a trade whose resting
+        take-profit never filled; every other strategy only ever looks at
+        OPEN trades.
+        """
+        async with self.AsyncSession() as s:
+            result = await s.execute(select(Trade).filter_by(strategy_id=strategy_id, status="CLOSING"))
+            rows = result.scalars().all()
+            return [self._trade_dict(r) for r in rows]
+
+    async def count_trades_for_expiry(self, strategy_id: str, symbol: str,
+                                      side: str, expiry: str) -> int:
+        """Trades of ANY status for (strategy, symbol, side, expiry).
+
+        DS0's one-shot-per-side-per-day gate: an open position, a working
+        close and a closed trade (win or loss) all block re-entry alike.
+        """
+        try:
+            exp_date = datetime.strptime(str(expiry), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError(
+                f"count_trades_for_expiry: invalid expiry {expiry!r}; "
+                "expected YYYY-MM-DD"
+            ) from exc
+        async with self.AsyncSession() as s:
+            q = (select(Trade).filter_by(strategy_id=strategy_id, symbol=symbol)
+                 .filter(Trade.side_type == side, Trade.expiry == exp_date))
+            result = await s.execute(q)
+            return len(result.scalars().all())
+
     async def all_open_trades(self) -> List[Dict[str, Any]]:
         """Every OPEN trade across all strategies.
 
@@ -677,5 +709,6 @@ class TradesRepository(Repository):
             "long_strike": float(r.long_strike) if r.long_strike else None,
             "width": float(r.width) if r.width else None,
             "lots": int(r.lots), "entry_credit": float(r.entry_credit or 0),
+            "entry_debit": float(r.entry_debit) if r.entry_debit is not None else None,
             "expiry": r.expiry, "status": r.status,
         }
