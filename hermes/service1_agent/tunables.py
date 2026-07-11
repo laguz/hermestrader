@@ -174,17 +174,21 @@ _CATALOG: List[Tunable] = [
     _f("hermesalpha_sl_mult", 2.5, "HERMESALPHA", "Stop-loss multiplier", min=1.0, max=10.0,
        help="Close when debit exceeds credit times this."),
 
-    # ── DS0 (priority 6; 0 DTE S/R-fade debit spreads, docs/ds0_spec.md) ────
+    # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
     _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,
        help="Day-limit price for the entry; never repriced or chased."),
     _f("ds0_close_price", 0.40, "DS0", "Close limit ($)", min=0.01, max=10.0,
        help="Resting take-profit credit placed as soon as the entry fills."),
     _f("ds0_pop_target", 0.75, "DS0", "POP floor", min=0.5, max=0.99,
-       help="Min 3m POP that the touched S/R level holds."),
+       help="Min 3m POP that the qualifying S/R level holds."),
     _f("ds0_width", 1.0, "DS0", "Spread width ($)", min=0.5, max=50,
        help="Strike distance between long and short legs."),
-    _f("ds0_trigger_band", 0.003, "DS0", "Trigger band (fraction)", min=0.0, max=0.05,
-       help="Price within this fraction of an S/R level arms that side."),
+    _i("ds0_atr_period", 14, "DS0", "ATR period (days)", min=2, max=60,
+       help="Wilder ATR over this many completed daily bars sets the "
+            "open±ATR range an S/R level must sit in to qualify."),
+    _f("ds0_sweep_min", 0.13, "DS0", "Sweep floor ($)", min=0.01, max=10.0,
+       help="The 15:01 sweep closes marks at/above this; below it the "
+            "spread rides to expiration as the accepted loss."),
     _f("ds0_guard_band", 0.005, "DS0", "Guard band (fraction)", min=0.0, max=0.05,
        help="Assignment guard fires when spot is within this of the near strike."),
     _i("ds0_assignment_guard", 1, "DS0", "Assignment guard (0/1)", min=0, max=1,
@@ -192,9 +196,9 @@ _CATALOG: List[Tunable] = [
     _i("ds0_approval_ttl_s", 900, "DS0", "Entry approval TTL (s)", min=0, max=86400,
        help="A queued DS0 entry approved after this window is expired, not executed."),
     _s("ds0_entry_cutoff", "14:00", "DS0", "Entry cutoff (ET HH:MM)",
-       help="No new entries at or after this time — the fade needs runway."),
-    _s("ds0_sweep_time", "15:00", "DS0", "Sweep time (ET HH:MM)",
-       help="Close anything marked above entry cost; at/below rides to expiry."),
+       help="No new entries at or after this time — the reversion needs runway."),
+    _s("ds0_sweep_time", "15:01", "DS0", "Sweep time (ET HH:MM)",
+       help="Close anything marked at/above the sweep floor; below rides to expiry."),
     _s("ds0_guard_time", "15:50", "DS0", "Guard time (ET HH:MM)",
        help="When the assignment guard starts checking spot vs strikes."),
 ]

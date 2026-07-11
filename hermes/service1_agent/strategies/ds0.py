@@ -1,24 +1,36 @@
 """DS0 — priority-6, 0 DTE mean-reversion debit spreads (docs/ds0_spec.md).
 
-A fully rule-based contrarian fade at intraday support/resistance on
-daily-expiry underlyings (watchlist seeded with QQQ). Price touching the
-upper bound (resistance) opens a **put debit spread** betting the bounce
-down; touching the lower bound (support) opens a **call debit spread**
-betting the bounce up. Both sides are independent and may be open at once.
+A fully rule-based reversion-toward-a-level trade on daily-expiry
+underlyings (watchlist seeded with QQQ). Each morning a side qualifies when
+a 3-month S/R level (a) has POP ≥ ``ds0_pop_target`` that it **holds** —
+the same engine/number CS7 uses — and (b) sits inside today's expected
+range, **session open ± Wilder ATR(``ds0_atr_period``)**: support in
+``[open − ATR, open]``, resistance in ``[open, open + ATR]``. Both sides
+are independent and may be open at once.
+
+Direction pairing — INTENTIONAL, operator-specified 2026-07-10; do NOT
+"correct" this in an audit: a qualified **support** arms a **put** debit
+spread and a qualified **resistance** arms a **call** debit spread. The
+spread points *toward* the level, and its fixed $0.10 day-limit only fills
+once price has moved *away* from the level (that is what makes the spread
+cheap) — the position bets the overextension reverts back toward the
+strong level. There is deliberately **no price-proximity/touch trigger**:
+the $0.10 limit itself is the trigger. This replaced the original
+touch-fade design (support→call / resistance→put); see the spec's
+revision note before flagging the pairing as inverted.
 
 Everything after submission is price-bound:
 
-- Entry: day-limit **buy** at ``ds0_open_price`` (default $0.10), gated on
-  the 3-month POP for the touched level being ≥ ``ds0_pop_target`` — the
-  same engine/number CS7 computes for a credit spread at that level (fading
-  resistance expresses the same view as a call credit spread there). Never
+- Entry: day-limit **buy** at ``ds0_open_price`` (default $0.10). Never
   repriced or chased; unfilled at end of day, the order dies.
 - Exit: as soon as the fill is visible, a resting **sell** day-limit at
   ``ds0_close_price`` (default $0.40). No stop loss — the debit paid is the
   entire accepted risk.
-- 3:00 PM ET sweep (``ds0_sweep_time``): anything marked above its entry
-  cost but below the target is closed at the live executable credit;
-  anything at/below entry cost rides to expiration as the accepted loss.
+- 3:01 PM ET sweep (``ds0_sweep_time``): anything marked at/above
+  ``ds0_sweep_min`` (default $0.13) but shy of the target is closed at the
+  live executable credit; anything below the floor rides to expiration as
+  the accepted loss. (At/above the $0.40 target the resting TP should have
+  filled; if it somehow hasn't, the sweep closing it only banks more.)
 - 3:50 PM ET assignment guard (``ds0_assignment_guard``, default ON): a
   still-open spread whose near-money strike is ITM or within
   ``ds0_guard_band`` of spot is force-closed — QQQ options are
@@ -136,8 +148,65 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
             return None
         return spot if spot > 0 else None
 
+    async def _today_open(self, symbol: str) -> Optional[float]:
+        """Today's regular-session opening print, from the quote's ``open``.
+
+        Fixed for the whole day — the open ± ATR range must not drift with
+        spot intraday. ``None`` (pre-open, halted, stub without the field)
+        means the symbol can't qualify and is skipped.
+        """
+        quotes = await self.broker.get_quote(symbol) or []
+        if not quotes:
+            return None
+        try:
+            raw = quotes[0].get("open")
+            opn = float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            return None
+        return opn if opn > 0 else None
+
+    async def _atr(self, symbol: str, period: int) -> Optional[float]:
+        """Wilder ATR over the last ``period`` completed daily bars.
+
+        True range includes overnight gaps (max of high−low, |high−prev
+        close|, |low−prev close|); the seed is the simple mean of the first
+        ``period`` TRs, then Wilder smoothing over the rest. Today's partial
+        bar is excluded so the entry range stays anchored. ``None`` when
+        history is too short/invalid — the symbol is skipped, never traded
+        on a guessed range.
+        """
+        if period < 1:
+            return None
+        end = self._now_et().date()
+        start = end - timedelta(days=period * 3 + 10)
+        bars = await self.broker.get_history(
+            symbol, start=start.isoformat(), end=end.isoformat()) or []
+        rows: List[Tuple[str, float, float, float]] = []
+        for b in bars:
+            day = str(b.get("date", ""))[:10]
+            if day >= end.isoformat():
+                continue
+            try:
+                rows.append((day, float(b["high"]), float(b["low"]),
+                             float(b["close"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        rows.sort(key=lambda r: r[0])   # mock/history feeds vary in ordering
+        if len(rows) < period + 1:
+            return None
+        trs: List[float] = []
+        prev_close = rows[0][3]
+        for _, high, low, close in rows[1:]:
+            trs.append(max(high - low, abs(high - prev_close),
+                           abs(low - prev_close)))
+            prev_close = close
+        atr = sum(trs[:period]) / period
+        for tr in trs[period:]:
+            atr = (atr * (period - 1) + tr) / period
+        return atr if atr > 0 else None
+
     # =======================================================================
-    # ENTRIES — fade an S/R touch with a price-bound OTM debit vertical
+    # ENTRIES — open±ATR-qualified reversion toward a strong S/R level
     # =======================================================================
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]:
         actions: List[TradeAction] = []
@@ -151,7 +220,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
         open_price = float(t.ds0_open_price)
         pop_target = float(t.ds0_pop_target)
         width = float(t.ds0_width)
-        band = float(t.ds0_trigger_band)
+        atr_period = int(t.ds0_atr_period)
         ttl_s = int(t.ds0_approval_ttl_s)
 
         # The engine's _watchlist_for falls back to the global default list
@@ -172,8 +241,8 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
                    if s.split(":", 1)[0].strip().upper() in own_syms]
 
         self._log(
-            f"↻ scanning {len(symbols)} symbol(s) — 0DTE fade, "
-            f"open≤${open_price:.2f} pop≥{pop_target:.0%} band={band:.2%}"
+            f"↻ scanning {len(symbols)} symbol(s) — 0DTE reversion, "
+            f"open≤${open_price:.2f} pop≥{pop_target:.0%} range=open±ATR{atr_period}"
         )
 
         for sym_raw in symbols:
@@ -186,6 +255,17 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
                 expiry = await self.find_expiry_in_dte_range(symbol, 0, 0)
                 if not expiry:
                     self._log(f"ℹ️ {symbol}: no same-day expiration; skip.")
+                    continue
+
+                today_open = await self._today_open(symbol)
+                if today_open is None:
+                    self._log(f"⚠️ {symbol}: no session open on the quote; skip.")
+                    continue
+                atr = await self._atr(symbol, atr_period)
+                if atr is None:
+                    self._log(
+                        f"⚠️ {symbol}: not enough daily bars for ATR{atr_period}; skip."
+                    )
                     continue
 
                 analysis = await self.broker.analyze_symbol(symbol, period=self.ANALYSIS_PERIOD)
@@ -204,14 +284,15 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
                     self._log(f"⚠️ {symbol}: empty chain for {expiry}; skip.")
                     continue
 
-                # Resistance touch → put debit spread; support touch → call.
-                for side, level_type in (("put", "resistance"), ("call", "support")):
+                # Reversion pairing (intentional — see module docstring):
+                # qualified support → put debit spread; resistance → call.
+                for side, level_type in (("put", "support"), ("call", "resistance")):
                     action = await self._try_side(
                         symbol=symbol, side=side, level_type=level_type,
                         analysis=analysis, chain=chain, price=price,
                         expiry=expiry, width=width, open_price=open_price,
-                        pop_target=pop_target, band=band, lots=target_lots,
-                        ttl_s=ttl_s, now_et=now_et,
+                        pop_target=pop_target, today_open=today_open,
+                        atr=atr, lots=target_lots, ttl_s=ttl_s, now_et=now_et,
                     )
                     if action is not None:
                         actions.append(action)
@@ -222,16 +303,22 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
     async def _try_side(self, *, symbol: str, side: str, level_type: str,
                         analysis: Dict[str, Any], chain: List[Dict[str, Any]],
                         price: float, expiry: str, width: float,
-                        open_price: float, pop_target: float, band: float,
-                        lots: int, ttl_s: int,
+                        open_price: float, pop_target: float,
+                        today_open: float, atr: float, lots: int, ttl_s: int,
                         now_et: datetime) -> Optional[TradeAction]:
-        levels = [lvl for lvl in analysis.get("key_levels", [])
-                  if lvl.get("type") == level_type and lvl.get("price") is not None]
-        if not levels or price <= 0:
+        if price <= 0:
             return None
-        level = min(levels, key=lambda lvl: abs(float(lvl["price"]) - price))
-        dist = abs(float(level["price"]) - price) / price
-        if dist > band:
+        # A side qualifies only when the level sits inside today's expected
+        # range anchored at the session open: support in [open − ATR, open],
+        # resistance in [open, open + ATR]. Bounds inclusive. No proximity
+        # trigger beyond this — the $0.10 day-limit is the trigger.
+        lo, hi = ((today_open - atr, today_open) if level_type == "support"
+                  else (today_open, today_open + atr))
+        in_range = [lvl for lvl in analysis.get("key_levels", [])
+                    if lvl.get("type") == level_type
+                    and lvl.get("price") is not None
+                    and lo <= float(lvl["price"]) <= hi]
+        if not in_range:
             return None
 
         # One shot per side per symbol per day — a win, a loss and a resting
@@ -243,41 +330,50 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
             self._log(f"ℹ️ {symbol} {side}: entry already pending/queued; skip.")
             return None
 
-        # POP gate — the probability the touched level HOLDS, computed exactly
-        # as CS7 would for a credit spread at that level (fading resistance is
-        # the call-credit view; fading support is the put-credit view).
+        # POP gate — the probability the level HOLDS, computed exactly as CS7
+        # would for a credit spread at that level (resistance holding is the
+        # call-credit view; support holding is the put-credit view). Levels
+        # are tried nearest-to-open first; the first one passing wins.
         gate_side = "call" if level_type == "resistance" else "put"
-        gate_opt = nearest_strike(chain, gate_side, float(level["price"]))
-        if not gate_opt:
-            return None
-        greeks = gate_opt.get("greeks") or {}
-        raw_delta = greeks.get("delta")
-        if raw_delta is None:
-            self._log(f"✗ {symbol} {side}: no delta at level strike; skip.")
-            return None
-        delta = abs(float(raw_delta))
-        if delta <= 0.0:
-            return None
-        iv = greeks.get("mid_iv")
-        if iv is None:
-            iv = greeks.get("smv_vol")
-        pop = predict_pop(FeatureVector(
-            delta=delta,
-            xgb_prob=float(analysis.get("xgb_prob", 0.5)),
-            current_vol=float(analysis.get("current_vol", 0.30)),
-            avg_vol=float(analysis.get("avg_vol", 0.25)),
-            protection_score=float(level.get("protection", 1.0)),
-            side=gate_side,
-            period=self.ANALYSIS_PERIOD.upper(),
-            symbol=symbol,
-            dte=0.0,
-            sigma=float(iv) if iv is not None else None,
-        ))
-        if pop < pop_target - _POP_GATE_EPS:
+        level: Optional[Dict[str, Any]] = None
+        pop = 0.0
+        delta = 0.0
+        for cand in sorted(in_range,
+                           key=lambda lvl: abs(float(lvl["price"]) - today_open)):
+            gate_opt = nearest_strike(chain, gate_side, float(cand["price"]))
+            if not gate_opt:
+                continue
+            greeks = gate_opt.get("greeks") or {}
+            raw_delta = greeks.get("delta")
+            if raw_delta is None:
+                self._log(f"✗ {symbol} {side}: no delta at level strike; skip level.")
+                continue
+            cand_delta = abs(float(raw_delta))
+            if cand_delta <= 0.0:
+                continue
+            iv = greeks.get("mid_iv")
+            if iv is None:
+                iv = greeks.get("smv_vol")
+            cand_pop = predict_pop(FeatureVector(
+                delta=cand_delta,
+                xgb_prob=float(analysis.get("xgb_prob", 0.5)),
+                current_vol=float(analysis.get("current_vol", 0.30)),
+                avg_vol=float(analysis.get("avg_vol", 0.25)),
+                protection_score=float(cand.get("protection", 1.0)),
+                side=gate_side,
+                period=self.ANALYSIS_PERIOD.upper(),
+                symbol=symbol,
+                dte=0.0,
+                sigma=float(iv) if iv is not None else None,
+            ))
+            if cand_pop >= pop_target - _POP_GATE_EPS:
+                level, pop, delta = cand, cand_pop, cand_delta
+                break
             self._log(
-                f"✗ {symbol} {side}: level {float(level['price']):.2f} POP "
-                f"{pop:.1%} < {pop_target:.0%}; skip."
+                f"✗ {symbol} {side}: level {float(cand['price']):.2f} POP "
+                f"{cand_pop:.1%} < {pop_target:.0%}; skip level."
             )
+        if level is None:
             return None
 
         selected = self._select_debit_spread(chain, side, price, width, open_price)
@@ -292,14 +388,17 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
 
         valid_until = (now_et + timedelta(seconds=ttl_s)).isoformat() if ttl_s > 0 else None
         self._log(
-            f"→ {symbol} {side}: fade {level_type} {float(level['price']):.2f} "
-            f"(pop {pop:.1%}) long={float(long_leg['strike']):.2f} "
+            f"→ {symbol} {side}: revert toward {level_type} "
+            f"{float(level['price']):.2f} (pop {pop:.1%}, range "
+            f"{lo:.2f}–{hi:.2f}) long={float(long_leg['strike']):.2f} "
             f"short={float(short_leg['strike']):.2f} mid=${mid_debit:.2f} "
             f"limit=${open_price:.2f}"
         )
         sp: Dict[str, Any] = {
             "short_leg": short_leg["symbol"], "long_leg": long_leg["symbol"],
             "side_type": side, "pop": pop, "short_delta": delta,
+            "level": float(level["price"]), "today_open": today_open,
+            "atr": atr,
         }
         if valid_until is not None:
             sp["valid_until"] = valid_until
@@ -376,11 +475,11 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
             return actions
 
         t = await self.load_tunables()
-        sweep_time = _parse_hhmm(t.ds0_sweep_time, time(15, 0))
+        sweep_time = _parse_hhmm(t.ds0_sweep_time, time(15, 1))
         guard_time = _parse_hhmm(t.ds0_guard_time, time(15, 50))
         guard_on = bool(int(t.ds0_assignment_guard))
         guard_band = float(t.ds0_guard_band)
-        open_price = float(t.ds0_open_price)
+        sweep_min = float(t.ds0_sweep_min)
         close_price = float(t.ds0_close_price)
         cfg_width = float(t.ds0_width)
         now_t = self._now_et().time()
@@ -433,7 +532,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
 
             action = await self._sweep_decision(
                 trade, quotes, width, now_t, sweep_time, guard_time,
-                guard_on, open_price, _danger)
+                guard_on, sweep_min, _danger)
             if action is not None:
                 actions.append(action)
 
@@ -449,7 +548,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
                 width = float(trade["width"]) if trade.get("width") is not None else cfg_width
                 action = await self._sweep_decision(
                     trade, quotes, width, now_t, sweep_time, guard_time,
-                    guard_on, open_price, _danger)
+                    guard_on, sweep_min, _danger)
                 if action is None:
                     continue
                 oid = self._find_resting_close_order(broker_orders, short_leg, long_leg)
@@ -464,12 +563,15 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
         return actions
 
     async def _sweep_decision(self, trade, quotes, width, now_t, sweep_time,
-                              guard_time, guard_on, open_price,
+                              guard_time, guard_on, sweep_min,
                               danger_fn) -> Optional[TradeAction]:
         """Post-sweep close decision for one trade (OPEN or CLOSING).
 
         Guard first (assignment risk trumps the mark), then the sweep rule:
-        mark above entry cost → bank it; at/below → ride to expiration.
+        mark at/above ``ds0_sweep_min`` → bank it; below the floor → ride to
+        expiration as the accepted loss. No upper bound — at/above the $0.40
+        target the resting TP should already have filled, and if it somehow
+        hasn't, closing here only banks more than the target.
         """
         short_leg, long_leg = trade["short_leg"], trade["long_leg"]
         mid_credit, exec_credit, blocked, reason = self._spread_close_value(
@@ -490,13 +592,11 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
             )
             return None
 
-        entry_ref = trade.get("entry_debit")
-        threshold = float(entry_ref) if entry_ref is not None else open_price
-        if mid_credit > threshold:
+        if mid_credit >= sweep_min:
             price = exec_credit if exec_credit and exec_credit > 0 else max(0.01, mid_credit)
             self._log(
                 f"→ {trade['symbol']} {trade.get('side_type')}: SWEEP-3PM — mid "
-                f"${mid_credit:.2f} > entry ${threshold:.2f}; closing at ${price:.2f}"
+                f"${mid_credit:.2f} ≥ floor ${sweep_min:.2f}; closing at ${price:.2f}"
             )
             return self._close_spread_action(trade, price, "SWEEP-3PM")
         return None
