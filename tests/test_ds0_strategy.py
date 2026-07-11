@@ -1,20 +1,29 @@
-"""Regression tests for DS0 (priority-6, 0 DTE S/R-fade debit spreads).
+"""Regression tests for DS0 (priority-6, 0 DTE S/R-reversion debit spreads).
 
-Pins the rule set of docs/ds0_spec.md against stub broker / stub DB:
+Pins the rule set of docs/ds0_spec.md (v2, operator-corrected 2026-07-10)
+against stub broker / stub DB:
 
-- Entries: trigger band on the touched level, the 3m POP ≥ 0.75 gate, the
-  $0.10 debit cap with closest-to-the-money pair selection, the 14:00 ET
-  cutoff, the one-shot-per-side-per-day gate, and the "both sides can arm on
-  the same day" contract. Actions must be debit multileg day-limits tagged
+- Entries: the open±ATR(14) range qualification (support in [open−ATR,
+  open], resistance in [open, open+ATR], bounds inclusive, today's partial
+  bar excluded from the ATR), the 3m POP ≥ 0.75 gate, the $0.10 debit cap
+  with closest-to-the-money pair selection, the 14:00 ET cutoff, the
+  one-shot-per-side-per-day gate, and the "both sides can arm on the same
+  day" contract. Actions must be debit multileg day-limits tagged
   ``HERMES_DS0`` carrying an approval-TTL stamp.
+- **Direction pairing is operator-specified and intentional**: qualified
+  support → PUT debit spread, qualified resistance → CALL debit spread
+  (reversion *toward* the level — the $0.10 limit fills when price moves
+  *away* from it). These assertions lock the pairing so a future audit
+  doesn't "fix" it back to the original touch-fade orientation.
 - Empty own-watchlist means idle — DS0 must never trade the engine-wide
   default watchlist fallback (SPY/IWM there are perfectly valid 0DTE
   symbols the operator never armed).
 - Management: the $0.40 TP close is placed exactly when the fill is visible
-  (both legs held at the broker); the 3:00 PM sweep closes marks above entry
-  cost and rides marks at/below it; a CLOSING trade's sweep close carries
-  ``replace_broker_order_id`` for its resting TP; the 3:50 assignment guard
-  fires on strike proximity regardless of mark and can be disarmed.
+  (both legs held at the broker); the 15:01 sweep closes marks at/above the
+  $0.13 floor and rides marks below it; a CLOSING trade's sweep close
+  carries ``replace_broker_order_id`` for its resting TP; the 3:50
+  assignment guard fires on strike proximity regardless of mark and can be
+  disarmed.
 - Executor contracts DS0 introduced: ``valid_until`` expiry in
   ``_execute_approved_action`` (a stale approval must NOT reach the broker)
   and cancel-or-abort for ``replace_broker_order_id`` in
@@ -76,7 +85,7 @@ def _entry_chain(expiry: str, *, gate_call_delta=0.20, gate_put_delta=0.20):
     ]
 
 
-def _analysis(price: float, *, support=90.0, resistance=110.0):
+def _analysis(price: float, *, support=95.0, resistance=105.0):
     return {
         "symbol": SYM, "current_price": price,
         "current_vol": 0.20, "avg_vol": 0.20,
@@ -88,9 +97,27 @@ def _analysis(price: float, *, support=90.0, resistance=110.0):
     }
 
 
+def _daily_bars(*, days: int = 20, tr: float = 10.0, close: float = 100.0):
+    """Completed daily bars ending yesterday with a constant true range.
+
+    high−low = ``tr`` and every prev-close sits inside the bar, so TR = tr
+    for each bar and any Wilder smoothing yields ATR == tr exactly.
+    """
+    out = []
+    d0 = _et_today()
+    for i in range(days, 0, -1):
+        d = d0 - timedelta(days=i)
+        out.append({"date": d.isoformat(), "open": close,
+                    "high": close + tr / 2, "low": close - tr / 2,
+                    "close": close, "volume": 1_000_000})
+    return out
+
+
 def _build_ds0(*, now_utc: datetime, expiry: str | None = None,
                analysis: dict | None = None, chain: list | None = None,
-               db: StubDB | None = None, config: dict | None = None):
+               db: StubDB | None = None, config: dict | None = None,
+               today_open: float | None = 100.0, bars: list | None = None):
+    """Defaults give an entry range of open 100 ± ATR 10 → [90, 110]."""
     expiry = expiry or _et_today().isoformat()
     broker = StubBroker(expirations=[expiry])
     broker.current_date = now_utc
@@ -98,6 +125,14 @@ def _build_ds0(*, now_utc: datetime, expiry: str | None = None,
         broker.analyze_symbol = lambda symbol, period="3m": dict(analysis)
     if chain is not None:
         broker.get_option_chains = lambda symbol, exp: list(chain)
+    the_bars = _daily_bars() if bars is None else bars
+    broker.get_history = (
+        lambda symbol, interval="daily", start=None, end=None: list(the_bars))
+    quote: dict = {"last": 100.0, "bid": 99.95, "ask": 100.05}
+    if today_open is not None:
+        quote["open"] = today_open
+    broker.get_quote = lambda symbols: [
+        {"symbol": s_.strip(), **quote} for s_ in symbols.split(",")]
     db = db or StubDB()
     db.set_watchlist("DS0", [SYM])
     cfg = {"ds0_target_lots": 1, "ds0_max_lots": 1}
@@ -109,12 +144,14 @@ def _build_ds0(*, now_utc: datetime, expiry: str | None = None,
     return s, broker, db
 
 
-# ── entries: triggers, gates and the order envelope ──────────────────────────
-async def test_put_fade_on_resistance_touch():
+# ── entries: range qualification, gates and the order envelope ───────────────
+async def test_put_spread_arms_on_qualified_support():
+    # Operator-specified reversion pairing: support → PUT debit spread.
+    # Do NOT flip this back to the touch-fade orientation (support→call).
     expiry = _et_today().isoformat()
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0, resistance=100.2),
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
         chain=_entry_chain(expiry))
     actions = await s.execute_entries([SYM])
     assert len(actions) == 1
@@ -123,6 +160,9 @@ async def test_put_fade_on_resistance_touch():
     assert a.order_class == "multileg" and a.order_type == "debit"
     assert a.side == "buy" and a.price == 0.10 and a.duration == "day"
     assert a.strategy_params["side_type"] == "put"
+    assert a.strategy_params["level"] == 99.0
+    assert a.strategy_params["today_open"] == 100.0
+    assert a.strategy_params["atr"] == 10.0
     assert a.expiry == expiry and a.dte == 0
     assert "valid_until" in a.strategy_params
     sides = {leg["side"] for leg in a.legs}
@@ -132,11 +172,12 @@ async def test_put_fade_on_resistance_touch():
     assert "P00097000" in a.strategy_params["short_leg"]
 
 
-async def test_call_fade_on_support_touch():
+async def test_call_spread_arms_on_qualified_resistance():
+    # Operator-specified reversion pairing: resistance → CALL debit spread.
     expiry = _et_today().isoformat()
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0, support=99.8),
+        analysis=_analysis(100.0, support=85.0, resistance=101.0),
         chain=_entry_chain(expiry))
     actions = await s.execute_entries([SYM])
     assert len(actions) == 1
@@ -150,28 +191,53 @@ async def test_both_sides_arm_on_the_same_day():
     expiry = _et_today().isoformat()
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0, support=99.8, resistance=100.2),
+        analysis=_analysis(100.0, support=99.0, resistance=101.0),
         chain=_entry_chain(expiry))
     actions = await s.execute_entries([SYM])
     assert {a.strategy_params["side_type"] for a in actions} == {"put", "call"}
 
 
-async def test_no_trigger_outside_band():
+async def test_levels_outside_atr_range_do_not_arm():
+    # Open 100, ATR 10 → range [90, 110]. Support 85 / resistance 118 are
+    # beyond a normal day's reach → skip the day entirely.
     expiry = _et_today().isoformat()
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0),         # levels at 90 / 110 — 10% away
+        analysis=_analysis(100.0, support=85.0, resistance=118.0),
+        chain=_entry_chain(expiry))
+    assert await s.execute_entries([SYM]) == []
+
+
+async def test_atr_range_bounds_are_inclusive():
+    # Levels exactly at open−ATR (90) and open+ATR (110) still qualify.
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        analysis=_analysis(100.0, support=90.0, resistance=110.0),
+        chain=_entry_chain(expiry))
+    actions = await s.execute_entries([SYM])
+    assert {a.strategy_params["side_type"] for a in actions} == {"put", "call"}
+
+
+async def test_support_above_open_never_qualifies():
+    # The support window is [open − ATR, open]: a "support" above the open
+    # (stale 3m level after a gap down) must not arm the put side.
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry, today_open=95.0,
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
         chain=_entry_chain(expiry))
     assert await s.execute_entries([SYM]) == []
 
 
 async def test_pop_gate_blocks_weak_level():
     expiry = _et_today().isoformat()
-    # Gate delta 0.30 → linear POP 0.70 < the 0.75 floor.
+    # Gate strike for support 99 is the put 99 — delta 0.30 → linear POP
+    # 0.70 < the 0.75 floor. Resistance is out of range → no actions at all.
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0, resistance=100.2),
-        chain=_entry_chain(expiry, gate_call_delta=0.30))
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
+        chain=_entry_chain(expiry, gate_put_delta=0.30))
     assert await s.execute_entries([SYM]) == []
 
 
@@ -185,8 +251,76 @@ async def test_debit_cap_rejects_rich_chains():
     ]
     s, _, _ = _build_ds0(
         now_utc=_utc_at_et(11, 0), expiry=expiry,
-        analysis=_analysis(100.0, resistance=100.2), chain=chain)
+        analysis=_analysis(100.0, support=99.0, resistance=118.0), chain=chain)
     assert await s.execute_entries([SYM]) == []
+
+
+async def test_missing_atr_history_skips_symbol():
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry, bars=[],
+        analysis=_analysis(100.0, support=99.0, resistance=101.0),
+        chain=_entry_chain(expiry))
+    assert await s.execute_entries([SYM]) == []
+
+
+async def test_missing_session_open_skips_symbol():
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry, today_open=None,
+        analysis=_analysis(100.0, support=99.0, resistance=101.0),
+        chain=_entry_chain(expiry))
+    assert await s.execute_entries([SYM]) == []
+
+
+async def test_atr_excludes_todays_partial_bar():
+    # A huge in-progress bar dated today must not widen the range: with it
+    # excluded ATR stays 10 → [90, 100] and support 88 does not qualify.
+    expiry = _et_today().isoformat()
+    today = _et_today()
+    wild_today = {"date": today.isoformat(), "open": 100.0, "high": 120.0,
+                  "low": 80.0, "close": 100.0, "volume": 1_000_000}
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        bars=_daily_bars() + [wild_today],
+        analysis=_analysis(100.0, support=88.0, resistance=118.0),
+        chain=_entry_chain(expiry))
+    assert await s.execute_entries([SYM]) == []
+
+
+async def test_wider_atr_widens_the_entry_range():
+    # Control for the exclusion test: genuinely wider completed bars
+    # (TR 16 → range [84, 100]) let the same support 88 qualify.
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        bars=_daily_bars(tr=16.0),
+        analysis=_analysis(100.0, support=88.0, resistance=118.0),
+        chain=_entry_chain(expiry))
+    actions = await s.execute_entries([SYM])
+    assert {a.strategy_params["side_type"] for a in actions} == {"put"}
+
+
+async def test_atr_is_wilder_smoothed():
+    # Hand-computed Wilder ATR, period 3. Seed = mean(TR1..3) = (2+3+4)/3
+    # = 3.0; then TR4 = 7 (a gap: |low − prev close|) smooths to
+    # (3.0·2 + 7)/3 = 13/3 ≈ 4.3333.
+    def bar(i, h, low, c):
+        d = _et_today() - timedelta(days=10 - i)
+        return {"date": d.isoformat(), "open": c, "high": h, "low": low,
+                "close": c, "volume": 1}
+    bars = [
+        bar(0, 101.0, 99.0, 100.0),            # seed prev-close only
+        bar(1, 102.0, 100.0, 101.0),           # TR1 = 2
+        bar(2, 104.0, 101.0, 103.0),           # TR2 = 3
+        bar(3, 103.0, 99.0, 100.0),            # TR3 = max(4, 0, 4) = 4
+        bar(4, 95.0, 93.0, 94.0),              # TR4 = |93 − 100| = 7 (gap)
+    ]
+    s, _, _ = _build_ds0(now_utc=_utc_at_et(11, 0), bars=bars)
+    atr = await s._atr(SYM, 3)
+    assert atr is not None and abs(atr - 13.0 / 3.0) < 1e-9
+    # Too little history → None (never trade on a guessed range).
+    assert await s._atr(SYM, 5) is None
 
 
 async def test_no_same_day_expiry_skips_symbol():
@@ -303,13 +437,13 @@ async def test_no_tp_while_entry_still_resting():
     assert await s.manage_positions() == []
 
 
-async def test_sweep_banks_marks_above_entry_cost():
+async def test_sweep_closes_marks_at_or_above_floor():
     trade = _ds0_trade(entry_debit=0.10)
     db = StubDB()
     db.set_open_trades("DS0", [trade])
     s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
     _hold_positions(broker, trade)
-    # mid = 0.30 − 0.05 = 0.25 → between entry (0.10) and target (0.40).
+    # mid = 0.30 − 0.05 = 0.25 → inside the [0.13, 0.40) sweep window.
     _wire_quotes(broker, trade, long_q={"bid": 0.28, "ask": 0.32},
                  short_q={"bid": 0.04, "ask": 0.06})
     actions = await s.manage_positions()
@@ -319,16 +453,62 @@ async def test_sweep_banks_marks_above_entry_cost():
     assert a.price == 0.22                       # exec credit: 0.28 − 0.06
 
 
-async def test_sweep_rides_marks_at_or_below_entry_cost():
+async def test_sweep_rides_marks_below_floor():
     trade = _ds0_trade(entry_debit=0.10)
     db = StubDB()
     db.set_open_trades("DS0", [trade])
     s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
     _hold_positions(broker, trade)
-    # mid = 0.11 − 0.03 = 0.08 ≤ entry cost → accepted loss, ride to expiry.
+    # mid = 0.11 − 0.03 = 0.08 < the $0.13 floor → accepted loss, ride.
     _wire_quotes(broker, trade, long_q={"bid": 0.10, "ask": 0.12},
                  short_q={"bid": 0.02, "ask": 0.04})
     assert await s.manage_positions() == []
+
+
+async def test_sweep_floor_boundary():
+    # Exactly $0.13 closes; $0.12 rides. (Operator rule: close 0.13–0.39.)
+    trade = _ds0_trade(entry_debit=0.10)
+    db = StubDB()
+    db.set_open_trades("DS0", [trade])
+    s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
+    _hold_positions(broker, trade)
+    # long mid 0.16, short mid 0.03 → spread mid exactly 0.13.
+    _wire_quotes(broker, trade, long_q={"bid": 0.14, "ask": 0.18},
+                 short_q={"bid": 0.02, "ask": 0.04})
+    actions = await s.manage_positions()
+    assert len(actions) == 1 and actions[0].tag == "HERMES_DS0_CLOSE_SWEEP-3PM"
+
+    trade2 = _ds0_trade(entry_debit=0.10)
+    db2 = StubDB()
+    db2.set_open_trades("DS0", [trade2])
+    s2, broker2, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db2)
+    _hold_positions(broker2, trade2)
+    # long mid 0.15, short mid 0.03 → spread mid 0.12, just under the floor.
+    _wire_quotes(broker2, trade2, long_q={"bid": 0.13, "ask": 0.17},
+                 short_q={"bid": 0.02, "ask": 0.04})
+    assert await s2.manage_positions() == []
+
+
+async def test_sweep_fires_at_1501_not_1500():
+    # Default ds0_sweep_time is 15:01 — at 15:00 a CLOSING trade keeps its
+    # resting TP; at 15:01 the sweep replaces it.
+    for hh, mm, expect_close in ((15, 0, False), (15, 1, True)):
+        trade = _ds0_trade(entry_debit=0.10, status="CLOSING")
+        db = StubDB()
+        db.set_closing_trades("DS0", [trade])
+        s, broker, _ = _build_ds0(now_utc=_utc_at_et(hh, mm), db=db)
+        _hold_positions(broker, trade)
+        broker._orders = [{
+            "id": 42, "status": "open",
+            "leg": [
+                {"option_symbol": trade["long_leg"], "side": "sell_to_close"},
+                {"option_symbol": trade["short_leg"], "side": "buy_to_close"},
+            ],
+        }]
+        _wire_quotes(broker, trade, long_q={"bid": 0.28, "ask": 0.32},
+                     short_q={"bid": 0.04, "ask": 0.06})
+        actions = await s.manage_positions()
+        assert bool(actions) is expect_close, f"at {hh}:{mm:02d}"
 
 
 async def test_sweep_replaces_resting_tp_on_closing_trade():

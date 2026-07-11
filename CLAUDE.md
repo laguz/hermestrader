@@ -175,6 +175,16 @@ The following patterns are intentional and should NOT be flagged as dead code or
 
 **`optimizer.py` `strategy_params` access** — `action.strategy_params` uses `field(default_factory=dict)` on the dataclass, making `.get()` calls safe. Not a missing-attribute bug.
 
+**DS0 direction pairing (`strategies/ds0.py`)** — a qualified *support* arms a
+**put** debit spread and a qualified *resistance* arms a **call** debit spread.
+This reversion-toward-the-level pairing is operator-specified (2026-07-10,
+`docs/ds0_spec.md` v2 revision note) and the opposite of the common touch-fade
+idiom — it is NOT inverted legs. There is also deliberately no
+price-proximity/touch trigger (the old `ds0_trigger_band` was removed at the
+operator's instruction — not a missing tunable): entry qualification is
+POP ≥ 0.75 plus the level sitting inside session-open ± Wilder ATR(14), and
+the $0.10 day-limit itself is the trigger.
+
 **Dynamic lookups via `getattr`/`__getattr__`:**
 - `WatchlistRepository.list_watchlist` — resolved dynamically via `getattr` in `_engine_pipeline.py`.
 - `TradesRepository.close_trade_from_action` — resolved dynamically via `getattr` in `agent_approvals.py`.
