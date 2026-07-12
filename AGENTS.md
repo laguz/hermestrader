@@ -121,3 +121,9 @@ require a live database — use the stub-broker / stub-DB pattern in
   LLM/engine construction and helpers live in `agent_construction.py` and the
   other `agent_*.py` modules it re-imports.
 - `hermes/service2_watcher/api.py` — operator API surface.
+- `hermes/replay/` + `scripts/replay.py` — the historical replay (backtest)
+  harness: the real `CascadingEngine` + strategies stepped through a
+  `SimulatedClock` over historical bars, with fills simulated by
+  `ReplayBroker` (a `MockBroker` subclass) and all writes kept in the
+  in-memory `ReplayDB`. Read-only against the live DB, never builds a real
+  Tradier client. `python scripts/replay.py --symbols SPY,QQQ --start ... --end ...`.

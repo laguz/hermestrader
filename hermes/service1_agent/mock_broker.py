@@ -272,28 +272,44 @@ class MockBroker(AbstractBroker):
             })
         return out
 
+    def _leg_quote(self, opt_symbol: str) -> tuple:
+        """(mid, spread) used to price one leg of a simulated fill.
+
+        Overridable pricing hook: the replay harness' ReplayBroker reuses this
+        fill machinery but prices legs from historical data instead of the
+        symbol-hash synthetic below.
+        """
+        h = hash(opt_symbol) & 0xFFFFFFFF
+        leg_mid = 0.5 + (h % 450) / 100.0
+        leg_spread = max(0.05, round(leg_mid * 0.1, 2))
+        return leg_mid, leg_spread
+
+    def _leg_slippage(self, opt_symbol: str, spread: float) -> float:
+        """Per-leg fill slippage (also an overridable replay hook)."""
+        h = hash(opt_symbol) & 0xFFFFFFFF
+        return (h % 3) * 0.1 * spread
+
     async def place_order_from_action(self, action: TradeAction) -> OrderPlacementResult:
         logger.info("[MOCK] Placing order for %s: %s", action.symbol, action.legs)
-        
+
         simulated_net_price = 0.0
         for leg in action.legs:
             opt_symbol = leg.get("option_symbol", "")
             leg_side = leg.get("side", "buy")
             qty = leg.get("quantity", 1)
-            
-            # Deterministic mid price and spread based on option symbol
-            h = hash(opt_symbol) & 0xFFFFFFFF
-            leg_mid = 0.5 + (h % 450) / 100.0
-            leg_spread = max(0.05, round(leg_mid * 0.1, 2))
-            
-            if leg_side == "buy":
+
+            leg_mid, leg_spread = self._leg_quote(opt_symbol)
+            slippage = self._leg_slippage(opt_symbol, leg_spread)
+
+            # Substring match: real legs carry "buy_to_open"/"buy_to_close",
+            # which the old `== "buy"` check silently routed to the sell
+            # branch, inflating simulated credits on multileg spreads.
+            if "buy" in leg_side:
                 # Buy filled slightly above mid (slippage)
-                slippage = (h % 3) * 0.1 * leg_spread
                 fill_price = round(leg_mid + slippage, 2)
                 simulated_net_price -= fill_price * qty
             else:
                 # Sell filled slightly below mid (slippage)
-                slippage = (h % 3) * 0.1 * leg_spread
                 fill_price = round(leg_mid - slippage, 2)
                 simulated_net_price += fill_price * qty
                 

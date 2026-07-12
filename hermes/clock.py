@@ -39,6 +39,10 @@ class SimulatedClock:
     def __init__(self, initial_dt: datetime.datetime):
         self._current_dt = initial_dt
 
+    def set_time(self, dt: datetime.datetime) -> None:
+        """Move the simulated instant (timezone-naive UTC)."""
+        self._current_dt = dt
+
     def utc_now(self) -> datetime.datetime:
         return self._current_dt
 
