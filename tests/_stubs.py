@@ -219,11 +219,9 @@ class StubDB:
         self.settings = _DictNSView(self)
         # Default blackout days to 0 in StubDB so existing tests don't get blocked
         # by the system clock's proximity to real CPI/FOMC dates.
-        self.settings["cs75_event_blackout_days"] = "0"
-        self.settings["cs7_event_blackout_days"] = "0"
-        self.settings["tt45_event_blackout_days"] = "0"
-        self.settings["wheel_event_blackout_days"] = "0"
-        self.settings["hermesalpha_event_blackout_days"] = "0"
+        for _s in ("cs75", "cs7", "tt45", "wheel", "hermesalpha"):
+            self.settings[f"{_s}_event_blackout_days"] = "0"
+            self.settings[f"{_s}_macro_blackout_days"] = "0"
 
         self.approvals = _ListNSView(self)
         # Plain repo namespaces forwarding to the flat surface.
