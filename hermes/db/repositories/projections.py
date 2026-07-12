@@ -78,6 +78,7 @@ class ProjectionsRepository:
                 broker_order_id=tf.get("broker_order_id"),
                 tag=tf.get("tag"),
                 entry_features=tf.get("entry_features"),
+                mid_at_submit=tf.get("mid_at_submit"),
                 opened_at=datetime.fromisoformat(tf["opened_at"]) if tf.get("opened_at") else datetime.utcnow()
             )
             session.add(trade)

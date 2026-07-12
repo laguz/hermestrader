@@ -96,6 +96,7 @@ class TradesRepository(Repository):
                     "tag": action.tag, "ai_authored": action.ai_authored,
                     "ai_rationale": action.ai_rationale,
                     "expiry": action.expiry,
+                    "mid_at_submit": (action.strategy_params or {}).get("mid_at_submit"),
                 }
             )
 
@@ -173,6 +174,10 @@ class TradesRepository(Repository):
             else:
                 entry_debit = float(action.price)
 
+        mid_at_submit = (action.strategy_params or {}).get("mid_at_submit")
+        if mid_at_submit is not None:
+            mid_at_submit = float(mid_at_submit)
+
         async with self.AsyncSession() as s:
             if rejected:
                 await TransactionManager.reject(
@@ -208,6 +213,7 @@ class TradesRepository(Repository):
                 "broker_order_id": broker_order_id,
                 "tag": getattr(action, "tag", None),
                 "entry_features": (action.strategy_params or {}).get("entry_features"),
+                "mid_at_submit": mid_at_submit,
             }
             await TransactionManager.fill(
                 session=s,
@@ -239,7 +245,13 @@ class TradesRepository(Repository):
         implausibly large improvement (beyond 1.5× / a $0.10 allowance —
         e.g. Tradier reporting a per-leg price on a multileg order), is
         treated as a data anomaly and ignored with a warning. Returns True
-        only when a row was actually updated.
+        only when the entry price was actually reconciled.
+
+        Also writes ``entry_slippage`` (fill vs the ``mid_at_submit`` captured
+        at submission; positive = filled worse than mid) whenever the fill is
+        plausible and a mid was recorded — including a fill exactly at the
+        limit, which changes no entry price but is still a real measurement.
+        No mid → slippage stays NULL ("unknown"), never a fabricated 0.0.
         """
         if not broker_order_id or fill_price is None:
             return False
@@ -256,6 +268,7 @@ class TradesRepository(Repository):
             if row is None:
                 return False
             eps = 1e-9
+            mid = float(row.mid_at_submit) if row.mid_at_submit is not None else None
             if row.entry_credit is not None:
                 limit = float(row.entry_credit)
                 hi = max(limit * 1.5, limit + 0.10)
@@ -265,7 +278,11 @@ class TradesRepository(Repository):
                         "for order %s (%s); keeping limit price",
                         fill, limit, hi, broker_order_id, row.symbol)
                     return False
+                if mid is not None:
+                    row.entry_slippage = mid - fill
                 if abs(fill - limit) <= eps:
+                    if mid is not None:
+                        await s.commit()
                     return False
                 row.entry_credit = fill
             elif row.entry_debit is not None:
@@ -277,7 +294,11 @@ class TradesRepository(Repository):
                         "for order %s (%s); keeping limit price",
                         fill, lo, limit, broker_order_id, row.symbol)
                     return False
+                if mid is not None:
+                    row.entry_slippage = fill - mid
                 if abs(fill - limit) <= eps:
+                    if mid is not None:
+                        await s.commit()
                     return False
                 row.entry_debit = fill
             else:
@@ -285,11 +306,15 @@ class TradesRepository(Repository):
                 # credit from debit, so leave the row alone.
                 return False
             strategy_id, symbol = row.strategy_id, row.symbol
+            slippage = (float(row.entry_slippage)
+                        if row.entry_slippage is not None else None)
             await s.commit()
+        slip = (f" slippage_vs_mid={slippage:.4f}"
+                if slippage is not None else "")
         await self._db.logs.write_log(
             strategy_id,
             f"[ENTRY FILL] {symbol} order_id={broker_order_id} "
-            f"limit={limit:.4f} filled={fill:.4f} — entry price reconciled",
+            f"limit={limit:.4f} filled={fill:.4f}{slip} — entry price reconciled",
         )
         return True
 

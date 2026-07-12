@@ -141,7 +141,9 @@ async def get_analytics() -> Response:
                     COALESCE(AVG(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS avg_pnl,
                     COALESCE(MAX(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS best_trade,
                     COALESCE(MIN(pnl) FILTER (WHERE status = 'CLOSED'), 0) AS worst_trade,
-                    COUNT(*) FILTER (WHERE status = 'OPEN') AS open_count
+                    COUNT(*) FILTER (WHERE status = 'OPEN') AS open_count,
+                    AVG(entry_slippage) AS avg_entry_slippage,
+                    COUNT(entry_slippage) AS slippage_samples
                 FROM trades
                 GROUP BY strategy_id
                 ORDER BY strategy_id
@@ -159,6 +161,14 @@ async def get_analytics() -> Response:
                     "best_trade": float(r.best_trade or 0),
                     "worst_trade": float(r.worst_trade or 0),
                     "open_count": int(r.open_count or 0),
+                    # Fill-vs-mid execution cost per contract (positive =
+                    # filled worse than mid). None — not 0.0 — when no fill
+                    # has a recorded submission mid yet.
+                    "avg_entry_slippage": (
+                        float(r.avg_entry_slippage)
+                        if r.avg_entry_slippage is not None else None
+                    ),
+                    "slippage_samples": int(r.slippage_samples or 0),
                 }
 
             # Open trades (all strategies)

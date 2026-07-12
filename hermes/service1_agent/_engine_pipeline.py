@@ -28,6 +28,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence
 
 from hermes.events.bus import ReviewRequestEvent, AIApprovalEvent, ClockTickEvent
+from .execution_quality import capture_submission_mid
 from .trade_action import TradeAction
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -530,6 +531,11 @@ class PipelineController:
                 f"(autonomous + alpha_autonomous_live); routing to broker",
             )
 
+        # Execution-quality measurement: stamp the current net quote mid on
+        # the action so the eventual fill can be compared to the market at
+        # submission (fill-vs-mid slippage). Degrades to None on any failure —
+        # it never blocks the order.
+        await capture_submission_mid(ctx.broker, a)
         await ctx.db.trades.record_pending_order(a)
         # Management actions whose legs are all *_to_close represent the close
         # of an existing trade, not a new entry. Route them to
