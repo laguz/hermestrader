@@ -6,8 +6,8 @@ keep the bar/price surface on ``HermesDB`` for existing call-sites.
 """
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Optional, List, Tuple
 
 import pandas as pd
 
