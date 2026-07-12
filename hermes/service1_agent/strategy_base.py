@@ -376,7 +376,21 @@ class AbstractStrategy(ABC):
         for action in actions:
             action.strategy_params["throttle_mult"] = throttle_mult
 
-            # Resolve/write prediction to the ledger
+            # Ledger prediction: POP is "the short strike stays OTM", so the
+            # row must carry that win condition for backfill to score it —
+            # a directional (close > spot) outcome is not what POP predicts.
+            # Actions without a short *_to_open leg (debit spreads, equity)
+            # have no such condition and are not logged.
+            short_leg = self._short_open_leg(action)
+            if short_leg is None:
+                continue
+            from hermes.common import OCC_RE
+            m = OCC_RE.match(str(short_leg.get("option_symbol") or ""))
+            if not m:
+                continue
+            option_type = "call" if m.group(3) == "C" else "put"
+            short_strike = int(m.group(4)) / 1000.0
+
             pop = action.strategy_params.get("pop")
             if pop is None:
                 delta = action.strategy_params.get("delta")
@@ -392,11 +406,29 @@ class AbstractStrategy(ABC):
                 except Exception:
                     pass
             if spot is None:
-                spot = 100.0
+                # Never fabricate a spot into the ledger — an unknown spot
+                # means an unevaluable row, not a $100 stock.
+                logger.debug("[THROTTLE] %s: no spot for %s; skipping ledger write",
+                             self.NAME, action.symbol)
+                continue
 
-            await self.write_prediction_to_ledger(action.symbol, float(pop), float(spot), int(dte))
+            await self.write_prediction_to_ledger(
+                action.symbol, float(pop), float(spot), int(dte),
+                feature_vector={
+                    "win_condition": "short_otm",
+                    "option_type": option_type,
+                    "short_strike": short_strike,
+                })
 
         return actions
+
+    @staticmethod
+    def _short_open_leg(action) -> Optional[Dict[str, Any]]:
+        for leg in action.legs or []:
+            side = str(leg.get("side", "")).lower()
+            if "sell" in side and "open" in side:
+                return leg
+        return None
 
     async def get_throttle_multiplier(self) -> float:
         try:
@@ -469,7 +501,9 @@ class AbstractStrategy(ABC):
             logger.warning("[THROTTLE] %s failed to compute throttle: %s. Fails open to 1.0.", self.NAME, exc)
             return 1.0
 
-    async def write_prediction_to_ledger(self, symbol: str, pop: float, spot: float, horizon_dte: int) -> None:
+    async def write_prediction_to_ledger(self, symbol: str, pop: float, spot: float,
+                                         horizon_dte: int,
+                                         feature_vector: Optional[Dict[str, Any]] = None) -> None:
         from hermes.ml.ledger import write_record, LedgerRecord
         try:
             await write_record(self.db, LedgerRecord(
@@ -484,7 +518,7 @@ class AbstractStrategy(ABC):
                 predicted_prob_hi=None,
                 predicted_return=None,
                 spot=spot,
-                feature_vector={},
+                feature_vector=feature_vector or {},
             ))
             logger.debug("[THROTTLE] Logged prediction to ledger for %s: %s (POP=%.2f DTE=%d)", self.NAME, symbol, pop, horizon_dte)
         except Exception as exc:

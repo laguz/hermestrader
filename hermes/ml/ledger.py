@@ -219,8 +219,31 @@ async def backfill_prediction_outcomes(db: Any, lookback_days: int = 90) -> int:
 
             row_bar = df_future.iloc[0]
             realized_close = float(row_bar["close"])
-            spot = float(row.spot) if row.spot is not None else realized_close
-            outcome = 1.0 if realized_close > spot else 0.0
+            fv = row.feature_vector or {}
+            if fv.get("win_condition") == "short_otm":
+                # Strategy-qualification rows: predicted_prob is the spread's
+                # POP, so the outcome must be "short strike unbreached at
+                # horizon", not the directional up-move below — comparing POP
+                # (~0.75) against the ~50% up-move base rate would read as
+                # permanent drift and wedge the sizing throttle engaged.
+                strike = fv.get("short_strike")
+                otype = fv.get("option_type")
+                if strike is None or otype not in ("put", "call"):
+                    logger.debug("qualification row %s/%s lacks win-condition "
+                                 "fields; leaving unmarked", row.symbol, row.ts)
+                    continue
+                strike = float(strike)
+                if otype == "put":
+                    outcome = 1.0 if realized_close >= strike else 0.0
+                else:
+                    outcome = 1.0 if realized_close <= strike else 0.0
+            elif row.schema_stage == "strategy_qualification":
+                # Legacy qualification rows written before win-condition
+                # stamping: a directional outcome would be wrong for them.
+                continue
+            else:
+                spot = float(row.spot) if row.spot is not None else realized_close
+                outcome = 1.0 if realized_close > spot else 0.0
 
             row.realized_outcome = outcome
             row.realized_close = realized_close

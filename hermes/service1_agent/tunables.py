@@ -108,7 +108,8 @@ _CATALOG: List[Tunable] = [
     _f("cs75_throttle_drift_threshold", 0.05, "CS75", "Throttle Drift Threshold", min=0.0, max=1.0,
        help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
     _f("cs75_throttle_floor_mult", 1.0, "CS75", "Throttle Floor Multiplier", min=0.0, max=1.0,
-       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
+       help="Sizing multiplier when the throttle engages. 1.0 = no reduction; "
+            "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── CS7 (priority 2; ~7 DTE short-cycle spreads) ───────────────────────
     _f("cs7_width", 1.0, "CS7", "Spread width ($)", min=0.5, max=50,
@@ -140,7 +141,8 @@ _CATALOG: List[Tunable] = [
     _f("cs7_throttle_drift_threshold", 0.05, "CS7", "Throttle Drift Threshold", min=0.0, max=1.0,
        help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
     _f("cs7_throttle_floor_mult", 1.0, "CS7", "Throttle Floor Multiplier", min=0.0, max=1.0,
-       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
+       help="Sizing multiplier when the throttle engages. 1.0 = no reduction; "
+            "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── TT45 (priority 3; 16Δ verticals, 30–60 DTE) ────────────────────────
     _f("tt45_width", 5.0, "TT45", "Spread width ($)", min=0.5, max=50,
@@ -168,7 +170,8 @@ _CATALOG: List[Tunable] = [
     _f("tt45_throttle_drift_threshold", 0.05, "TT45", "Throttle Drift Threshold", min=0.0, max=1.0,
        help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
     _f("tt45_throttle_floor_mult", 1.0, "TT45", "Throttle Floor Multiplier", min=0.0, max=1.0,
-       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
+       help="Sizing multiplier when the throttle engages. 1.0 = no reduction; "
+            "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── WHEEL (priority 4; CSP → assignment → covered call) ────────────────
     _f("wheel_delta", 0.30, "WHEEL", "Short Δ target", min=0.0, max=1.0,
@@ -194,7 +197,8 @@ _CATALOG: List[Tunable] = [
     _f("wheel_throttle_drift_threshold", 0.05, "WHEEL", "Throttle Drift Threshold", min=0.0, max=1.0,
        help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
     _f("wheel_throttle_floor_mult", 1.0, "WHEEL", "Throttle Floor Multiplier", min=0.0, max=1.0,
-       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
+       help="Sizing multiplier when the throttle engages. 1.0 = no reduction; "
+            "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── Lot sizing (catalog visibility only) ───────────────────────────────
     # These keep their existing read path (routes/strategies.py _LOT_SPECS +
@@ -232,7 +236,8 @@ _CATALOG: List[Tunable] = [
     _f("hermesalpha_throttle_drift_threshold", 0.05, "HERMESALPHA", "Throttle Drift Threshold", min=0.0, max=1.0,
        help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
     _f("hermesalpha_throttle_floor_mult", 1.0, "HERMESALPHA", "Throttle Floor Multiplier", min=0.0, max=1.0,
-       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
+       help="Sizing multiplier when the throttle engages. 1.0 = no reduction; "
+            "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
     _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,
