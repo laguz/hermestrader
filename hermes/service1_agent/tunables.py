@@ -99,6 +99,8 @@ _CATALOG: List[Tunable] = [
        help="Force-close at or below this many days to expiry."),
     _i("cs75_event_blackout_days", 7, "CS75", "Event blackout days", min=0, max=30,
        help="Number of days to look ahead for earnings and macro events to block entries."),
+    _f("cs75_min_ivr", 0.0, "CS75", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── CS7 (priority 2; ~7 DTE short-cycle spreads) ───────────────────────
     _f("cs7_width", 1.0, "CS7", "Spread width ($)", min=0.5, max=50,
@@ -121,6 +123,8 @@ _CATALOG: List[Tunable] = [
        help="Close when debit ≥ entry credit × this."),
     _i("cs7_event_blackout_days", 7, "CS7", "Event blackout days", min=0, max=30,
        help="Number of days to look ahead for earnings and macro events to block entries."),
+    _f("cs7_min_ivr", 0.0, "CS7", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── TT45 (priority 3; 16Δ verticals, 30–60 DTE) ────────────────────────
     _f("tt45_width", 5.0, "TT45", "Spread width ($)", min=0.5, max=50,
@@ -139,6 +143,8 @@ _CATALOG: List[Tunable] = [
        help="Neutralise the side when the short's |Δ| exceeds this."),
     _i("tt45_event_blackout_days", 7, "TT45", "Event blackout days", min=0, max=30,
        help="Number of days to look ahead for earnings and macro events to block entries."),
+    _f("tt45_min_ivr", 0.0, "TT45", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── WHEEL (priority 4; CSP → assignment → covered call) ────────────────
     _f("wheel_delta", 0.30, "WHEEL", "Short Δ target", min=0.0, max=1.0,
@@ -155,6 +161,8 @@ _CATALOG: List[Tunable] = [
        help="Roll an ITM short below this many days to expiry."),
     _i("wheel_event_blackout_days", 0, "WHEEL", "Event blackout days", min=0, max=30,
        help="Number of days to look ahead for earnings and macro events to block entries."),
+    _f("wheel_min_ivr", 0.0, "WHEEL", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── Lot sizing (catalog visibility only) ───────────────────────────────
     # These keep their existing read path (routes/strategies.py _LOT_SPECS +
@@ -183,6 +191,8 @@ _CATALOG: List[Tunable] = [
        help="Close when debit exceeds credit times this."),
     _i("hermesalpha_event_blackout_days", 7, "HERMESALPHA", "Event blackout days", min=0, max=30,
        help="Number of days to look ahead for earnings and macro events to block entries."),
+    _f("hermesalpha_min_ivr", 0.0, "HERMESALPHA", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
     _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,

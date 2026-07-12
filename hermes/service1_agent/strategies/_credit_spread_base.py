@@ -98,10 +98,25 @@ class CreditSpreadStrategy(AbstractStrategy):
                 if await self.is_event_gated(symbol, blackout_days):
                     continue
 
+                min_ivr = self._tun(t, "min_ivr")
+                if await self.is_ivr_gated(symbol, min_ivr):
+                    continue
+
                 analysis = await self.broker.analyze_symbol(symbol, period=self.ANALYSIS_PERIOD)
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
+
+                # Persist current vol via system settings
+                current_vol = analysis.get("current_vol")
+                if current_vol is not None:
+                    try:
+                        await self.db.settings.set_setting(f"ml_current_vol__{symbol}", str(current_vol))
+                    except Exception as e:
+                        import logging
+                        logging.getLogger("hermes.strategy.credit_spread").warning(
+                            "Failed to persist ml_current_vol for %s: %s", symbol, e
+                        )
 
                 # Centralised POP overlay on the institutional-flow S/R levels.
                 # Prefer the in-process predictor (carries the calibrated

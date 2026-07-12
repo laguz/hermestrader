@@ -201,3 +201,37 @@ class TimeSeriesEngine:
             intra = (await conn.execute(text("SELECT COUNT(*) FROM bars_intraday"))).scalar()
         return int(daily or 0), int(intra or 0)
 
+    async def save_implied_vol(self, symbol: str, iv: float, ts: Optional[datetime] = None) -> None:
+        if ts is None:
+            ts = datetime.now(timezone.utc)
+        else:
+            ts = _as_utc(ts)
+        # Truncate ts to daily (date) so we store exactly one observation per day
+        ts = datetime.combine(ts.date(), datetime_time.min, tzinfo=timezone.utc)
+        stmt = text(
+            "INSERT INTO implied_volatility (symbol, ts, iv) "
+            "VALUES (:symbol, :ts, :iv) "
+            "ON CONFLICT (symbol, ts) DO UPDATE SET iv = EXCLUDED.iv"
+        )
+        try:
+            async with self._engine.begin() as conn:
+                await conn.execute(stmt, {"symbol": symbol.upper(), "ts": ts, "iv": float(iv)})
+        except Exception as exc:
+            logger.exception("Failed to save implied vol for %s: %s", symbol.upper(), exc)
+
+    async def get_implied_vol_history(self, symbol: str, lookback_days: int = 365) -> List[Tuple[datetime, float]]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        stmt = text(
+            "SELECT ts, iv FROM implied_volatility "
+            "WHERE symbol = :symbol AND ts >= :cutoff ORDER BY ts"
+        )
+        try:
+            async with self._engine.connect() as conn:
+                res = await conn.execute(stmt, {"symbol": symbol.upper(), "cutoff": cutoff})
+                rows = res.fetchall()
+            return [(row[0], float(row[1])) for row in rows]
+        except Exception as exc:
+            logger.exception("Failed to query implied vol history for %s: %s", symbol.upper(), exc)
+            return []
+
+

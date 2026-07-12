@@ -362,6 +362,14 @@ class SystemSetting(Base):
                         onupdate=utc_now)
 
 
+class ImpliedVolatility(Base):
+    """Stores daily ATM IV observations for symbols to compute IV Rank."""
+    __tablename__ = "implied_volatility"
+    ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
+    symbol = Column(String, primary_key=True)
+    iv = Column(Numeric(12, 6), nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Realized-PnL + tag helpers (module-level so they're trivially testable
 # without a live DB).
