@@ -59,6 +59,7 @@ class ControlState:
             "cs7_target_lots":  10, "cs7_max_lots":  10,
             "tt45_target_lots":  5, "tt45_max_lots":  5,
             "wheel_max_lots":    5,
+            "hermesalpha_target_lots": 1, "hermesalpha_max_lots": 1,
             "ds0_target_lots":   1, "ds0_max_lots":   1,
         }
         self.pending_order_ttl_s = 3600
@@ -113,6 +114,12 @@ class ControlState:
                 self.pending_order_ttl_s = int(value)
             except ValueError:
                 self.pending_order_ttl_s = 3600
+        elif key == "alpha_max_lots":
+            # The dashboard writes HermesAlpha lots under this legacy key
+            # (routes/strategies.py _LOT_SPECS) but the agent reads
+            # hermesalpha_*. Alpha is max-only and self-sizes within the cap,
+            # so the one dashboard value feeds both keys.
+            self._apply_alpha_max_lots(value)
         elif key in self.lot_settings:
             try:
                 self.lot_settings[key] = int(value)
@@ -131,10 +138,18 @@ class ControlState:
                 else:
                     self.llm_config[field] = value
 
+    def _apply_alpha_max_lots(self, value: str) -> None:
+        try:
+            v = int(value)
+        except (TypeError, ValueError):
+            return
+        self.lot_settings["hermesalpha_target_lots"] = v
+        self.lot_settings["hermesalpha_max_lots"] = v
+
     async def load_from_db(self, db, conf: Dict[str, Any]) -> None:
         settings = await db.settings.get_settings(
             ["hermes_mode", "agent_paused", "agent_autonomy", "approval_mode",
-             "alpha_autonomous_live",
+             "alpha_autonomous_live", "alpha_max_lots",
              "llm_out_of_loop", "overseer_mode", "max_daily_loss", "pending_order_ttl_s"]
             + list(self.lot_settings.keys())
             + [f"strategy_{sid.lower()}_enabled" for sid in STRATEGY_PRIORITIES]
@@ -163,6 +178,12 @@ class ControlState:
                     self.lot_settings[k] = int(settings[k])
                 except ValueError:
                     pass
+
+        # Applied after the loop: the dashboard's alpha_max_lots is the
+        # operator's canonical Alpha lots control, so it wins over any
+        # directly-set hermesalpha_* rows.
+        if settings.get("alpha_max_lots") is not None:
+            self._apply_alpha_max_lots(settings["alpha_max_lots"])
                     
         for sid in STRATEGY_PRIORITIES:
             enabled_key = f"strategy_{sid.lower()}_enabled"
