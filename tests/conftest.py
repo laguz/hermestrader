@@ -62,12 +62,19 @@ async def cleanup_tasks():
     try:
         import asyncio
         loop = asyncio.get_running_loop()
-        await asyncio.sleep(0.01)
+        try:
+            await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            pass
+        
         tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task(loop)]
         if tasks:
             for task in tasks:
                 task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            except asyncio.CancelledError:
+                pass
     except RuntimeError:
         pass
 
