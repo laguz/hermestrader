@@ -290,6 +290,25 @@ function drawPnlChart() {
   }
 }
 
+// Wilder ATR(14) + latest-open entry range per symbol — the same
+// open ± ATR band DS0 uses to qualify levels. Absent until the watcher
+// serves the fields (older API responses simply omit them).
+const atrRanges = computed(() => {
+  const out = {}
+  for (const [sym, d] of Object.entries(state.keyLevelsData || {})) {
+    if (d?.atr != null && d?.today_open != null) {
+      out[sym] = {
+        period: d.atr_period || 14,
+        atr: d.atr,
+        open: d.today_open,
+        lo: d.today_open - d.atr,
+        hi: d.today_open + d.atr,
+      }
+    }
+  }
+  return out
+})
+
 // Sort support/resistance clusters
 function getSupportLevels(sym) {
   const levels = state.keyLevelsData[sym]?.key_levels || []
@@ -759,6 +778,12 @@ function getMaxStrength(sym) {
                 <span>Realized Vol (21d): <strong>{{ ((state.keyLevelsData[sym]?.current_vol || 0) * 100).toFixed(1) }}%</strong></span>
                 <span>Avg Vol ({{ state.keyLevelsData[sym]?.period || 'N/A' }}): <strong>{{ ((state.keyLevelsData[sym]?.avg_vol || 0) * 100).toFixed(1) }}%</strong></span>
                 <span>Samples: <strong>{{ state.keyLevelsData[sym]?.samples || 0 }} trading days</strong></span>
+                <span v-if="atrRanges[sym]" title="Wilder ATR over completed daily bars; DS0 qualifies levels inside open ± ATR">
+                  ATR({{ atrRanges[sym].period }}): <strong>${{ atrRanges[sym].atr.toFixed(2) }}</strong>
+                  · Open ${{ atrRanges[sym].open.toFixed(2) }} ± ATR →
+                  <strong class="atr-range">${{ atrRanges[sym].lo.toFixed(2) }} – ${{ atrRanges[sym].hi.toFixed(2) }}</strong>
+                </span>
+                <span v-else title="Served by the watcher once it runs a build with ATR support">ATR(14): <strong>—</strong></span>
               </div>
             </div>
           </div>
@@ -1251,6 +1276,10 @@ function getMaxStrength(sym) {
 }
 .strength-bar-fill.red-fill {
   background: var(--color-red);
+}
+
+.atr-range {
+  color: var(--accent);
 }
 
 .keylevels-card-footer {

@@ -164,7 +164,7 @@ class MockBroker(AbstractBroker):
         S/R panel renders in dev/paper mode without real Tradier credentials."""
         import numpy as np
         import pandas as pd
-        from hermes.ml.pop_engine import find_key_levels
+        from hermes.ml.pop_engine import find_key_levels, wilder_atr
 
         bars = await self.get_history(symbol, interval="daily")
         if not bars:
@@ -198,6 +198,20 @@ class MockBroker(AbstractBroker):
         put_entries.sort(key=lambda x: abs(x["price"] - current))
         call_entries.sort(key=lambda x: abs(x["price"] - current))
 
+        # Mirror TradierBroker: ATR(14) over completed bars + latest open.
+        from datetime import date as _date
+        today_open = None
+        if "open" in df.columns:
+            raw_open = pd.to_numeric(df["open"], errors="coerce").iloc[-1]
+            if pd.notna(raw_open) and float(raw_open) > 0:
+                today_open = float(raw_open)
+        atr_df = df
+        if "date" in df.columns:
+            completed = df[df["date"].astype(str).str[:10] < _date.today().isoformat()]
+            if not completed.empty:
+                atr_df = completed
+        atr = wilder_atr(atr_df, period=14)
+
         return {
             "symbol": symbol,
             "current_price": current,
@@ -208,6 +222,9 @@ class MockBroker(AbstractBroker):
             "call_entry_points": call_entries,
             "samples": len(df),
             "period": period,
+            "atr": atr,
+            "atr_period": 14,
+            "today_open": today_open,
         }
 
     async def get_history(

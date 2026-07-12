@@ -215,6 +215,42 @@ def find_key_levels(
     return out
 
 
+def wilder_atr(df: pd.DataFrame, period: int = 14) -> Optional[float]:
+    """Wilder ATR over the last ``period`` daily bars of an OHLC frame.
+
+    Same math as DS0's entry-range ATR (``strategies/ds0.py::_atr``): true
+    range includes overnight gaps (max of high−low, |high−prev close|,
+    |low−prev close|); the seed is the simple mean of the first ``period``
+    TRs, then Wilder smoothing over the rest. The frame must be sorted
+    ascending by date and contain only the bars to include — callers drop
+    today's partial bar themselves. Returns ``None`` when the history is
+    too short or invalid rather than guessing.
+    """
+    if period < 1 or df is None or df.empty:
+        return None
+    cols = {"high", "low", "close"}
+    if not cols.issubset(df.columns):
+        return None
+    highs = pd.to_numeric(df["high"], errors="coerce")
+    lows = pd.to_numeric(df["low"], errors="coerce")
+    closes = pd.to_numeric(df["close"], errors="coerce")
+    ok = highs.notna() & lows.notna() & closes.notna()
+    highs, lows, closes = highs[ok].values, lows[ok].values, closes[ok].values
+    if len(closes) < period + 1:
+        return None
+    trs: List[float] = []
+    prev_close = float(closes[0])
+    for high, low, close in zip(highs[1:], lows[1:], closes[1:], strict=True):
+        trs.append(max(float(high) - float(low),
+                       abs(float(high) - prev_close),
+                       abs(float(low) - prev_close)))
+        prev_close = float(close)
+    atr = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        atr = (atr * (period - 1) + tr) / period
+    return atr if atr > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # Strike protection
 # ---------------------------------------------------------------------------

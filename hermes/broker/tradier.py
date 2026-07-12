@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import httpx
-from hermes.ml.pop_engine import find_key_levels
+from hermes.ml.pop_engine import find_key_levels, wilder_atr
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -418,9 +418,25 @@ class TradierBroker(AbstractBroker):
 
         put_entries = [lvl for lvl in key_levels if lvl['type'] == 'support']
         call_entries = [lvl for lvl in key_levels if lvl['type'] == 'resistance']
-        
+
         put_entries.sort(key=lambda x: abs(x['price'] - current))
         call_entries.sort(key=lambda x: abs(x['price'] - current))
+
+        # Wilder ATR(14) + latest session open — the same range DS0 anchors
+        # its entry qualification on (open − ATR .. open + ATR). ATR excludes
+        # today's partial bar; the open comes from the latest bar, which IS
+        # today's during a session.
+        today_open = None
+        if "open" in df.columns:
+            raw_open = pd.to_numeric(df["open"], errors="coerce").iloc[-1]
+            if pd.notna(raw_open) and float(raw_open) > 0:
+                today_open = float(raw_open)
+        atr_df = df
+        if "date" in df.columns:
+            completed = df[df["date"].astype(str).str[:10] < end.isoformat()]
+            if not completed.empty:
+                atr_df = completed
+        atr = wilder_atr(atr_df, period=14)
 
         return {
             "symbol": symbol,
@@ -432,6 +448,9 @@ class TradierBroker(AbstractBroker):
             "call_entry_points": call_entries,
             "samples": len(df),
             "period": period,
+            "atr": atr,
+            "atr_period": 14,
+            "today_open": today_open,
         }
 
     async def place_order_from_action(self, action) -> OrderPlacementResult:
