@@ -284,6 +284,65 @@ class StubDB:
         for sym in orphan_symbols:
             self.logs.append(f"orphan position: {sym}")
 
+    async def get_realized_edge_stats(self, strategy_id: str, window_days: int) -> Dict[str, Any]:
+        trades_list = self._closed_trades.get(strategy_id, [])
+        from datetime import datetime, timezone, timedelta
+        from hermes.utils import utc_now
+
+        cutoff = utc_now()
+        if cutoff.tzinfo is not None:
+            cutoff = cutoff.astimezone(timezone.utc).replace(tzinfo=None)
+        cutoff = cutoff - timedelta(days=window_days)
+
+        valid_trades = []
+        for t in trades_list:
+            if t.get("exit_price") is None:
+                continue
+
+            closed_at = t.get("closed_at")
+            if closed_at is not None:
+                if isinstance(closed_at, str):
+                    closed_at = datetime.fromisoformat(closed_at)
+                if closed_at.tzinfo is not None:
+                    closed_at = closed_at.astimezone(timezone.utc).replace(tzinfo=None)
+                if closed_at < cutoff:
+                    continue
+
+            pnl_val = t.get("pnl")
+            if pnl_val is None:
+                from hermes.db.orm import _compute_realized_pnl
+                pnl_val = _compute_realized_pnl(
+                    entry_credit=t.get("entry_credit"),
+                    entry_debit=t.get("entry_debit"),
+                    exit_price=t.get("exit_price"),
+                    lots=t.get("lots", 1)
+                )
+            if pnl_val is not None:
+                valid_trades.append({"pnl": float(pnl_val)})
+
+        wins = [t["pnl"] for t in valid_trades if t["pnl"] > 0]
+        losses = [t["pnl"] for t in valid_trades if t["pnl"] < 0]
+        total_count = len(valid_trades)
+
+        if total_count == 0:
+            return {
+                "win_rate": 0.0,
+                "avg_win": 0.0,
+                "avg_loss": 0.0,
+                "count": 0
+            }
+
+        win_rate = len(wins) / total_count
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+
+        return {
+            "win_rate": win_rate,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "count": total_count
+        }
+
     async def open_trades(self, strategy_id: str):
         return list(self._open_trades.get(strategy_id, []))
 

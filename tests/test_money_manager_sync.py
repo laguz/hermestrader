@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 
 from hermes.service1_agent.core import CascadingEngine, MoneyManager, AsyncBrokerWrapper
-from ._stubs import RepoNamespaceMixin
+from ._stubs import RepoNamespaceMixin, StubDB
 
 
 class _StubBroker:
@@ -187,3 +187,143 @@ async def test_engine_sync_positions_handles_non_list():
     positions, active_legs = await engine.sync_positions()
     assert positions == []
     assert active_legs == set()
+
+
+from hermes.service1_agent.trade_action import TradeAction
+from hermes.service1_agent.money_manager import resolve_entry_sizing
+
+async def test_realized_edge_multiplier():
+    # 1. 40% wins with avg win/loss of 0.5 gets scaled down to floor (0.25)
+    db = StubDB()
+    # Seed 8 wins and 12 losses. Total = 20 trades.
+    trades = []
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for _ in range(8):
+        trades.append({"exit_price": 10.0, "pnl": 100.0, "closed_at": now})
+    for _ in range(12):
+        trades.append({"exit_price": 10.0, "pnl": -200.0, "closed_at": now})
+    db.set_closed_trades("CS75", trades)
+
+    mm = MoneyManager(broker=_StubBroker([]), db=db, config={})
+    await mm.prefetch_edge_multipliers(config={})
+    
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        side="buy",
+        quantity=10,
+        order_class="multileg",
+        legs=[],
+        price=1.0,
+        width=5.0
+    )
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={}, mm=mm)
+    assert req == 2
+
+async def test_realized_edge_multiplier_above_breakeven():
+    # 2. Strategy above breakeven edge stays at 1.0
+    db = StubDB()
+    trades = []
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for _ in range(12):
+        trades.append({"exit_price": 10.0, "pnl": 200.0, "closed_at": now})
+    for _ in range(8):
+        trades.append({"exit_price": 10.0, "pnl": -100.0, "closed_at": now})
+    db.set_closed_trades("CS75", trades)
+
+    mm = MoneyManager(broker=_StubBroker([]), db=db, config={})
+    await mm.prefetch_edge_multipliers(config={})
+    
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        side="buy",
+        quantity=10,
+        order_class="multileg",
+        legs=[],
+        price=1.0,
+        width=5.0
+    )
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={}, mm=mm)
+    assert req == 10
+
+async def test_realized_edge_multiplier_fewer_than_min_trades():
+    # 3. Fewer than edge_min_trades (default 15) -> sizing stays 1.0 (neutral)
+    db = StubDB()
+    trades = []
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for _ in range(4):
+        trades.append({"exit_price": 10.0, "pnl": 100.0, "closed_at": now})
+    for _ in range(6):
+        trades.append({"exit_price": 10.0, "pnl": -200.0, "closed_at": now})
+    db.set_closed_trades("CS75", trades)
+
+    mm = MoneyManager(broker=_StubBroker([]), db=db, config={})
+    await mm.prefetch_edge_multipliers(config={})
+    
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        side="buy",
+        quantity=10,
+        order_class="multileg",
+        legs=[],
+        price=1.0,
+        width=5.0
+    )
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={}, mm=mm)
+    assert req == 10
+
+async def test_realized_edge_multiplier_db_error():
+    # 4. DB error during stats fetch -> warning logged, multiplier 1.0, entry still sized
+    class BadDB(StubDB):
+        async def get_realized_edge_stats(self, strategy_id, window_days):
+            raise RuntimeError("DB connection failure")
+
+    db = BadDB()
+    mm = MoneyManager(broker=_StubBroker([]), db=db, config={})
+    await mm.prefetch_edge_multipliers(config={})
+    
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        side="buy",
+        quantity=10,
+        order_class="multileg",
+        legs=[],
+        price=1.0,
+        width=5.0
+    )
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={}, mm=mm)
+    assert req == 10
+
+async def test_realized_edge_multiplier_never_increases():
+    # 5. Multiplier never increases size above requested
+    db = StubDB()
+    trades = []
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for _ in range(18):
+        trades.append({"exit_price": 10.0, "pnl": 500.0, "closed_at": now})
+    for _ in range(2):
+        trades.append({"exit_price": 10.0, "pnl": -10.0, "closed_at": now})
+    db.set_closed_trades("CS75", trades)
+
+    mm = MoneyManager(broker=_StubBroker([]), db=db, config={"edge_mult_ceiling": 1.5})
+    await mm.prefetch_edge_multipliers(config={"edge_mult_ceiling": 1.5})
+    
+    action = TradeAction(
+        strategy_id="CS75",
+        symbol="AAPL",
+        side="buy",
+        quantity=10,
+        order_class="multileg",
+        legs=[],
+        price=1.0,
+        width=5.0
+    )
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={"edge_mult_ceiling": 1.5}, mm=mm)
+    assert req == 10

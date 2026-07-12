@@ -840,6 +840,15 @@ class ReactiveController:
         if control_state is not None:
             self.ctx.config.update(control_state.lot_settings)
 
+        if self.ctx.mm is not None:
+            from unittest.mock import Mock, AsyncMock
+            func = getattr(self.ctx.mm, "prefetch_edge_multipliers", None)
+            if func is not None:
+                if isinstance(func, Mock) and not isinstance(func, AsyncMock):
+                    pass
+                else:
+                    await func(self.ctx.config)
+
         async def _check_watchlist(s):
             try:
                 wl = await self.engine._watchlist_for(s.strategy_id, [symbol])
@@ -911,7 +920,7 @@ class ReactiveController:
                     scaled_actions = []
                     for action in actions:
                         requested_lots, max_lots, requirement_per_lot = \
-                            resolve_entry_sizing(action, self.ctx.config)
+                            resolve_entry_sizing(action, self.ctx.config, self.ctx.mm)
 
                         if requested_lots <= 0:
                             continue

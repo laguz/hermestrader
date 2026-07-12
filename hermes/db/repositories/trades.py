@@ -778,6 +778,62 @@ class TradesRepository(Repository):
             row = res.first()
             return row[0] if row else None
 
+    async def get_realized_edge_stats(self, strategy_id: str, window_days: int) -> Dict[str, Any]:
+        """Fetch closed trades for strategy_id over window_days with non-null exit_price.
+        Returns a dict with win_rate, avg_win, avg_loss, and count.
+        """
+        from hermes.db.orm import _compute_realized_pnl
+
+        cutoff = utc_now() - timedelta(days=window_days)
+        async with self.AsyncSession() as session:
+            q = (
+                select(Trade)
+                .filter(
+                    Trade.strategy_id == strategy_id,
+                    Trade.status == "CLOSED",
+                    Trade.closed_at >= cutoff,
+                    Trade.exit_price.isnot(None),
+                )
+            )
+            res = await session.execute(q)
+            rows = res.scalars().all()
+
+            trades_data = []
+            for r in rows:
+                pnl_val = float(r.pnl) if r.pnl is not None else None
+                if pnl_val is None:
+                    pnl_val = _compute_realized_pnl(
+                        entry_credit=r.entry_credit,
+                        entry_debit=r.entry_debit,
+                        exit_price=r.exit_price,
+                        lots=int(r.lots or 0)
+                    )
+                if pnl_val is not None:
+                    trades_data.append({"pnl": pnl_val})
+
+            wins = [t["pnl"] for t in trades_data if t["pnl"] > 0]
+            losses = [t["pnl"] for t in trades_data if t["pnl"] < 0]
+            total_count = len(trades_data)
+
+            if total_count == 0:
+                return {
+                    "win_rate": 0.0,
+                    "avg_win": 0.0,
+                    "avg_loss": 0.0,
+                    "count": 0
+                }
+
+            win_rate = len(wins) / total_count
+            avg_win = sum(wins) / len(wins) if wins else 0.0
+            avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+
+            return {
+                "win_rate": win_rate,
+                "avg_win": avg_win,
+                "avg_loss": avg_loss,
+                "count": total_count
+            }
+
     @staticmethod
     def _trade_dict(r: Trade) -> Dict[str, Any]:
         return {

@@ -101,7 +101,7 @@ class CascadingEngine:
             ipc_client=ipc,
             overseer=overseer,
             mm=mm,
-            risk_engine=PortfolioRiskEngine(broker, db, config),
+            risk_engine=PortfolioRiskEngine(broker, db, config, money_manager=mm),
             strategies=strategies,
             # When True, submit() queues trades for human approval instead of
             # sending them to the broker directly.
@@ -532,6 +532,7 @@ class CascadingEngine:
         # mm may be None on legacy callers that haven't been updated yet;
         # skip rather than crash the entire tick.
         if self.mm is not None:
+            self.mm.clear_edge_stats_cache()
             await self.mm.sync_broker_orders()
         await self.reconcile_orphans()
         mgmt = await self.process_management()
