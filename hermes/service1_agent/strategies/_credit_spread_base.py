@@ -289,7 +289,11 @@ class CreditSpreadStrategy(AbstractStrategy):
 
         best: Optional[Dict[str, Any]] = None
         max_pop_seen = 0.0
-        credit_reject: Optional[Tuple[float, float, float]] = None
+        credit_reject: Optional[Tuple[float, float, float, float]] = None
+
+        from ..execution_quality import estimate_symbol_slippage
+        slippage_min_fills = int(t.get("slippage_min_fills", 10))
+        slippage_adj = await estimate_symbol_slippage(self.db, symbol, slippage_min_fills) or 0.0
 
         pop_target = self._tun(t, "pop_target")
         delta_min = self._tun(t, "short_delta_min")
@@ -355,9 +359,9 @@ class CreditSpreadStrategy(AbstractStrategy):
                 effective_min_credit = round(actual_width * (min_credit / width), 2)
             else:
                 effective_min_credit = min_credit
-            if credit < effective_min_credit:
+            if (credit - slippage_adj) < effective_min_credit:
                 if credit_reject is None:
-                    credit_reject = (credit, effective_min_credit, actual_width)
+                    credit_reject = (credit, effective_min_credit, actual_width, slippage_adj)
                 continue
 
             ev = self._expected_value(pop=pop, credit=credit,
@@ -371,9 +375,10 @@ class CreditSpreadStrategy(AbstractStrategy):
 
         if best is None:
             if credit_reject is not None:
-                credit, effective_min_credit, actual_width = credit_reject
+                credit, effective_min_credit, actual_width, slip_used = credit_reject
+                slip_note = f" (net of ${slip_used:.2f} slippage)" if slip_used else ""
                 self._log(
-                    f"✗ {symbol} {side}: credit ${credit:.2f} < min ${effective_min_credit:.2f} "
+                    f"✗ {symbol} {side}: credit ${credit:.2f}{slip_note} < min ${effective_min_credit:.2f} "
                     f"(width={actual_width:.2f}); skip."
                 )
             else:

@@ -266,6 +266,16 @@ _CATALOG: List[Tunable] = [
        help="Close anything marked at/above the sweep floor; below rides to expiry."),
     _s("ds0_guard_time", "15:50", "DS0", "Guard time (ET HH:MM)",
        help="When the assignment guard starts checking spot vs strikes."),
+
+    # ── EXECUTION (engine-wide: order-working + slippage feedback) ─────────
+    _f("order_work_after_s", 60.0, "EXECUTION", "Reprice age threshold (s)", min=0.0, max=3600.0,
+       help="Age of an unfilled resting entry limit order before it's cancelled and repriced toward the market."),
+    _f("order_work_step", 0.05, "EXECUTION", "Reprice step ($)", min=0.0, max=1.0,
+       help="Price moved toward the market per reprice step."),
+    _i("order_work_max_steps", 2, "EXECUTION", "Max reprice steps", min=0, max=10,
+       help="Reprice steps allowed before the order is cancelled and abandoned for this cycle."),
+    _i("slippage_min_fills", 10, "EXECUTION", "Min fills for slippage adjustment", min=0, max=200,
+       help="Fewer recorded fills than this for a symbol → assume zero slippage adjustment."),
 ]
 
 TUNABLES: Dict[str, Tunable] = {t.key: t for t in _CATALOG}

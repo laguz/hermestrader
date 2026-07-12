@@ -675,6 +675,46 @@ class TradesRepository(Repository):
                 await s.commit()
         return expired
 
+    async def reprice_open_order(self, old_broker_order_id: str, new_broker_order_id: str,
+                                 new_price: float, new_mid: Optional[float] = None) -> bool:
+        """Re-point an OPEN/CLOSING trade's ``broker_order_id`` and limit price
+        after an order-working cancel/replace.
+
+        Unlike the entry-fill path (``TransactionManager.fill`` always mints a
+        fresh ``Trade`` row), a reprice must update the *same* row in place —
+        the position never changed, only the resting order that represents it.
+        """
+        async with self.AsyncSession() as s:
+            q = (select(Trade)
+                 .filter(Trade.broker_order_id == str(old_broker_order_id),
+                         Trade.status.in_(["OPEN", "CLOSING"]))
+                 .order_by(Trade.opened_at.desc())
+                 .limit(1))
+            row = (await s.execute(q)).scalars().first()
+            if row is None:
+                return False
+            row.broker_order_id = str(new_broker_order_id)
+            if row.entry_credit is not None:
+                row.entry_credit = float(new_price)
+            elif row.entry_debit is not None:
+                row.entry_debit = float(new_price)
+            if new_mid is not None:
+                row.mid_at_submit = float(new_mid)
+            await s.commit()
+            return True
+
+    async def recent_entry_slippage(self, symbol: str, limit: int) -> List[float]:
+        """Most-recent recorded ``entry_slippage`` values for ``symbol``, newest
+        first — the raw series ``execution_quality.estimate_symbol_slippage``
+        reduces to a trailing median."""
+        async with self.AsyncSession() as s:
+            q = (select(Trade.entry_slippage)
+                 .filter(Trade.symbol == symbol, Trade.entry_slippage.isnot(None))
+                 .order_by(Trade.opened_at.desc())
+                 .limit(limit))
+            rows = (await s.execute(q)).scalars().all()
+            return [float(v) for v in rows if v is not None]
+
     async def tracked_option_symbols(self) -> set:
         async with self.AsyncSession() as s:
             # CLOSING trades still hold their legs at the broker until the close
