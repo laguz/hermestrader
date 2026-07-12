@@ -94,6 +94,10 @@ class CreditSpreadStrategy(AbstractStrategy):
                 if await self._in_cooldown(symbol):
                     continue
 
+                blackout_days = self._tun(t, "event_blackout_days")
+                if await self.is_event_gated(symbol, blackout_days):
+                    continue
+
                 analysis = await self.broker.analyze_symbol(symbol, period=self.ANALYSIS_PERIOD)
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")

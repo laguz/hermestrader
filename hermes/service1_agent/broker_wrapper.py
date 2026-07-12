@@ -27,6 +27,7 @@ class BrokerCache:
         self.quotes: Dict[str, tuple[float, Dict[str, Any]]] = {}
         self.expirations: Dict[str, tuple[float, List[str]]] = {}
         self.analysis: Dict[tuple[str, str], tuple[float, Dict[str, Any]]] = {}
+        self.corporate_calendar: Dict[str, tuple[float, Dict[str, Any]]] = {}
         self.ttl = int(os.environ.get("HERMES_CACHE_TTL_S", 120))
         self.analysis_ttl = int(os.environ.get("HERMES_ANALYSIS_CACHE_TTL_S", 3600))
 
@@ -72,11 +73,22 @@ class BrokerCache:
     def set_analysis(self, symbol: str, period: str, data: Dict[str, Any], now: float):
         self.analysis[(symbol, period)] = (now, data)
 
+    def get_corporate_calendar(self, symbol: str, now: float) -> Optional[Dict[str, Any]]:
+        if symbol in self.corporate_calendar:
+            ts, val = self.corporate_calendar[symbol]
+            if now - ts < self.analysis_ttl:
+                return val
+        return None
+
+    def set_corporate_calendar(self, symbol: str, data: Dict[str, Any], now: float):
+        self.corporate_calendar[symbol] = (now, data)
+
     def clear(self):
         self.chains.clear()
         self.quotes.clear()
         self.expirations.clear()
         self.analysis.clear()
+        self.corporate_calendar.clear()
 
 
 class AsyncBrokerWrapper:
@@ -170,6 +182,29 @@ class AsyncBrokerWrapper:
                 res = await res
         
         cache.set_analysis(symbol, period, res or {}, now_ts)
+        return res
+
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        cache = self._shared_cache
+        now_ts = self._get_current_timestamp()
+        
+        is_single = "," not in symbols
+        if is_single:
+            cached = cache.get_corporate_calendar(symbols, now_ts)
+            if cached is not None:
+                logger.debug("[CACHE-HIT] get_corporate_calendar(%s)", symbols)
+                return cached
+
+        attr = getattr(self.broker, "get_corporate_calendar")
+        if asyncio.iscoroutinefunction(attr) or inspect.iscoroutinefunction(attr):
+            res = await attr(symbols)
+        else:
+            res = attr(symbols)
+            if inspect.iscoroutine(res) or asyncio.iscoroutine(res):
+                res = await res
+        
+        if is_single:
+            cache.set_corporate_calendar(symbols, res or {}, now_ts)
         return res
 
     async def get_quote(self, symbols: str) -> List[Dict[str, Any]]:

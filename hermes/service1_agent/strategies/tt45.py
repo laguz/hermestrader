@@ -52,6 +52,9 @@ class TastyTrade45(AbstractStrategy):
 
         for symbol in symbols:
             try:
+                if await self.is_event_gated(symbol, t.tt45_event_blackout_days):
+                    continue
+
                 # Always prefer to complete an existing IC over opening a new one.
                 expiry = await self.find_active_ic_expiry(symbol)
                 if not expiry:

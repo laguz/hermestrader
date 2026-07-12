@@ -97,6 +97,8 @@ _CATALOG: List[Tunable] = [
        help="Close when debit ≥ entry credit × this."),
     _i("cs75_time_exit_dte", 8, "CS75", "Time-exit DTE", min=0, max=60,
        help="Force-close at or below this many days to expiry."),
+    _i("cs75_event_blackout_days", 7, "CS75", "Event blackout days", min=0, max=30,
+       help="Number of days to look ahead for earnings and macro events to block entries."),
 
     # ── CS7 (priority 2; ~7 DTE short-cycle spreads) ───────────────────────
     _f("cs7_width", 1.0, "CS7", "Spread width ($)", min=0.5, max=50,
@@ -117,6 +119,8 @@ _CATALOG: List[Tunable] = [
        help="Close when debit ≤ this fraction of spread width."),
     _f("cs7_sl_mult", 3.0, "CS7", "Stop-loss multiple", min=1.0, max=10.0,
        help="Close when debit ≥ entry credit × this."),
+    _i("cs7_event_blackout_days", 7, "CS7", "Event blackout days", min=0, max=30,
+       help="Number of days to look ahead for earnings and macro events to block entries."),
 
     # ── TT45 (priority 3; 16Δ verticals, 30–60 DTE) ────────────────────────
     _f("tt45_width", 5.0, "TT45", "Spread width ($)", min=0.5, max=50,
@@ -133,6 +137,8 @@ _CATALOG: List[Tunable] = [
        help="Force-close at or below this many days to expiry."),
     _f("tt45_challenged_delta", 0.30, "TT45", "Challenged Δ", min=0.0, max=1.0,
        help="Neutralise the side when the short's |Δ| exceeds this."),
+    _i("tt45_event_blackout_days", 7, "TT45", "Event blackout days", min=0, max=30,
+       help="Number of days to look ahead for earnings and macro events to block entries."),
 
     # ── WHEEL (priority 4; CSP → assignment → covered call) ────────────────
     _f("wheel_delta", 0.30, "WHEEL", "Short Δ target", min=0.0, max=1.0,
@@ -147,6 +153,8 @@ _CATALOG: List[Tunable] = [
        help="Latest expiry (days) for wheel legs."),
     _i("wheel_roll_dte", 7, "WHEEL", "Roll DTE", min=0, max=60,
        help="Roll an ITM short below this many days to expiry."),
+    _i("wheel_event_blackout_days", 0, "WHEEL", "Event blackout days", min=0, max=30,
+       help="Number of days to look ahead for earnings and macro events to block entries."),
 
     # ── Lot sizing (catalog visibility only) ───────────────────────────────
     # These keep their existing read path (routes/strategies.py _LOT_SPECS +
@@ -173,6 +181,8 @@ _CATALOG: List[Tunable] = [
        help="Close the position when DTE falls to this."),
     _f("hermesalpha_sl_mult", 2.5, "HERMESALPHA", "Stop-loss multiplier", min=1.0, max=10.0,
        help="Close when debit exceeds credit times this."),
+    _i("hermesalpha_event_blackout_days", 7, "HERMESALPHA", "Event blackout days", min=0, max=30,
+       help="Number of days to look ahead for earnings and macro events to block entries."),
 
     # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
     _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,

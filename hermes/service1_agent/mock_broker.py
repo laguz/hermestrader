@@ -51,6 +51,9 @@ class MockBroker(AbstractBroker):
         today = datetime.utcnow().date()
         return [(today + timedelta(days=d)).strftime("%Y-%m-%d") for d in [7, 14, 21, 28, 45]]
 
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        return {"calendar": []}
+
     def _get_symbol_price(self, symbol: str) -> float:
         """Synchronously get a deterministic current price for a symbol."""
         h = sum(ord(c) for c in symbol)

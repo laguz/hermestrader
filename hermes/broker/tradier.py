@@ -382,6 +382,12 @@ class TradierBroker(AbstractBroker):
             items = [items]
         return items
 
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        return await self._get(
+            "/markets/corporate_calendar",
+            params={"symbols": symbols}
+        )
+
     async def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
         months = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}.get(period, 6)
         end = date.today()

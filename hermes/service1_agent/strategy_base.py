@@ -288,6 +288,32 @@ class AbstractStrategy(ABC):
         # 9:30 AM to 10:30 AM Eastern Time
         return time(9, 30) <= current_time < time(10, 30)
 
+    async def is_event_gated(self, symbol: str, blackout_days: int) -> bool:
+        try:
+            blackout_days = int(blackout_days)
+        except (TypeError, ValueError):
+            blackout_days = 0
+
+        if blackout_days <= 0:
+            return False
+
+        from hermes.event_calendar import is_macro_event_within_days, has_earnings_within_days
+
+        today = self.today()
+        if is_macro_event_within_days(today, blackout_days):
+            self._log(f"⚠️ Entry blocked: macro event (FOMC/CPI) scheduled within {blackout_days} days.")
+            return True
+
+        try:
+            if await has_earnings_within_days(self.broker, symbol, today, blackout_days):
+                self._log(f"⚠️ Entry blocked: {symbol} has earnings scheduled within {blackout_days} days.")
+                return True
+        except Exception as exc:
+            logger.error("[EVENT CALENDAR] Earnings calendar fetch failed for %s: %s", symbol, exc, exc_info=True)
+            self._log(f"⚠️ WARNING: Earnings calendar fetch failed for {symbol} ({exc}). Gate failing open; entry qualification degraded.")
+
+        return False
+
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...
