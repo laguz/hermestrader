@@ -295,29 +295,36 @@ class AbstractStrategy(ABC):
         # 9:30 AM to 10:30 AM Eastern Time
         return time(9, 30) <= current_time < time(10, 30)
 
-    async def is_event_gated(self, symbol: str, blackout_days: int) -> bool:
-        try:
-            blackout_days = int(blackout_days)
-        except (TypeError, ValueError):
-            blackout_days = 0
+    async def is_event_gated(self, symbol: str, earnings_days: int,
+                             macro_days: int = 0) -> bool:
+        # Separate windows: a week around an earnings print is conventional,
+        # but the same lookahead on FOMC+CPI would black out ~40% of the year.
+        def _days(raw) -> int:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 0
 
-        if blackout_days <= 0:
+        earnings_days = _days(earnings_days)
+        macro_days = _days(macro_days)
+        if earnings_days <= 0 and macro_days <= 0:
             return False
 
         from hermes.event_calendar import is_macro_event_within_days, has_earnings_within_days
 
         today = self.today()
-        if is_macro_event_within_days(today, blackout_days):
-            self._log(f"⚠️ Entry blocked: macro event (FOMC/CPI) scheduled within {blackout_days} days.")
+        if macro_days > 0 and is_macro_event_within_days(today, macro_days):
+            self._log(f"⚠️ Entry blocked: macro event (FOMC/CPI) scheduled within {macro_days} days.")
             return True
 
-        try:
-            if await has_earnings_within_days(self.broker, symbol, today, blackout_days):
-                self._log(f"⚠️ Entry blocked: {symbol} has earnings scheduled within {blackout_days} days.")
-                return True
-        except Exception as exc:
-            logger.error("[EVENT CALENDAR] Earnings calendar fetch failed for %s: %s", symbol, exc, exc_info=True)
-            self._log(f"⚠️ WARNING: Earnings calendar fetch failed for {symbol} ({exc}). Gate failing open; entry qualification degraded.")
+        if earnings_days > 0:
+            try:
+                if await has_earnings_within_days(self.broker, symbol, today, earnings_days):
+                    self._log(f"⚠️ Entry blocked: {symbol} has earnings scheduled within {earnings_days} days.")
+                    return True
+            except Exception as exc:
+                logger.error("[EVENT CALENDAR] Earnings calendar fetch failed for %s: %s", symbol, exc, exc_info=True)
+                self._log(f"⚠️ WARNING: Earnings calendar fetch failed for {symbol} ({exc}). Gate failing open; entry qualification degraded.")
 
         return False
 

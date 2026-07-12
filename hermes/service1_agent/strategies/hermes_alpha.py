@@ -76,7 +76,8 @@ class HermesAlpha(CreditSpreadStrategy):
                 
                 t = await self.load_tunables()
                 blackout_days = t.hermesalpha_event_blackout_days
-                if await self.is_event_gated(symbol, blackout_days):
+                macro_days = t.hermesalpha_macro_blackout_days
+                if await self.is_event_gated(symbol, blackout_days, macro_days):
                     continue
 
                 min_ivr = t.hermesalpha_min_ivr
