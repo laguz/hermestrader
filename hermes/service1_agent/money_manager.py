@@ -56,6 +56,15 @@ def resolve_entry_sizing(action: TradeAction,
     if action.order_class == "multileg" and action.legs:
         requested_lots = action.legs[0].get("quantity", 1)
 
+    throttle_mult = action.strategy_params.get("throttle_mult")
+    if throttle_mult is not None:
+        try:
+            m = float(throttle_mult)
+            m = min(1.0, max(0.0, m))
+            requested_lots = int(requested_lots * m)
+        except (ValueError, TypeError):
+            pass
+
     strat_id = action.strategy_id.upper()
     _raw_max_lots = config.get(f"{strat_id.lower()}_max_lots")
     max_lots = (int(_raw_max_lots) if _raw_max_lots is not None

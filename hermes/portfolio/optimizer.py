@@ -50,6 +50,16 @@ class PortfolioOptimizer:
             risk_per_lot = max(0.0, (width - credit) * 100.0)
             requested_lots = action.quantity
             
+            # Apply throttle multiplier if present in strategy_params
+            throttle_mult = action.strategy_params.get("throttle_mult")
+            if throttle_mult is not None:
+                try:
+                    m = float(throttle_mult)
+                    m = min(1.0, max(0.0, m))
+                    requested_lots = int(requested_lots * m)
+                except (ValueError, TypeError):
+                    pass
+            
             # Simple Kelly-like adjustment
             pop = action.strategy_params.get("pop")
             if pop is None:
@@ -65,6 +75,7 @@ class PortfolioOptimizer:
                 continue
 
             requested_bp = risk_per_lot * requested_lots
+            scaled_lots = requested_lots
             if requested_bp > max_symbol_bp:
                 scaled_lots = int(max_symbol_bp // risk_per_lot) if risk_per_lot > 0 else requested_lots
                 scaled_lots = max(0, min(requested_lots, scaled_lots))
@@ -73,10 +84,11 @@ class PortfolioOptimizer:
                         "[PORTFOLIO-OPTIMIZER] Scaled %s due to concentration limit: %d -> %d",
                         sym, requested_lots, scaled_lots
                     )
-                    action.quantity = scaled_lots
-                    if action.legs:
-                        for leg in action.legs:
-                            leg["quantity"] = scaled_lots
+            
+            action.quantity = scaled_lots
+            if action.legs:
+                for leg in action.legs:
+                    leg["quantity"] = scaled_lots
 
             if action.quantity > 0:
                 optimized_actions.append(action)
