@@ -255,6 +255,18 @@ class PipelineController:
         unique_watchlist = list(dict.fromkeys(watchlist))
         max_per_tick = int(ctx.config.get("max_orders_per_tick", 5))
 
+        # Push the operator's lot settings into the shared config BEFORE the
+        # strategies run: they size entries from self.config (the same dict),
+        # so syncing after the gather made a lot change invisible to
+        # strategy-side sizing until the NEXT tick (an hour on live) while the
+        # risk engine already saw it — the operator's "sometimes it doesn't
+        # change" report. control_state owns the values (event-updated, with
+        # the clock-tick DB backstop). Without this sync at all, risk_engine
+        # falls back to a hard-coded 1-lot cap and the bot silently
+        # under-trades, ignoring cs*/tt*/wheel/hermesalpha _max_lots entirely.
+        if ctx.control_state is not None:
+            ctx.config.update(ctx.control_state.lot_settings)
+
         # Gather proposed actions across all strategies concurrently
         async def _run_strategy_entries(s):
             try:
@@ -269,15 +281,6 @@ class PipelineController:
         all_proposed_actions = []
         for _s, actions in results:
             all_proposed_actions.extend(actions)
-
-        # Keep the risk engine's per-strategy lot caps in sync with the
-        # operator's lot settings. control_state owns them (event-updated, with
-        # the clock-tick DB backstop); the risk engine reads them from the shared
-        # config dict, so push them across here before evaluation. Without this,
-        # risk_engine falls back to a hard-coded 1-lot cap and the bot silently
-        # under-trades, ignoring cs*/tt*/wheel _max_lots entirely.
-        if ctx.control_state is not None:
-            ctx.config.update(ctx.control_state.lot_settings)
 
         # Delegate validation, scaling, and risk filtering to risk engine
         validated_actions = await ctx.risk_engine.evaluate_and_scale(all_proposed_actions)

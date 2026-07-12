@@ -833,6 +833,13 @@ class ReactiveController:
 
     async def process_reactive_entries(self, symbol: str) -> None:
         """Executes entries reactively for a single symbol that crossed support/resistance."""
+        # Same lot-settings sync as the tick path's process_entries: this path
+        # fires between clock ticks, so without it a lot change stays invisible
+        # to reactive sizing until the next full tick.
+        control_state = getattr(self.ctx, "control_state", None)
+        if control_state is not None:
+            self.ctx.config.update(control_state.lot_settings)
+
         async def _check_watchlist(s):
             try:
                 wl = await self.engine._watchlist_for(s.strategy_id, [symbol])
