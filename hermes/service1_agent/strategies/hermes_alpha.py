@@ -171,9 +171,15 @@ class HermesAlpha(CreditSpreadStrategy):
         credit = self.short_credit(short_leg, long_leg)
         min_credit_pct = float(self.config.get("hermesalpha_min_credit_pct", 0.20))
         min_credit = round(actual_width * min_credit_pct, 2)
-        if credit < min_credit:
+
+        from ..execution_quality import estimate_symbol_slippage
+        slippage_min_fills = int(self.config.get("slippage_min_fills", 10))
+        slippage_adj = await estimate_symbol_slippage(self.db, symbol, slippage_min_fills) or 0.0
+
+        if (credit - slippage_adj) < min_credit:
+            slip_note = f" (net of ${slippage_adj:.2f} slippage)" if slippage_adj else ""
             self._log(
-                f"✗ {symbol} {side}: credit ${credit:.2f} < min ${min_credit:.2f} "
+                f"✗ {symbol} {side}: credit ${credit:.2f}{slip_note} < min ${min_credit:.2f} "
                 f"(width={actual_width:.2f}); skip."
             )
             return None

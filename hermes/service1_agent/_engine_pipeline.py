@@ -36,6 +36,21 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = logging.getLogger("hermes.agent.core")
 
+# Order-working: resting-order statuses that count as "still unfilled" —
+# deliberately excludes "partially_filled" (cancelling a partial fill is a
+# different, more delicate operation than working a stale untouched order).
+_ORDER_WORK_ACTIVE_STATUSES = {"open", "pending", "submitted", "accepted", "calculated"}
+
+# Per-strategy min-credit-pct tunable to derive the worst-price floor from.
+# CS75 is handled separately (DTE-banded far/near). Strategies absent here
+# (TT45, WHEEL, DS0) fall back to a floor of half the order's original price
+# — DS0 is additionally excluded outright (see ``work_stale_entry_orders``,
+# its ``ds0_open_price`` tunable is documented "never repriced or chased").
+_ORDER_WORK_MIN_CREDIT_KEYS = {
+    "CS7": "cs7_min_credit_pct",
+    "HERMESALPHA": "hermesalpha_min_credit_pct",
+}
+
 
 class PipelineController:
     """The agent tick pipeline — one method per phase body.
@@ -53,6 +68,13 @@ class PipelineController:
         # Shared dependency surface read through the context; ``self.engine`` is
         # kept for cross-phase orchestration calls + circuit-breaker counters.
         self.ctx = engine.ctx
+        # In-memory order-working state (broker_order_id -> {first_seen, steps,
+        # original_price}), mirroring the ``_tracked_orders`` order-monitor
+        # precedent: process-lifetime only, reset on restart. A restart simply
+        # restarts the age clock for any still-resting order — the floor/
+        # max-steps guards in ``work_stale_entry_orders`` bound the damage
+        # regardless, so this doesn't need to survive a crash.
+        self._order_work_state: Dict[str, Dict[str, Any]] = {}
 
     # 1
     async def sync_positions(self) -> tuple[List[Dict[str, Any]], set[str]]:
@@ -347,6 +369,223 @@ class PipelineController:
         except Exception:
             logger.debug("entry-feature snapshot failed for %s", a.symbol,
                          exc_info=True)
+
+    @staticmethod
+    def _order_work_floor(strategy_id: str, legs: List[Dict[str, Any]], t) -> Optional[float]:
+        """Worst-price (lowest credit) this strategy's resting order may be
+        stepped down to, derived from strike width × the strategy's own
+        min-credit-pct tunable. ``None`` when the strategy has no such
+        tunable or the width can't be read off the legs' OCC symbols."""
+        from hermes.common import OCC_RE
+        strikes: List[float] = []
+        for leg in legs:
+            sym = leg.get("option_symbol") or leg.get("symbol")
+            if not sym:
+                continue
+            m = OCC_RE.match(str(sym))
+            if m:
+                strikes.append(int(m.group(4)) / 1000.0)
+        if len(strikes) < 2:
+            return None
+        width = abs(strikes[0] - strikes[1])
+        if width <= 0:
+            return None
+        if strategy_id == "CS75":
+            pct = t.get("cs75_min_credit_pct_far")
+            if pct is None:
+                pct = t.get("cs75_min_credit_pct_near")
+        else:
+            key = _ORDER_WORK_MIN_CREDIT_KEYS.get(strategy_id)
+            pct = t.get(key) if key else None
+        if pct is None:
+            return None
+        return round(width * float(pct), 2)
+
+    @staticmethod
+    def _build_order_work_replacement(order: Dict[str, Any], strategy_id: str,
+                                      new_price: float) -> TradeAction:
+        legs = order.get("legs") or order.get("leg") or []
+        if isinstance(legs, dict):
+            legs = [legs]
+        order_class = str(order.get("class") or ("multileg" if len(legs) > 1 else "option"))
+        return TradeAction(
+            strategy_id=strategy_id,
+            symbol=str(order.get("symbol") or ""),
+            order_class=order_class,
+            legs=legs,
+            price=new_price,
+            side=str(order.get("side") or "sell"),
+            quantity=int(order.get("quantity") if order.get("quantity") is not None else 1),
+            duration=str(order.get("duration") or "day"),
+            order_type=str(order.get("type") or "credit"),
+            tag=str(order.get("tag") or ""),
+            strategy_params={"order_work_reprice": True},
+        )
+
+    async def work_stale_entry_orders(self) -> None:
+        """Cancel-and-reprice unfilled ENTRY limit orders that have rested
+        past ``order_work_after_s``, stepping the credit down toward the
+        market by ``order_work_step`` per pass, up to ``order_work_max_steps``
+        — after which the order is cancelled and abandoned for this cycle
+        rather than resubmitted.
+
+        Cancel-then-place, never blind resubmission: ``cancel_order`` is
+        awaited and any failure (most likely "already filled") aborts the
+        reprice for that order without ever calling
+        ``place_order_from_action`` — the same cancel-or-abort contract
+        ``_execute_or_queue`` uses for ``replace_broker_order_id``. Unlike
+        that path, a reprice never mints a new ``Trade`` row (entries always
+        would via ``TransactionManager.fill``); instead the existing OPEN
+        row is re-pointed to the new broker order id via
+        ``TradesRepository.reprice_open_order``.
+
+        Tracking (age + step count) is process-lifetime in-memory state, the
+        same durability tier as the order monitor's ``_tracked_orders`` — see
+        ``__init__``.
+        """
+        ctx = self.ctx
+        from hermes.market_hours import should_block_trades
+        blocked, _ = should_block_trades()
+        if blocked:
+            return
+
+        from .tunables import resolve as _resolve_tunables
+        from hermes.common import strategy_id_from_tag, is_close_tag
+        import time as _time
+
+        t = await _resolve_tunables(ctx.db, ctx.config)
+        after_s = float(t.get("order_work_after_s", 60.0))
+        step = float(t.get("order_work_step", 0.05))
+        max_steps = int(t.get("order_work_max_steps", 2))
+
+        try:
+            orders = await ctx.broker.get_orders() or []
+        except Exception:
+            logger.exception("[ORDER-WORK] get_orders failed")
+            return
+
+        now = _time.monotonic()
+        seen_oids: set = set()
+        for order in orders:
+            status = str(order.get("status", "")).lower()
+            if status not in _ORDER_WORK_ACTIVE_STATUSES:
+                continue
+            tag = str(order.get("tag") or "")
+            strategy_id = strategy_id_from_tag(tag)
+            if not strategy_id or is_close_tag(tag):
+                continue
+            # DS0's entry is documented (ds0_open_price) as "never repriced
+            # or chased" — its 0DTE day-limit is a deliberate one-shot price.
+            if strategy_id == "DS0":
+                continue
+            oid = str(order.get("id") or order.get("order_id") or "")
+            if not oid:
+                continue
+            seen_oids.add(oid)
+
+            state = self._order_work_state.get(oid)
+            if state is None:
+                try:
+                    original_price = float(order.get("price"))
+                except (TypeError, ValueError):
+                    original_price = None
+                self._order_work_state[oid] = {
+                    "first_seen": now, "steps": 0, "original_price": original_price,
+                }
+                continue
+
+            if now - state["first_seen"] < after_s:
+                continue
+
+            symbol = str(order.get("symbol") or "")
+            legs = order.get("legs") or order.get("leg") or []
+            if isinstance(legs, dict):
+                legs = [legs]
+            try:
+                old_price = float(order.get("price"))
+            except (TypeError, ValueError):
+                old_price = None
+
+            abandon_reason = None
+            new_price = None
+            if state["steps"] >= max_steps:
+                abandon_reason = f"max_steps={max_steps} reached"
+            elif old_price is None:
+                abandon_reason = "order has no readable price"
+            else:
+                floor = self._order_work_floor(strategy_id, legs, t)
+                if floor is None and state.get("original_price") is not None:
+                    floor = max(0.01, round(state["original_price"] * 0.5, 2))
+                floor = 0.01 if floor is None else max(0.01, floor)
+                candidate = round(max(floor, old_price - step), 2)
+                if candidate >= old_price - 1e-9:
+                    abandon_reason = f"at worst-price floor ${floor:.2f}"
+                else:
+                    new_price = candidate
+
+            if abandon_reason is not None:
+                try:
+                    await ctx.broker.cancel_order(oid)
+                except Exception as exc:
+                    logger.info("[ORDER-WORK] abandon-cancel failed for %s %s "
+                               "order %s (likely filled): %s",
+                               strategy_id, symbol, oid, exc)
+                else:
+                    await ctx.db.logs.write_log(
+                        strategy_id,
+                        f"[ORDER-WORK] {symbol} order {oid} abandoned after "
+                        f"{state['steps']} step(s) — {abandon_reason}",
+                    )
+                self._order_work_state.pop(oid, None)
+                continue
+
+            try:
+                await ctx.broker.cancel_order(oid)
+            except Exception as exc:
+                logger.info("[ORDER-WORK] cancel failed for %s %s order %s "
+                           "(likely filled); replacement NOT placed: %s",
+                           strategy_id, symbol, oid, exc)
+                self._order_work_state.pop(oid, None)
+                continue
+
+            new_action = self._build_order_work_replacement(order, strategy_id, new_price)
+            new_mid = await capture_submission_mid(ctx.broker, new_action)
+            try:
+                resp = await ctx.broker.place_order_from_action(new_action)
+            except Exception as exc:
+                logger.warning("[ORDER-WORK] replacement placement failed for "
+                               "%s %s order %s: %s", strategy_id, symbol, oid, exc)
+                await ctx.db.logs.write_log(
+                    strategy_id,
+                    f"[ORDER-WORK] {symbol} order {oid} cancelled but "
+                    f"replacement failed: {exc}",
+                )
+                self._order_work_state.pop(oid, None)
+                continue
+
+            new_oid = str((resp.get("order") or {}).get("id") or resp.get("order_id") or "")
+            self._order_work_state.pop(oid, None)
+            new_steps = state["steps"] + 1
+            if new_oid:
+                relinked = await ctx.db.trades.reprice_open_order(oid, new_oid, new_price, new_mid)
+                self._order_work_state[new_oid] = {
+                    "first_seen": now, "steps": new_steps,
+                    "original_price": state.get("original_price"),
+                }
+                # The replacement was just placed this pass, so it can't be in
+                # ``orders`` (fetched before the loop started) — exempt it from
+                # the stale-tracking prune below or it's dropped immediately.
+                seen_oids.add(new_oid)
+                await ctx.db.logs.write_log(
+                    strategy_id,
+                    f"[ORDER-WORK] {symbol} repriced order {oid}->{new_oid} "
+                    f"{old_price:.2f}->{new_price:.2f} step={new_steps} "
+                    f"relinked={relinked}",
+                )
+
+        stale_oids = set(self._order_work_state) - seen_oids
+        for oid in stale_oids:
+            self._order_work_state.pop(oid, None)
 
     async def submit(self, actions: Iterable[TradeAction],
                action_type: str = "entry") -> None:
@@ -848,6 +1087,13 @@ class PipelineController:
                     await ctx.db.logs.write_log("ENGINE", f"auto-expired {expired_approvals} stale approval(s) past deadline")
             except Exception as exc:
                 logger.warning("expire_stale_approvals failed: %s", exc)
+
+            # 4a-2. Work stale unfilled entry orders (cancel + reprice toward
+            # market, up to a step cap, then abandon).
+            try:
+                await self.work_stale_entry_orders()
+            except Exception as exc:
+                logger.warning("work_stale_entry_orders failed: %s", exc)
 
             # 4b. LLM client liveness check
             if ctx.overseer is not None:
