@@ -284,6 +284,16 @@ _CATALOG: List[Tunable] = [
        help="Minimum multiplier allowed to shrink size for a losing strategy."),
     _f("edge_mult_ceiling", 1.0, "EXECUTION", "Kelly edge mult ceiling", min=0.0, max=2.0,
        help="Maximum multiplier allowed to scale size."),
+
+    # ── PORTFOLIO (portfolio-wide ceilings and risk scaling) ───────────────
+    _f("portfolio_max_net_vega", 999999.0, "PORTFOLIO", "Max Net Vega", min=0.0, max=9999999.0,
+       help="Maximum absolute portfolio net vega per $100k of equity. High default is inert."),
+    _f("portfolio_max_short_delta", 999999.0, "PORTFOLIO", "Max Short Delta", min=0.0, max=9999999.0,
+       help="Maximum portfolio net short delta limit. High default is inert."),
+    _f("regime_scale_iv_pct", 80.0, "PORTFOLIO", "Regime Scale IV Pct", min=0.0, max=100.0,
+       help="IV percentile threshold above which regime gross scaling applies."),
+    _f("regime_gross_mult", 1.0, "PORTFOLIO", "Regime Gross Mult", min=0.0, max=1.0,
+       help="Multiplier applied to total entry size when IV is high. 1.0 is off."),
 ]
 
 TUNABLES: Dict[str, Tunable] = {t.key: t for t in _CATALOG}

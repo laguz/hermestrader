@@ -234,6 +234,7 @@ class StubDB:
 
         self.pending_orders: List[Any] = []
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
+        self._greeks_snapshots: List[Dict[str, Any]] = []
         self._prediction_ledger: List[Any] = []
         self._implied_vols: Dict[str, List[Tuple[date, float]]] = {}
         self._closing_trades: Dict[str, List[Dict[str, Any]]] = {}
@@ -431,6 +432,29 @@ class StubDB:
 
     async def equity_position(self, symbol: str) -> int:
         return 0
+
+    async def save_greeks_snapshot(self, net_delta: float, net_vega: float, net_theta: float, ts: Optional[datetime] = None) -> None:
+        if ts is None:
+            ts = datetime.utcnow()
+        self._greeks_snapshots.append({
+            "ts": ts,
+            "net_delta": net_delta,
+            "net_vega": net_vega,
+            "net_theta": net_theta
+        })
+
+    async def get_latest_greeks_snapshot(self) -> Optional[Dict[str, Any]]:
+        if not self._greeks_snapshots:
+            return None
+        sorted_snaps = sorted(self._greeks_snapshots, key=lambda s: s["ts"], reverse=True)
+        row = sorted_snaps[0]
+        return {
+            "ts": row["ts"].isoformat() if row["ts"] else None,
+            "net_delta": float(row["net_delta"]),
+            "net_vega": float(row["net_vega"]),
+            "net_theta": float(row["net_theta"]),
+        }
+
 
     async def has_pending_approval(self, strategy_id: str, symbol: str, side: str, expiry: str) -> bool:
         for app in self.approvals:

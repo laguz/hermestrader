@@ -43,6 +43,7 @@ SQL_ONLY_TABLES = {"bars_daily", "bars_intraday"}
 # the addendum. Keep this in lock-step with the time-series tables in orm.py.
 HYPERTABLE_ORM_TABLES = {
     "trades", "pending_orders", "bot_logs", "ai_decisions", "predictions", "implied_volatility",
+    "portfolio_greeks_snapshots",
 }
 
 
