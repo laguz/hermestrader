@@ -64,7 +64,8 @@ def apply_throttle_mult(action: TradeAction, requested_lots: int) -> int:
 
 
 def resolve_entry_sizing(action: TradeAction,
-                         config: Dict[str, Any]) -> tuple[int, int, float]:
+                         config: Dict[str, Any],
+                         mm: Optional[MoneyManager] = None) -> tuple[int, int, float]:
     """(requested_lots, max_lots, requirement_per_lot) for one entry action.
 
     Single source of the per-action sizing preamble used by both the tick-path
@@ -79,6 +80,26 @@ def resolve_entry_sizing(action: TradeAction,
         requested_lots = action.legs[0].get("quantity", 1)
 
     requested_lots = apply_throttle_mult(action, requested_lots)
+
+    # Apply realized-edge multiplier
+    if mm is not None:
+        strat_id = action.strategy_id.upper()
+        stats = mm._edge_stats.get(strat_id)
+        if stats is not None:
+            win_rate, avg_win, avg_loss, count, edge_mult = stats
+            if edge_mult != 1.0 and requested_lots > 0:
+                original_lots = requested_lots
+                requested_lots = int(requested_lots * edge_mult)
+                if requested_lots == 0:
+                    logger.info(
+                        "[MM] Strategy %s entry for %s skipped: scaled to 0 by realized-edge multiplier %.2f (original lots: %d)",
+                        strat_id, action.symbol, edge_mult, original_lots
+                    )
+                else:
+                    logger.info(
+                        "[MM] Strategy %s entry for %s scaled by realized-edge multiplier %.2f: %d -> %d (win_rate=%.2f, avg_win=%.2f, avg_loss=%.2f, count=%d)",
+                        strat_id, action.symbol, edge_mult, original_lots, requested_lots, win_rate, avg_win, avg_loss, count
+                    )
 
     strat_id = action.strategy_id.upper()
     _raw_max_lots = config.get(f"{strat_id.lower()}_max_lots")
@@ -120,6 +141,65 @@ class MoneyManager:
         # expiry_iso is YYYY-MM-DD; an empty string is used when the OCC
         # symbol cannot be parsed so the entry is still countable globally.
         self._broker_order_counts: Dict[Tuple[str, str, str, str], int] = {}
+        # Map strategy_id -> (win_rate, avg_win, avg_loss, count, edge_mult)
+        self._edge_stats: Dict[str, Tuple[float, float, float, int, float]] = {}
+
+    def clear_edge_stats_cache(self) -> None:
+        self._edge_stats = {}
+
+    def get_cached_edge_multiplier(self, strategy_id: str) -> float:
+        stats = self._edge_stats.get(strategy_id.upper())
+        return stats[4] if stats else 1.0
+
+    async def prefetch_edge_multipliers(self, config: Dict[str, Any]) -> None:
+        """Prefetch edge multipliers for all strategies and cache them."""
+        if self._edge_stats:
+            return
+
+        from .tunables import resolve
+        try:
+            tunables = await resolve(self.db, config, group="EXECUTION")
+            window_days = int(tunables.get("edge_window_days", 90))
+            min_trades = int(tunables.get("edge_min_trades", 15))
+            floor = float(tunables.get("edge_mult_floor", 0.25))
+            ceiling = float(tunables.get("edge_mult_ceiling", 1.0))
+        except Exception as exc:
+            logger.warning("[MM] Failed to resolve EXECUTION tunables, using defaults: %s", exc)
+            window_days = 90
+            min_trades = 15
+            floor = 0.25
+            ceiling = 1.0
+
+        strategies = ["CS7", "CS75", "TT45", "WHEEL", "HERMESALPHA", "DS0"]
+        self._edge_stats = {}
+        for strat in strategies:
+            try:
+                stats = await self.db.trades.get_realized_edge_stats(strat, window_days)
+                count = stats.get("count", 0)
+                if count < min_trades:
+                    mult = 1.0
+                    self._edge_stats[strat] = (0.0, 0.0, 0.0, count, mult)
+                else:
+                    win_rate = stats.get("win_rate", 0.0)
+                    avg_win = stats.get("avg_win", 0.0)
+                    avg_loss = stats.get("avg_loss", 0.0)
+                    if avg_loss == 0.0:
+                        k = 0.0
+                    elif avg_win == 0.0:
+                        k = -1.0
+                    else:
+                        b = avg_win / avg_loss
+                        k = win_rate - (1.0 - win_rate) / b
+
+                    mult = 1.0 + k
+                    mult = max(floor, min(min(1.0, ceiling), mult))
+                    self._edge_stats[strat] = (win_rate, avg_win, avg_loss, count, mult)
+            except Exception as exc:
+                logger.warning(
+                    "[MM] Failed to fetch/calculate edge stats for %s (degraded to 1.0): %s",
+                    strat, exc
+                )
+                self._edge_stats[strat] = (0.0, 0.0, 0.0, 0, 1.0)
 
     # OCC option symbol regex lives in hermes.common so DB-side parsing in
     # record_pending_order shares one definition with this matcher.

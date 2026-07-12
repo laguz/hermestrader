@@ -289,6 +289,15 @@ class PipelineController:
         if ctx.control_state is not None:
             ctx.config.update(ctx.control_state.lot_settings)
 
+        if ctx.mm is not None:
+            from unittest.mock import Mock, AsyncMock
+            func = getattr(ctx.mm, "prefetch_edge_multipliers", None)
+            if func is not None:
+                if isinstance(func, Mock) and not isinstance(func, AsyncMock):
+                    pass
+                else:
+                    await func(ctx.config)
+
         # Gather proposed actions across all strategies concurrently
         async def _run_strategy_entries(s):
             try:

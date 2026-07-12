@@ -276,6 +276,14 @@ _CATALOG: List[Tunable] = [
        help="Reprice steps allowed before the order is cancelled and abandoned for this cycle."),
     _i("slippage_min_fills", 10, "EXECUTION", "Min fills for slippage adjustment", min=0, max=200,
        help="Fewer recorded fills than this for a symbol → assume zero slippage adjustment."),
+    _i("edge_window_days", 90, "EXECUTION", "Kelly edge window days", min=1, max=365,
+       help="Trailing window (days) of closed trades to calculate strategy realized edge."),
+    _i("edge_min_trades", 15, "EXECUTION", "Kelly edge min trades", min=1, max=200,
+       help="Minimum closed trades in-window required to scale entry sizing."),
+    _f("edge_mult_floor", 0.25, "EXECUTION", "Kelly edge mult floor", min=0.0, max=1.0,
+       help="Minimum multiplier allowed to shrink size for a losing strategy."),
+    _f("edge_mult_ceiling", 1.0, "EXECUTION", "Kelly edge mult ceiling", min=0.0, max=2.0,
+       help="Maximum multiplier allowed to scale size."),
 ]
 
 TUNABLES: Dict[str, Tunable] = {t.key: t for t in _CATALOG}

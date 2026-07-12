@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from hermes.common import OCC_RE
 from hermes.service1_agent.trade_action import TradeAction
 from hermes.broker import BrokerAdapter
 from hermes.portfolio.safety_gateway import SafetyGateway
-from .money_manager import resolve_entry_sizing
+from .money_manager import resolve_entry_sizing, MoneyManager
 
 logger = logging.getLogger("hermes.agent.risk_engine")
 
@@ -31,11 +31,12 @@ def _action_side_type(action: TradeAction) -> str:
 
 
 class PortfolioRiskEngine:
-    def __init__(self, broker: BrokerAdapter, db, config: Dict[str, Any]):
+    def __init__(self, broker: BrokerAdapter, db, config: Dict[str, Any], money_manager: Optional[MoneyManager] = None):
         from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
         self.broker = AsyncBrokerWrapper(broker, db)
         self.db = db
         self.config = config or {}
+        self.mm = money_manager
         self._broker_order_counts: Dict[tuple[str, str, str, str], int] = {}
 
     async def _sync_broker_orders(self) -> None:
@@ -129,7 +130,7 @@ class PortfolioRiskEngine:
 
         for action in sorted_actions:
             requested_lots, max_lots, requirement_per_lot = \
-                resolve_entry_sizing(action, self.config)
+                resolve_entry_sizing(action, self.config, self.mm)
 
             if requested_lots <= 0:
                 continue
