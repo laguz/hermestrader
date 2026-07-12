@@ -95,7 +95,8 @@ class CreditSpreadStrategy(AbstractStrategy):
                     continue
 
                 blackout_days = self._tun(t, "event_blackout_days")
-                if await self.is_event_gated(symbol, blackout_days):
+                macro_days = self._tun(t, "macro_blackout_days")
+                if await self.is_event_gated(symbol, blackout_days, macro_days):
                     continue
 
                 min_ivr = self._tun(t, "min_ivr")

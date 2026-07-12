@@ -52,12 +52,14 @@ class TastyTrade45(AbstractStrategy):
 
         for symbol in symbols:
             try:
-                if await self.is_event_gated(symbol, t.tt45_event_blackout_days):
-                    continue
-
-                # Always prefer to complete an existing IC over opening a new one.
+                # Always prefer to complete an existing IC over opening a new
+                # one. Completion balances a one-sided book, so the event gate
+                # applies only to brand-new condors.
                 expiry = await self.find_active_ic_expiry(symbol)
                 if not expiry:
+                    if await self.is_event_gated(symbol, t.tt45_event_blackout_days,
+                                                 t.tt45_macro_blackout_days):
+                        continue
                     expiry = await self.find_expiry_in_dte_range(symbol, entry_min_dte, entry_max_dte, prefer="max")
 
                 if not expiry:

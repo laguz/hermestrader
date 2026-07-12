@@ -961,6 +961,48 @@ class PipelineController:
                         f"bar ingest: {_ingested}/{len(_bar_ingest_watchlist)} symbols refreshed"
                     )
 
+            # 8b. Daily ATM-IV snapshot — feeds implied_volatility for IV-rank
+            # gating. Runs unconditionally (not from inside is_ivr_gated) so
+            # history accumulates while the *_min_ivr gates are off and without
+            # selection bias toward days a gate passed. Market-open only: the
+            # chain greeks are stale/unusable off-hours.
+            _IV_SNAPSHOT_KEY = "iv_snapshot_last_run"
+            if current_watchlist and mkt["is_open"]:
+                _should_snapshot_iv = False
+                try:
+                    _last_iv_raw = await ctx.db.settings.get_setting(_IV_SNAPSHOT_KEY)
+                    if not _last_iv_raw:
+                        _should_snapshot_iv = True
+                    else:
+                        try:
+                            _s = _last_iv_raw
+                            _last_iv_dt = datetime.fromisoformat(
+                                _s[:-1] + "+00:00" if _s.endswith("Z") else _s
+                            )
+                            if not _last_iv_dt.tzinfo:
+                                _last_iv_dt = _last_iv_dt.replace(tzinfo=timezone.utc)
+                            _iv_age_h = (datetime.now(timezone.utc) - _last_iv_dt).total_seconds() / 3600
+                            _should_snapshot_iv = _iv_age_h >= 20
+                        except ValueError:
+                            _should_snapshot_iv = True
+                except Exception as exc:
+                    logger.warning("Failed to check IV snapshot age: %s", exc)
+                    _should_snapshot_iv = True
+
+                if _should_snapshot_iv:
+                    try:
+                        from hermes.market_hours import ET
+                        from .iv_tracker import snapshot_daily_iv
+                        _iv_today = datetime.now(ET).date()
+                        _iv_saved = await snapshot_daily_iv(
+                            ctx.db, ctx.broker, current_watchlist, _iv_today)
+                        await ctx.db.settings.set_setting(
+                            _IV_SNAPSHOT_KEY, datetime.now(timezone.utc).isoformat())
+                        logger.info("IV snapshot complete: %d/%d symbols",
+                                    _iv_saved, len(current_watchlist))
+                    except Exception as exc:
+                        logger.warning("Daily IV snapshot failed: %s", exc)
+
             # 9. Chart analysis
             _CHART_ANALYSIS_KEY = "chart_analysis_last_run"
             _CHART_ANALYSIS_INTERVAL_DAYS = 7

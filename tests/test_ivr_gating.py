@@ -159,10 +159,10 @@ async def test_ivr_degraded_path_fails_open_no_history():
 
     actions = await strat.execute_entries(["AAPL"])
     assert len(actions) > 0
-    # Should save today's observation to help build future history
+    # The gate is read-only: history comes from the pipeline's daily IV
+    # snapshot, never from inside the gate (selection-bias fix).
     history = await db.get_implied_vol_history("AAPL")
-    assert len(history) == 1
-    assert abs(history[0][1] - 0.35) < 1e-4
+    assert len(history) == 0
 
 
 @pytest.mark.asyncio
@@ -255,8 +255,81 @@ async def test_current_vol_persisted():
     broker.analyze_symbol = mock_analyze_symbol
 
     actions = await strat.execute_entries(["AAPL"])
-    
+
     # Setting should be saved in DB
     val = await db.settings.get_setting("ml_current_vol__AAPL")
     assert val is not None
     assert float(val) == 0.45
+
+
+# ── DAILY IV SNAPSHOT (pipeline heartbeat) ─────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_daily_iv_snapshot_persists_history():
+    today_dt = datetime(2026, 7, 25, 10, 0, 0)
+    strat, broker, db = _build_strat(
+        CreditSpreads75, today_dt,
+        expirations=["2026-09-03"]
+    )
+    broker.last_price = lambda sym: 100.0
+
+    from hermes.service1_agent.iv_tracker import snapshot_daily_iv
+    saved = await snapshot_daily_iv(db, strat.broker, ["AAPL"], today_dt.date())
+    assert saved == 1
+    history = await db.get_implied_vol_history("AAPL")
+    assert len(history) == 1
+    assert abs(history[0][1] - 0.35) < 1e-4
+
+    # Re-running the same day upserts, never duplicates.
+    saved = await snapshot_daily_iv(db, strat.broker, ["AAPL"], today_dt.date())
+    assert saved == 1
+    assert len(await db.get_implied_vol_history("AAPL")) == 1
+
+
+@pytest.mark.asyncio
+async def test_daily_iv_snapshot_isolates_symbol_failures():
+    today_dt = datetime(2026, 7, 25, 10, 0, 0)
+    strat, broker, db = _build_strat(
+        CreditSpreads75, today_dt,
+        expirations=["2026-09-03"]
+    )
+    broker.last_price = lambda sym: 100.0
+
+    orig_expirations = broker.get_option_expirations
+    def failing_expirations(symbol):
+        if symbol == "BAD":
+            raise RuntimeError("chain fetch exploded")
+        return orig_expirations(symbol)
+    broker.get_option_expirations = failing_expirations
+
+    from hermes.service1_agent.iv_tracker import snapshot_daily_iv
+    saved = await snapshot_daily_iv(db, strat.broker, ["BAD", "AAPL"], today_dt.date())
+    assert saved == 1
+    assert len(await db.get_implied_vol_history("AAPL")) == 1
+    assert len(await db.get_implied_vol_history("BAD")) == 0
+
+
+@pytest.mark.asyncio
+async def test_ivr_gate_never_writes_history():
+    # Selection-bias regression: neither a blocked day nor a passed day may
+    # write history from inside the gate — only the daily snapshot writes.
+    today_dt = datetime(2026, 7, 25, 10, 0, 0)
+    db = StubDB()
+    await db.save_implied_vol("AAPL", 0.30, today_dt - timedelta(days=4))
+    await db.save_implied_vol("AAPL", 0.90, today_dt - timedelta(days=3))
+
+    strat, broker, _ = _build_strat(
+        CreditSpreads75, today_dt,
+        expirations=["2026-09-03"],
+        config={"cs75_min_ivr": 60.0},
+        db=db
+    )
+    broker.last_price = lambda sym: 100.0
+
+    # current 0.35 vs range [0.30, 0.90] → IVR ~8% < 60 → blocked
+    assert await strat.is_ivr_gated("AAPL", 60.0) is True
+    assert len(await db.get_implied_vol_history("AAPL")) == 2
+
+    # Passing day (threshold 5%) must not write either.
+    assert await strat.is_ivr_gated("AAPL", 5.0) is False
+    assert len(await db.get_implied_vol_history("AAPL")) == 2

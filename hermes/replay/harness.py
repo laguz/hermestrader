@@ -91,9 +91,15 @@ class ReplayHarness:
         # The wrapper's shared circuit breaker treats a rejected order as a
         # broker failure and pauses after 3 in a row. In replay a rejection is
         # a normal modeled non-fill (the real broker would let the limit order
-        # rest instead), so give this run a breaker that can't trip.
+        # rest instead), so give this run a breaker that can't trip. The
+        # attribute is class-global, so the previous breaker is restored in
+        # run()'s finally — leaving it overridden would disable the live
+        # breaker for any agent sharing the process.
         from hermes.broker.circuit_breaker import CircuitBreaker
         from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+        # _shared_cb is lazily created by the wrapper's __init__, so it may
+        # not exist yet; None means "restore by deleting" (back to lazy init).
+        self._prev_shared_cb = getattr(AsyncBrokerWrapper, "_shared_cb", None)
         AsyncBrokerWrapper._shared_cb = CircuitBreaker(failure_threshold=1_000_000_000)
 
         assert isinstance(self.broker, ReplayBroker)
@@ -206,6 +212,12 @@ class ReplayHarness:
             else:
                 os.environ[_OFFHOURS_ENV] = prev_env
             _utils._GLOBAL_CLOCK = prev_clock
+            from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+            if self._prev_shared_cb is not None:
+                AsyncBrokerWrapper._shared_cb = self._prev_shared_cb
+            else:
+                with contextlib.suppress(AttributeError):
+                    del AsyncBrokerWrapper._shared_cb
             monitor = self.engine.reactive._order_monitor_task
             if monitor is not None and not monitor.done():
                 monitor.cancel()

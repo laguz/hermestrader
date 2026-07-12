@@ -41,6 +41,28 @@ _DEFAULT_MAX_LOTS = {
 }
 
 
+def apply_throttle_mult(action: TradeAction, requested_lots: int) -> int:
+    """Reduce ``requested_lots`` by the action's stamped throttle multiplier.
+
+    Reduce-only, and never truncates a live entry to zero: at the typical
+    1-lot sizing, plain ``int(lots * mult)`` would turn any fractional
+    multiplier into a full entry kill instead of a shrink. A multiplier of
+    exactly 0.0 remains the explicit full-kill setting.
+    """
+    throttle_mult = action.strategy_params.get("throttle_mult")
+    if throttle_mult is None:
+        return requested_lots
+    try:
+        m = min(1.0, max(0.0, float(throttle_mult)))
+    except (ValueError, TypeError):
+        return requested_lots
+    if m <= 0.0:
+        return 0
+    if requested_lots <= 0:
+        return requested_lots
+    return max(1, int(requested_lots * m))
+
+
 def resolve_entry_sizing(action: TradeAction,
                          config: Dict[str, Any]) -> tuple[int, int, float]:
     """(requested_lots, max_lots, requirement_per_lot) for one entry action.
@@ -56,14 +78,7 @@ def resolve_entry_sizing(action: TradeAction,
     if action.order_class == "multileg" and action.legs:
         requested_lots = action.legs[0].get("quantity", 1)
 
-    throttle_mult = action.strategy_params.get("throttle_mult")
-    if throttle_mult is not None:
-        try:
-            m = float(throttle_mult)
-            m = min(1.0, max(0.0, m))
-            requested_lots = int(requested_lots * m)
-        except (ValueError, TypeError):
-            pass
+    requested_lots = apply_throttle_mult(action, requested_lots)
 
     strat_id = action.strategy_id.upper()
     _raw_max_lots = config.get(f"{strat_id.lower()}_max_lots")

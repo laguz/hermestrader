@@ -94,14 +94,14 @@ def test_extract_earnings_dates_defensive():
 
 @pytest.mark.asyncio
 async def test_entry_blocked_near_macro_event():
-    # 2026-07-25 is 3 days before FOMC (2026-07-28). Blackout window is 7 days.
+    # 2026-07-25 is 3 days before FOMC (2026-07-28). Macro window is 7 days.
     today_dt = datetime(2026, 7, 25, 10, 0, 0)
     strat, broker, db = _build_strat(
         CreditSpreads75, today_dt,
         expirations=["2026-09-01"],
-        config={"cs75_event_blackout_days": 7}
+        config={"cs75_macro_blackout_days": 7}
     )
-    
+
     actions = await strat.execute_entries(["AAPL"])
     assert len(actions) == 0
     assert any("Entry blocked: macro event" in log for log in strat.execution_logs)
@@ -109,17 +109,94 @@ async def test_entry_blocked_near_macro_event():
 
 @pytest.mark.asyncio
 async def test_entry_allowed_outside_macro_event():
-    # 2026-07-19 is 9 days before FOMC. Blackout window is 7 days.
+    # 2026-07-19 is 9 days before FOMC. Macro window is 7 days.
     today_dt = datetime(2026, 7, 19, 10, 0, 0)
     strat, broker, db = _build_strat(
         CreditSpreads75, today_dt,
         expirations=["2026-08-28"],
-        config={"cs75_event_blackout_days": 7}
+        config={"cs75_macro_blackout_days": 7}
     )
-    
+
     actions = await strat.execute_entries(["AAPL"])
     # Allowed, should produce entry actions
     assert len(actions) > 0
+
+
+@pytest.mark.asyncio
+async def test_macro_window_independent_of_earnings_window():
+    # 2026-07-25 is 3 days before FOMC. The earnings window is wide (7d) but
+    # the macro window is the default 1d — FOMC 3 days out must NOT gate.
+    today_dt = datetime(2026, 7, 25, 10, 0, 0)
+    strat, broker, db = _build_strat(
+        CreditSpreads75, today_dt,
+        expirations=["2026-09-04"],  # 41 DTE — inside CS75's 39-45 entry window
+        config={"cs75_event_blackout_days": 7, "cs75_macro_blackout_days": 1}
+    )
+
+    actions = await strat.execute_entries(["AAPL"])
+    assert len(actions) > 0
+    assert not any("Entry blocked: macro event" in log for log in strat.execution_logs)
+
+
+@pytest.mark.asyncio
+async def test_macro_window_blocks_even_with_earnings_window_off():
+    # 2026-07-27 is 1 day before FOMC. Earnings window off, macro window 1d.
+    today_dt = datetime(2026, 7, 27, 10, 0, 0)
+    strat, broker, db = _build_strat(
+        CreditSpreads75, today_dt,
+        expirations=["2026-09-01"],
+        config={"cs75_event_blackout_days": 0, "cs75_macro_blackout_days": 1}
+    )
+
+    actions = await strat.execute_entries(["AAPL"])
+    assert len(actions) == 0
+    assert any("Entry blocked: macro event" in log for log in strat.execution_logs)
+
+
+@pytest.mark.asyncio
+async def test_tt45_ic_completion_not_gated():
+    # On a macro blackout day TT45 must still complete an existing half-IC;
+    # only brand-new condors are gated.
+    today_dt = datetime(2026, 7, 28, 10, 0, 0)  # FOMC day
+    strat, broker, db = _build_strat(
+        TastyTrade45, today_dt,
+        expirations=["2026-09-18"],
+        config={"tt45_macro_blackout_days": 7}
+    )
+
+    async def fake_active_ic_expiry(symbol):
+        return "2026-09-18"
+    strat.find_active_ic_expiry = fake_active_ic_expiry
+
+    gate_calls = []
+    orig_gate = strat.is_event_gated
+    async def spy_gate(symbol, earnings_days, macro_days=0):
+        gate_calls.append(symbol)
+        return await orig_gate(symbol, earnings_days, macro_days)
+    strat.is_event_gated = spy_gate
+
+    await strat.execute_entries(["AAPL"])
+    # The completion path never consulted the event gate.
+    assert gate_calls == []
+    assert not any("Entry blocked" in log for log in strat.execution_logs)
+
+
+@pytest.mark.asyncio
+async def test_tt45_new_ic_still_gated():
+    today_dt = datetime(2026, 7, 28, 10, 0, 0)  # FOMC day
+    strat, broker, db = _build_strat(
+        TastyTrade45, today_dt,
+        expirations=["2026-09-18"],
+        config={"tt45_macro_blackout_days": 7}
+    )
+
+    async def no_active_ic(symbol):
+        return None
+    strat.find_active_ic_expiry = no_active_ic
+
+    actions = await strat.execute_entries(["AAPL"])
+    assert len(actions) == 0
+    assert any("Entry blocked: macro event" in log for log in strat.execution_logs)
 
 
 @pytest.mark.asyncio

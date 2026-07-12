@@ -313,3 +313,22 @@ async def test_replay_offhours_env_restored():
     before = os.environ.get("HERMES_ALLOW_OFFHOURS_TRADES")
     await make_harness(("CS75",), replay_days=2).run()
     assert os.environ.get("HERMES_ALLOW_OFFHOURS_TRADES") == before
+
+
+async def test_replay_shared_circuit_breaker_restored():
+    """run() must restore the class-global circuit breaker — leaving the
+    can't-trip replay breaker behind would disable the live breaker for any
+    agent sharing the process."""
+    from hermes.broker.circuit_breaker import CircuitBreaker
+    from hermes.service1_agent.broker_wrapper import AsyncBrokerWrapper
+
+    sentinel = CircuitBreaker()
+    AsyncBrokerWrapper._shared_cb = sentinel
+    try:
+        harness = make_harness(("CS75",), replay_days=2)
+        # While constructed, the harness swaps in its own no-trip breaker.
+        assert AsyncBrokerWrapper._shared_cb is not sentinel
+        await harness.run()
+        assert AsyncBrokerWrapper._shared_cb is sentinel
+    finally:
+        AsyncBrokerWrapper._shared_cb = sentinel

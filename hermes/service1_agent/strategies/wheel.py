@@ -71,7 +71,8 @@ class WheelStrategy(AbstractStrategy):
         self._log(f"↻ scanning {len(symbols)} symbol(s) — max_lots={max_lots} delta={t.wheel_delta:.2f}")
 
         for symbol in symbols:
-            if await self.is_event_gated(symbol, t.wheel_event_blackout_days):
+            if await self.is_event_gated(symbol, t.wheel_event_blackout_days,
+                                         t.wheel_macro_blackout_days):
                 continue
 
             shares = int(await self.db.trades.equity_position(symbol) or 0)

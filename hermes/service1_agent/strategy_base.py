@@ -295,104 +295,48 @@ class AbstractStrategy(ABC):
         # 9:30 AM to 10:30 AM Eastern Time
         return time(9, 30) <= current_time < time(10, 30)
 
-    async def is_event_gated(self, symbol: str, blackout_days: int) -> bool:
-        try:
-            blackout_days = int(blackout_days)
-        except (TypeError, ValueError):
-            blackout_days = 0
+    async def is_event_gated(self, symbol: str, earnings_days: int,
+                             macro_days: int = 0) -> bool:
+        # Separate windows: a week around an earnings print is conventional,
+        # but the same lookahead on FOMC+CPI would black out ~40% of the year.
+        def _days(raw) -> int:
+            try:
+                return int(raw)
+            except (TypeError, ValueError):
+                return 0
 
-        if blackout_days <= 0:
+        earnings_days = _days(earnings_days)
+        macro_days = _days(macro_days)
+        if earnings_days <= 0 and macro_days <= 0:
             return False
 
         from hermes.event_calendar import is_macro_event_within_days, has_earnings_within_days
 
         today = self.today()
-        if is_macro_event_within_days(today, blackout_days):
-            self._log(f"⚠️ Entry blocked: macro event (FOMC/CPI) scheduled within {blackout_days} days.")
+        if macro_days > 0 and is_macro_event_within_days(today, macro_days):
+            self._log(f"⚠️ Entry blocked: macro event (FOMC/CPI) scheduled within {macro_days} days.")
             return True
 
-        try:
-            if await has_earnings_within_days(self.broker, symbol, today, blackout_days):
-                self._log(f"⚠️ Entry blocked: {symbol} has earnings scheduled within {blackout_days} days.")
-                return True
-        except Exception as exc:
-            logger.error("[EVENT CALENDAR] Earnings calendar fetch failed for %s: %s", symbol, exc, exc_info=True)
-            self._log(f"⚠️ WARNING: Earnings calendar fetch failed for {symbol} ({exc}). Gate failing open; entry qualification degraded.")
+        if earnings_days > 0:
+            try:
+                if await has_earnings_within_days(self.broker, symbol, today, earnings_days):
+                    self._log(f"⚠️ Entry blocked: {symbol} has earnings scheduled within {earnings_days} days.")
+                    return True
+            except Exception as exc:
+                logger.error("[EVENT CALENDAR] Earnings calendar fetch failed for %s: %s", symbol, exc, exc_info=True)
+                self._log(f"⚠️ WARNING: Earnings calendar fetch failed for {symbol} ({exc}). Gate failing open; entry qualification degraded.")
 
         return False
 
     async def _fetch_current_atm_iv(self, symbol: str) -> Optional[float]:
-        try:
-            expirations = await self.broker.get_option_expirations(symbol)
-            if not expirations:
-                return None
-            
-            today = self.today()
-            valid_expiries = []
-            for exp in expirations:
-                try:
-                    d = datetime.strptime(exp, "%Y-%m-%d").date()
-                    valid_expiries.append((d, exp))
-                except (ValueError, TypeError):
-                    pass
-            
-            if not valid_expiries:
-                return None
-            
-            # Sort by DTE proximity to 30 days
-            best_expiry = min(valid_expiries, key=lambda x: abs((x[0] - today).days - 30))[1]
-            
-            chain = await self.broker.get_option_chains(symbol, best_expiry)
-            if not chain:
-                return None
-            
-            # Fetch current stock price (spot price)
-            spot = await self.broker.last_price(symbol)
-            if spot is None:
-                quotes = await self.broker.get_quote(symbol)
-                if quotes and len(quotes) > 0:
-                    spot = quotes[0].get("last")
-                if spot is None:
-                    # Fallback to median strike in chain
-                    strikes = [o.get("strike") for o in chain if o.get("strike") is not None]
-                    if strikes:
-                        import statistics
-                        spot = statistics.median(strikes)
-            
-            if spot is None:
-                return None
-            
-            # Find the strike closest to spot
-            atm_strike = min(
-                (o.get("strike") for o in chain if o.get("strike") is not None),
-                key=lambda s: abs(s - spot),
-                default=None
-            )
-            if atm_strike is None:
-                return None
-            
-            ivs = []
-            for o in chain:
-                if o.get("strike") == atm_strike:
-                    greeks = o.get("greeks") or {}
-                    iv = greeks.get("mid_iv")
-                    if iv is None:
-                        iv = greeks.get("smv_vol")
-                    if iv is not None:
-                        try:
-                            ivs.append(float(iv))
-                        except (ValueError, TypeError):
-                            pass
-            
-            if ivs:
-                import statistics
-                return float(statistics.mean(ivs))
-            return None
-        except Exception as exc:
-            logger.debug("[IV GATING] Failed to fetch current ATM IV for %s: %s", symbol, exc)
-            return None
+        from .iv_tracker import fetch_current_atm_iv
+        return await fetch_current_atm_iv(self.broker, symbol, self.today())
 
     async def is_ivr_gated(self, symbol: str, min_ivr: float) -> bool:
+        # Read-only: history is written by the pipeline heartbeat's daily IV
+        # snapshot (iv_tracker.snapshot_daily_iv), never from inside the gate —
+        # gate-side writes only recorded days the gate passed, biasing the
+        # min/max the rank is computed from toward high-IV days.
         try:
             min_ivr = float(min_ivr)
         except (TypeError, ValueError):
@@ -406,15 +350,11 @@ class AbstractStrategy(ABC):
             logger.debug("[IV GATING] Missing current ATM IV for %s; degrading to no gating.", symbol)
             return False
 
-        # Get historical IVs from the TimescaleDB timeseries repository
         history = await self.db.timeseries.get_implied_vol_history(symbol, lookback_days=365)
         if not history:
             logger.debug("[IV GATING] Missing historical IV data for %s; degrading to no gating.", symbol)
-            # Save today's observation anyway so we start building history
-            await self.db.timeseries.save_implied_vol(symbol, current_iv)
             return False
 
-        # Extract only the IV values and combine with current_iv
         all_ivs = [iv for _, iv in history] + [current_iv]
         min_iv = min(all_ivs)
         max_iv = max(all_ivs)
@@ -424,9 +364,7 @@ class AbstractStrategy(ABC):
             if ivr < min_ivr:
                 self._log(f"⚠️ Entry blocked: {symbol} IV rank {ivr:.1f}% is below threshold {min_ivr:.1f}%.")
                 return True
-        
-        # Save today's observation to the implied_volatility history hypertable
-        await self.db.timeseries.save_implied_vol(symbol, current_iv)
+
         return False
 
     async def _process_and_throttle_actions(self, actions: List[TradeAction]) -> List[TradeAction]:
@@ -438,7 +376,21 @@ class AbstractStrategy(ABC):
         for action in actions:
             action.strategy_params["throttle_mult"] = throttle_mult
 
-            # Resolve/write prediction to the ledger
+            # Ledger prediction: POP is "the short strike stays OTM", so the
+            # row must carry that win condition for backfill to score it —
+            # a directional (close > spot) outcome is not what POP predicts.
+            # Actions without a short *_to_open leg (debit spreads, equity)
+            # have no such condition and are not logged.
+            short_leg = self._short_open_leg(action)
+            if short_leg is None:
+                continue
+            from hermes.common import OCC_RE
+            m = OCC_RE.match(str(short_leg.get("option_symbol") or ""))
+            if not m:
+                continue
+            option_type = "call" if m.group(3) == "C" else "put"
+            short_strike = int(m.group(4)) / 1000.0
+
             pop = action.strategy_params.get("pop")
             if pop is None:
                 delta = action.strategy_params.get("delta")
@@ -454,11 +406,29 @@ class AbstractStrategy(ABC):
                 except Exception:
                     pass
             if spot is None:
-                spot = 100.0
+                # Never fabricate a spot into the ledger — an unknown spot
+                # means an unevaluable row, not a $100 stock.
+                logger.debug("[THROTTLE] %s: no spot for %s; skipping ledger write",
+                             self.NAME, action.symbol)
+                continue
 
-            await self.write_prediction_to_ledger(action.symbol, float(pop), float(spot), int(dte))
+            await self.write_prediction_to_ledger(
+                action.symbol, float(pop), float(spot), int(dte),
+                feature_vector={
+                    "win_condition": "short_otm",
+                    "option_type": option_type,
+                    "short_strike": short_strike,
+                })
 
         return actions
+
+    @staticmethod
+    def _short_open_leg(action) -> Optional[Dict[str, Any]]:
+        for leg in action.legs or []:
+            side = str(leg.get("side", "")).lower()
+            if "sell" in side and "open" in side:
+                return leg
+        return None
 
     async def get_throttle_multiplier(self) -> float:
         try:
@@ -531,7 +501,9 @@ class AbstractStrategy(ABC):
             logger.warning("[THROTTLE] %s failed to compute throttle: %s. Fails open to 1.0.", self.NAME, exc)
             return 1.0
 
-    async def write_prediction_to_ledger(self, symbol: str, pop: float, spot: float, horizon_dte: int) -> None:
+    async def write_prediction_to_ledger(self, symbol: str, pop: float, spot: float,
+                                         horizon_dte: int,
+                                         feature_vector: Optional[Dict[str, Any]] = None) -> None:
         from hermes.ml.ledger import write_record, LedgerRecord
         try:
             await write_record(self.db, LedgerRecord(
@@ -546,7 +518,7 @@ class AbstractStrategy(ABC):
                 predicted_prob_hi=None,
                 predicted_return=None,
                 spot=spot,
-                feature_vector={},
+                feature_vector=feature_vector or {},
             ))
             logger.debug("[THROTTLE] Logged prediction to ledger for %s: %s (POP=%.2f DTE=%d)", self.NAME, symbol, pop, horizon_dte)
         except Exception as exc:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
+from hermes.service1_agent.money_manager import apply_throttle_mult
 from hermes.service1_agent.trade_action import TradeAction
 
 logger = logging.getLogger("hermes.portfolio.optimizer")
@@ -49,17 +50,9 @@ class PortfolioOptimizer:
             width = float(action.width if action.width is not None else 0.0)
             risk_per_lot = max(0.0, (width - credit) * 100.0)
             requested_lots = action.quantity
-            
-            # Apply throttle multiplier if present in strategy_params
-            throttle_mult = action.strategy_params.get("throttle_mult")
-            if throttle_mult is not None:
-                try:
-                    m = float(throttle_mult)
-                    m = min(1.0, max(0.0, m))
-                    requested_lots = int(requested_lots * m)
-                except (ValueError, TypeError):
-                    pass
-            
+            requested_lots = apply_throttle_mult(action, requested_lots)
+
+
             # Simple Kelly-like adjustment
             pop = action.strategy_params.get("pop")
             if pop is None:
