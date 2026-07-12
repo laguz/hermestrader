@@ -80,6 +80,11 @@ class AbstractBroker(ABC):
         pass
 
     @abstractmethod
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        """Fetch corporate calendar (earnings/dividends/splits) for a comma-separated list of symbols."""
+        pass
+
+    @abstractmethod
     async def close(self) -> None:
         """Close any open connections or clients."""
         pass

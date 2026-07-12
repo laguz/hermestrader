@@ -145,6 +145,13 @@ async def analyze_symbol(symbol: str, period: str = "6m") -> Dict[str, Any]:
     return await broker.analyze_symbol(symbol, period=period)
 
 
+@mcp.tool()
+async def get_corporate_calendar(symbols: str) -> Dict[str, Any]:
+    """Fetch corporate calendar (earnings/dividends/splits) for a comma-separated list of symbols."""
+    broker = await _broker()
+    return await broker.get_corporate_calendar(symbols)
+
+
 # ----------------------------------------------------------------------- Orders
 @mcp.tool()
 async def place_multileg_order(

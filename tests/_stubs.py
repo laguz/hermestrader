@@ -88,6 +88,9 @@ class StubBroker:
         return [(today + timedelta(days=d)).strftime("%Y-%m-%d")
                 for d in (7, 14, 21, 30, 35, 40, 45, 60)]
 
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        return {"calendar": []}
+
     def get_option_chains(self, symbol: str, expiry: str) -> List[Dict[str, Any]]:
         return make_chain(symbol, expiry)
 
@@ -214,6 +217,14 @@ class StubDB:
         # repo namespace (see _ListNSView / _DictNSView above).
         self.logs = _ListNSView(self)
         self.settings = _DictNSView(self)
+        # Default blackout days to 0 in StubDB so existing tests don't get blocked
+        # by the system clock's proximity to real CPI/FOMC dates.
+        self.settings["cs75_event_blackout_days"] = "0"
+        self.settings["cs7_event_blackout_days"] = "0"
+        self.settings["tt45_event_blackout_days"] = "0"
+        self.settings["wheel_event_blackout_days"] = "0"
+        self.settings["hermesalpha_event_blackout_days"] = "0"
+
         self.approvals = _ListNSView(self)
         # Plain repo namespaces forwarding to the flat surface.
         self.trades = _NSView(self)

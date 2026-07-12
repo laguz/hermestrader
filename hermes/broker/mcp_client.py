@@ -422,6 +422,9 @@ class MCPBrokerClient(AbstractBroker):
     async def analyze_symbol(self, symbol: str, period: str = "6m") -> Dict[str, Any]:
         return await self._call_mcp("analyze_symbol", symbol=symbol, period=period)
 
+    async def get_corporate_calendar(self, symbols: str) -> Dict[str, Any]:
+        return await self._call_mcp("get_corporate_calendar", symbols=symbols)
+
     async def roll_to_next_month(self, option_symbol: str) -> str:
         return await self._call_mcp("roll_to_next_month", option_symbol=option_symbol)
 
