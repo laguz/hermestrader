@@ -136,7 +136,7 @@ a:hover {
 /* Main App Layout */
 #app {
   display: grid;
-  grid-template-columns: 70px 1fr;
+  grid-template-columns: 190px 1fr;
   min-height: 100vh;
   width: 100%;
   max-width: 100vw;
@@ -456,6 +456,19 @@ input:checked + .slider:before {
   opacity: 1;
   transform: translateY(0);
 }
+
+/* Text color utilities — referenced across views; keep global so every
+   component resolves them (they were previously scoped-only and silently
+   inert outside Analytics/Settings). */
+.text-green { color: var(--positive); }
+.text-red { color: var(--negative); }
+.text-blue { color: var(--accent); }
+.text-orange { color: var(--live); }
+.text-muted { color: var(--text-muted); }
+.text-xs { font-size: var(--fs-xs); }
+.font-mono { font-family: var(--font-mono); }
+.font-bold { font-weight: var(--fw-bold); }
+.overflow-x { overflow-x: auto; }
 
 .divider {
   height: 1px;

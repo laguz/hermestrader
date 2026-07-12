@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   state,
   loadStatus,
@@ -7,9 +7,8 @@ import {
   loadLogs,
   decide,
   bulkDecide,
-  togglePause,
-  setMode,
-  setAutonomousLive
+  requestSetMode,
+  requestAutonomousLive
 } from '../state'
 import Icon from '../components/Icon.vue'
 
@@ -55,31 +54,23 @@ function isBuyLeg(leg) {
   return side.includes('buy')
 }
 
-// -----------------------------------------------------------------
-// Mock Dynamic / Real Data Integration
-// -----------------------------------------------------------------
-
-
-
-const portfolioValue = computed(() => {
-  const val = state.analyticsData?.performance?.total_value
-  return val ? '$' + val.toLocaleString() : '$148,650'
+// analyticsData.performance is keyed by strategy id — aggregate across them.
+const realizedPnl = computed(() => {
+  const perf = state.analyticsData?.performance || {}
+  const strategies = Object.values(perf)
+  if (!strategies.length) return null
+  return strategies.reduce((acc, s) => acc + (s.total_pnl || 0), 0)
 })
 
 const totalPnl = computed(() => {
-  const pnl = state.analyticsData?.performance?.total_pnl
-  const pct = state.analyticsData?.performance?.total_pnl_pct
-  if (pnl != null) {
-    const sign = pnl >= 0 ? '+' : ''
-    const formattedPct = pct != null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)` : ''
-    return `${sign}$${pnl.toLocaleString()}${formattedPct}`
-  }
-  return '+$3,450.78 (+12.5%)'
+  const pnl = realizedPnl.value
+  if (pnl == null) return '—'
+  const sign = pnl >= 0 ? '+' : ''
+  return `${sign}$${pnl.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 })
 
 const isPnlPositive = computed(() => {
-  const pnl = state.analyticsData?.performance?.total_pnl
-  return pnl != null ? pnl >= 0 : true
+  return realizedPnl.value == null ? true : realizedPnl.value >= 0
 })
 
 const lastActionText = computed(() => {
@@ -92,56 +83,31 @@ const lastActionText = computed(() => {
 <template>
   <div class="cockpit-container">
 
-    <!-- Top Row: Full Width Wide Cockpit Card -->
-    <section class="card cockpit-card">
+    <!-- Trading Controls — the arming panel. Everything here changes how
+         orders get placed; pure status readouts live in BotOpsBar. -->
+    <section class="card arming-card" :class="{ armed: state.status.mode === 'live' || state.status.alpha_autonomous_live }">
       <div class="card-header">
         <div class="cockpit-title-group">
-          <Icon name="bolt" :size="18" style="color: var(--color-blue);" />
-          <span class="header-title">HermesTrader Cockpit</span>
-        </div>
-        <div class="status-summary-header">
-          <div class="pulse-dot" :class="{ running: state.status.hermes_running }"></div>
-          <span class="status-txt">{{ state.status.hermes_running ? 'SYSTEM ONLINE' : 'SYSTEM OFFLINE' }}</span>
+          <Icon name="alert" :size="16" style="color: var(--live);" />
+          <span class="header-title">Trading Controls</span>
         </div>
       </div>
       <div class="card-body cockpit-body">
         <div class="cockpit-grid">
           <div class="grid-item">
-            <span class="lbl">Daemon Loop</span>
-            <div class="val-actions">
-              <span class="val" :class="state.status.hermes_running ? 'text-green' : 'text-red'">
-                {{ state.status.hermes_running ? 'Online' : 'Offline' }}
-              </span>
-              <button 
-                v-if="state.status.hermes_running" 
-                class="btn-pause-inline" 
-                :class="state.status.paused ? 'btn-inline-resume' : 'btn-inline-pause'" 
-                @click="togglePause"
-              >
-                {{ state.status.paused ? 'Resume' : 'Pause' }}
-              </button>
-            </div>
-          </div>
-
-          <div class="grid-item">
             <span class="lbl">Trading Route</span>
             <div class="mode-toggles-inline">
-              <button 
-                class="btn-inline-toggle" 
+              <button
+                class="btn-inline-toggle"
                 :class="{ active: state.status.mode === 'paper' }"
-                @click="setMode('paper')"
+                @click="requestSetMode('paper')"
               >Paper</button>
               <button
                 class="btn-inline-toggle btn-live-inline"
                 :class="{ active: state.status.mode === 'live' }"
-                @click="setMode('live')"
+                @click="requestSetMode('live')"
               >Live</button>
             </div>
-          </div>
-
-          <div class="grid-item">
-            <span class="lbl">Auto-Pilot Autonomy</span>
-            <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
           </div>
 
           <div class="grid-item">
@@ -150,32 +116,19 @@ const lastActionText = computed(() => {
               <button
                 class="btn-inline-toggle"
                 :class="{ active: !state.status.alpha_autonomous_live }"
-                @click="setAutonomousLive(false)"
+                @click="requestAutonomousLive(false)"
               >Off</button>
               <button
                 class="btn-inline-toggle btn-live-inline"
                 :class="{ active: state.status.alpha_autonomous_live }"
-                @click="setAutonomousLive(true)"
+                @click="requestAutonomousLive(true)"
               >Auto</button>
             </div>
           </div>
 
           <div class="grid-item">
-            <span class="lbl">Market Session</span>
-            <span class="val" :class="state.status.market_is_open ? 'text-green' : 'text-muted'">
-              {{ state.status.market_is_open ? '● OPEN' : '● CLOSED' }}
-            </span>
-          </div>
-
-          <div class="grid-item">
-            <span class="lbl">System Health</span>
-            <span class="val diag-indicators">
-              <span :class="state.status.tradier_ok ? 'text-green' : 'text-red'" title="Tradier API Status">TRADIER</span>
-              <span class="separator">·</span>
-              <span :class="state.status.ml_ok ? 'text-green' : 'text-red'" title="XGBoost ML Status">ML</span>
-              <span class="separator">·</span>
-              <span :class="state.status.llm_ok ? 'text-green' : 'text-red'" title="LLM Overseer Status">LLM</span>
-            </span>
+            <span class="lbl">Overseer Autonomy</span>
+            <span class="val mode-badge" :class="state.soul?.autonomy">{{ (state.soul?.autonomy || 'advisory').toUpperCase() }}</span>
           </div>
         </div>
       </div>
@@ -184,25 +137,21 @@ const lastActionText = computed(() => {
     <!-- Bottom Row Layout -->
     <div class="primary-layout">
       
-      <!-- Left Column: Active Bot Status -->
+      <!-- Left Column: Bot Summary -->
       <section class="card bot-status-card">
         <div class="card-header">
-          <span class="header-title">Active Bot Status</span>
-          <div class="status-summary-header">
-            <div class="pulse-dot" :class="{ running: state.status.hermes_running }"></div>
-            <span class="status-txt">{{ state.status.hermes_running ? 'RUNNING' : 'STOPPED' }}</span>
-          </div>
+          <span class="header-title">Bot Summary</span>
         </div>
         <div class="card-body bot-content">
           <div class="bot-info-table">
             <div class="bot-info-row">
-              <span class="lbl">Profit/Loss</span>
-              <span class="val text-green font-bold" :class="{ 'text-red': !isPnlPositive }">{{ totalPnl }}</span>
+              <span class="lbl">Realized P&amp;L</span>
+              <span class="val font-bold" :class="isPnlPositive ? 'text-green' : 'text-red'">{{ totalPnl }}</span>
             </div>
-            
+
             <div class="bot-info-row">
               <span class="lbl">Open Positions</span>
-              <span class="val">{{ state.analyticsData?.open_trades?.length || '4' }} Trades</span>
+              <span class="val">{{ (state.analyticsData?.open_trades || []).length }} Trades</span>
             </div>
             
             <div class="bot-info-row last-action-row">
@@ -274,8 +223,51 @@ const lastActionText = computed(() => {
           </div>
         </div>
       </section>
-      
+
     </div>
+
+    <!-- Open Positions (first-class on the dashboard; full detail in Analytics) -->
+    <section class="card table-card">
+      <div class="card-header">
+        <span class="header-title">Open Positions</span>
+        <span class="text-muted text-xs">{{ (state.analyticsData?.open_trades || []).length }} open</span>
+      </div>
+      <div class="card-body no-padding overflow-x">
+        <div v-if="!state.analyticsData?.open_trades?.length" class="no-data">
+          No open positions.
+        </div>
+        <table v-else class="tbl">
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Strategy</th>
+              <th>Side</th>
+              <th>Short Strike</th>
+              <th>Long Strike</th>
+              <th>Lots</th>
+              <th>Credit</th>
+              <th>Expiry</th>
+              <th>Age</th>
+              <th>AI</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in state.analyticsData.open_trades" :key="t.id">
+              <td><strong class="text-blue">{{ t.symbol }}</strong></td>
+              <td>{{ t.strategy_id }}</td>
+              <td><span class="tag" :class="t.side_type">{{ t.side_type || '—' }}</span></td>
+              <td>{{ t.short_strike != null ? '$' + t.short_strike.toFixed(2) : '—' }}</td>
+              <td>{{ t.long_strike != null ? '$' + t.long_strike.toFixed(2) : '—' }}</td>
+              <td>{{ t.lots }}</td>
+              <td class="text-green">{{ t.entry_credit != null ? '$' + t.entry_credit.toFixed(2) : '—' }}</td>
+              <td class="text-xs">{{ t.expiry || '—' }}</td>
+              <td class="text-xs text-muted">{{ getRelativeTime(t.opened_at) }}</td>
+              <td><span v-if="t.ai_authored" class="tag ai">AI</span><span v-else>—</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
   </div>
 </template>
@@ -309,37 +301,6 @@ const lastActionText = computed(() => {
   background: var(--surface-glass);
 }
 
-.status-summary-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--color-red);
-  box-shadow: 0 0 6px var(--color-red);
-}
-
-.pulse-dot.running {
-  background: var(--color-green);
-  box-shadow: 0 0 8px var(--color-green);
-  animation: s-pulse 2s infinite;
-}
-
-@keyframes s-pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.2); opacity: 0.7; }
-}
-
-.status-txt {
-  font-size: var(--fs-2xs);
-  font-weight: var(--fw-bold);
-  letter-spacing: var(--tracking-wide);
-}
-
 .bot-content {
   display: flex;
   flex-direction: column;
@@ -369,47 +330,19 @@ const lastActionText = computed(() => {
   font-weight: var(--fw-semibold);
 }
 
-.val-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.btn-pause-inline {
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.btn-pause-inline:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-.btn-inline-resume {
-  color: var(--color-green);
-  border-color: rgba(16, 185, 129, 0.3);
-}
-.btn-inline-pause {
-  color: var(--color-yellow);
-  border-color: rgba(245, 158, 11, 0.3);
-}
-
 .mode-toggles-inline {
   display: inline-flex;
   background: rgba(0,0,0,0.3);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
-  padding: 1px;
+  padding: 2px;
 }
 .btn-inline-toggle {
   background: transparent;
   color: var(--text-muted);
   border: none;
-  font-size: 10px;
-  padding: 2px 8px;
+  font-size: var(--fs-sm);
+  padding: 5px 14px;
   font-weight: var(--fw-semibold);
   border-radius: 3px;
   cursor: pointer;
@@ -446,9 +379,15 @@ const lastActionText = computed(() => {
   color: var(--color-purple);
 }
 
-.cockpit-card {
-  margin-bottom: 20px;
+/* Arming panel — everything in it changes how orders are placed, so it
+   carries the LIVE (orange) accent instead of the neutral card border. */
+.arming-card {
   width: 100%;
+  border-color: rgba(249, 115, 22, 0.22);
+}
+.arming-card.armed {
+  border-color: rgba(249, 115, 22, 0.5);
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.08);
 }
 
 .cockpit-title-group {
@@ -489,17 +428,6 @@ const lastActionText = computed(() => {
 .grid-item .val {
   font-size: var(--fs-md);
   font-weight: var(--fw-bold);
-}
-
-.diag-indicators {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  font-weight: 700;
-}
-.diag-indicators .separator {
-  color: rgba(255, 255, 255, 0.15);
 }
 
 .last-action-row {
