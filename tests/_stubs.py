@@ -20,7 +20,7 @@ Conventions
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 
@@ -236,6 +236,7 @@ class StubDB:
 
         self.pending_orders: List[Any] = []
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
+        self._implied_vols: Dict[str, List[Tuple[date, float]]] = {}
         self._closing_trades: Dict[str, List[Dict[str, Any]]] = {}
         self._closed_trades: Dict[str, List[Dict[str, Any]]] = {}
         self._open_legs:   Dict[str, List[Dict[str, Any]]] = {}
@@ -405,6 +406,37 @@ class StubDB:
 
     async def close_trade_from_action(self, action, response):
         pass
+
+    async def save_implied_vol(self, symbol: str, iv: float, ts: Optional[Any] = None):
+        if ts is None:
+            ts = date.today()
+        elif isinstance(ts, datetime):
+            ts = ts.date()
+        
+        symbol = symbol.upper()
+        if symbol not in self._implied_vols:
+            self._implied_vols[symbol] = []
+        # Update if duplicate date, else append
+        history = self._implied_vols[symbol]
+        for idx, (d, _) in enumerate(history):
+            if d == ts:
+                history[idx] = (ts, float(iv))
+                break
+        else:
+            history.append((ts, float(iv)))
+            history.sort()
+
+    async def get_implied_vol_history(self, symbol: str, lookback_days: int = 365) -> List[Tuple[Any, float]]:
+        symbol = symbol.upper()
+        if symbol not in self._implied_vols:
+            return []
+        cutoff = date.today() - timedelta(days=lookback_days)
+        res = []
+        for d, iv in self._implied_vols[symbol]:
+            if d >= cutoff:
+                res.append((d, iv))
+        return res
+
 
     async def queue_for_approval(self, action_dict, action_type="entry", status="PENDING"):
         app_id = self._next_approval_id

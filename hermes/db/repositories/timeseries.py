@@ -6,8 +6,8 @@ keep the bar/price surface on ``HermesDB`` for existing call-sites.
 """
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+from datetime import date, datetime
+from typing import Optional, List, Tuple
 
 import pandas as pd
 
@@ -35,3 +35,10 @@ class TimeSeriesRepository(Repository):
     async def get_price_on_date(self, symbol: str, dt: date) -> Optional[float]:
         """Fetch close price of the symbol on or before the specified date."""
         return await self.ts_engine.get_price_on_date(symbol, dt)
+
+    async def save_implied_vol(self, symbol: str, iv: float, ts: Optional[datetime] = None) -> None:
+        await self.ts_engine.save_implied_vol(symbol, iv, ts)
+
+    async def get_implied_vol_history(self, symbol: str, lookback_days: int = 365) -> List[Tuple[datetime, float]]:
+        return await self.ts_engine.get_implied_vol_history(symbol, lookback_days)
+

@@ -314,6 +314,114 @@ class AbstractStrategy(ABC):
 
         return False
 
+    async def _fetch_current_atm_iv(self, symbol: str) -> Optional[float]:
+        try:
+            expirations = await self.broker.get_option_expirations(symbol)
+            if not expirations:
+                return None
+            
+            today = self.today()
+            valid_expiries = []
+            for exp in expirations:
+                try:
+                    d = datetime.strptime(exp, "%Y-%m-%d").date()
+                    valid_expiries.append((d, exp))
+                except (ValueError, TypeError):
+                    pass
+            
+            if not valid_expiries:
+                return None
+            
+            # Sort by DTE proximity to 30 days
+            best_expiry = min(valid_expiries, key=lambda x: abs((x[0] - today).days - 30))[1]
+            
+            chain = await self.broker.get_option_chains(symbol, best_expiry)
+            if not chain:
+                return None
+            
+            # Fetch current stock price (spot price)
+            spot = await self.broker.last_price(symbol)
+            if spot is None:
+                quotes = await self.broker.get_quote(symbol)
+                if quotes and len(quotes) > 0:
+                    spot = quotes[0].get("last")
+                if spot is None:
+                    # Fallback to median strike in chain
+                    strikes = [o.get("strike") for o in chain if o.get("strike") is not None]
+                    if strikes:
+                        import statistics
+                        spot = statistics.median(strikes)
+            
+            if spot is None:
+                return None
+            
+            # Find the strike closest to spot
+            atm_strike = min(
+                (o.get("strike") for o in chain if o.get("strike") is not None),
+                key=lambda s: abs(s - spot),
+                default=None
+            )
+            if atm_strike is None:
+                return None
+            
+            ivs = []
+            for o in chain:
+                if o.get("strike") == atm_strike:
+                    greeks = o.get("greeks") or {}
+                    iv = greeks.get("mid_iv")
+                    if iv is None:
+                        iv = greeks.get("smv_vol")
+                    if iv is not None:
+                        try:
+                            ivs.append(float(iv))
+                        except (ValueError, TypeError):
+                            pass
+            
+            if ivs:
+                import statistics
+                return float(statistics.mean(ivs))
+            return None
+        except Exception as exc:
+            logger.debug("[IV GATING] Failed to fetch current ATM IV for %s: %s", symbol, exc)
+            return None
+
+    async def is_ivr_gated(self, symbol: str, min_ivr: float) -> bool:
+        try:
+            min_ivr = float(min_ivr)
+        except (TypeError, ValueError):
+            min_ivr = 0.0
+
+        if min_ivr <= 0.0:
+            return False
+
+        current_iv = await self._fetch_current_atm_iv(symbol)
+        if current_iv is None:
+            logger.debug("[IV GATING] Missing current ATM IV for %s; degrading to no gating.", symbol)
+            return False
+
+        # Get historical IVs from the TimescaleDB timeseries repository
+        history = await self.db.timeseries.get_implied_vol_history(symbol, lookback_days=365)
+        if not history:
+            logger.debug("[IV GATING] Missing historical IV data for %s; degrading to no gating.", symbol)
+            # Save today's observation anyway so we start building history
+            await self.db.timeseries.save_implied_vol(symbol, current_iv)
+            return False
+
+        # Extract only the IV values and combine with current_iv
+        all_ivs = [iv for _, iv in history] + [current_iv]
+        min_iv = min(all_ivs)
+        max_iv = max(all_ivs)
+
+        if max_iv > min_iv:
+            ivr = 100.0 * (current_iv - min_iv) / (max_iv - min_iv)
+            if ivr < min_ivr:
+                self._log(f"⚠️ Entry blocked: {symbol} IV rank {ivr:.1f}% is below threshold {min_ivr:.1f}%.")
+                return True
+        
+        # Save today's observation to the implied_volatility history hypertable
+        await self.db.timeseries.save_implied_vol(symbol, current_iv)
+        return False
+
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod
     async def execute_entries(self, watchlist: Iterable[str]) -> List[TradeAction]: ...

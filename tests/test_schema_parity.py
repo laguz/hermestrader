@@ -42,7 +42,7 @@ SQL_ONLY_TABLES = {"bars_daily", "bars_intraday"}
 # ORM tables that are time-partitioned and MUST be converted to hypertables by
 # the addendum. Keep this in lock-step with the time-series tables in orm.py.
 HYPERTABLE_ORM_TABLES = {
-    "trades", "pending_orders", "bot_logs", "ai_decisions", "predictions",
+    "trades", "pending_orders", "bot_logs", "ai_decisions", "predictions", "implied_volatility",
 }
 
 

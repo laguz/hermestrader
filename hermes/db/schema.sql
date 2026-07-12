@@ -63,6 +63,7 @@ SELECT create_hypertable('pending_orders', 'submitted_at', if_not_exists => TRUE
 SELECT create_hypertable('bot_logs',       'ts',           if_not_exists => TRUE, migrate_data => TRUE);
 SELECT create_hypertable('ai_decisions',   'ts',           if_not_exists => TRUE, migrate_data => TRUE);
 SELECT create_hypertable('predictions',    'ts',           if_not_exists => TRUE, migrate_data => TRUE);
+SELECT create_hypertable('implied_volatility', 'ts',       if_not_exists => TRUE, migrate_data => TRUE);
 
 -- ---------------------------------------------------------------------
 -- Compression / retention policies (TimescaleDB best-practice).
