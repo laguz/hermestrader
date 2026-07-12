@@ -63,6 +63,13 @@ class AbstractStrategy(ABC):
         # until each task completes.
         self._pending_log_tasks: set[asyncio.Task] = set()
 
+        # Decorate execute_entries to automatically apply throttle and log predictions to the ledger
+        orig_execute = self.execute_entries
+        async def wrapped_execute(watchlist):
+            actions = await orig_execute(watchlist)
+            return await self._process_and_throttle_actions(actions)
+        self.execute_entries = wrapped_execute
+
     # ---- shared helpers ----------------------------------------------------
     async def load_tunables(self):
         """Resolve this strategy's tunables (settings > env config > default).
@@ -421,6 +428,129 @@ class AbstractStrategy(ABC):
         # Save today's observation to the implied_volatility history hypertable
         await self.db.timeseries.save_implied_vol(symbol, current_iv)
         return False
+
+    async def _process_and_throttle_actions(self, actions: List[TradeAction]) -> List[TradeAction]:
+        if not actions:
+            return actions
+
+        throttle_mult = await self.get_throttle_multiplier()
+
+        for action in actions:
+            action.strategy_params["throttle_mult"] = throttle_mult
+
+            # Resolve/write prediction to the ledger
+            pop = action.strategy_params.get("pop")
+            if pop is None:
+                delta = action.strategy_params.get("delta")
+                if delta is None:
+                    delta = action.strategy_params.get("short_delta")
+                pop = 1.0 - abs(float(delta)) if delta is not None else 0.70
+
+            dte = action.dte or 7
+            spot = action.strategy_params.get("spot")
+            if spot is None:
+                try:
+                    spot = await self.broker.last_price(action.symbol)
+                except Exception:
+                    pass
+            if spot is None:
+                spot = 100.0
+
+            await self.write_prediction_to_ledger(action.symbol, float(pop), float(spot), int(dte))
+
+        return actions
+
+    async def get_throttle_multiplier(self) -> float:
+        try:
+            t = await self.load_tunables()
+            raw_window = t.get(f"{self.KEY_PREFIX}throttle_window")
+            window = int(raw_window) if raw_window is not None else 0
+        except Exception:
+            window = 0
+
+        if window <= 0:
+            return 1.0
+
+        try:
+            raw_drift = t.get(f"{self.KEY_PREFIX}throttle_drift_threshold")
+            drift_threshold = float(raw_drift) if raw_drift is not None else 0.0
+            
+            raw_floor = t.get(f"{self.KEY_PREFIX}throttle_floor_mult")
+            floor_mult = float(raw_floor) if raw_floor is not None else 1.0
+        except Exception:
+            drift_threshold = 0.0
+            floor_mult = 1.0
+
+        floor_mult = min(1.0, max(0.0, floor_mult))
+
+        from hermes.ml.ledger import PredictionLedger
+        if PredictionLedger is None:
+            return 1.0
+
+        try:
+            from sqlalchemy import select
+            stmt = (
+                select(PredictionLedger)
+                .filter(
+                    PredictionLedger.model_name == self.NAME,
+                    PredictionLedger.realized_outcome.is_not(None)
+                )
+                .order_by(PredictionLedger.ts.desc())
+                .limit(window)
+            )
+            async with self.db.AsyncSession() as session:
+                res = await session.execute(stmt)
+                rows = res.scalars().all()
+
+            if len(rows) < window:
+                logger.debug(
+                    "[THROTTLE] %s has insufficient history (%d/%d closed predictions); returning multiplier 1.0",
+                    self.NAME, len(rows), window
+                )
+                return 1.0
+
+            outcomes = [float(r.realized_outcome) for r in rows if r.realized_outcome is not None]
+            probs = [float(r.predicted_prob or 0.0) for r in rows]
+
+            if not outcomes:
+                return 1.0
+
+            realized_win_rate = sum(outcomes) / len(outcomes)
+            calibrated_pop = sum(probs) / len(probs)
+
+            drift = calibrated_pop - realized_win_rate
+            if drift > drift_threshold:
+                logger.warning(
+                    "[THROTTLE] %s underperforming: realized win rate %.1f%% drifts below calibrated POP %.1f%% by %.1f%% (threshold %.1f%%). Scaling size by %.2f",
+                    self.NAME, realized_win_rate * 100, calibrated_pop * 100, drift * 100, drift_threshold * 100, floor_mult
+                )
+                return floor_mult
+
+            return 1.0
+        except Exception as exc:
+            logger.warning("[THROTTLE] %s failed to compute throttle: %s. Fails open to 1.0.", self.NAME, exc)
+            return 1.0
+
+    async def write_prediction_to_ledger(self, symbol: str, pop: float, spot: float, horizon_dte: int) -> None:
+        from hermes.ml.ledger import write_record, LedgerRecord
+        try:
+            await write_record(self.db, LedgerRecord(
+                symbol=symbol,
+                model_name=self.NAME,
+                horizon_dte=horizon_dte,
+                model_hash=None,
+                schema_hash=None,
+                schema_stage="strategy_qualification",
+                predicted_prob=pop,
+                predicted_prob_lo=None,
+                predicted_prob_hi=None,
+                predicted_return=None,
+                spot=spot,
+                feature_vector={},
+            ))
+            logger.debug("[THROTTLE] Logged prediction to ledger for %s: %s (POP=%.2f DTE=%d)", self.NAME, symbol, pop, horizon_dte)
+        except Exception as exc:
+            logger.warning("[THROTTLE] Failed to write prediction to ledger for %s: %s", self.NAME, exc)
 
     # ---- API expected by the cascading engine ------------------------------
     @abstractmethod

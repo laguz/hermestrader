@@ -101,6 +101,12 @@ _CATALOG: List[Tunable] = [
        help="Number of days to look ahead for earnings and macro events to block entries."),
     _f("cs75_min_ivr", 0.0, "CS75", "Minimum IV Rank", min=0.0, max=100.0,
        help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
+    _i("cs75_throttle_window", 0, "CS75", "Throttle Window", min=0, max=100,
+       help="Number of past closed predictions to monitor for underperformance (0 is OFF)."),
+    _f("cs75_throttle_drift_threshold", 0.05, "CS75", "Throttle Drift Threshold", min=0.0, max=1.0,
+       help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
+    _f("cs75_throttle_floor_mult", 1.0, "CS75", "Throttle Floor Multiplier", min=0.0, max=1.0,
+       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
 
     # ── CS7 (priority 2; ~7 DTE short-cycle spreads) ───────────────────────
     _f("cs7_width", 1.0, "CS7", "Spread width ($)", min=0.5, max=50,
@@ -125,6 +131,12 @@ _CATALOG: List[Tunable] = [
        help="Number of days to look ahead for earnings and macro events to block entries."),
     _f("cs7_min_ivr", 0.0, "CS7", "Minimum IV Rank", min=0.0, max=100.0,
        help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
+    _i("cs7_throttle_window", 0, "CS7", "Throttle Window", min=0, max=100,
+       help="Number of past closed predictions to monitor for underperformance (0 is OFF)."),
+    _f("cs7_throttle_drift_threshold", 0.05, "CS7", "Throttle Drift Threshold", min=0.0, max=1.0,
+       help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
+    _f("cs7_throttle_floor_mult", 1.0, "CS7", "Throttle Floor Multiplier", min=0.0, max=1.0,
+       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
 
     # ── TT45 (priority 3; 16Δ verticals, 30–60 DTE) ────────────────────────
     _f("tt45_width", 5.0, "TT45", "Spread width ($)", min=0.5, max=50,
@@ -145,6 +157,12 @@ _CATALOG: List[Tunable] = [
        help="Number of days to look ahead for earnings and macro events to block entries."),
     _f("tt45_min_ivr", 0.0, "TT45", "Minimum IV Rank", min=0.0, max=100.0,
        help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
+    _i("tt45_throttle_window", 0, "TT45", "Throttle Window", min=0, max=100,
+       help="Number of past closed predictions to monitor for underperformance (0 is OFF)."),
+    _f("tt45_throttle_drift_threshold", 0.05, "TT45", "Throttle Drift Threshold", min=0.0, max=1.0,
+       help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
+    _f("tt45_throttle_floor_mult", 1.0, "TT45", "Throttle Floor Multiplier", min=0.0, max=1.0,
+       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
 
     # ── WHEEL (priority 4; CSP → assignment → covered call) ────────────────
     _f("wheel_delta", 0.30, "WHEEL", "Short Δ target", min=0.0, max=1.0,
@@ -163,6 +181,12 @@ _CATALOG: List[Tunable] = [
        help="Number of days to look ahead for earnings and macro events to block entries."),
     _f("wheel_min_ivr", 0.0, "WHEEL", "Minimum IV Rank", min=0.0, max=100.0,
        help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
+    _i("wheel_throttle_window", 0, "WHEEL", "Throttle Window", min=0, max=100,
+       help="Number of past closed predictions to monitor for underperformance (0 is OFF)."),
+    _f("wheel_throttle_drift_threshold", 0.05, "WHEEL", "Throttle Drift Threshold", min=0.0, max=1.0,
+       help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
+    _f("wheel_throttle_floor_mult", 1.0, "WHEEL", "Throttle Floor Multiplier", min=0.0, max=1.0,
+       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
 
     # ── Lot sizing (catalog visibility only) ───────────────────────────────
     # These keep their existing read path (routes/strategies.py _LOT_SPECS +
@@ -193,6 +217,12 @@ _CATALOG: List[Tunable] = [
        help="Number of days to look ahead for earnings and macro events to block entries."),
     _f("hermesalpha_min_ivr", 0.0, "HERMESALPHA", "Minimum IV Rank", min=0.0, max=100.0,
        help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
+    _i("hermesalpha_throttle_window", 0, "HERMESALPHA", "Throttle Window", min=0, max=100,
+       help="Number of past closed predictions to monitor for underperformance (0 is OFF)."),
+    _f("hermesalpha_throttle_drift_threshold", 0.05, "HERMESALPHA", "Throttle Drift Threshold", min=0.0, max=1.0,
+       help="Win rate drift below predicted POP before throttle engages (e.g. 0.05 is 5%)."),
+    _f("hermesalpha_throttle_floor_mult", 1.0, "HERMESALPHA", "Throttle Floor Multiplier", min=0.0, max=1.0,
+       help="Sizing multiplier applied when throttle is engaged (1.0 is no reduction)."),
 
     # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
     _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,

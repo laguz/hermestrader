@@ -236,6 +236,7 @@ class StubDB:
 
         self.pending_orders: List[Any] = []
         self._open_trades: Dict[str, List[Dict[str, Any]]] = {}
+        self._prediction_ledger: List[Any] = []
         self._implied_vols: Dict[str, List[Tuple[date, float]]] = {}
         self._closing_trades: Dict[str, List[Dict[str, Any]]] = {}
         self._closed_trades: Dict[str, List[Dict[str, Any]]] = {}
@@ -437,6 +438,9 @@ class StubDB:
                 res.append((d, iv))
         return res
 
+    def AsyncSession(self):
+        return StubAsyncSession(self)
+
 
     async def queue_for_approval(self, action_dict, action_type="entry", status="PENDING"):
         app_id = self._next_approval_id
@@ -623,3 +627,74 @@ def make_trade(strategy_id: str, symbol: str, *,
         "expiry": expiry,
         "status": "OPEN",
     }
+
+
+class StubAsyncSession:
+    def __init__(self, db):
+        self.db = db
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+    async def execute(self, stmt, params=None):
+        return StubResult(self.db, stmt, params)
+    async def commit(self):
+        pass
+    async def rollback(self):
+        pass
+    def add(self, row):
+        self.db._prediction_ledger.append(row)
+
+
+class StubResult:
+    def __init__(self, db, stmt, params):
+        self.db = db
+        self.stmt = stmt
+        self.params = params
+        
+        stmt_str = str(self.stmt)
+        # Handle mock update queries in memory immediately on execution
+        if "UPDATE" in stmt_str.upper():
+            val = 0.0
+            if "realized_outcome = 1.0" in stmt_str or (params and "realized_outcome = 1.0" in params):
+                val = 1.0
+            if "WHERE id =" in stmt_str or (params and "WHERE id =" in params):
+                if self.db._prediction_ledger:
+                    self.db._prediction_ledger[0].realized_outcome = val
+            else:
+                for r in self.db._prediction_ledger:
+                    r.realized_outcome = val
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        stmt_str = str(self.stmt)
+        model_name = None
+        try:
+            params = self.stmt.compile().params
+            for k, v in params.items():
+                if "model_name" in k:
+                    model_name = v
+                    break
+        except Exception:
+            pass
+
+        rows = self.db._prediction_ledger
+        if model_name:
+            rows = [r for r in rows if r.model_name == model_name]
+
+        rows = sorted(rows, key=lambda r: r.ts if r.ts is not None else datetime.min, reverse=True)
+        return rows
+
+    def fetchall(self):
+        rows = self.all()
+        res = []
+        for r in rows:
+            symbol = getattr(r, "symbol", "")
+            model_name = getattr(r, "model_name", "")
+            predicted_prob = getattr(r, "predicted_prob", 0.0)
+            res.append((symbol, model_name, predicted_prob))
+        return res
+
+
