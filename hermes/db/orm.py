@@ -105,6 +105,14 @@ class Trade(Base):
     # tuner / contextual bandit trains on. Nullable: trades opened before this
     # column existed, and any path that can't assemble it, simply leave it NULL.
     entry_features = Column(JSONB)
+    # Execution-quality measurement. ``mid_at_submit`` is the net quote
+    # midpoint of the order's legs captured when the entry was submitted, in
+    # the same credit/debit convention as ``entry_credit``/``entry_debit``.
+    # ``entry_slippage`` is fill-vs-mid per contract (positive = filled worse
+    # than mid), written when the broker's actual fill reconciles. NULL on
+    # both means "unknown" — never coerce to 0.
+    mid_at_submit = Column(Numeric(10, 4))
+    entry_slippage = Column(Numeric(10, 4))
 
     __table_args__ = (
         Index("idx_trades_strategy_status", "strategy_id", "status", "symbol"),

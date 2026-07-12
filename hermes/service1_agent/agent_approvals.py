@@ -133,6 +133,11 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     )
     close_method = getattr(db.trades, "close_trade_from_action", None)
 
+    # Same mid-at-submit capture as _engine_pipeline._execute_or_queue —
+    # measured here (after human approval), not at proposal time, so the mid
+    # reflects the market the order actually goes out into.
+    from hermes.service1_agent.execution_quality import capture_submission_mid
+    await capture_submission_mid(async_broker, action)
     await db.trades.record_pending_order(action)
     # Same order-replacement contract as _engine_pipeline._execute_or_queue:
     # cancel the superseded resting close first, and abort if the cancel

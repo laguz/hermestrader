@@ -453,6 +453,59 @@ class TradierBroker(AbstractBroker):
             "today_open": today_open,
         }
 
+    @staticmethod
+    def _quote_mid(quote: Optional[Dict[str, Any]]) -> Optional[float]:
+        """Bid/ask midpoint of one quote, or None when the market is unusable
+        (missing quote, empty book, crossed bid/ask)."""
+        if not quote:
+            return None
+        bid, ask = quote.get("bid"), quote.get("ask")
+        if bid is None or ask is None:
+            return None
+        bid, ask = float(bid), float(ask)
+        if ask <= 0.0 or bid < 0.0 or ask < bid:
+            return None
+        return (bid + ask) / 2.0
+
+    async def get_action_net_mid(self, action) -> Optional[float]:
+        """Net bid/ask midpoint of an order's legs right now, quoted in the
+        same convention as ``action.price``: a positive net credit for credit
+        orders, a positive net debit otherwise (the same classification
+        ``TradesRepository.record_order_response`` applies when it picks
+        ``entry_credit`` vs ``entry_debit``, so the stored mid always compares
+        against the matching column).
+
+        Execution-quality measurement only — never called by order placement.
+        Returns None whenever any leg's market is unusable, or the net mid is
+        non-positive under the assumed convention, rather than fabricating a
+        value.
+        """
+        order_class = (action.order_class or "multileg").lower()
+        if order_class == "equity":
+            quotes = await self.get_quote(action.symbol)
+            return self._quote_mid(quotes[0] if quotes else None)
+
+        legs = action.legs or []
+        symbols = [str(leg.get("option_symbol") or "") for leg in legs]
+        if not symbols or not all(symbols):
+            return None
+        quotes = await self.get_quote(",".join(symbols))
+        by_symbol = {q.get("symbol"): q for q in quotes or []}
+        net = 0.0
+        for leg, sym in zip(legs, symbols):
+            mid = self._quote_mid(by_symbol.get(sym))
+            if mid is None:
+                return None
+            try:
+                leg_action = self._leg_action(leg, default_open=True)
+            except ValueError:
+                return None
+            net += mid if "sell" in leg_action else -mid
+        ot = (action.order_type or "").lower()
+        is_credit = ot == "credit" or (ot == "" and (action.side or "").lower() == "sell")
+        net_mid = net if is_credit else -net
+        return net_mid if net_mid > 0.0 else None
+
     async def place_order_from_action(self, action) -> OrderPlacementResult:
         legs = action.legs or []
         if not legs:
