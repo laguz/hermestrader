@@ -7,6 +7,11 @@ export const state = reactive({
     all: []
   },
   hotkeysHelpOpen: false,
+  // Typed-confirmation modal for dangerous arming actions ('live' | 'auto').
+  armModal: {
+    open: false,
+    kind: null
+  },
   logs: [],
   watchlistData: {
     per_strategy: {},
@@ -344,8 +349,10 @@ export async function togglePause() {
   }
 }
 
+// Raw setters — no confirmation. Dangerous directions must go through
+// requestSetMode / requestAutonomousLive, which open the typed-confirmation
+// modal (ArmModal) before calling these.
 export async function setMode(mode) {
-  if (mode === 'live' && !confirm('Switch to LIVE trading? Real money will be at risk.')) return
   try {
     await api('PUT', '/api/mode', { mode })
     await loadStatus()
@@ -356,10 +363,6 @@ export async function setMode(mode) {
 }
 
 export async function setAutonomousLive(enabled) {
-  if (enabled && !confirm(
-    'Arm FULL AUTONOMY?\n\nEVERY strategy (CS75, Wheel, Alpha, …) will place orders with NO human approval. ' +
-    'Paper/Live still applies — flip Live separately to risk real money.'
-  )) return
   try {
     await api('PUT', '/api/alpha-autonomous', { enabled })
     await loadStatus()
@@ -370,6 +373,26 @@ export async function setAutonomousLive(enabled) {
   } catch (e) {
     showToast('Error: ' + e.message, true)
   }
+}
+
+export function requestSetMode(mode) {
+  if (mode === 'live' && state.status.mode !== 'live') {
+    state.armModal = { open: true, kind: 'live' }
+    return
+  }
+  return setMode(mode)
+}
+
+export function requestAutonomousLive(enabled) {
+  if (enabled && !state.status.alpha_autonomous_live) {
+    state.armModal = { open: true, kind: 'auto' }
+    return
+  }
+  return setAutonomousLive(enabled)
+}
+
+export function closeArmModal() {
+  state.armModal = { open: false, kind: null }
 }
 
 export async function setApprovalMode(enabled) {

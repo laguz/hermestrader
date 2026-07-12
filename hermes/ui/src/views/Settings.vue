@@ -10,7 +10,6 @@ import {
   saveSoul,
   saveAutonomy,
   toggleStrategy,
-  setMode,
   saveLLM as apiSaveLLM,
   saveLots,
   addSymbol,
@@ -256,7 +255,7 @@ function triggerUpdateInfo() {
         @click="activeTab = tab"
       >
         <Icon :name="tab === 'soul' ? 'clipboard' : tab === 'strats' ? 'sliders' : tab === 'watchlists' ? 'calculator' : tab === 'llm' ? 'lock' : 'alert'" :size="16" />
-        {{ tab === 'soul' ? 'Soul Doctrine' : tab === 'strats' ? 'Pipelines' : tab === 'watchlists' ? 'Watchlists' : tab === 'llm' ? 'LLM Overseer' : 'Diagnostics' }}
+        {{ tab === 'soul' ? 'Soul Doctrine' : tab === 'strats' ? 'Strategies' : tab === 'watchlists' ? 'Watchlists' : tab === 'llm' ? 'LLM Overseer' : 'Diagnostics' }}
       </button>
     </nav>
     
@@ -267,7 +266,7 @@ function triggerUpdateInfo() {
         <!-- SOUL DOCTRINE -->
         <div v-if="activeTab === 'soul'" class="tab-panel">
           <div class="tab-sec-title">Agent Operating Doctrine</div>
-          <p class="tab-sec-desc">Define prompt boundaries, trade filters, rules rules of safety, and direct autonomy constraints.</p>
+          <p class="tab-sec-desc">The operating principles the LLM overseer follows: prompt boundaries, trade filters, safety rules, and how much autonomy it gets.</p>
           
           <div class="form-group">
             <label>Autonomy Level</label>
@@ -293,7 +292,7 @@ function triggerUpdateInfo() {
         <!-- STRATEGY TOGGLES -->
         <div v-if="activeTab === 'strats'" class="tab-panel">
           <div class="tab-sec-title">Enable / Disable Strategies</div>
-          <p class="tab-sec-desc">Active pipelines tick on schedule. Disabled lines are bypassed.</p>
+          <p class="tab-sec-desc">Enabled strategies are evaluated every tick in priority order; disabled strategies are skipped entirely.</p>
           
           <div class="strategy-toggles">
             <div v-for="sid in (state.watchlistData?.strategies || ['CS75', 'CS7', 'TT45', 'WHEEL', 'HermesAlpha'])" :key="sid" class="strategy-toggle-row">
@@ -312,7 +311,7 @@ function triggerUpdateInfo() {
         <!-- WATCHLISTS & LOTS -->
         <div v-if="activeTab === 'watchlists'" class="tab-panel">
           <div class="tab-sec-title">Watchlists &amp; Lots Configuration</div>
-          <p class="tab-sec-desc">Manage specific watchlists scanned by each strategy and target lot sizes.</p>
+          <p class="tab-sec-desc">Set the symbols each strategy scans and its target / max lot sizes. Strategies without a custom list fall back to the global default.</p>
           
           <div class="strategies-config">
             <div v-for="sid in state.watchlistData?.strategies" :key="sid" class="strategy-watchlist-section">
@@ -372,7 +371,7 @@ function triggerUpdateInfo() {
         <!-- LLM OVERSEER CONFIG -->
         <div v-if="activeTab === 'llm'" class="tab-panel">
           <div class="tab-sec-title">LLM Client Configuration</div>
-          <p class="tab-sec-desc">Configure target API model keys and timeouts mapping LLM visual and logical evaluations.</p>
+          <p class="tab-sec-desc">Provider, model, API key, and timeouts for the LLM overseer that reviews and proposes trades.</p>
           
           <div class="form-group">
             <label>API Provider</label>
@@ -422,8 +421,8 @@ function triggerUpdateInfo() {
         
         <!-- DIAGNOSTICS -->
         <div v-if="activeTab === 'diagnostics'" class="tab-panel">
-          <div class="tab-sec-title">Status Diagnostics &amp; Loops</div>
-          <p class="tab-sec-desc">Continuous feedback loop logs and connection health checks.</p>
+          <div class="tab-sec-title">Diagnostics</div>
+          <p class="tab-sec-desc">Connection health checks and the live agent activity log.</p>
           
           <div class="status-grid-diag">
             <div class="diag-row">

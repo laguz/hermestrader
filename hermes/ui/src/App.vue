@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   state,
@@ -12,9 +12,21 @@ import {
 } from './state'
 import BotOpsBar from './components/BotOpsBar.vue'
 import TraderBar from './components/TraderBar.vue'
+import ArmModal from './components/ArmModal.vue'
 import Icon from './components/Icon.vue'
 
 const route = useRoute()
+
+const armedLive = computed(() => state.status.mode === 'live')
+const armedAuto = computed(() => !!state.status.alpha_autonomous_live)
+const armedText = computed(() => {
+  if (armedLive.value && armedAuto.value) {
+    return 'LIVE + AUTO-EXECUTE — strategies place real-money orders with no approval'
+  }
+  if (armedLive.value) return 'LIVE TRADING — orders use real money'
+  if (armedAuto.value) return 'AUTO-EXECUTE ARMED — entries skip the approval queue (paper route)'
+  return ''
+})
 
 function isTypingTarget(el) {
   if (!el) return false
@@ -58,26 +70,36 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <!-- Sidebar Navigation (Slim Mockup Style) -->
+  <!-- Sidebar Navigation -->
   <aside class="sidebar">
     <div class="sidebar-header">
       <div class="logo" title="HermesTrader"><Icon name="logo" :size="22" /></div>
+      <span class="brand">Hermes</span>
       <div class="connection-status" :class="{ connected: state.isConnected }" :title="state.isConnected ? 'Connected' : 'Connecting...'"></div>
     </div>
-    
+
+    <!-- Active state keys off route.name (not router-link's param matching,
+         which drops activeness on /analytics/:tab child links). -->
     <nav class="sidebar-nav">
-      <router-link to="/" class="nav-item" exact-active-class="active" title="Dashboard">
-        <span class="icon"><Icon name="dashboard" :size="20" /></span>
-        <span v-if="state.status.pending_approvals > 0" class="nav-badge"></span>
+      <router-link to="/" class="nav-item" :class="{ active: route.name === 'Dashboard' }">
+        <span class="icon"><Icon name="dashboard" :size="18" /></span>
+        <span class="nav-label">Dashboard</span>
       </router-link>
-      <router-link to="/charts" class="nav-item" exact-active-class="active" title="Markets">
-        <span class="icon"><Icon name="chart-line" :size="20" /></span>
+      <router-link to="/charts" class="nav-item" :class="{ active: route.name === 'Markets' }">
+        <span class="icon"><Icon name="chart-line" :size="18" /></span>
+        <span class="nav-label">Markets</span>
       </router-link>
-      <router-link to="/analytics" class="nav-item" exact-active-class="active" title="Bots">
-        <span class="icon"><Icon name="bot" :size="20" /></span>
+      <router-link to="/analytics" class="nav-item" :class="{ active: route.name === 'Analytics' }">
+        <span class="icon"><Icon name="chart-bar" :size="18" /></span>
+        <span class="nav-label">Analytics</span>
       </router-link>
-      <router-link to="/settings" class="nav-item" exact-active-class="active" title="Settings">
-        <span class="icon"><Icon name="settings" :size="20" /></span>
+      <router-link to="/docs" class="nav-item" :class="{ active: route.name === 'Docs' }">
+        <span class="icon"><Icon name="book" :size="18" /></span>
+        <span class="nav-label">Docs</span>
+      </router-link>
+      <router-link to="/settings" class="nav-item" :class="{ active: route.name === 'Settings' }">
+        <span class="icon"><Icon name="settings" :size="18" /></span>
+        <span class="nav-label">Settings</span>
       </router-link>
     </nav>
   </aside>
@@ -85,14 +107,17 @@ onUnmounted(() => {
   <!-- Main Viewport -->
   <div class="main-viewport">
     <div class="sticky-top">
+      <div v-if="armedText" class="armed-banner">
+        <Icon name="alert" :size="14" />
+        <span>{{ armedText }}</span>
+        <router-link to="/" class="armed-manage">Manage</router-link>
+      </div>
       <header class="main-header">
-        <h2 class="view-title">
-          {{ $route.name === 'Analytics' ? 'Hermes Analytics' : $route.name === 'ChartVision' ? 'Chart Vision Analysis' : $route.name === 'Settings' ? 'System Settings' : 'C2 Control Room' }}
-        </h2>
+        <h2 class="view-title">{{ route.name }}</h2>
         <div class="header-actions">
-          <span v-if="state.status.pending_approvals > 0" class="pending-badge animate-pulse">
+          <router-link v-if="state.status.pending_approvals > 0" to="/" class="pending-badge animate-pulse">
             {{ state.status.pending_approvals }} pending
-          </span>
+          </router-link>
           <button
             v-if="state.status.hermes_running"
             :class="state.status.paused ? 'btn-resume' : 'btn-pause'"
@@ -113,6 +138,9 @@ onUnmounted(() => {
       <router-view />
     </main>
   </div>
+
+  <!-- Typed-confirmation modal for Live / Auto-Execute arming -->
+  <ArmModal />
 
   <!-- Hotkeys Help Modal -->
   <div
@@ -156,11 +184,18 @@ onUnmounted(() => {
 }
 
 .sidebar-header {
-  padding: 24px 0;
+  padding: 20px 16px;
   display: flex;
-  flex-direction: column;
   align-items: center;
+  gap: 10px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.brand {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-extrabold);
+  letter-spacing: 0.02em;
+  flex-grow: 1;
 }
 
 .logo {
@@ -172,7 +207,6 @@ onUnmounted(() => {
 }
 
 .connection-status {
-  margin-top: 8px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -185,24 +219,23 @@ onUnmounted(() => {
 }
 
 .sidebar-nav {
-  padding: 24px 0;
+  padding: 16px 10px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 16px;
+  gap: 4px;
   flex-grow: 1;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
+  gap: 12px;
+  padding: 10px 12px;
   color: var(--text-muted);
   border-radius: var(--radius-md);
+  font-size: var(--fs-base);
+  font-weight: var(--fw-semibold);
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  position: relative;
 }
 .nav-item:hover {
   color: var(--text-primary);
@@ -216,17 +249,6 @@ onUnmounted(() => {
 .nav-item .icon {
   display: inline-flex;
   align-items: center;
-}
-
-.nav-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 8px;
-  height: 8px;
-  background-color: var(--color-orange);
-  border-radius: 50%;
-  box-shadow: 0 0 6px var(--color-orange);
 }
 
 .main-viewport {
@@ -273,6 +295,38 @@ onUnmounted(() => {
   padding: 3px 10px;
   font-size: 11px;
   font-weight: 700;
+  text-decoration: none;
+}
+.pending-badge:hover {
+  color: #060913;
+  filter: brightness(1.1);
+}
+
+.armed-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 30px;
+  background: rgba(249, 115, 22, 0.14);
+  border-bottom: 1px solid rgba(249, 115, 22, 0.4);
+  color: var(--live);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.armed-manage {
+  margin-left: auto;
+  color: var(--live);
+  border: 1px solid rgba(249, 115, 22, 0.45);
+  border-radius: var(--radius-sm);
+  padding: 1px 8px;
+  font-size: var(--fs-2xs);
+  text-transform: uppercase;
+}
+.armed-manage:hover {
+  background: var(--live-glow);
+  color: var(--live);
 }
 
 @keyframes pulse {
@@ -369,7 +423,6 @@ onUnmounted(() => {
   }
   .sidebar-header {
     padding: 12px 0;
-    flex-direction: row;
     gap: 12px;
     border-bottom: none;
   }
@@ -379,8 +432,9 @@ onUnmounted(() => {
     gap: 8px;
     flex-grow: 0;
   }
-  .connection-status {
-    margin-top: 0;
+  .brand,
+  .nav-label {
+    display: none;
   }
   .main-viewport {
     height: auto;
