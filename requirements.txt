@@ -39,4 +39,6 @@ sse-starlette==3.4.4
 transitions==0.9.3
 greenlet==3.5.1
 redis==5.0.8
+yfinance==1.5.1
+
 
