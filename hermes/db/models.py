@@ -29,7 +29,7 @@ from hermes.db.orm import (
     AIDecision, Base, BotLog, EventLedger, ExitTick, OperatorCommand,
     PendingApproval, PendingOrder, Prediction, Strategy, StrategyWatchlist,
     SystemSetting, Trade, VetoSuppression, _close_reason_from_tag,
-    _compute_realized_pnl, sync_to_async_dsn,
+    _compute_realized_pnl, sync_to_async_dsn, PortfolioGreeksSnapshot,
 )
 from hermes.db.repositories import (
     AnalyticsRepository, ApprovalsRepository, CommandsRepository,
@@ -43,7 +43,7 @@ __all__ = [
     "Base", "Strategy", "StrategyWatchlist", "Trade", "PendingOrder",
     "PendingApproval", "VetoSuppression", "BotLog", "EventLedger", "AIDecision", "Prediction",
     "SystemSetting", "OperatorCommand", "ExitTick", "HermesDB", "sync_to_async_dsn",
-    "_close_reason_from_tag", "_compute_realized_pnl",
+    "_close_reason_from_tag", "_compute_realized_pnl", "PortfolioGreeksSnapshot",
 ]
 
 

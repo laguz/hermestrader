@@ -258,3 +258,13 @@ async def get_debug_info() -> Dict[str, Any]:
             result["db"]["pop_calibration"] = None
 
     return result
+
+
+@router.get("/api/status/greeks")
+async def get_greeks() -> Dict[str, Any]:
+    """Expose the latest portfolio Greeks snapshot."""
+    snapshot = await db.trades.get_latest_greeks_snapshot()
+    if snapshot is None:
+        return {"net_delta": 0.0, "net_vega": 0.0, "net_theta": 0.0, "ts": None}
+    return snapshot
+

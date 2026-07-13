@@ -535,6 +535,8 @@ class CascadingEngine:
             self.mm.clear_edge_stats_cache()
             await self.mm.sync_broker_orders()
         await self.reconcile_orphans()
+        if self.risk_engine is not None:
+            await self.risk_engine.record_portfolio_greeks()
         mgmt = await self.process_management()
         await self.submit(mgmt, action_type="management")
 

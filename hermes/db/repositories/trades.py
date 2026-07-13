@@ -846,3 +846,36 @@ class TradesRepository(Repository):
             "entry_debit": float(r.entry_debit) if r.entry_debit is not None else None,
             "expiry": r.expiry, "status": r.status,
         }
+
+    async def save_greeks_snapshot(self, net_delta: float, net_vega: float, net_theta: float, ts: Optional[datetime] = None) -> None:
+        """Save a portfolio Greeks snapshot (Service-1 only)."""
+        from hermes.db.orm import PortfolioGreeksSnapshot
+        from datetime import timezone
+        if ts is None:
+            ts = datetime.now(timezone.utc)
+        async with self.AsyncSession() as session:
+            snapshot = PortfolioGreeksSnapshot(
+                net_delta=net_delta,
+                net_vega=net_vega,
+                net_theta=net_theta,
+                ts=ts
+            )
+            session.add(snapshot)
+            await session.commit()
+
+    async def get_latest_greeks_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Fetch the latest portfolio Greeks snapshot (Service-2 read-only)."""
+        from hermes.db.orm import PortfolioGreeksSnapshot
+        async with self.AsyncSession() as session:
+            stmt = select(PortfolioGreeksSnapshot).order_by(PortfolioGreeksSnapshot.ts.desc()).limit(1)
+            result = await session.execute(stmt)
+            row = result.scalars().first()
+            if row:
+                return {
+                    "ts": row.ts.isoformat() if row.ts else None,
+                    "net_delta": float(row.net_delta),
+                    "net_vega": float(row.net_vega),
+                    "net_theta": float(row.net_theta),
+                }
+            return None
+

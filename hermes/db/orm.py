@@ -370,6 +370,15 @@ class ImpliedVolatility(Base):
     iv = Column(Numeric(12, 6), nullable=False)
 
 
+class PortfolioGreeksSnapshot(Base):
+    """Snapshot of portfolio-level aggregated Greeks per tick."""
+    __tablename__ = "portfolio_greeks_snapshots"
+    ts = Column(DateTime(timezone=True), default=utc_now, primary_key=True)
+    net_delta = Column(Numeric(12, 4), nullable=False)
+    net_vega = Column(Numeric(12, 4), nullable=False)
+    net_theta = Column(Numeric(12, 4), nullable=False)
+
+
 # ---------------------------------------------------------------------------
 # Realized-PnL + tag helpers (module-level so they're trivially testable
 # without a live DB).
