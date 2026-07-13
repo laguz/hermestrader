@@ -56,3 +56,7 @@ scratch/
 hermes/scratch/
 .DS_Store
 hermes/.DS_Store
+
+# ── Replay corpus data ──────────────────────────────────────────────────
+data/
+

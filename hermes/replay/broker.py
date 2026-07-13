@@ -79,6 +79,8 @@ class ReplayBroker(MockBroker):
         self._margin: Dict[str, Dict[str, Any]] = {}
         self.fills: List[Dict[str, Any]] = []
         self.settlements: List[Dict[str, Any]] = []
+        self.used_synthetic_pricing = False
+
 
     # ── simulated time ───────────────────────────────────────────────────────
     def set_time(self, sim_dt: datetime) -> None:
@@ -99,7 +101,12 @@ class ReplayBroker(MockBroker):
         return self.data.spot(symbol, self._now())
 
     def _sigma(self, symbol: str) -> float:
-        """Annualized trailing-21-bar realized vol (deterministic, floored)."""
+        """Annualized IV proxy if available in data, else trailing-21-bar realized vol."""
+        self.used_synthetic_pricing = True
+        val = self.data.iv_proxy(symbol, self._now())
+        if val is not None and val > 0:
+            return max(self.vol_floor, val)
+
         bars = self.data.completed_daily(symbol, self._now())
         closes = bars["close"].dropna() if not bars.empty else pd.Series(dtype=float)
         if len(closes) < 5:
@@ -111,6 +118,7 @@ class ReplayBroker(MockBroker):
         if not math.isfinite(vol):
             return 0.30
         return max(self.vol_floor, vol)
+
 
     def _tte_years(self, expiry: date) -> float:
         # Options expire at the 16:00 ET close on expiry day.

@@ -69,7 +69,10 @@ class ReplayDataSource:
         for col in _DAILY_COLS:
             if col in out.columns:
                 out[col] = pd.to_numeric(out[col], errors="coerce")
+        if "iv_proxy" in out.columns:
+            out["iv_proxy"] = pd.to_numeric(out["iv_proxy"], errors="coerce")
         return out.sort_index()
+
 
     # ---- constructors -----------------------------------------------------
     @classmethod
@@ -127,6 +130,19 @@ class ReplayDataSource:
             return pd.DataFrame(columns=_DAILY_COLS)
         cutoff = _et_date(_naive_utc(sim_dt))
         return df[[d.date() < cutoff for d in df.index]]
+
+    def iv_proxy(self, symbol: str, sim_dt: datetime) -> Optional[float]:
+        """Best lookahead-safe IV proxy estimate at ``sim_dt``.
+
+        Always returns the previous day's completed IV proxy to prevent lookahead.
+        """
+        completed = self.completed_daily(symbol, sim_dt)
+        if not completed.empty and "iv_proxy" in completed.columns:
+            val = completed["iv_proxy"].iloc[-1]
+            if pd.notna(val):
+                return float(val)
+        return None
+
 
     def today_bar(self, symbol: str, sim_dt: datetime) -> Optional[pd.Series]:
         df = self.daily.get(symbol.upper())

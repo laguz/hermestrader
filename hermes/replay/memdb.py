@@ -507,8 +507,43 @@ class ReplayDB:
                 return int(t["lots"])
         return 0
 
-    async def closed_trades_entry_features(self, limit: int = 500):
-        return []
+    async def closed_trades_entry_features(self, limit: int = 500) -> List[Dict[str, Any]]:
+        rows = [t for t in self._trades if t["status"] == "CLOSED"
+                and t.get("pnl") is not None
+                and t.get("entry_features") is not None]
+        rows = sorted(rows, key=lambda x: x["closed_at"] or datetime.min, reverse=True)
+        return [
+            {
+                "strategy_id": r["strategy_id"],
+                "symbol": r["symbol"],
+                "entry_features": r["entry_features"],
+                "pnl": float(r["pnl"]),
+                "closed_at": r["closed_at"]
+            }
+            for r in rows[:limit]
+        ]
+
+    async def get_realized_edge_stats(self, strategy_id: str, window_days: int) -> Dict[str, Any]:
+        from datetime import timedelta
+        cutoff = self._now() - timedelta(days=window_days)
+        closed_trades = [t for t in self._trades if t["strategy_id"] == strategy_id
+                         and t["status"] == "CLOSED"
+                         and t.get("closed_at") is not None
+                         and t["closed_at"] >= cutoff
+                         and t.get("pnl") is not None]
+        wins = [float(t["pnl"]) for t in closed_trades if float(t["pnl"]) > 0]
+        losses = [float(t["pnl"]) for t in closed_trades if float(t["pnl"]) < 0]
+        count = len(closed_trades)
+        return {
+            "win_rate": float(len(wins) / count) if count > 0 else 0.5,
+            "avg_win": float(sum(wins) / len(wins)) if wins else 0.0,
+            "avg_loss": float(sum(losses) / len(losses)) if losses else 0.0,
+            "count": count,
+        }
+
+    async def save_greeks_snapshot(self, net_delta: float, net_vega: float, net_theta: float, ts_now: Optional[datetime] = None) -> None:
+        pass
+
 
     # ── replay reporting surface ─────────────────────────────────────────────
     def closed_trade_rows(self) -> List[Dict[str, Any]]:

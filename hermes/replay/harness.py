@@ -225,8 +225,9 @@ class ReplayHarness:
                     await monitor
 
         trades = self.db.all_trade_rows()
-        report = build_report(trades, equity_curve)
+        report = build_report(trades, equity_curve, synthetic_pricing=getattr(self.broker, "used_synthetic_pricing", False))
         return ReplayResult(trades=trades, fills=list(self.broker.fills),
                             settlements=list(self.broker.settlements),
                             equity_curve=equity_curve, report=report,
                             ticks=ticks)
+
