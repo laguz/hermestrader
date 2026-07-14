@@ -149,7 +149,8 @@ const LOT_META = {
   CS7:  { hasTarget: true, targetDefault: 10, maxDefault: 10 },
   TT45: { hasTarget: true, targetDefault: 5,  maxDefault: 5 },
   WHEEL: { hasTarget: false, targetDefault: 5,  maxDefault: 5 },
-  HermesAlpha: { hasTarget: false, targetDefault: 1, maxDefault: 1 }
+  HermesAlpha: { hasTarget: false, targetDefault: 1, maxDefault: 1 },
+  DS0: { hasTarget: false, targetDefault: 1, maxDefault: 1 }
 }
 
 function adjustLotsLocal(sid, field, delta) {

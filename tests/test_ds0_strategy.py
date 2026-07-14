@@ -135,7 +135,7 @@ def _build_ds0(*, now_utc: datetime, expiry: str | None = None,
         {"symbol": s_.strip(), **quote} for s_ in symbols.split(",")]
     db = db or StubDB()
     db.set_watchlist("DS0", [SYM])
-    cfg = {"ds0_target_lots": 1, "ds0_max_lots": 1}
+    cfg = {"ds0_max_lots": 1}
     cfg.update(config or {})
     mm = MoneyManager(broker, db, cfg)
     s = DebitSpreads0DTE(broker=broker, db=db, money_manager=mm,
@@ -185,6 +185,44 @@ async def test_call_spread_arms_on_qualified_resistance():
     assert a.strategy_params["side_type"] == "call"
     assert "C00102000" in a.strategy_params["long_leg"]
     assert "C00103000" in a.strategy_params["short_leg"]
+
+
+async def test_lot_size_defaults_to_one():
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
+        chain=_entry_chain(expiry))
+    actions = await s.execute_entries([SYM])
+    assert len(actions) == 1
+    assert {leg["quantity"] for leg in actions[0].legs} == {1}
+
+
+async def test_ds0_max_lots_alone_controls_sizing():
+    # DS0 is max-only (like WHEEL): raising ds0_max_lots must size the
+    # entry up on its own, with no separate ds0_target_lots that can
+    # silently clamp it back down to 1 (the tunable was removed).
+    expiry = _et_today().isoformat()
+    s, _, _ = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
+        chain=_entry_chain(expiry), config={"ds0_max_lots": 10})
+    actions = await s.execute_entries([SYM])
+    assert len(actions) == 1
+    assert {leg["quantity"] for leg in actions[0].legs} == {10}
+
+
+async def test_per_symbol_watchlist_lots_override_global_max():
+    # An explicit "SYMBOL:LOTS" watchlist entry wins over ds0_max_lots.
+    expiry = _et_today().isoformat()
+    s, _, db = _build_ds0(
+        now_utc=_utc_at_et(11, 0), expiry=expiry,
+        analysis=_analysis(100.0, support=99.0, resistance=118.0),
+        chain=_entry_chain(expiry), config={"ds0_max_lots": 1})
+    db.set_watchlist("DS0", [f"{SYM}:7"])
+    actions = await s.execute_entries([f"{SYM}:7"])
+    assert len(actions) == 1
+    assert {leg["quantity"] for leg in actions[0].legs} == {7}
 
 
 async def test_both_sides_arm_on_the_same_day():
