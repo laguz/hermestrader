@@ -110,13 +110,15 @@ stop loss** — the debit paid is the entire accepted risk per side.
    side never blocks the call trigger on the same symbol. No intraday
    re-entry on the same side, even after a win — one shot per side per
    symbol per day.
-8. **Sizing**: `ds0_target_lots` / `ds0_max_lots` (global defaults, per-
-   symbol override via the watchlist as in rule 1), default **1 lot**
-   (operator wants risk "low"). Worst-case day = 2 sides × $0.10 × 100 ×
-   lots = **$20/lot-pair per watchlist symbol**, so total daily risk scales
-   with watchlist size — keep the watchlist short. Entries still flow
-   through `MoneyManager` and `PortfolioRiskEngine` like every other
-   strategy.
+8. **Sizing**: `ds0_max_lots` (global default, per-symbol override via the
+   watchlist as in rule 1), default **1 lot** (operator wants risk "low").
+   DS0 is max-only like WHEEL — there is no separate `ds0_target_lots`
+   that could silently clamp a raised `ds0_max_lots` back down; the max
+   setting (or a per-symbol/inline override) is what actually controls
+   size. Worst-case day = 2 sides × $0.10 × 100 × lots = **$20/lot-pair
+   per watchlist symbol**, so total daily risk scales with watchlist size
+   — keep the watchlist short. Entries still flow through `MoneyManager`
+   and `PortfolioRiskEngine` like every other strategy.
 
 ## Exit rules
 
@@ -209,7 +211,7 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 | `ds0_width` | 1 | vertical width (operator default, confirm) |
 | `ds0_atr_period` | 14 | completed daily bars in the Wilder ATR (v2) |
 | `ds0_sweep_min` | 0.13 | sweep floor — marks below it ride to expiry (v2) |
-| `ds0_target_lots` / `ds0_max_lots` | 1 / 1 | sizing (keep low) |
+| `ds0_max_lots` | 1 | sizing, max-only like WHEEL (keep low) |
 | `ds0_entry_cutoff` | 14:00 ET | no new entries after (operator default, confirm) |
 | `ds0_sweep_time` | 15:01 ET | the partial-profit/flatten sweep (v2: 15:01) |
 | `ds0_approval_ttl` | 900 s | unapproved entry auto-expiry |

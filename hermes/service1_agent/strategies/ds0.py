@@ -234,8 +234,11 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
             return actions
         own_syms = {s.split(":", 1)[0].strip().upper() for s in own_wl}
 
+        # DS0 is max-only sizing (like WHEEL): a single ds0_max_lots knob,
+        # no separate target that can silently clamp it back down. Per-symbol
+        # watchlist overrides (target_lots column or "SYMBOL:LOTS" inline
+        # syntax) are authoritative when present.
         max_lots_global = int(self.config.get("ds0_max_lots", 1))
-        target_lots_global = int(self.config.get("ds0_target_lots", 1))
         detailed_wl = await self.db.watchlist.list_watchlist_detailed(self.strategy_id)
         symbols = [s for s in dict.fromkeys(watchlist)
                    if s.split(":", 1)[0].strip().upper() in own_syms]
@@ -247,8 +250,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
 
         for sym_raw in symbols:
             try:
-                symbol, target_lots = self._parse_symbol(sym_raw, detailed_wl, target_lots_global)
-                target_lots = min(target_lots, max_lots_global)
+                symbol, target_lots = self._parse_symbol(sym_raw, detailed_wl, max_lots_global)
                 if target_lots <= 0:
                     continue
 

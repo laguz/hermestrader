@@ -211,7 +211,6 @@ _CATALOG: List[Tunable] = [
     _i("tt45_target_lots", 5, "LOTS", "TT45 target lots", min=1, max=100),
     _i("tt45_max_lots", 5, "LOTS", "TT45 max lots", min=1, max=100),
     _i("wheel_max_lots", 5, "LOTS", "WHEEL max lots", min=1, max=100),
-    _i("ds0_target_lots", 1, "LOTS", "DS0 target lots", min=1, max=100),
     _i("ds0_max_lots", 1, "LOTS", "DS0 max lots", min=0, max=100),
 
     # ── HERMESALPHA (priority 5; LLM-originated credit spreads) ────────────

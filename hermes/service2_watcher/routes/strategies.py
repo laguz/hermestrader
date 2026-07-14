@@ -57,7 +57,10 @@ _LOT_SPECS = {
     # control for every watchlisted strategy and indexes this payload, so an
     # omission leaves the UI reading an undefined entry and blanks the view.
     "HermesAlpha": {"target": ("alpha_max_lots", 1), "max": ("alpha_max_lots", 1)},
-    "DS0":   {"target": ("ds0_target_lots",  1), "max": ("ds0_max_lots",  1)},
+    # DS0 is max-only (no per-entry target), mirroring WHEEL — both roles
+    # point at the same setting so a change to "max lots" is what actually
+    # controls sizing, with no separate target that can clamp it back down.
+    "DS0":   {"target": ("ds0_max_lots",  1), "max": ("ds0_max_lots",  1)},
 }
 
 # Case-insensitive lookup: every other strategy id is upper-case, but

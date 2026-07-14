@@ -60,7 +60,7 @@ class ControlState:
             "tt45_target_lots":  5, "tt45_max_lots":  5,
             "wheel_max_lots":    5,
             "hermesalpha_target_lots": 1, "hermesalpha_max_lots": 1,
-            "ds0_target_lots":   1, "ds0_max_lots":   1,
+            "ds0_max_lots":   1,
         }
         self.pending_order_ttl_s = 3600
         self.last_sync_ts = None
