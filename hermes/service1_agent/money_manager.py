@@ -73,7 +73,10 @@ def resolve_entry_sizing(action: TradeAction,
     had to be fixed once per copy when this logic lived in each. A
     ``{strategy}_max_lots`` config value of 0 must be honored, not replaced
     with the default. WHEEL puts are cash-secured, so their requirement is the
-    short strike, not a spread width.
+    short strike, not a spread width. Debit spreads (DS0) pay the debit
+    upfront — that IS the capital requirement, which is well under the full
+    width; only credit spreads (CS75/CS7/TT45/HermesAlpha) tie up ~width as
+    margin.
     """
     requested_lots = action.quantity
     if action.order_class == "multileg" and action.legs:
@@ -114,6 +117,11 @@ def resolve_entry_sizing(action: TradeAction,
                 strike = parse_occ_strike(opt_symbol)
                 if strike:
                     requirement_per_lot = strike * 100.0
+    elif action.order_type == "debit":
+        if action.price is not None:
+            requirement_per_lot = action.price * 100.0
+        elif action.width is not None:
+            requirement_per_lot = action.width * 100.0
     else:
         if action.width is not None:
             requirement_per_lot = action.width * 100.0

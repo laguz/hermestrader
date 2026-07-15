@@ -179,6 +179,35 @@ def test_resolve_entry_sizing_honors_max_lots_zero():
     assert max_lots == 0
 
 
+def test_resolve_entry_sizing_debit_spread_uses_price_not_width():
+    # DS0 pays the debit upfront (~$0.10-0.30/share for a $1-wide spread);
+    # that IS the capital requirement, not the full width*100 margin figure
+    # that applies to credit spreads (CS75/CS7/TT45/HermesAlpha).
+    action = TradeAction(
+        strategy_id="DS0", symbol="SPY", order_class="multileg",
+        legs=[{"option_symbol": "SPY260715P00500000", "side": "buy_to_open", "quantity": 1},
+              {"option_symbol": "SPY260715P00499000", "side": "sell_to_open", "quantity": 1}],
+        price=0.20, side="buy", quantity=1, order_type="debit", width=1.0,
+    )
+
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={"ds0_max_lots": 1})
+    assert req == 1
+    assert req_per_lot == 20.0
+
+
+def test_resolve_entry_sizing_debit_spread_falls_back_to_width_without_price():
+    action = TradeAction(
+        strategy_id="DS0", symbol="SPY", order_class="multileg",
+        legs=[{"option_symbol": "SPY260715P00500000", "side": "buy_to_open", "quantity": 1},
+              {"option_symbol": "SPY260715P00499000", "side": "sell_to_open", "quantity": 1}],
+        price=None, side="buy", quantity=1, order_type="debit", width=1.0,
+    )
+
+    req, max_lots, req_per_lot = resolve_entry_sizing(action, config={"ds0_max_lots": 1})
+    assert req == 1
+    assert req_per_lot == 100.0
+
+
 @pytest.mark.asyncio
 async def test_portfolio_optimizer_applies_throttle():
     action = TradeAction(
