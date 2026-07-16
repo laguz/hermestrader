@@ -115,6 +115,30 @@ async def test_origination_scoped_to_supplied_watchlist():
     assert ov.proposed == ["AAA", "BBB"]
 
 
+# ── operator tunables reach the entry path (settings > env config) ──────────
+def _expiries():
+    return [(_et_today() + timedelta(days=d)).isoformat() for d in (30, 40, 45)]
+
+
+async def test_min_credit_settings_override_tightens_entry_gate():
+    # A system_settings retune must reach the entry credit gate — reading
+    # self.config directly dead-ends the operator's only write path.
+    ov = _FakeOverseer(autonomy="autonomous", intent=_intent("put"))
+    s, _, db = _build_alpha(overseer=ov, broker_kwargs={"expirations": _expiries()})
+    db.settings["hermesalpha_min_credit_pct"] = "0.99"   # ~impossible: ≥99% of width
+    assert await s.execute_entries(["AAPL"]) == []
+
+
+async def test_min_credit_settings_override_loosens_entry_gate():
+    ov = _FakeOverseer(autonomy="autonomous", intent=_intent("put"))
+    s, _, db = _build_alpha(overseer=ov,
+                            config={"hermesalpha_min_credit_pct": 0.99},
+                            broker_kwargs={"expirations": _expiries()})
+    db.settings["hermesalpha_min_credit_pct"] = "0.0"    # settings beat env config
+    actions = await s.execute_entries(["AAPL"])
+    assert len(actions) == 1
+
+
 # ── broker-verified exits ────────────────────────────────────────────────────
 def _seed_open(db, *, days_to_expiry=21):
     db.set_open_trades("HERMESALPHA", [
