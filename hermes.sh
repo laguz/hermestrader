@@ -160,7 +160,11 @@ _up() {
         api_port=$(grep -E "^HERMES_API_PORT=" "$env_file" | cut -d= -f2- | tr -d "'\"" || echo "8080")
         inst_image=$(_get_env_image "$env_file")
         info "Starting Hermes ${BOLD}${proj_name}${NC} services…"
-        docker compose --env-file "$env_file" -p "$proj_name" up -d
+        if [ "$SYNC_NEEDS_IMAGE" = "true" ]; then
+            docker compose --env-file "$env_file" -p "$proj_name" up -d --build
+        else
+            docker compose --env-file "$env_file" -p "$proj_name" up -d
+        fi
         ok "Hermes ${proj_name} is running"
         echo -e "   ${CYAN}Dashboard${NC}  → http://localhost:${api_port}"
         echo -e "   ${CYAN}Image${NC}      → ${inst_image}"
@@ -180,7 +184,10 @@ _show_version() {
 
 # ── Commands ──────────────────────────────────────────────────────────
 cmd_start() {
-    info "Hermes — starting all detected instances (paper/live) with latest images"
+    info "Hermes — starting all detected instances (paper/live) on the latest code"
+    # Always come up on the newest code the tracked branch has — fail-soft so an
+    # offline start still brings the stack up on whatever is checked out.
+    _sync_latest --soft
     _pull
     _up
 }
@@ -246,20 +253,36 @@ cmd_update_check() {
     fi
 }
 
-cmd_update_apply() {
-    local branch old_head new_head changed needs_image
+# Fast-forward the checkout to origin/<update branch> and rebuild what the
+# pulled diff requires. Sets SYNC_PULLED (any new commits) and SYNC_NEEDS_IMAGE
+# (requirements.txt/Dockerfile changed). With --soft, network/ff failures warn
+# and return 0 so start/build can proceed on the current code (e.g. offline).
+SYNC_PULLED=false
+SYNC_NEEDS_IMAGE=false
+_sync_latest() {
+    local soft="${1:-}" branch old_head new_head changed
+    SYNC_PULLED=false
+    SYNC_NEEDS_IMAGE=false
     branch=$(_update_branch)
     if [ "$branch" != "$(_git_branch)" ]; then
-        info "Updating Hermes from ${BOLD}origin/${branch}${NC} (checkout branch: $(_git_branch), tracked via HERMES_UPDATE_BRANCH)…"
+        info "Syncing to ${BOLD}origin/${branch}${NC} (checkout branch: $(_git_branch), tracked via HERMES_UPDATE_BRANCH)…"
     else
-        info "Updating Hermes on branch ${BOLD}${branch}${NC}…"
+        info "Syncing to ${BOLD}origin/${branch}${NC}…"
     fi
 
     if ! _git_fetch; then
+        if [ "$soft" = "--soft" ]; then
+            warn "Could not reach GitHub — continuing with the current code"
+            return 0
+        fi
         err "Could not reach GitHub — aborting update"
         return 1
     fi
     if ! git rev-parse "origin/${branch}" >/dev/null 2>&1; then
+        if [ "$soft" = "--soft" ]; then
+            warn "Branch '${branch}' has no remote on origin — continuing with the current code"
+            return 0
+        fi
         err "Branch '${branch}' has no remote on origin (merged & deleted, or never pushed)."
         echo -e "   Switch to your deploy branch and retry, e.g. ${BOLD}git checkout main${NC}"
         return 1
@@ -267,6 +290,10 @@ cmd_update_apply() {
 
     old_head=$(git rev-parse HEAD 2>/dev/null)
     if ! git merge --ff-only "origin/${branch}" >/dev/null 2>&1; then
+        if [ "$soft" = "--soft" ]; then
+            warn "Cannot fast-forward to origin/${branch} (local changes/divergence) — continuing with the current code"
+            return 0
+        fi
         err "Cannot fast-forward — local branch has diverged from origin/${branch}."
         echo -e "   Resolve manually (e.g. ${BOLD}git pull --rebase${NC}) then re-run."
         return 1
@@ -274,10 +301,12 @@ cmd_update_apply() {
     new_head=$(git rev-parse HEAD 2>/dev/null)
 
     if [ "$old_head" = "$new_head" ]; then
-        ok "Already up to date on ${branch} — nothing to apply"
+        ok "Already up to date with origin/${branch} (v${HERMES_VERSION})"
         return 0
     fi
-    ok "Pulled $(git rev-list --count "${old_head}..${new_head}") new commit(s) → $(git rev-parse --short HEAD)"
+    SYNC_PULLED=true
+    HERMES_VERSION="$(cat VERSION 2>/dev/null || echo "$HERMES_VERSION")"
+    ok "Pulled $(git rev-list --count "${old_head}..${new_head}") new commit(s) → $(git rev-parse --short HEAD) (v${HERMES_VERSION})"
 
     changed=$(git diff --name-only "$old_head" "$new_head")
 
@@ -297,11 +326,20 @@ cmd_update_apply() {
     # The app code is bind-mounted, so most updates just need a restart for
     # uvicorn --reload to re-import. Only rebuild the image when the Python env
     # itself changed.
-    needs_image=false
     if echo "$changed" | grep -qE '^(requirements\.txt|Dockerfile)$'; then
-        needs_image=true
+        SYNC_NEEDS_IMAGE=true
         info "requirements.txt/Dockerfile changed — image rebuild required"
     fi
+    return 0
+}
+
+cmd_update_apply() {
+    local needs_image
+    _sync_latest || return 1
+    if [ "$SYNC_PULLED" != "true" ]; then
+        return 0
+    fi
+    needs_image="$SYNC_NEEDS_IMAGE"
 
     for i in "${!ENV_FILES[@]}"; do
         local env_file="${ENV_FILES[$i]}"
@@ -398,6 +436,8 @@ cmd_build() {
     if [ "${1:-}" = "--no-cache" ]; then
         no_cache="--no-cache"
     fi
+    # Build from the newest code the tracked branch has (fail-soft when offline).
+    _sync_latest --soft
     info "Building ${BOLD}${IMAGE_FULL}${NC} (version: ${HERMES_VERSION})…"
     docker build \
         $no_cache \
@@ -535,7 +575,7 @@ cmd_help() {
     echo "Usage: ./hermes.sh <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  start            Pull latest images from Docker Hub & start all services"
+    echo "  start            Sync to latest code, pull images & start all services"
     echo "  stop             Stop all services"
     echo "  restart          Restart agent + watcher (keeps DB running)"
     echo "  rebuild          Stop, build from scratch (no cache), restart — keeps DB data"
