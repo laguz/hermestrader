@@ -346,9 +346,12 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
                 engine.overseer.vision_enabled = current_vision
                 await engine.overseer.start()
 
+            active = new_snapshot.get("active_provider", "mock")
             await db.logs.write_log(
                 "ENGINE",
                 f"LLM swapped reactively: provider={new_snapshot['provider']} model={new_snapshot['model'] or '-'}"
+                + ("" if active == new_snapshot["provider"]
+                   else f" (ACTIVE: {active} — configured provider not wired, check model/api key)")
             )
 
         new_overseer_cfg = await _read_overseer_settings(db, conf)

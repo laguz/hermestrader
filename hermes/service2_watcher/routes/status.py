@@ -29,6 +29,7 @@ from .._app_state import (
     SETTING_ALPHA_AUTONOMOUS_LIVE,
     SETTING_APPROVAL_MODE,
     SETTING_AUTONOMY,
+    SETTING_LLM_ACTIVE_PROVIDER,
     SETTING_LLM_ERROR,
     SETTING_LLM_MODEL,
     SETTING_LLM_OK_TS,
@@ -72,6 +73,12 @@ async def get_status() -> Dict[str, Any]:
 
     llm_error = (await db.settings.get_setting_async(SETTING_LLM_ERROR) or "").strip()
     llm_last_ok = parse_iso(await db.settings.get_setting_async(SETTING_LLM_OK_TS))
+    # The agent records which client _build_llm actually wired — "mock" on any
+    # fallback. MockLLM's always-instant successes refresh llm_last_ok_ts too,
+    # so freshness alone must never turn the chip green. None = older agent
+    # that predates the setting; keep the freshness-only behavior then.
+    llm_active_raw = (await db.settings.get_setting_async(SETTING_LLM_ACTIVE_PROVIDER) or "").strip().lower()
+    llm_active_provider = llm_active_raw or None
     # LLM may not be used every tick (advisory autonomy with no actions);
     # be 4x more lenient than the Tradier window before declaring unhealthy.
     llm_ok = (
@@ -79,6 +86,7 @@ async def get_status() -> Dict[str, Any]:
         and seconds_since(llm_last_ok) is not None
         and seconds_since(llm_last_ok) <= STALE_AFTER_S * 4
         and not llm_error
+        and llm_active_provider != "mock"
     )
 
     mode = (await db.settings.get_setting_async(SETTING_MODE) or "paper").lower()
@@ -128,6 +136,7 @@ async def get_status() -> Dict[str, Any]:
         "llm_error": llm_error or None,
         "llm_model": llm_model or None,
         "llm_provider": llm_provider,
+        "llm_active_provider": llm_active_provider,
         "mode": mode,
         "paused": paused,
         "approval_mode": approval_mode,

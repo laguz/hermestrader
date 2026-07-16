@@ -26,7 +26,13 @@ const health = computed(() => {
       key: 'overseer',
       label: 'Overseer',
       ok: !!s.llm_ok,
-      detail: s.llm_error || (s.llm_ok ? `${s.llm_provider || 'LLM'} healthy` : 'no recent LLM activity'),
+      detail: s.llm_error || (s.llm_ok
+        ? `${s.llm_provider || 'LLM'} healthy`
+        : s.llm_active_provider === 'mock'
+          ? (s.llm_provider && s.llm_provider !== 'mock'
+              ? `MOCK fallback — ${s.llm_provider} not wired (check model/api key)`
+              : 'mock LLM — no real provider configured')
+          : 'no recent LLM activity'),
     },
     {
       key: 'market',
