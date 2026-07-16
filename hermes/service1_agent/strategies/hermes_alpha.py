@@ -61,11 +61,16 @@ class HermesAlpha(CreditSpreadStrategy):
         if not self._is_autonomous():
             return actions
 
-        width = int(self.config.get("hermesalpha_width", 5))
+        # Tunables, not self.config: these keys live in the TUNABLES catalog so
+        # the operator can retune them via system_settings (settings > env
+        # config > default) — reading self.config directly dead-ends that path.
+        t = await self.load_tunables()
+        width = int(t.hermesalpha_width)
         target_lots = min(
-            int(self.config.get("hermesalpha_target_lots", 1)),
-            int(self.config.get("hermesalpha_max_lots", 1)),
+            int(t.hermesalpha_target_lots),
+            int(t.hermesalpha_max_lots),
         )
+        min_credit_pct = float(t.hermesalpha_min_credit_pct)
         symbols = list(dict.fromkeys(watchlist))
         self._log(f"↻ autonomous origination scan — {len(symbols)} symbol(s)")
 
@@ -73,8 +78,7 @@ class HermesAlpha(CreditSpreadStrategy):
             try:
                 if await self._in_cooldown(symbol):
                     continue
-                
-                t = await self.load_tunables()
+
                 blackout_days = t.hermesalpha_event_blackout_days
                 macro_days = t.hermesalpha_macro_blackout_days
                 if await self.is_event_gated(symbol, blackout_days, macro_days):
@@ -108,7 +112,8 @@ class HermesAlpha(CreditSpreadStrategy):
                 intent = await self.overseer.propose_intent(symbol, self._entry_context(symbol, analysis))
                 if not intent:
                     continue
-                action = await self._build_from_intent(symbol, intent, width, target_lots)
+                action = await self._build_from_intent(symbol, intent, width, target_lots,
+                                                       min_credit_pct=min_credit_pct)
                 if action is not None:
                     actions.append(action)
             except Exception as exc:
@@ -127,7 +132,8 @@ class HermesAlpha(CreditSpreadStrategy):
         }
 
     async def _build_from_intent(self, symbol: str, intent: Dict[str, Any],
-                                 default_width: int, target_lots: int) -> Optional[TradeAction]:
+                                 default_width: int, target_lots: int,
+                                 min_credit_pct: float = 0.20) -> Optional[TradeAction]:
         """Resolve + price an overseer credit-spread intent against the live chain.
 
         The intent names the *structure*; every price here comes from the chain,
@@ -174,8 +180,7 @@ class HermesAlpha(CreditSpreadStrategy):
 
         actual_width = abs(sl_strike - ll_strike)
         credit = self.short_credit(short_leg, long_leg)
-        min_credit_pct = float(self.config.get("hermesalpha_min_credit_pct", 0.20))
-        min_credit = round(actual_width * min_credit_pct, 2)
+        min_credit = round(actual_width * float(min_credit_pct), 2)
 
         from ..execution_quality import estimate_symbol_slippage
         slippage_min_fills = int(self.config.get("slippage_min_fills", 10))
@@ -225,7 +230,8 @@ class HermesAlpha(CreditSpreadStrategy):
         if not trades:
             return actions
 
-        cfg_width = int(self.config.get("hermesalpha_width", 5))
+        t = await self.load_tunables()
+        cfg_width = int(t.hermesalpha_width)
         symbols = set()
         for tr in trades:
             symbols.add(tr["short_leg"])
@@ -248,7 +254,7 @@ class HermesAlpha(CreditSpreadStrategy):
             # Deterministic backstop runs first — it bounds the LLM and also
             # covers the stale-quote case (force a width-priced time-exit).
             # mid_debit used for SL decision; exec_debit for limit price.
-            backstop = self._exit_backstop(trade, dte, mid_debit, exec_debit, blocked, entry_credit, width)
+            backstop = self._exit_backstop(trade, dte, mid_debit, exec_debit, blocked, entry_credit, width, t)
             if backstop is not None:
                 actions.append(backstop)
                 continue
@@ -272,7 +278,8 @@ class HermesAlpha(CreditSpreadStrategy):
         return actions
 
     def _exit_backstop(self, trade, dte: Optional[int], mid_debit, exec_debit,
-                       blocked: bool, entry_credit: float, width: float) -> Optional[TradeAction]:
+                       blocked: bool, entry_credit: float, width: float,
+                       t) -> Optional[TradeAction]:
         """Hard exit the LLM cannot loosen: time-exit floor and max-loss stop.
 
         - At/under the time-exit DTE floor we force a TIME-EXIT (width-priced if
@@ -282,8 +289,8 @@ class HermesAlpha(CreditSpreadStrategy):
           wide bid-ask spreads don't produce false triggers; exec_debit is used
           for the limit price so the close fills.
         """
-        time_exit_dte = int(self.config.get("hermesalpha_time_exit_dte", 2))
-        sl_mult = float(self.config.get("hermesalpha_sl_mult", 2.5))
+        time_exit_dte = int(t.hermesalpha_time_exit_dte)
+        sl_mult = float(t.hermesalpha_sl_mult)
 
         if dte is not None and dte <= time_exit_dte:
             price_debit = exec_debit if (not blocked and exec_debit is not None) else width
