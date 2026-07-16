@@ -332,11 +332,36 @@ class AbstractStrategy(ABC):
         from .iv_tracker import fetch_current_atm_iv
         return await fetch_current_atm_iv(self.broker, symbol, self.today())
 
-    async def is_ivr_gated(self, symbol: str, min_ivr: float) -> bool:
-        # Read-only: history is written by the pipeline heartbeat's daily IV
-        # snapshot (iv_tracker.snapshot_daily_iv), never from inside the gate —
-        # gate-side writes only recorded days the gate passed, biasing the
-        # min/max the rank is computed from toward high-IV days.
+    async def compute_iv_rank(self, symbol: str) -> Optional[float]:
+        """IV rank (0–100) of the current ATM IV against the daily history.
+
+        Read-only: history is written by the pipeline heartbeat's daily IV
+        snapshot (iv_tracker.snapshot_daily_iv), never from inside the gate —
+        gate-side writes only recorded days the gate passed, biasing the
+        min/max the rank is computed from toward high-IV days.
+
+        Returns None when the current IV, the history, or the min/max spread
+        is unavailable — callers degrade to no gating / no context.
+        """
+        current_iv = await self._fetch_current_atm_iv(symbol)
+        if current_iv is None:
+            logger.debug("[IV GATING] Missing current ATM IV for %s; degrading to no gating.", symbol)
+            return None
+
+        history = await self.db.timeseries.get_implied_vol_history(symbol, lookback_days=365)
+        if not history:
+            logger.debug("[IV GATING] Missing historical IV data for %s; degrading to no gating.", symbol)
+            return None
+
+        all_ivs = [iv for _, iv in history] + [current_iv]
+        min_iv = min(all_ivs)
+        max_iv = max(all_ivs)
+        if max_iv <= min_iv:
+            return None
+        return 100.0 * (current_iv - min_iv) / (max_iv - min_iv)
+
+    async def is_ivr_gated(self, symbol: str, min_ivr: float,
+                           ivr: Optional[float] = None) -> bool:
         try:
             min_ivr = float(min_ivr)
         except (TypeError, ValueError):
@@ -345,25 +370,11 @@ class AbstractStrategy(ABC):
         if min_ivr <= 0.0:
             return False
 
-        current_iv = await self._fetch_current_atm_iv(symbol)
-        if current_iv is None:
-            logger.debug("[IV GATING] Missing current ATM IV for %s; degrading to no gating.", symbol)
-            return False
-
-        history = await self.db.timeseries.get_implied_vol_history(symbol, lookback_days=365)
-        if not history:
-            logger.debug("[IV GATING] Missing historical IV data for %s; degrading to no gating.", symbol)
-            return False
-
-        all_ivs = [iv for _, iv in history] + [current_iv]
-        min_iv = min(all_ivs)
-        max_iv = max(all_ivs)
-
-        if max_iv > min_iv:
-            ivr = 100.0 * (current_iv - min_iv) / (max_iv - min_iv)
-            if ivr < min_ivr:
-                self._log(f"⚠️ Entry blocked: {symbol} IV rank {ivr:.1f}% is below threshold {min_ivr:.1f}%.")
-                return True
+        if ivr is None:
+            ivr = await self.compute_iv_rank(symbol)
+        if ivr is not None and ivr < min_ivr:
+            self._log(f"⚠️ Entry blocked: {symbol} IV rank {ivr:.1f}% is below threshold {min_ivr:.1f}%.")
+            return True
 
         return False
 

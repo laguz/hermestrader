@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import httpx
-from hermes.ml.pop_engine import find_key_levels, wilder_atr
+from hermes.ml.pop_engine import classify_trend, find_key_levels, wilder_atr
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -457,6 +457,7 @@ class TradierBroker(AbstractBroker):
             "atr": atr,
             "atr_period": 14,
             "today_open": today_open,
+            "trend": classify_trend(df["close"]),
         }
 
     @staticmethod

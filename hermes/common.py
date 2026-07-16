@@ -74,6 +74,12 @@ LLM_PROVIDER_BASE_URLS: dict[str, str] = {
 # GGUF weights (LM Studio / Ollama on consumer hardware).
 DEFAULT_LLM_TIMEOUT_S: float = 120.0
 
+# Default completion budget. Thinking models (e.g. gemini-2.5-flash via the
+# OpenAI-compat endpoint) count hidden reasoning tokens against max_tokens;
+# at the old 1024 default the visible JSON reply came back truncated
+# (finish_reason=length) and fell into _safe_json's unparseable fallback.
+DEFAULT_LLM_MAX_TOKENS: int = 8192
+
 # ---------------------------------------------------------------------------
 # Cross-service IPC (Redis pub/sub) contract
 # ---------------------------------------------------------------------------

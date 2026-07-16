@@ -80,14 +80,19 @@ class HermesAlpha(CreditSpreadStrategy):
                 if await self.is_event_gated(symbol, blackout_days, macro_days):
                     continue
 
+                # Computed unconditionally (not just when the gate is armed):
+                # the overseer's intent context needs iv_rank even at min_ivr=0,
+                # and a null iv_rank makes a conservative LLM decline every scan.
                 min_ivr = t.hermesalpha_min_ivr
-                if await self.is_ivr_gated(symbol, min_ivr):
+                ivr = await self.compute_iv_rank(symbol)
+                if await self.is_ivr_gated(symbol, min_ivr, ivr=ivr):
                     continue
 
                 analysis = await self.broker.analyze_symbol(symbol, period=self.ANALYSIS_PERIOD)
                 if not analysis or "error" in analysis:
                     self._log(f"⚠️ {symbol}: analysis unavailable — {(analysis or {}).get('error','no data')}; skip.")
                     continue
+                analysis["iv_rank"] = round(ivr, 1) if ivr is not None else None
 
                 # Persist current vol via system settings
                 current_vol = analysis.get("current_vol")
