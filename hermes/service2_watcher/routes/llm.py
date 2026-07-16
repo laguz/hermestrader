@@ -31,6 +31,7 @@ from .._app_state import (
     DEFAULT_LLM_BASE_URL,
     SETTING_LLM_API_KEY,
     SETTING_LLM_BASE_URL,
+    SETTING_LLM_ACTIVE_PROVIDER,
     SETTING_LLM_ERROR,
     SETTING_LLM_MODEL,
     SETTING_LLM_OK_TS,
@@ -65,8 +66,12 @@ async def _read_llm_config() -> Dict[str, Any]:
     overseer_mode = normalize_overseer_mode(await db.settings.get_setting("overseer_mode"))
     last_ok = parse_iso(await db.settings.get_setting(SETTING_LLM_OK_TS))
     last_err = (await db.settings.get_setting(SETTING_LLM_ERROR) or "").strip() or None
+    active_provider = (await db.settings.get_setting(SETTING_LLM_ACTIVE_PROVIDER) or "").strip().lower() or None
     return {
         "provider": provider,
+        # What the agent actually wired — "mock" when it fell back (missing
+        # key/model or build failure); None until an agent that records it runs.
+        "active_provider": active_provider,
         "base_url": base_url,
         "model": model,
         "temperature": temperature,

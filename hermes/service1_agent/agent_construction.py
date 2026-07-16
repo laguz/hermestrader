@@ -24,9 +24,9 @@ from hermes.service1_agent.strategies import (
 )
 
 from .agent_settings import (
-    SETTING_LLM_API_KEY, SETTING_LLM_BASE_URL, SETTING_LLM_ERROR,
-    SETTING_LLM_MODEL, SETTING_LLM_PROVIDER, SETTING_LLM_TEMPERATURE,
-    SETTING_LLM_TIMEOUT, SETTING_LLM_VISION,
+    SETTING_LLM_ACTIVE_PROVIDER, SETTING_LLM_API_KEY, SETTING_LLM_BASE_URL,
+    SETTING_LLM_ERROR, SETTING_LLM_MODEL, SETTING_LLM_PROVIDER,
+    SETTING_LLM_TEMPERATURE, SETTING_LLM_TIMEOUT, SETTING_LLM_VISION,
 )
 
 log = logging.getLogger("hermes.agent.main")
@@ -78,6 +78,15 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
         "vision": vision,
     }
 
+    async def _record_active(active: str) -> None:
+        # Written on every build so the watcher can tell a real client from the
+        # MockLLM fallback — mock successes must never light the health chip.
+        snapshot["active_provider"] = active
+        try:
+            await db.settings.set_setting(SETTING_LLM_ACTIVE_PROVIDER, active)
+        except Exception:
+            log.debug("LLM status DB write failed", exc_info=True)
+
     if provider == "ollama_cloud":
         # Use the native Ollama Python library — Ollama Cloud auth works
         # differently from the OpenAI-compatible shim and requires the
@@ -100,6 +109,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:
                     log.debug("LLM status DB write failed", exc_info=True)
+                await _record_active(provider)
                 return client, snapshot, vision
             except Exception as exc:
                 log.exception("Failed to build OllamaCloudLLM (model=%s): %s", model, exc)
@@ -134,6 +144,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                     await db.settings.set_setting(SETTING_LLM_ERROR, "")
                 except Exception:
                     log.debug("LLM status DB write failed", exc_info=True)
+                await _record_active(provider)
                 return client, snapshot, vision
             except Exception as exc:
                 log.exception("Failed to build LLM client (provider=%s): %s", provider, exc)
@@ -145,6 +156,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
     # Fallback — mock LLM keeps the overseer operational without a backend.
     from hermes.service1_agent.mock_broker import MockLLM
     log.info("LLM overseer: using MockLLM (provider=%s)", provider)
+    await _record_active("mock")
     return MockLLM(), snapshot, vision
 
 

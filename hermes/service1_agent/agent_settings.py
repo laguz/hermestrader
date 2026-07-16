@@ -32,6 +32,10 @@ SETTING_LLM_VISION = "llm_vision"               # "true" | "false"
 SETTING_LLM_TIMEOUT = "llm_timeout_s"           # seconds; bump on cold-load setups
 SETTING_LLM_OK_TS = "llm_last_ok_ts"
 SETTING_LLM_ERROR = "llm_last_error"
+# The provider actually wired into the overseer — "mock" whenever _build_llm
+# fell back (missing key/model, build failure) regardless of the configured
+# llm_provider. The watcher's health chip goes green only on a real provider.
+SETTING_LLM_ACTIVE_PROVIDER = "llm_active_provider"
 
 # Operator doctrine + agent control — written by the C2 panel.
 SETTING_SOUL = "soul_md"
