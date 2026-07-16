@@ -14,6 +14,13 @@ Two bugs made lot changes look intermittent to the operator:
    key (routes/strategies.py ``_LOT_SPECS``), but the agent reads
    ``hermesalpha_target_lots`` / ``hermesalpha_max_lots`` and ControlState
    tracked neither — changing Alpha lots in the UI did nothing, ever.
+
+3. ``_LOT_SPECS`` keyed HermesAlpha as ``"HermesAlpha"`` while the canonical
+   id everywhere else (``hermes.common.STRATEGIES``, ``/api/watchlist``) is
+   ``"HERMESALPHA"``. The Settings UI iterates the canonical ids and indexes
+   the ``/api/lots`` payload with them, so the mismatch left the HermesAlpha
+   lots inputs permanently stuck on their hardcoded defaults — saves applied
+   server-side but the UI never showed the new value.
 """
 from __future__ import annotations
 
@@ -94,6 +101,16 @@ async def test_reactive_entries_sync_lot_caps():
         "reactive entries sized from the stale cap — lot settings must be "
         "synced into config before the reactive path runs strategies"
     )
+
+
+def test_lots_route_ids_match_canonical_strategy_ids():
+    """/api/lots payload keys must be the canonical strategy ids — the UI
+    indexes the payload with the ids from /api/watchlist (STRATEGY_PRIORITIES),
+    so any casing drift disconnects the lots controls from their values."""
+    from hermes.common import STRATEGIES
+    from hermes.service2_watcher.routes.strategies import _LOT_SPECS
+
+    assert set(_LOT_SPECS) == set(STRATEGIES)
 
 
 def test_alpha_max_lots_event_reaches_hermesalpha_keys():
