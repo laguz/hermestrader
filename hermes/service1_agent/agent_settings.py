@@ -54,6 +54,24 @@ def _strategy_enabled_key(strategy_id: str) -> str:
     return f"strategy_{strategy_id.lower()}_enabled"
 
 
+# Keys that feed _build_llm's config snapshot. The LLM *status* keys
+# (llm_last_error, llm_last_ok_ts, llm_active_provider) are deliberately
+# excluded: _build_llm writes them itself, so reacting to them would re-trigger
+# the settings-changed handler after every genuine rebuild.
+LLM_CONFIG_KEYS = frozenset({
+    SETTING_LLM_PROVIDER, SETTING_LLM_BASE_URL, SETTING_LLM_MODEL,
+    SETTING_LLM_API_KEY, SETTING_LLM_TEMPERATURE, SETTING_LLM_TIMEOUT,
+    SETTING_LLM_VISION,
+})
+
+# Keys _read_overseer_settings resolves that arrive as SYSTEM_SETTING_CHANGED —
+# the rest (soul/autonomy/pause/strategy toggles) map to dedicated event
+# classes in SettingsRepository.set_setting.
+OVERSEER_CONFIG_KEYS = frozenset({
+    SETTING_APPROVAL_MODE, SETTING_LLM_OUT_OF_LOOP, "overseer_mode",
+})
+
+
 async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     """Return the operator-driven overseer config (soul, autonomy, paused, approval_mode).
 

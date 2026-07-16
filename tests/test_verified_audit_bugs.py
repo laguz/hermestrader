@@ -86,7 +86,9 @@ async def test_settings_changed_handler_survives_none_overseer(caplog):
         assert event_bus is not None
 
         caplog.clear()
-        event_bus.emit(SystemSettingChangedEvent(key="obp_reserve", value="1", updated_at="now"))
+        # "overseer_mode" is in OVERSEER_CONFIG_KEYS, so the handler runs its
+        # overseer-refresh tail (keys outside the config sets are ignored).
+        event_bus.emit(SystemSettingChangedEvent(key="overseer_mode", value="single", updated_at="now"))
         await asyncio.sleep(0.2)
 
         # EventBus._safe_invoke swallows handler exceptions and logs an error —

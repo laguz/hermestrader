@@ -34,6 +34,7 @@ from .agent_settings import (
     SETTING_AGENT_STARTED_AT,
     SETTING_SOUL, SETTING_AUTONOMY, SETTING_PAUSED,
     SETTING_LLM_OUT_OF_LOOP,
+    LLM_CONFIG_KEYS, OVERSEER_CONFIG_KEYS,
     _read_overseer_settings,
 )
 from .agent_risk import resolve_max_daily_loss, enforce_daily_loss_limit
@@ -328,31 +329,46 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
 
     event_bus.subscribe(ModeChangedEvent, _handle_mode_change)
 
-    # Reactively handle settings changes (LLM and Overseer parameters)
+    # Reactively handle settings changes (LLM and Overseer parameters).
+    # SYSTEM_SETTING_CHANGED fires for *every* settings write, including status
+    # heartbeats whose value changes on each write (ml_last_ok_ts every 10s
+    # MlRetrainTick, tradier_last_ok_ts, …) — those must not rebuild the LLM
+    # client or the strategy list, so anything outside the two config key sets
+    # is ignored here.
     async def _handle_settings_changed(ev) -> None:
         nonlocal current_llm, current_llm_snapshot, current_vision
-        new_llm, new_snapshot, new_vision = await _build_llm(db)
-        if new_snapshot != current_llm_snapshot:
-            log.warning("LLM config change reactively: %s → %s", current_llm_snapshot, new_snapshot)
-            if engine.overseer is not None:
-                await engine.overseer.stop()
+        if isinstance(ev, SystemSettingChangedEvent):
+            if ev.key not in LLM_CONFIG_KEYS and ev.key not in OVERSEER_CONFIG_KEYS:
+                return
+            rebuild_llm = ev.key in LLM_CONFIG_KEYS
+        else:
+            # Dedicated classes (doctrine/autonomy/pause/strategy toggle)
+            # can't change the LLM client config.
+            rebuild_llm = False
 
-            current_llm = new_llm
-            current_llm_snapshot = new_snapshot
-            current_vision = new_vision
+        if rebuild_llm:
+            new_llm, new_snapshot, new_vision = await _build_llm(db)
+            if new_snapshot != current_llm_snapshot:
+                log.warning("LLM config change reactively: %s → %s", current_llm_snapshot, new_snapshot)
+                if engine.overseer is not None:
+                    await engine.overseer.stop()
 
-            if engine.overseer is not None:
-                engine.overseer.llm = current_llm
-                engine.overseer.vision_enabled = current_vision
-                await engine.overseer.start()
+                current_llm = new_llm
+                current_llm_snapshot = new_snapshot
+                current_vision = new_vision
 
-            active = new_snapshot.get("active_provider", "mock")
-            await db.logs.write_log(
-                "ENGINE",
-                f"LLM swapped reactively: provider={new_snapshot['provider']} model={new_snapshot['model'] or '-'}"
-                + ("" if active == new_snapshot["provider"]
-                   else f" (ACTIVE: {active} — configured provider not wired, check model/api key)")
-            )
+                if engine.overseer is not None:
+                    engine.overseer.llm = current_llm
+                    engine.overseer.vision_enabled = current_vision
+                    await engine.overseer.start()
+
+                active = new_snapshot.get("active_provider", "mock")
+                await db.logs.write_log(
+                    "ENGINE",
+                    f"LLM swapped reactively: provider={new_snapshot['provider']} model={new_snapshot['model'] or '-'}"
+                    + ("" if active == new_snapshot["provider"]
+                       else f" (ACTIVE: {active} — configured provider not wired, check model/api key)")
+                )
 
         new_overseer_cfg = await _read_overseer_settings(db, conf)
         if engine.overseer is not None:
