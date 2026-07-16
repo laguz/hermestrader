@@ -11,7 +11,7 @@ import logging
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from hermes.common import DEFAULT_LLM_TIMEOUT_S, LLM_PROVIDER_BASE_URLS
+from hermes.common import DEFAULT_LLM_MAX_TOKENS, DEFAULT_LLM_TIMEOUT_S, LLM_PROVIDER_BASE_URLS
 from hermes.utils import decrypt_value
 from hermes.db.models import HermesDB
 from hermes.service1_agent.core import (
@@ -100,7 +100,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                     model=model,
                     api_key=api_key,
                     temperature=temperature,
-                    max_tokens=1024,
+                    max_tokens=DEFAULT_LLM_MAX_TOKENS,
                     timeout_s=timeout_s,
                 )
                 log.info("LLM overseer: provider=ollama_cloud model=%s vision=%s timeout=%.0fs",
@@ -136,6 +136,7 @@ async def _build_llm(db) -> Tuple[Any, Dict[str, Any], bool]:
                 client = OpenAICompatibleLLM(
                     base_url=effective_base, model=model,
                     api_key=api_key, temperature=temperature,
+                    max_tokens=DEFAULT_LLM_MAX_TOKENS,
                     timeout_s=timeout_s,
                 )
                 log.info("LLM overseer: provider=%s model=%s base=%s vision=%s timeout=%.0fs",

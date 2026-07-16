@@ -251,6 +251,26 @@ def wilder_atr(df: pd.DataFrame, period: int = 14) -> Optional[float]:
     return atr if atr > 0 else None
 
 
+def classify_trend(closes: pd.Series, fast: int = 20, slow: int = 50) -> Optional[str]:
+    """Coarse "up" / "down" / "sideways" label from SMA alignment.
+
+    Up requires price > SMA(fast) > SMA(slow); down is the mirror; anything
+    else is sideways. Returns ``None`` (unknown) when the history is shorter
+    than the slow window rather than guessing from a partial average.
+    """
+    closes = pd.to_numeric(closes, errors="coerce").dropna()
+    if len(closes) < slow:
+        return None
+    current = float(closes.iloc[-1])
+    sma_fast = float(closes.iloc[-fast:].mean())
+    sma_slow = float(closes.iloc[-slow:].mean())
+    if current > sma_fast > sma_slow:
+        return "up"
+    if current < sma_fast < sma_slow:
+        return "down"
+    return "sideways"
+
+
 # ---------------------------------------------------------------------------
 # Strike protection
 # ---------------------------------------------------------------------------

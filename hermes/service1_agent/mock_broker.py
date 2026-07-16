@@ -167,7 +167,7 @@ class MockBroker(AbstractBroker):
         S/R panel renders in dev/paper mode without real Tradier credentials."""
         import numpy as np
         import pandas as pd
-        from hermes.ml.pop_engine import find_key_levels, wilder_atr
+        from hermes.ml.pop_engine import classify_trend, find_key_levels, wilder_atr
 
         bars = await self.get_history(symbol, interval="daily")
         if not bars:
@@ -228,6 +228,7 @@ class MockBroker(AbstractBroker):
             "atr": atr,
             "atr_period": 14,
             "today_open": today_open,
+            "trend": classify_trend(df["close"]),
         }
 
     async def get_history(
