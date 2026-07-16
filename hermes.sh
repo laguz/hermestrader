@@ -94,6 +94,28 @@ _git_branch() {
     git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main"
 }
 
+# The remote branch `update` tracks. Defaults to the checkout's own branch;
+# set HERMES_UPDATE_BRANCH (env or first env file) to follow a different one —
+# e.g. HERMES_UPDATE_BRANCH=main in the live folder's .env.live makes the live
+# worktree (whose branch is `live`, since `main` is checked out in the paper
+# folder and a worktree can't hold it twice) fast-forward from origin/main on
+# every update instead of waiting for a manual main→live promotion.
+_update_branch() {
+    if [ -n "${HERMES_UPDATE_BRANCH:-}" ]; then
+        echo "$HERMES_UPDATE_BRANCH"
+        return
+    fi
+    local from_file=""
+    if [ ${#ENV_FILES[@]} -gt 0 ] && [ -f "${ENV_FILES[0]}" ]; then
+        from_file=$(grep -E "^HERMES_UPDATE_BRANCH=" "${ENV_FILES[0]}" | cut -d= -f2- | tr -d "'\"" || true)
+    fi
+    if [ -n "$from_file" ]; then
+        echo "$from_file"
+    else
+        _git_branch
+    fi
+}
+
 # Fetch all refs + prune so a branch deleted on the remote (e.g. after its PR
 # merged) doesn't make a single-ref fetch fail and look like a network outage.
 _git_fetch() {
@@ -194,8 +216,12 @@ cmd_update() {
 
 cmd_update_check() {
     local branch behind ahead
-    branch=$(_git_branch)
-    info "Checking GitHub for updates on branch ${BOLD}${branch}${NC}…"
+    branch=$(_update_branch)
+    if [ "$branch" != "$(_git_branch)" ]; then
+        info "Checking GitHub for updates on branch ${BOLD}${branch}${NC} (tracked via HERMES_UPDATE_BRANCH)…"
+    else
+        info "Checking GitHub for updates on branch ${BOLD}${branch}${NC}…"
+    fi
 
     if ! _git_fetch; then
         warn "Could not reach GitHub — check your network or the 'origin' remote"
@@ -222,8 +248,12 @@ cmd_update_check() {
 
 cmd_update_apply() {
     local branch old_head new_head changed needs_image
-    branch=$(_git_branch)
-    info "Updating Hermes on branch ${BOLD}${branch}${NC}…"
+    branch=$(_update_branch)
+    if [ "$branch" != "$(_git_branch)" ]; then
+        info "Updating Hermes from ${BOLD}origin/${branch}${NC} (checkout branch: $(_git_branch), tracked via HERMES_UPDATE_BRANCH)…"
+    else
+        info "Updating Hermes on branch ${BOLD}${branch}${NC}…"
+    fi
 
     if ! _git_fetch; then
         err "Could not reach GitHub — aborting update"
