@@ -13,7 +13,7 @@ const strategyLotMeta = computed(() => {
     CS7:  { target: d.CS7?.target, max: d.CS7?.max },
     TT45: { target: d.TT45?.target, max: d.TT45?.max },
     WHEEL: { max: d.WHEEL?.max },
-    HermesAlpha: { max: d.HermesAlpha?.max }
+    HermesAlpha: { max: d.HERMESALPHA?.max }
   }
 })
 </script>
