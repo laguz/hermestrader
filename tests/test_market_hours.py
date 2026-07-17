@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from hermes.market_hours import (
-    ET, is_trading_day, market_session, next_open, session_label
+    ET, is_trading_day, market_session, next_open, session_label,
+    minutes_to_close, should_block_new_entries, should_block_trades,
 )
 
 def test_is_trading_day():
@@ -148,3 +149,70 @@ def test_early_close_days():
     # A normal day is unaffected: 14:30 ET is still regular.
     now = datetime(2026, 11, 30, 14, 30, tzinfo=ET)
     assert market_session(now)["is_open"] is True
+
+
+def test_minutes_to_close():
+    # Mid-session — plenty of runway.
+    now = datetime(2025, 1, 7, 10, 0, tzinfo=ET)
+    assert minutes_to_close(now) == 360.0
+
+    # One minute before the regular close.
+    now = datetime(2025, 1, 7, 15, 59, tzinfo=ET)
+    assert minutes_to_close(now) == 1.0
+
+    # Outside the regular session → None, not a negative/garbage number.
+    now = datetime(2025, 1, 7, 17, 0, tzinfo=ET)  # after-hours
+    assert minutes_to_close(now) is None
+    now = datetime(2025, 1, 11, 10, 0, tzinfo=ET)  # weekend
+    assert minutes_to_close(now) is None
+
+    # Early-close day uses the 13:00 ET boundary, not 16:00.
+    now = datetime(2026, 11, 27, 12, 55, tzinfo=ET)
+    assert minutes_to_close(now) == 5.0
+
+
+def test_should_block_new_entries_close_buffer():
+    """Regression for the 2026-07-16 HermesAlpha META incident: an entry
+    submitted 10s before the 16:00 ET close was accepted by the broker,
+    never filled (no time left in the session), and later reconciled away
+    with a null PnL. New entries must stop a few minutes before the bell
+    even though the session is technically still open.
+    """
+    # 15:59:50 ET — 10s before close. should_block_trades (the plain gate
+    # exits/management use) still says "open"; the entry-only gate must not.
+    now = datetime(2025, 1, 7, 15, 59, 50, tzinfo=ET)
+    assert should_block_trades(now) == (False, "")
+    blocked, reason = should_block_new_entries(now)
+    assert blocked is True
+    assert "closing soon" in reason
+
+    # Just outside the buffer (5m01s before close) — still allowed.
+    now = datetime(2025, 1, 7, 15, 54, 59, tzinfo=ET)
+    blocked, _ = should_block_new_entries(now)
+    assert blocked is False
+
+    # Just inside the buffer (4m59s before close) — blocked.
+    now = datetime(2025, 1, 7, 15, 55, 1, tzinfo=ET)
+    blocked, _ = should_block_new_entries(now)
+    assert blocked is True
+
+    # Early-close day: buffer applies to the 13:00 ET boundary too.
+    now = datetime(2026, 11, 27, 12, 57, tzinfo=ET)
+    assert should_block_trades(now) == (False, "")
+    blocked, _ = should_block_new_entries(now)
+    assert blocked is True
+
+
+def test_should_block_new_entries_matches_plain_gate_outside_buffer():
+    """Away from the closing minutes, the entry gate must not diverge from
+    should_block_trades — same weekend/holiday/after-hours/regular-session
+    verdicts, just with an extra restriction near the bell."""
+    cases = [
+        datetime(2025, 1, 7, 10, 0, tzinfo=ET),   # regular, mid-session
+        datetime(2025, 1, 7, 8, 0, tzinfo=ET),    # pre-market
+        datetime(2025, 1, 7, 17, 0, tzinfo=ET),   # after-hours
+        datetime(2025, 1, 11, 10, 0, tzinfo=ET),  # weekend
+        datetime(2025, 1, 1, 10, 0, tzinfo=ET),   # holiday
+    ]
+    for now in cases:
+        assert should_block_new_entries(now) == should_block_trades(now)

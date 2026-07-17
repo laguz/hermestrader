@@ -609,8 +609,13 @@ class PipelineController:
         # windows where quote feeds are stale and fills are punitive.
         # Operators who explicitly want off-hours submission can set
         # HERMES_ALLOW_OFFHOURS_TRADES=true (see market_hours.py).
-        from hermes.market_hours import should_block_trades
-        blocked, reason = should_block_trades()
+        # New entries get the stricter gate: a day-limit order submitted in
+        # the closing minutes can't realistically fill (2026-07-16 HermesAlpha
+        # META incident). Management/exits keep the plain gate — closing
+        # existing risk right up to the bell is fine.
+        from hermes.market_hours import should_block_trades, should_block_new_entries
+        gate = should_block_new_entries if action_type == "entry" else should_block_trades
+        blocked, reason = gate()
         if blocked:
             actions = list(actions)
             for a in actions:

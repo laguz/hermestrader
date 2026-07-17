@@ -27,7 +27,8 @@ from ._stubs import RepoNamespaceMixin
 
 @pytest.fixture(autouse=True)
 def mock_market_hours():
-    with patch("hermes.market_hours.should_block_trades", return_value=(False, "regular session")):
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "regular session")), \
+         patch("hermes.market_hours.should_block_new_entries", return_value=(False, "regular session")):
         yield
 
 
@@ -255,4 +256,52 @@ async def test_execute_approved_action_pure_close_routes_to_close_trade():
     ops = [e["op"] for e in db.events]
     assert "close_trade_from_action" in ops
     assert "record_order_response" not in ops
+
+
+# ── Close-buffer gate routing ───────────────────────────────────────────────
+def _close_action() -> TradeAction:
+    return TradeAction(
+        strategy_id="CS75", symbol="AAPL", order_class="multileg",
+        legs=[
+            {"option_symbol": "AAPL250620P00150000", "side": "buy_to_close", "quantity": 1},
+            {"option_symbol": "AAPL250620P00145000", "side": "sell_to_close", "quantity": 1},
+        ],
+        price=1.25, side="buy", quantity=1, order_type="debit",
+        tag="HERMES_CS75_CLOSE_TEST", strategy_params={"trade_id": 123},
+        expiry="2025-06-20",
+    )
+
+
+async def test_approval_open_action_deferred_in_close_buffer():
+    """An opening C2-approved action must be deferred (not sent to the
+    broker) inside the pre-close entry buffer — same regression as the
+    2026-07-16 HermesAlpha META incident, applied to the approval path."""
+    broker = _FakeBroker()
+    db = _FakeDB()
+    action = _make_action()  # sell_to_open — an entry, not a close
+
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "regular session")), \
+         patch("hermes.market_hours.should_block_new_entries",
+               return_value=(True, "closing soon (0.2m to close < 5m entry cutoff)")):
+        result = await _execute_approved_action(_approval_item(action), broker=broker, db=db)
+
+    assert result == "deferred"
+    assert broker.calls == []
+    assert any("[C2 DEFERRED]" in m for m in _logged(db))
+
+
+async def test_approval_close_action_ignores_close_buffer():
+    """A pure-close C2-approved action must still execute inside the
+    pre-close entry buffer — exits shouldn't be held back from the bell."""
+    broker = _FakeBroker()
+    db = _FakeDB()
+    action = _close_action()
+
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "regular session")), \
+         patch("hermes.market_hours.should_block_new_entries",
+               return_value=(True, "closing soon (0.2m to close < 5m entry cutoff)")):
+        result = await _execute_approved_action(_approval_item(action), broker=broker, db=db)
+
+    assert result == "executed"
+    assert len(broker.calls) == 1
 
