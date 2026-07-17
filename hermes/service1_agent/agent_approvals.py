@@ -95,9 +95,16 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
     # Market-hours gate — C2-approved trades must respect the same
     # off-hours block as strategy-emitted ones. Leave the approval row
     # in PENDING (do NOT mark FAILED) so the next tick during regular
-    # session picks it up automatically.
-    from hermes.market_hours import should_block_trades
-    blocked, reason = should_block_trades()
+    # session picks it up automatically. Opens get the stricter
+    # close-buffer gate (see _engine_pipeline.submit); pure closes keep
+    # the plain gate so exits can still go out right up to the bell.
+    is_pure_close = bool(action.legs) and all(
+        "to_close" in (leg.get("side") or "").lower() or "to_close" in (leg.get("action") or "").lower()
+        for leg in action.legs
+    )
+    from hermes.market_hours import should_block_trades, should_block_new_entries
+    gate = should_block_trades if is_pure_close else should_block_new_entries
+    blocked, reason = gate()
     if blocked:
         log.info("[C2] OFF-HOURS — deferring approval id=%d (%s)",
                  approval_id, reason)
@@ -127,10 +134,6 @@ async def _execute_approved_action(item: Dict[str, Any], *, broker, db) -> str:
         )
         return "preview"
 
-    is_pure_close = bool(action.legs) and all(
-        "to_close" in (leg.get("side") or "").lower() or "to_close" in (leg.get("action") or "").lower()
-        for leg in action.legs
-    )
     close_method = getattr(db.trades, "close_trade_from_action", None)
 
     # Same mid-at-submit capture as _engine_pipeline._execute_or_queue —

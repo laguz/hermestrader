@@ -9,6 +9,9 @@ Provides:
                           the broker round-trip never happens outside
                           the regular session unless the operator has
                           explicitly opted in via HERMES_ALLOW_OFFHOURS_TRADES.
+  - should_block_new_entries(): same, plus blocks brand-new entries in the
+                          last few minutes of the session (day-limit orders
+                          submitted that late can't realistically fill).
 
 All times are US/Eastern.  No third-party calendar dependency —
 holidays are maintained in NYSE_HOLIDAYS below.  Add each year's
@@ -213,6 +216,47 @@ def should_block_trades(now: Optional[datetime] = None) -> Tuple[bool, str]:
         return True, f"closed (not a trading day; {s['et_date']})"
     if not s["is_open"]:
         return True, f"closed ({s['session']} {s['et_time']} ET)"
+    return False, ""
+
+
+_ENTRY_CLOSE_BUFFER_MIN = 5.0
+
+
+def minutes_to_close(now: Optional[datetime] = None) -> Optional[float]:
+    """Minutes remaining in today's regular session, or ``None`` if the
+    market isn't currently in the regular session."""
+    if now is None:
+        now = _now_et()
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=ET)
+    if market_session(now)["session"] != "regular":
+        return None
+    today = now.date()
+    regular_close = _EARLY_CLOSE if today in NYSE_EARLY_CLOSES else _REGULAR_CLOSE
+    close_dt = datetime.combine(today, regular_close, tzinfo=ET)
+    return (close_dt - now).total_seconds() / 60.0
+
+
+def should_block_new_entries(now: Optional[datetime] = None) -> Tuple[bool, str]:
+    """Stricter gate for *new* entry orders: everything ``should_block_trades``
+    blocks, plus the final ``_ENTRY_CLOSE_BUFFER_MIN`` minutes of the regular
+    session. A day-limit entry order submitted that close to the bell has no
+    realistic chance to fill before Tradier expires it unfilled — see the
+    2026-07-16 HermesAlpha META incident, where an entry 10s before the
+    16:00 ET close was accepted by the broker, never filled, and later
+    reconciled away with a null PnL. Exits/management should keep using
+    ``should_block_trades`` — closing existing risk right up to the bell is
+    fine; opening new risk that can't fill isn't.
+    """
+    blocked, reason = should_block_trades(now)
+    if blocked:
+        return blocked, reason
+    remaining = minutes_to_close(now)
+    if remaining is not None and remaining < _ENTRY_CLOSE_BUFFER_MIN:
+        return True, (
+            f"closing soon ({remaining:.1f}m to close < "
+            f"{_ENTRY_CLOSE_BUFFER_MIN:.0f}m entry cutoff)"
+        )
     return False, ""
 
 

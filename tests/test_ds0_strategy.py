@@ -658,6 +658,7 @@ async def test_expired_approval_never_reaches_broker():
 async def test_fresh_approval_executes(monkeypatch):
     import hermes.market_hours as mh
     monkeypatch.setattr(mh, "should_block_trades", lambda: (False, ""))
+    monkeypatch.setattr(mh, "should_block_new_entries", lambda: (False, ""))
     db, broker = StubDB(), StubBroker()
     fresh = (datetime.now(timezone.utc) + timedelta(seconds=900)).isoformat()
     app_id = await _seed_approval(db, _entry_action(fresh))

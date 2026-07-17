@@ -79,10 +79,70 @@ async def test_out_of_loop_bypasses_review():
     )
     
     # 4. Call submit under mocked should_block_trades
-    with patch("hermes.market_hours.should_block_trades", return_value=(False, "")):
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "")), \
+         patch("hermes.market_hours.should_block_new_entries", return_value=(False, "")):
         await engine.submit([action], action_type="entry")
     
     # 5. Verify direct execution without review request event or LLM calls
     engine._execute_or_queue.assert_called_once_with(action, "entry")
     event_bus_mock.emit.assert_not_called()
     overseer_mock.review.assert_not_called()
+
+
+def _submit_gate_engine():
+    broker_mock = MagicMock()
+    db_mock = AsyncMock()
+    alias_db_namespaces(db_mock)
+    db_mock.active_veto.return_value = None
+    strategy_mock = MagicMock()
+    strategy_mock.PRIORITY = 1
+    strategy_mock.mm = None
+
+    engine = CascadingEngine(
+        broker=broker_mock,
+        db=db_mock,
+        strategies=[strategy_mock],
+        overseer=None,
+        approval_mode=False,
+        event_bus=MagicMock(),
+        llm_out_of_loop=True,
+    )
+    engine._execute_or_queue = AsyncMock()
+    return engine
+
+
+@pytest.mark.anyio
+async def test_submit_entry_uses_close_buffer_gate():
+    """submit() must route action_type='entry' through the stricter
+    close-buffer gate — regression for the 2026-07-16 HermesAlpha META
+    incident, where a day-limit entry order placed 10s before the 16:00 ET
+    close was accepted by the broker but had no chance to fill."""
+    engine = _submit_gate_engine()
+    action = TradeAction(
+        strategy_id="CS75", symbol="AAPL", order_class="multileg", legs=[],
+        price=1.50, side="sell", quantity=1, order_type="credit",
+    )
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "")), \
+         patch("hermes.market_hours.should_block_new_entries",
+               return_value=(True, "closing soon (0.2m to close < 5m entry cutoff)")):
+        await engine.submit([action], action_type="entry")
+
+    engine._execute_or_queue.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_submit_management_ignores_close_buffer_gate():
+    """Exits/management must NOT be subject to the entry close-buffer —
+    closing existing risk right up to the bell is fine and should keep
+    using the plain should_block_trades gate."""
+    engine = _submit_gate_engine()
+    action = TradeAction(
+        strategy_id="CS75", symbol="AAPL", order_class="multileg", legs=[],
+        price=1.50, side="sell", quantity=1, order_type="credit",
+    )
+    with patch("hermes.market_hours.should_block_trades", return_value=(False, "")), \
+         patch("hermes.market_hours.should_block_new_entries",
+               return_value=(True, "closing soon (0.2m to close < 5m entry cutoff)")):
+        await engine.submit([action], action_type="management")
+
+    engine._execute_or_queue.assert_called_once_with(action, "management")
