@@ -239,9 +239,9 @@ _CATALOG: List[Tunable] = [
             "fractional values shrink but never below 1 lot; 0.0 halts entries."),
 
     # ── DS0 (priority 6; 0 DTE S/R-reversion debit spreads, docs/ds0_spec.md) ─
-    _f("ds0_open_price", 0.10, "DS0", "Max entry debit ($)", min=0.01, max=5.0,
+    _f("ds0_open_price", 0.08, "DS0", "Max entry debit ($)", min=0.01, max=5.0,
        help="Day-limit price for the entry; never repriced or chased."),
-    _f("ds0_close_price", 0.40, "DS0", "Close limit ($)", min=0.01, max=10.0,
+    _f("ds0_close_price", 0.50, "DS0", "Close limit ($)", min=0.01, max=10.0,
        help="Resting take-profit credit placed as soon as the entry fills."),
     _f("ds0_pop_target", 0.75, "DS0", "POP floor", min=0.5, max=0.99,
        help="Min 3m POP that the qualifying S/R level holds."),
@@ -250,7 +250,7 @@ _CATALOG: List[Tunable] = [
     _i("ds0_atr_period", 14, "DS0", "ATR period (days)", min=2, max=60,
        help="Wilder ATR over this many completed daily bars sets the "
             "open±ATR range an S/R level must sit in to qualify."),
-    _f("ds0_sweep_min", 0.13, "DS0", "Sweep floor ($)", min=0.01, max=10.0,
+    _f("ds0_sweep_min", 0.11, "DS0", "Sweep floor ($)", min=0.01, max=10.0,
        help="The 15:01 sweep closes marks at/above this; below it the "
             "spread rides to expiration as the accepted loss."),
     _f("ds0_guard_band", 0.005, "DS0", "Guard band (fraction)", min=0.0, max=0.05,
