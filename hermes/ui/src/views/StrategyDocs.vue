@@ -13,7 +13,9 @@ const strategyLotMeta = computed(() => {
     CS7:  { target: d.CS7?.target, max: d.CS7?.max },
     TT45: { target: d.TT45?.target, max: d.TT45?.max },
     WHEEL: { max: d.WHEEL?.max },
-    HermesAlpha: { max: d.HERMESALPHA?.max }
+    HermesAlpha: { max: d.HERMESALPHA?.max },
+    DS0: { max: d.DS0?.max },
+    DS02: { target: d.DS02?.target, max: d.DS02?.max }
   }
 })
 </script>
@@ -21,7 +23,7 @@ const strategyLotMeta = computed(() => {
 <template>
   <div class="docs-container">
     <p class="tab-sec-desc">
-      Hermes ticks five strategies in priority order every loop, sizing entries through the
+      Hermes ticks seven strategies in priority order every loop, sizing entries through the
       money manager. Lot numbers below are live values from Settings → Watchlists.
     </p>
 
@@ -190,6 +192,75 @@ const strategyLotMeta = computed(() => {
         <div class="formula">Runs autonomously when Autonomy is set to Autonomous. Sized within the alpha max lots threshold.</div>
       </div>
     </div>
+
+    <!-- DS0 Card -->
+    <div class="card logic-card">
+      <h3 class="logic-title">
+        <span class="p-pill pill-cyan">P6</span> DS0 — 0DTE Reversion Debit Spreads
+      </h3>
+      <div class="logic-summary-row">
+        <div class="logic-summary-box">
+          <span class="l-lbl">Strategy Type</span>
+          <span class="l-val">0DTE Debit Spreads (Mean Reversion)</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">DTE Target Window</span>
+          <span class="l-val">0 DTE (Same-Day Expiry)</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">Spread Width</span>
+          <span class="l-val">$1.00 width</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">Max Lots</span>
+          <span class="l-val">{{ strategyLotMeta.DS0?.max ?? '—' }}</span>
+        </div>
+      </div>
+      <div class="logic-steps">
+        <div class="logic-step"><span class="step-num">1</span><span><strong>Range Qualification:</strong> A support level inside [open − ATR14, open] arms a <strong>put</strong> debit spread; a resistance level inside [open, open + ATR14] arms a <strong>call</strong> debit spread — reversion toward the level, not a touch-fade.</span></div>
+        <div class="logic-step"><span class="step-num">2</span><span><strong>POP Gate:</strong> The qualifying level's 3-month POP (that it holds) must be ≥ 75% — same engine and number CS7 uses.</span></div>
+        <div class="logic-step"><span class="step-num">3</span><span><strong>Entry:</strong> Day-limit buy at max $0.08 debit. Never repriced or chased; dies unfilled at day end. One shot per side per symbol per day.</span></div>
+        <div class="logic-step"><span class="step-num">4</span><span><strong>Exit:</strong> Resting day-limit sell at $0.50 placed on fill. 3:01 PM ET sweep closes anything marked ≥ $0.11; below that rides to expiry. 3:50 PM assignment guard force-closes near-the-money spreads (QQQ is American-style / physically settled).</span></div>
+        <div class="formula">No stop loss — the $0.08 debit is the entire accepted risk per side. Risk $0.08 to net $0.42 → 16% breakeven hit rate vs. the 75% POP-holds gate.</div>
+      </div>
+    </div>
+
+    <!-- DS02 Card -->
+    <div class="card logic-card">
+      <h3 class="logic-title">
+        <span class="p-pill pill-pink">P7</span> DS02 — 0DTE Implied-Move Iron Condors
+        <span class="p-pill pill-muted">Default-Disabled</span>
+      </h3>
+      <div class="logic-summary-row">
+        <div class="logic-summary-box">
+          <span class="l-lbl">Strategy Type</span>
+          <span class="l-val">0DTE Iron Condor (Implied-Move)</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">DTE Target Window</span>
+          <span class="l-val">0 DTE (Same-Day Expiry)</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">Spread Width</span>
+          <span class="l-val">$1.00 width</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">Target Lots</span>
+          <span class="l-val">{{ strategyLotMeta.DS02?.target ?? '—' }}</span>
+        </div>
+        <div class="logic-summary-box">
+          <span class="l-lbl">Max Lots</span>
+          <span class="l-val">{{ strategyLotMeta.DS02?.max ?? '—' }}</span>
+        </div>
+      </div>
+      <div class="logic-steps">
+        <div class="logic-step"><span class="step-num">1</span><span><strong>Entry Window:</strong> ET 10:00–13:30 — skips unreliable opening quotes and stops early enough that residual credit still compensates for the resting size.</span></div>
+        <div class="logic-step"><span class="step-num">2</span><span><strong>Implied-Move Signal:</strong> ATM straddle price (nearest-strike call mid + put mid) sets synthetic levels: spot − 1.0× straddle (support → put side) and spot + 1.0× straddle (resistance → call side). Self-adjusting as theta bleeds the straddle down through the day.</span></div>
+        <div class="logic-step"><span class="step-num">3</span><span><strong>Shared Credit Engine:</strong> Same strike-selection stack as CS75/CS7/HermesAlpha — honest chain-delta POP ≥ 80%, short Δ in 0.05–0.20, credit ≥ 10% of width, highest-EV candidate wins. Sits out FOMC/CPI (macro blackout).</span></div>
+        <div class="logic-step"><span class="step-num">4</span><span><strong>Management:</strong> TP at 50% of entry credit. SL at 2.5× credit (width-capped). Blanket EOD flatten at 15:45 ET — no per-trade proximity judgment.</span></div>
+        <div class="formula">Ships default-disabled — must be armed by the operator, never enabled by a deploy. Independent design from DS0: reuses the shared credit-spread engine, not DS0's debit machinery.</div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -235,6 +306,9 @@ const strategyLotMeta = computed(() => {
 .pill-orange { background: var(--color-orange); }
 .pill-purple { background: var(--color-purple); }
 .pill-green { background: var(--color-green); }
+.pill-cyan { background: var(--color-cyan); }
+.pill-pink { background: var(--color-pink); }
+.pill-muted { background: rgba(255, 255, 255, 0.08); color: var(--text-muted); font-weight: 600; }
 
 .logic-summary-row {
   display: flex;
