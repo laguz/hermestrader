@@ -56,6 +56,23 @@ def _safe_dispose_async_engine(engine) -> None:
     except Exception as e:
         import logging
         logging.getLogger("tests.conftest").warning("Failed to dispose async engine: %s", e)
+def _is_test_runner_internal(task) -> bool:
+    """True for the anyio pytest plugin's own machinery tasks.
+
+    anyio >=4.14.1 drives every fixture/test call through an internal
+    ``TestRunner._call_in_runner_task`` task that is *awaiting this very
+    fixture's teardown*. Cancelling it deadlocks the runner — the 2026-07-16
+    CI hang, where the suite froze forever at the first anyio-marked DB test
+    (anyio is an unpinned transitive dep, so CI resolved 4.14.2 while local
+    venvs still had 4.14.0, whose runner had no such per-call task).
+    ``asyncio.current_task()`` alone doesn't protect it: the current task
+    during teardown is the *runner* task, not this per-call driver.
+    """
+    coro = task.get_coro()
+    qualname = getattr(coro, "__qualname__", "") or ""
+    return qualname.startswith("TestRunner.")
+
+
 @pytest.fixture(autouse=True)
 async def cleanup_tasks():
     yield
@@ -66,8 +83,10 @@ async def cleanup_tasks():
             await asyncio.sleep(0.01)
         except asyncio.CancelledError:
             pass
-        
-        tasks = [t for t in asyncio.all_tasks(loop) if t is not asyncio.current_task(loop)]
+
+        tasks = [t for t in asyncio.all_tasks(loop)
+                 if t is not asyncio.current_task(loop)
+                 and not _is_test_runner_internal(t)]
         if tasks:
             for task in tasks:
                 task.cancel()
