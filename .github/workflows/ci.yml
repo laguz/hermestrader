@@ -64,5 +64,11 @@ jobs:
 
       - name: Run Pytest
         timeout-minutes: 10
+        env:
+          # -q buffers stdout, so a hang shows zero test-level output before
+          # the step timeout kills it — no way to see which test was running.
+          # -v plus unbuffered output makes the last-started test visible in
+          # the log even when the step times out.
+          PYTHONUNBUFFERED: "1"
         run: |
-          pytest tests -q
+          pytest tests -v --tb=short
