@@ -150,7 +150,8 @@ const LOT_META = {
   TT45: { hasTarget: true, targetDefault: 5,  maxDefault: 5 },
   WHEEL: { hasTarget: false, targetDefault: 5,  maxDefault: 5 },
   HERMESALPHA: { hasTarget: false, targetDefault: 1, maxDefault: 1 },
-  DS0: { hasTarget: false, targetDefault: 1, maxDefault: 1 }
+  DS0: { hasTarget: false, targetDefault: 1, maxDefault: 1 },
+  DS02: { hasTarget: true, targetDefault: 1, maxDefault: 1 }
 }
 
 function adjustLotsLocal(sid, field, delta) {
@@ -230,7 +231,8 @@ const STRAT_DETAILS = {
   TT45: { name: 'TT45', prio: 3, desc: 'TastyTrade 45 DTE' },
   WHEEL: { name: 'WHEEL', prio: 4, desc: 'Wheel Strategy' },
   HERMESALPHA: { name: 'HermesAlpha', prio: 5, desc: 'Self-Directed Strategy' },
-  DS0: { name: 'DS0', prio: 6, desc: '0DTE Debit Spreads' }
+  DS0: { name: 'DS0', prio: 6, desc: '0DTE Debit Spreads' },
+  DS02: { name: 'DS02', prio: 7, desc: '0DTE Implied-Move Iron Condors' }
 }
 
 function triggerUpdateInfo() {
@@ -297,7 +299,7 @@ function triggerUpdateInfo() {
           <p class="tab-sec-desc">Enabled strategies are evaluated every tick in priority order; disabled strategies are skipped entirely.</p>
           
           <div class="strategy-toggles">
-            <div v-for="sid in (state.watchlistData?.strategies || ['CS75', 'CS7', 'TT45', 'WHEEL', 'HERMESALPHA', 'DS0'])" :key="sid" class="strategy-toggle-row">
+            <div v-for="sid in (state.watchlistData?.strategies || ['CS75', 'CS7', 'TT45', 'WHEEL', 'HERMESALPHA', 'DS0', 'DS02'])" :key="sid" class="strategy-toggle-row">
               <div class="strat-info-toggle">
                 <span class="strat-name-toggle">{{ sid }}</span>
                 <span class="strat-desc-toggle">P{{ STRAT_DETAILS[sid]?.prio }} · {{ STRAT_DETAILS[sid]?.desc }}</span>

@@ -21,7 +21,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse
 
-from hermes.common import STRATEGIES, VALID_MODES
+from hermes.common import DEFAULT_DISABLED_STRATEGIES, STRATEGIES, VALID_MODES
 from hermes.market_hours import market_session, next_open
 
 from .._app_state import (
@@ -104,7 +104,8 @@ async def get_status() -> Dict[str, Any]:
     strategy_enabled = {}
     for sid in STRATEGIES:
         val = await db.settings.get_setting_async(strategy_enabled_key(sid))
-        strategy_enabled[sid] = (val or "true").lower() != "false"
+        default = "false" if sid in DEFAULT_DISABLED_STRATEGIES else "true"
+        strategy_enabled[sid] = (val or default).lower() != "false"
 
     llm_model = (await db.settings.get_setting_async(SETTING_LLM_MODEL) or "").strip()
     llm_provider = (await db.settings.get_setting_async(SETTING_LLM_PROVIDER) or "mock").strip()

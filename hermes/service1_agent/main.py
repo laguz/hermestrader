@@ -205,6 +205,11 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         if not await db.watchlist.list_watchlist("DS0"):
             await db.watchlist.set_watchlist("DS0", ["QQQ"])
             log.info("DS0 watchlist empty — seeded default ['QQQ']")
+        # DS02 has the same daily-expiry constraint and the same no-global-
+        # fallback contract as DS0.
+        if not await db.watchlist.list_watchlist("DS02"):
+            await db.watchlist.set_watchlist("DS02", ["QQQ"])
+            log.info("DS02 watchlist empty — seeded default ['QQQ']")
     except Exception as exc:
         log.exception("ensure_strategies failed at startup: %s", exc)
 

@@ -212,6 +212,8 @@ _CATALOG: List[Tunable] = [
     _i("tt45_max_lots", 5, "LOTS", "TT45 max lots", min=1, max=100),
     _i("wheel_max_lots", 5, "LOTS", "WHEEL max lots", min=1, max=100),
     _i("ds0_max_lots", 1, "LOTS", "DS0 max lots", min=0, max=100),
+    _i("ds02_target_lots", 1, "LOTS", "DS02 target lots", min=1, max=100),
+    _i("ds02_max_lots", 1, "LOTS", "DS02 max lots", min=0, max=100),
 
     # ── HERMESALPHA (priority 5; LLM-originated credit spreads) ────────────
     _i("hermesalpha_width", 5, "HERMESALPHA", "Spread width ($)", min=1, max=50,
@@ -265,6 +267,41 @@ _CATALOG: List[Tunable] = [
        help="Close anything marked at/above the sweep floor; below rides to expiry."),
     _s("ds0_guard_time", "15:50", "DS0", "Guard time (ET HH:MM)",
        help="When the assignment guard starts checking spot vs strikes."),
+
+    # ── DS02 (priority 7; 0 DTE implied-move iron condors, docs/ds02_spec.md) ─
+    _f("ds02_width", 1.0, "DS02", "Spread width ($)", min=0.5, max=50,
+       help="Strike distance between short and long legs."),
+    _f("ds02_pop_target", 0.80, "DS02", "POP floor", min=0.5, max=0.99,
+       help="Min honest chain-delta POP for the short strike to qualify."),
+    _f("ds02_short_delta_min", 0.05, "DS02", "Short Δ floor", min=0.0, max=1.0,
+       help="Reject short strikes with less delta (no premium left)."),
+    _f("ds02_short_delta_max", 0.20, "DS02", "Short Δ cap", min=0.0, max=1.0,
+       help="Reject short strikes with more delta (too close to the money)."),
+    _f("ds02_min_credit_pct", 0.10, "DS02", "Min credit %", min=0.01, max=1.0,
+       help="Reject spreads collecting less than this fraction of width."),
+    _f("ds02_move_mult", 1.0, "DS02", "Implied-move multiple", min=0.25, max=3.0,
+       help="Short-strike synthetic level = spot ± this × the ATM straddle "
+            "price (the chain's own implied move for the rest of the day)."),
+    _f("ds02_tp_pct", 0.5, "DS02", "Take-profit % of credit", min=0.05, max=0.95,
+       help="Close when this fraction of the entry credit has decayed away."),
+    _f("ds02_sl_mult", 2.5, "DS02", "Stop-loss multiple", min=1.0, max=10.0,
+       help="Close when the mid debit reaches credit times this (width-capped)."),
+    _s("ds02_entry_start", "10:00", "DS02", "Entry start (ET HH:MM)",
+       help="No entries before this — opening prints/quotes are unreliable."),
+    _s("ds02_entry_cutoff", "13:30", "DS02", "Entry cutoff (ET HH:MM)",
+       help="No new entries at or after this — the remaining premium no "
+            "longer pays for the tail."),
+    _s("ds02_eod_close_time", "15:45", "DS02", "EOD flatten time (ET HH:MM)",
+       help="Force-close anything still open at the best executable price — "
+            "no holding a defined-risk premium program into assignment "
+            "territory on physically-settled underlyings."),
+    _i("ds02_event_blackout_days", 0, "DS02", "Earnings blackout days", min=0, max=30,
+       help="Days to look ahead for the symbol's earnings to block new entries."),
+    _i("ds02_macro_blackout_days", 1, "DS02", "Macro blackout days", min=0, max=30,
+       help="Days to look ahead for FOMC/CPI dates to block new entries — "
+            "a 0DTE premium seller should sit out scheduled-volatility days."),
+    _f("ds02_min_ivr", 0.0, "DS02", "Minimum IV Rank", min=0.0, max=100.0,
+       help="Minimum implied volatility rank (0-100) required to open entries. Default 0 is off."),
 
     # ── EXECUTION (engine-wide: order-working + slippage feedback) ─────────
     _f("order_work_after_s", 60.0, "EXECUTION", "Reprice age threshold (s)", min=0.0, max=3600.0,

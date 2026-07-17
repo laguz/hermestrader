@@ -20,7 +20,7 @@ from hermes.service1_agent.core import (
 from hermes.service1_agent.overseer import HermesOverseer
 from hermes.service1_agent.strategies import (
     CreditSpreads75, CreditSpreads7, TastyTrade45, WheelStrategy, HermesAlpha,
-    DebitSpreads0DTE,
+    DebitSpreads0DTE, CreditSpreads0DTE,
 )
 
 from .agent_settings import (
@@ -179,6 +179,7 @@ def make_strategies(common: Dict[str, Any]) -> list:
         WheelStrategy(**common),
         HermesAlpha(**common),
         DebitSpreads0DTE(**common),
+        CreditSpreads0DTE(**common),
     ]
 
 

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Any, Dict
 from hermes.common import (
+    DEFAULT_DISABLED_STRATEGIES,
     DEFAULT_OVERSEER_MODE,
     STRATEGY_PRIORITIES,
     normalize_overseer_mode,
@@ -61,6 +62,7 @@ class ControlState:
             "wheel_max_lots":    5,
             "hermesalpha_target_lots": 1, "hermesalpha_max_lots": 1,
             "ds0_max_lots":   1,
+            "ds02_target_lots": 1, "ds02_max_lots": 1,
         }
         self.pending_order_ttl_s = 3600
         self.last_sync_ts = None
@@ -187,7 +189,8 @@ class ControlState:
                     
         for sid in STRATEGY_PRIORITIES:
             enabled_key = f"strategy_{sid.lower()}_enabled"
-            self.strategy_enabled[sid] = settings.get(enabled_key, "true").lower() != "false"
+            default = "false" if sid in DEFAULT_DISABLED_STRATEGIES else "true"
+            self.strategy_enabled[sid] = (settings.get(enabled_key) or default).lower() != "false"
             
         # Load soul
         self.soul = await db.settings.get_setting("soul_md") or ""
