@@ -10,6 +10,11 @@ jobs:
   test:
     name: Run Linter and Tests
     runs-on: ubuntu-latest
+    # Safety net: without this, a genuine hang burns the default 360-minute
+    # GitHub Actions job timeout before the run ever reports back (observed
+    # 2026-07-16/17 — a stuck "Run Pytest" step ran for 6+ hours before being
+    # cancelled). The full suite normally finishes in under two minutes.
+    timeout-minutes: 20
 
     # HermesTrader is Postgres/Timescale-only. The DB-backed tests create
     # throwaway databases on this service; the stub-based tests ignore it.
@@ -23,7 +28,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U hermes"
+          --health-cmd "pg_isready -U hermes -d postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
@@ -58,5 +63,6 @@ jobs:
           ruff check --select E9,F63,F7,F82 hermes tests
 
       - name: Run Pytest
+        timeout-minutes: 10
         run: |
           pytest tests -q
