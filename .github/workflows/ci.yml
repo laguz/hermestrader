@@ -71,4 +71,8 @@ jobs:
           # the log even when the step times out.
           PYTHONUNBUFFERED: "1"
         run: |
-          pytest tests -v --tb=short
+          # faulthandler_timeout: if any single test runs >120s (the whole
+          # suite normally finishes in ~80s), dump every thread's stack to
+          # stderr so a hang pinpoints its exact frame instead of just
+          # dying at the step timeout with no trace.
+          pytest tests -v --tb=short -o faulthandler_timeout=120
