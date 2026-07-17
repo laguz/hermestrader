@@ -220,8 +220,6 @@ async def _run_async(chart_provider, conf: Dict[str, Any]) -> None:
         # Persist defaults/fallbacks back to DB if they were not there
         if await db.settings.get_setting("obp_reserve") is None:
             await db.settings.set_setting("obp_reserve", str(runtime_config.obp_reserve))
-        if await db.settings.get_setting("tick_interval") is None:
-            await db.settings.set_setting("tick_interval", str(runtime_config.tick_interval))
     except Exception as exc:
         log.error("Fatal startup settings validation error: %s", exc)
         raise
@@ -545,7 +543,7 @@ if __name__ == "__main__":
     conf = {
         "watchlist": [s for s in os.environ.get("HERMES_WATCHLIST", "").split(",") if s.strip()],
         "ai_autonomy": os.environ.get("HERMES_AI_AUTONOMY", "advisory"),
-        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 3600)),
+        "tick_interval_s": int(os.environ.get("HERMES_TICK_INTERVAL", 300)),
         # How long an overseer VETO suppresses re-proposal of the identical
         # entry (seconds). 0 disables suppression. Repeat vetoes extend it.
         "veto_suppression_s": int(os.environ.get("HERMES_VETO_SUPPRESSION_S", 1800)),

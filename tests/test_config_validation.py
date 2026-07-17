@@ -33,23 +33,27 @@ def test_runtime_config_invalid_interval():
     assert "tick_interval must be at least 1 second" in str(exc_info.value)
 
 @pytest.mark.asyncio
-async def test_load_and_validate_runtime_config_success():
+async def test_load_and_validate_runtime_config_success(monkeypatch):
+    monkeypatch.delenv("HERMES_TICK_INTERVAL", raising=False)
     db = AsyncMock()
     alias_db_namespaces(db)
-    # Mock settings returned from DB
+    # A DB-stored tick_interval must be IGNORED — a stale seeded row
+    # silently overriding HERMES_TICK_INTERVAL kept live ticking hourly
+    # despite the env file (removed 2026-07-17).
     db.get_setting.side_effect = lambda key: {
         "obp_reserve": "2500",
         "tick_interval": "120",
-        "tick_interval_s": None,
+        "tick_interval_s": "120",
     }.get(key)
 
     conf = {}
     config = await _load_and_validate_runtime_config(db, conf)
     assert config.obp_reserve == 2500.0
-    assert config.tick_interval == 120
+    assert config.tick_interval == 300
 
 @pytest.mark.asyncio
-async def test_load_and_validate_runtime_config_db_fallback():
+async def test_load_and_validate_runtime_config_db_fallback(monkeypatch):
+    monkeypatch.delenv("HERMES_TICK_INTERVAL", raising=False)
     db = AsyncMock()
     alias_db_namespaces(db)
     # No settings in DB
@@ -62,6 +66,19 @@ async def test_load_and_validate_runtime_config_db_fallback():
     config = await _load_and_validate_runtime_config(db, conf)
     assert config.obp_reserve == 1000.0
     assert config.tick_interval == 45
+
+@pytest.mark.asyncio
+async def test_tick_interval_env_beats_conf_and_db(monkeypatch):
+    monkeypatch.setenv("HERMES_TICK_INTERVAL", "120")
+    db = AsyncMock()
+    alias_db_namespaces(db)
+    db.get_setting.side_effect = lambda key: {
+        "tick_interval": "9999",
+    }.get(key)
+
+    conf = {"tick_interval_s": 45}
+    config = await _load_and_validate_runtime_config(db, conf)
+    assert config.tick_interval == 120
 
 @pytest.mark.asyncio
 async def test_load_and_validate_runtime_config_validation_error():

@@ -983,7 +983,7 @@ class PipelineController:
         ``trigger_approvals`` signal published right after an operator
         decides an approval — so a decision reaches the broker within
         seconds instead of waiting for the next heartbeat
-        (``tick_interval_s``, e.g. 900s). Safe to call from both places
+        (``tick_interval_s``, e.g. 300s). Safe to call from both places
         concurrently: ``fetch_approved_actions()`` only returns rows still
         in ``APPROVED`` status, so whichever call processes a row first
         flips its status and the other finds nothing left to do for it.

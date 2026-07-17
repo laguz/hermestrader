@@ -158,7 +158,7 @@ async def handle_ipc_command(data: dict, control_state, db, conf: Dict[str, Any]
         # just refresh a cache: it's the whole reason the watcher fires this
         # signal right after an operator decision, instead of leaving the
         # trade to wait for the next slow heartbeat tick (tick_interval_s,
-        # e.g. 900s).
+        # e.g. 300s).
         await engine.execute_approved_actions()
     elif action == IPC_ACTION_SYNC_SETTINGS:
         log.info("[IPC] Received sync settings signal reactively")
