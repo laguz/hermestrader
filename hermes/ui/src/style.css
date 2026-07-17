@@ -23,6 +23,13 @@
   --color-orange-glow: rgba(249, 115, 22, 0.15);
   --color-purple: #8b5cf6;
   --color-purple-glow: rgba(139, 92, 246, 0.15);
+  /* Strategy-identity-only additions (DS0/DS02) — the six colors above are
+     each already claimed by a semantic role below, so these two don't get
+     a semantic alias; they exist solely to color a 7th/8th strategy. */
+  --color-cyan: #06b6d4;
+  --color-cyan-glow: rgba(6, 182, 212, 0.15);
+  --color-pink: #ec4899;
+  --color-pink-glow: rgba(236, 72, 153, 0.15);
 
   /* Semantic color roles. Blue is the one brand/interactive accent; green and
      red are reserved for P&L / good-bad and danger; yellow for caution. Orange

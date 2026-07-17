@@ -164,7 +164,9 @@ const STRAT_COLORS = {
   CS7:  'var(--color-yellow)',
   TT45: 'var(--color-orange)',
   WHEEL: 'var(--color-purple)',
-  HERMESALPHA: 'var(--color-green)'
+  HERMESALPHA: 'var(--color-green)',
+  DS0: 'var(--color-cyan)',
+  DS02: 'var(--color-pink)'
 }
 
 // Win rate circles parameters
