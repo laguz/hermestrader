@@ -327,7 +327,6 @@ async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
     from hermes.config_schema import RuntimeConfig
     
     obp_reserve_val = await db.settings.get_setting("obp_reserve")
-    tick_interval_val = await db.settings.get_setting("tick_interval") or await db.settings.get_setting("tick_interval_s")
 
     config_data = {}
     if obp_reserve_val is not None and str(obp_reserve_val).strip() != "":
@@ -335,9 +334,9 @@ async def _load_and_validate_runtime_config(db, conf: Dict[str, Any]):
     else:
         config_data["obp_reserve"] = float(os.environ.get("HERMES_OBP_RESERVE", conf.get("obp_reserve", 0.0)))
 
-    if tick_interval_val is not None and str(tick_interval_val).strip() != "":
-        config_data["tick_interval"] = int(str(tick_interval_val).strip())
-    else:
-        config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 3600)))
+    # Tick cadence comes from the environment only — a stale DB-seeded
+    # value silently overriding HERMES_TICK_INTERVAL kept live ticking
+    # hourly despite the env file (removed 2026-07-17 at operator request).
+    config_data["tick_interval"] = int(os.environ.get("HERMES_TICK_INTERVAL", conf.get("tick_interval_s", 300)))
 
     return RuntimeConfig(**config_data)

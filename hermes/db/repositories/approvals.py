@@ -26,7 +26,7 @@ class ApprovalsRepository(Repository):
 
         ``APPROVED`` must count as in-flight, not just ``PENDING``/
         ``PENDING_AI_REVIEW``: actual broker execution only happens on the
-        slow heartbeat tick (``tick_interval_s``, e.g. every 15 min), while a
+        slow heartbeat tick (``tick_interval_s``, e.g. every 5 min), while a
         reactive per-quote loop re-evaluates management closes every few
         seconds. Without this, approving a close left a few-second window
         where the row was no longer PENDING but not yet EXECUTED either, so

@@ -12,7 +12,7 @@ class HermesSettings(BaseSettings):
     hermes_mode: str = Field(default="paper")
     hermes_dsn: str = Field(default="postgresql+psycopg://hermes:hermes@db:5432/hermes")
     hermes_redis_dsn: str = Field(default="redis://localhost:6379/0")
-    hermes_tick_interval: int = Field(default=3600)
+    hermes_tick_interval: int = Field(default=300)
     hermes_watchlist: str = Field(default="AAPL,SPY,QQQ,NVDA,AMD,KO")
     hermes_dry_run: bool = Field(default=True)
     hermes_use_mcp_broker: bool = Field(default=True)
