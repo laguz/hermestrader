@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from hermes.common import (
+    DEFAULT_DISABLED_STRATEGIES,
     STRATEGY_PRIORITIES,
     VALID_AUTONOMY,
     normalize_overseer_mode,
@@ -87,9 +88,12 @@ async def _read_overseer_settings(db, conf: Dict[str, Any]) -> Dict[str, Any]:
     approval_mode = ((await db.settings.get_setting(SETTING_APPROVAL_MODE)) or "true").lower() == "true"
     llm_out_of_loop = ((await db.settings.get_setting(SETTING_LLM_OUT_OF_LOOP)) or "true").lower() == "true"
     overseer_mode = normalize_overseer_mode(await db.settings.get_setting("overseer_mode"))
-    # Per-strategy enable flags — default to enabled for all known strategies.
+    # Per-strategy enable flags — default to enabled for all known strategies
+    # except DEFAULT_DISABLED_STRATEGIES, which stay off until the operator
+    # explicitly arms them from the C2 panel.
     strategy_enabled = {
-        sid: ((await db.settings.get_setting(_strategy_enabled_key(sid))) or "true").lower() != "false"
+        sid: ((await db.settings.get_setting(_strategy_enabled_key(sid)))
+              or ("false" if sid in DEFAULT_DISABLED_STRATEGIES else "true")).lower() != "false"
         for sid in STRATEGY_PRIORITIES
     }
     return {

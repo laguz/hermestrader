@@ -20,8 +20,16 @@ VALID_MODES = ("paper", "live")
 # Strategy registry — order defines cascading priority (1 = highest).
 # Must stay in sync with the strategies registered in service1_agent/main.py.
 # ---------------------------------------------------------------------------
-STRATEGIES: tuple[str, ...] = ("CS75", "CS7", "TT45", "WHEEL", "HERMESALPHA", "DS0")
-STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4, "HERMESALPHA": 5, "DS0": 6}
+STRATEGIES: tuple[str, ...] = ("CS75", "CS7", "TT45", "WHEEL", "HERMESALPHA", "DS0", "DS02")
+STRATEGY_PRIORITIES: dict[str, int] = {"CS75": 1, "CS7": 2, "TT45": 3, "WHEEL": 4, "HERMESALPHA": 5, "DS0": 6, "DS02": 7}
+
+# Strategies whose per-strategy enable flag defaults to OFF when the
+# ``strategy_<id>_enabled`` setting is absent (everything else defaults to
+# ON, see agent_settings/control_state). A brand-new strategy must not start
+# trading the moment it deploys — on live, ``alpha_autonomous_live`` routes
+# enabled-strategy entries straight to the broker — so it ships in this set
+# and the operator arms it deliberately from the C2 panel.
+DEFAULT_DISABLED_STRATEGIES: frozenset[str] = frozenset({"DS02"})
 
 # ---------------------------------------------------------------------------
 # LLM / Overseer

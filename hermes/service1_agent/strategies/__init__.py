@@ -18,6 +18,7 @@ Layout
 - ``wheel.py``        — Priority 4, CSP → assignment → covered-call wheel
 - ``hermes_alpha.py`` — Priority 5, LLM-originated credit spreads
 - ``ds0.py``          — Priority 6, 0 DTE S/R-fade debit spreads
+- ``ds02.py``         — Priority 7, 0 DTE beyond-range credit spreads
 
 Adding a strategy: subclass ``AbstractStrategy`` from ``..core``, give it a
 ``PRIORITY`` ≥2 and a ``NAME``, drop it in here, and register it in
@@ -32,6 +33,7 @@ from .tt45 import TastyTrade45
 from .wheel import WheelStrategy
 from .hermes_alpha import HermesAlpha
 from .ds0 import DebitSpreads0DTE
+from .ds02 import CreditSpreads0DTE
 
 __all__ = [
     "CreditSpreads75",
@@ -40,4 +42,5 @@ __all__ = [
     "WheelStrategy",
     "HermesAlpha",
     "DebitSpreads0DTE",
+    "CreditSpreads0DTE",
 ]

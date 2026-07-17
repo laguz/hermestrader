@@ -64,6 +64,7 @@ _LOT_SPECS = {
     # point at the same setting so a change to "max lots" is what actually
     # controls sizing, with no separate target that can clamp it back down.
     "DS0":   {"target": ("ds0_max_lots",  1), "max": ("ds0_max_lots",  1)},
+    "DS02":  {"target": ("ds02_target_lots", 1), "max": ("ds02_max_lots", 1)},
 }
 
 # Case-insensitive lookup so PUT tolerates any casing of the incoming id.
