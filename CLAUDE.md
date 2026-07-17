@@ -183,7 +183,8 @@ idiom — it is NOT inverted legs. There is also deliberately no
 price-proximity/touch trigger (the old `ds0_trigger_band` was removed at the
 operator's instruction — not a missing tunable): entry qualification is
 POP ≥ 0.75 plus the level sitting inside session-open ± Wilder ATR(14), and
-the $0.10 day-limit itself is the trigger.
+the day-limit itself is the trigger ($0.08 since the 2026-07-17 operator
+retune; `ds0_open_price`).
 
 **Dynamic lookups via `getattr`/`__getattr__`:**
 - `WatchlistRepository.list_watchlist` — resolved dynamically via `getattr` in `_engine_pipeline.py`.

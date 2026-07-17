@@ -5,22 +5,22 @@ against stub broker / stub DB:
 
 - Entries: the open±ATR(14) range qualification (support in [open−ATR,
   open], resistance in [open, open+ATR], bounds inclusive, today's partial
-  bar excluded from the ATR), the 3m POP ≥ 0.75 gate, the $0.10 debit cap
+  bar excluded from the ATR), the 3m POP ≥ 0.75 gate, the $0.08 debit cap
   with closest-to-the-money pair selection, the 14:00 ET cutoff, the
   one-shot-per-side-per-day gate, and the "both sides can arm on the same
   day" contract. Actions must be debit multileg day-limits tagged
   ``HERMES_DS0`` carrying an approval-TTL stamp.
 - **Direction pairing is operator-specified and intentional**: qualified
   support → PUT debit spread, qualified resistance → CALL debit spread
-  (reversion *toward* the level — the $0.10 limit fills when price moves
+  (reversion *toward* the level — the $0.08 limit fills when price moves
   *away* from it). These assertions lock the pairing so a future audit
   doesn't "fix" it back to the original touch-fade orientation.
 - Empty own-watchlist means idle — DS0 must never trade the engine-wide
   default watchlist fallback (SPY/IWM there are perfectly valid 0DTE
   symbols the operator never armed).
-- Management: the $0.40 TP close is placed exactly when the fill is visible
+- Management: the $0.50 TP close is placed exactly when the fill is visible
   (both legs held at the broker); the 15:01 sweep closes marks at/above the
-  $0.13 floor and rides marks below it; a CLOSING trade's sweep close
+  $0.11 floor and rides marks below it; a CLOSING trade's sweep close
   carries ``replace_broker_order_id`` for its resting TP; the 3:50
   assignment guard fires on strike proximity regardless of mark and can be
   disarmed.
@@ -158,7 +158,7 @@ async def test_put_spread_arms_on_qualified_support():
     a = actions[0]
     assert a.tag == "HERMES_DS0"
     assert a.order_class == "multileg" and a.order_type == "debit"
-    assert a.side == "buy" and a.price == 0.10 and a.duration == "day"
+    assert a.side == "buy" and a.price == 0.08 and a.duration == "day"
     assert a.strategy_params["side_type"] == "put"
     assert a.strategy_params["level"] == 99.0
     assert a.strategy_params["today_open"] == 100.0
@@ -458,7 +458,7 @@ async def test_tp_close_placed_once_fill_is_visible():
     a = actions[0]
     assert a.tag == "HERMES_DS0_CLOSE_TP"
     assert a.order_type == "credit" and a.side == "sell"
-    assert a.price == 0.40
+    assert a.price == 0.50
     sides = {leg["side"] for leg in a.legs}
     assert sides == {"sell_to_close", "buy_to_close"}
     assert a.strategy_params["trade_id"] == trade["id"]
@@ -481,7 +481,7 @@ async def test_sweep_closes_marks_at_or_above_floor():
     db.set_open_trades("DS0", [trade])
     s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
     _hold_positions(broker, trade)
-    # mid = 0.30 − 0.05 = 0.25 → inside the [0.13, 0.40) sweep window.
+    # mid = 0.30 − 0.05 = 0.25 → inside the [0.11, 0.50) sweep window.
     _wire_quotes(broker, trade, long_q={"bid": 0.28, "ask": 0.32},
                  short_q={"bid": 0.04, "ask": 0.06})
     actions = await s.manage_positions()
@@ -497,21 +497,21 @@ async def test_sweep_rides_marks_below_floor():
     db.set_open_trades("DS0", [trade])
     s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
     _hold_positions(broker, trade)
-    # mid = 0.11 − 0.03 = 0.08 < the $0.13 floor → accepted loss, ride.
+    # mid = 0.11 − 0.03 = 0.08 < the $0.11 floor → accepted loss, ride.
     _wire_quotes(broker, trade, long_q={"bid": 0.10, "ask": 0.12},
                  short_q={"bid": 0.02, "ask": 0.04})
     assert await s.manage_positions() == []
 
 
 async def test_sweep_floor_boundary():
-    # Exactly $0.13 closes; $0.12 rides. (Operator rule: close 0.13–0.39.)
+    # Exactly $0.11 closes; $0.10 rides. (Operator rule: close 0.11–0.49.)
     trade = _ds0_trade(entry_debit=0.10)
     db = StubDB()
     db.set_open_trades("DS0", [trade])
     s, broker, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db)
     _hold_positions(broker, trade)
-    # long mid 0.16, short mid 0.03 → spread mid exactly 0.13.
-    _wire_quotes(broker, trade, long_q={"bid": 0.14, "ask": 0.18},
+    # long mid 0.14, short mid 0.03 → spread mid exactly 0.11.
+    _wire_quotes(broker, trade, long_q={"bid": 0.12, "ask": 0.16},
                  short_q={"bid": 0.02, "ask": 0.04})
     actions = await s.manage_positions()
     assert len(actions) == 1 and actions[0].tag == "HERMES_DS0_CLOSE_SWEEP-3PM"
@@ -521,8 +521,8 @@ async def test_sweep_floor_boundary():
     db2.set_open_trades("DS0", [trade2])
     s2, broker2, _ = _build_ds0(now_utc=_utc_at_et(15, 5), db=db2)
     _hold_positions(broker2, trade2)
-    # long mid 0.15, short mid 0.03 → spread mid 0.12, just under the floor.
-    _wire_quotes(broker2, trade2, long_q={"bid": 0.13, "ask": 0.17},
+    # long mid 0.13, short mid 0.03 → spread mid 0.10, just under the floor.
+    _wire_quotes(broker2, trade2, long_q={"bid": 0.11, "ask": 0.15},
                  short_q={"bid": 0.02, "ask": 0.04})
     assert await s2.manage_positions() == []
 

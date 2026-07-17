@@ -11,25 +11,25 @@ are independent and may be open at once.
 Direction pairing — INTENTIONAL, operator-specified 2026-07-10; do NOT
 "correct" this in an audit: a qualified **support** arms a **put** debit
 spread and a qualified **resistance** arms a **call** debit spread. The
-spread points *toward* the level, and its fixed $0.10 day-limit only fills
+spread points *toward* the level, and its fixed $0.08 day-limit only fills
 once price has moved *away* from the level (that is what makes the spread
 cheap) — the position bets the overextension reverts back toward the
 strong level. There is deliberately **no price-proximity/touch trigger**:
-the $0.10 limit itself is the trigger. This replaced the original
+the $0.08 limit itself is the trigger. This replaced the original
 touch-fade design (support→call / resistance→put); see the spec's
 revision note before flagging the pairing as inverted.
 
 Everything after submission is price-bound:
 
-- Entry: day-limit **buy** at ``ds0_open_price`` (default $0.10). Never
+- Entry: day-limit **buy** at ``ds0_open_price`` (default $0.08). Never
   repriced or chased; unfilled at end of day, the order dies.
 - Exit: as soon as the fill is visible, a resting **sell** day-limit at
-  ``ds0_close_price`` (default $0.40). No stop loss — the debit paid is the
+  ``ds0_close_price`` (default $0.50). No stop loss — the debit paid is the
   entire accepted risk.
 - 3:01 PM ET sweep (``ds0_sweep_time``): anything marked at/above
-  ``ds0_sweep_min`` (default $0.13) but shy of the target is closed at the
+  ``ds0_sweep_min`` (default $0.11) but shy of the target is closed at the
   live executable credit; anything below the floor rides to expiration as
-  the accepted loss. (At/above the $0.40 target the resting TP should have
+  the accepted loss. (At/above the $0.50 target the resting TP should have
   filled; if it somehow hasn't, the sweep closing it only banks more.)
 - 3:50 PM ET assignment guard (``ds0_assignment_guard``, default ON): a
   still-open spread whose near-money strike is ITM or within
@@ -313,7 +313,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
         # A side qualifies only when the level sits inside today's expected
         # range anchored at the session open: support in [open − ATR, open],
         # resistance in [open, open + ATR]. Bounds inclusive. No proximity
-        # trigger beyond this — the $0.10 day-limit is the trigger.
+        # trigger beyond this — the $0.08 day-limit is the trigger.
         lo, hi = ((today_open - atr, today_open) if level_type == "support"
                   else (today_open, today_open + atr))
         in_range = [lvl for lvl in analysis.get("key_levels", [])
@@ -571,7 +571,7 @@ class DebitSpreads0DTE(CreditSpreadStrategy):
 
         Guard first (assignment risk trumps the mark), then the sweep rule:
         mark at/above ``ds0_sweep_min`` → bank it; below the floor → ride to
-        expiration as the accepted loss. No upper bound — at/above the $0.40
+        expiration as the accepted loss. No upper bound — at/above the $0.50
         target the resting TP should already have filled, and if it somehow
         hasn't, closing here only banks more than the target.
         """

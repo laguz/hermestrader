@@ -19,13 +19,13 @@ verbatim by the operator, is *reversion toward a strong level*:
   `[open − ATR14, open]` arms a **put debit spread**.
 - A **resistance** level (POP ≥ 0.75) inside `[open, open + ATR14]` arms a
   **call debit spread**.
-- The spread points **toward** the level; its fixed $0.10 day-limit only
+- The spread points **toward** the level; its fixed $0.08 day-limit only
   fills when price has moved **away** from the level (that's what makes the
   spread cheap). Worked example (operator's own): support $713, QQQ opens
-  $720, rallies to $724 → the put spread cheapens to $0.10 → filled, betting
+  $720, rallies to $724 → the put spread cheapens to $0.08 → filled, betting
   the reversion back down. Resistance $727, QQQ drops to $715 → the call
-  spread reaches $0.10 → filled, betting the bounce back up.
-- There is **no price-proximity/touch trigger** in v2. The $0.10 limit
+  spread reaches $0.08 → filled, betting the bounce back up.
+- There is **no price-proximity/touch trigger** in v2. The $0.08 limit
   itself is the trigger; `ds0_trigger_band` was deleted from the program at
   the operator's instruction.
 
@@ -82,7 +82,7 @@ stop loss** — the debit paid is the entire accepted risk per side.
      candidate **put** debit spread.
    - A **resistance** level inside `[open, open + ATR]` → candidate
      **call** debit spread.
-   - **No proximity/touch condition.** The $0.10 day-limit is the trigger:
+   - **No proximity/touch condition.** The $0.08 day-limit is the trigger:
      it fills only when price moves away from the level far enough to make
      the spread that cheap. Entries still ride the reactive S/R path and
      the regular tick scan — both just re-evaluate the same rules.
@@ -98,11 +98,11 @@ stop loss** — the debit paid is the entire accepted risk per side.
 5. **Structure**: 1-wide vertical (`ds0_width`, default 1 — operator default,
    see Open defaults). Strikes are the closest-to-the-money OTM pair **in
    the direction of the level** (puts for support, calls for resistance)
-   whose mid debit is ≤ `ds0_open_price`. At a $0.10 cap the spread is
+   whose mid debit is ≤ `ds0_open_price`. At a $0.08 cap the spread is
    necessarily OTM; its payoff zone lies between spot and the level it
    reverts toward.
-6. **Entry order**: day-limit **buy at max $0.10 debit**
-   (`ds0_open_price`, default 0.10). Never repriced, never chased; unfilled
+6. **Entry order**: day-limit **buy at max $0.08 debit**
+   (`ds0_open_price`, default 0.08). Never repriced, never chased; unfilled
    at end of day → the order dies.
 7. **Position limits**: max **one open put spread and one open call spread
    per symbol per day** (per-side bookkeeping, same shape as CS75/CS7's
@@ -115,7 +115,7 @@ stop loss** — the debit paid is the entire accepted risk per side.
    DS0 is max-only like WHEEL — there is no separate `ds0_target_lots`
    that could silently clamp a raised `ds0_max_lots` back down; the max
    setting (or a per-symbol/inline override) is what actually controls
-   size. Worst-case day = 2 sides × $0.10 × 100 × lots = **$20/lot-pair
+   size. Worst-case day = 2 sides × $0.08 × 100 × lots = **$16/lot-pair
    per watchlist symbol**, so total daily risk scales with watchlist size
    — keep the watchlist short. Entries still flow through `MoneyManager`
    and `PortfolioRiskEngine` like every other strategy.
@@ -123,27 +123,27 @@ stop loss** — the debit paid is the entire accepted risk per side.
 ## Exit rules
 
 1. **On entry fill** (hook: existing `ORDER_FILL` reactive event; next tick
-   as fallback): immediately place the closing day-limit **sell at $0.40**
-   (`ds0_close_price`, default 0.40). It rests all day.
-2. **3:01 PM ET sweep** (`ds0_sweep_time`, default 15:01 ET — the $0.40
+   as fallback): immediately place the closing day-limit **sell at $0.50**
+   (`ds0_close_price`, default 0.50). It rests all day.
+2. **3:01 PM ET sweep** (`ds0_sweep_time`, default 15:01 ET — the $0.50
    limit gets the full hour through 3:00, the sweep runs the minute after):
    for each open DS0 spread, take the live mark (mid, via the same
    batched-quote path the other strategies use):
-   - **mark ≥ `ds0_sweep_min` (default $0.13) and < $0.40** → cancel the
-     resting $0.40 order and close now with a marketable limit (banks the
+   - **mark ≥ `ds0_sweep_min` (default $0.11) and < $0.50** → cancel the
+     resting $0.50 order and close now with a marketable limit (banks the
      partial profit / avoids assignment exposure on anything with
      meaningful value).
-   - **mark < $0.13** → leave it; it rides to expiration and expires
+   - **mark < $0.11** → leave it; it rides to expiration and expires
      worthless as the accepted debit loss.
-   - **mark ≥ $0.40** should be impossible (the resting limit would have
+   - **mark ≥ $0.50** should be impossible (the resting limit would have
      filled); if it ever occurs (pathologically wide market), close it too —
      that only banks more than the target.
 3. **No stop loss, no morning-pricing guard, no LLM exit.** The only exits
-   are the $0.40 limit and the 3:01 PM sweep.
+   are the $0.50 limit and the 3:01 PM sweep.
 
 ### Residual risk noted for sign-off
 
-A spread marked below $0.13 at 3:01 PM stays open, so a violent move in the last
+A spread marked below $0.11 at 3:01 PM stays open, so a violent move in the last
 hour could put price at/through its strikes at expiration → assignment risk
 and an overnight QQQ share position (American-style, physical settlement).
 Proposed default-ON safety tunable, **pending operator approval**:
@@ -154,9 +154,9 @@ near-the-money tail case the 3:01 PM sweep can miss.
 
 ## Economics (stated for the record)
 
-Risk $0.10 to net $0.30 → breakeven hit rate 25% (ignoring the 3:01 PM
+Risk $0.08 to net $0.42 → breakeven hit rate 16% (ignoring the 3:01 PM
 partial-profit closes, which improve it). The 75% POP gate is the probability
-the *level holds* — not directly the probability the spread reaches $0.40,
+the *level holds* — not directly the probability the spread reaches $0.50,
 which additionally requires price to travel to the strikes. Realized hit rate
 vs. the 25% breakeven is the key paper-trading metric; wire DS0 entries into
 the prediction ledger so `backfill_prediction_outcomes` can measure it.
@@ -176,7 +176,7 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
   is untouched (CLAUDE.md safety rule #3).
 - **Tags**: `HERMES_DS0` opens, `HERMES_DS0_CLOSE_<reason>` closes; all
   matchers accept both `_` and `-` forms (safety rule #5). Close reasons:
-  `TP` (the $0.40 fill is broker-side, recorded on reconcile), `SWEEP-3PM`,
+  `TP` (the $0.50 fill is broker-side, recorded on reconcile), `SWEEP-3PM`,
   `ASSIGN-GUARD` (if approved).
 - **Persistence**: opens record `entry_debit` (plumbing already exists in
   `trades.py` / `orm.py`; realized P&L uses `_compute_realized_pnl`'s debit
@@ -205,12 +205,12 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 | Key | Default | Meaning |
 |---|---|---|
 | `ds0_enabled` | off | master switch |
-| `ds0_open_price` | 0.10 | max entry debit (day-limit price) |
-| `ds0_close_price` | 0.40 | resting close limit placed on fill |
+| `ds0_open_price` | 0.08 | max entry debit (day-limit price) |
+| `ds0_close_price` | 0.50 | resting close limit placed on fill |
 | `ds0_pop_target` | 0.75 | min 3m POP for the qualifying level |
 | `ds0_width` | 1 | vertical width (operator default, confirm) |
 | `ds0_atr_period` | 14 | completed daily bars in the Wilder ATR (v2) |
-| `ds0_sweep_min` | 0.13 | sweep floor — marks below it ride to expiry (v2) |
+| `ds0_sweep_min` | 0.11 | sweep floor — marks below it ride to expiry (v2) |
 | `ds0_max_lots` | 1 | sizing, max-only like WHEEL (keep low) |
 | `ds0_entry_cutoff` | 14:00 ET | no new entries after (operator default, confirm) |
 | `ds0_sweep_time` | 15:01 ET | the partial-profit/flatten sweep (v2: 15:01) |
@@ -220,8 +220,8 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 
 ## Open defaults awaiting operator confirmation
 
-1. **Width = 1** — assumed; wider at a $0.10 cap means far-OTM strikes that
-   rarely see $0.40.
+1. **Width = 1** — assumed; wider at a $0.08 cap means far-OTM strikes that
+   rarely see $0.50.
 2. **Entry cutoff 14:00 ET** — assumed; with the 3:01 PM sweep, entries
    after 2 PM have almost no runway. No entry-start restriction (sides
    qualify from the open) unless the operator wants to skip the 9:30–10:00
@@ -234,7 +234,7 @@ the prediction ledger so `backfill_prediction_outcomes` can measure it.
 Stub-broker tests: POP gate at/below/above 0.75; debit cap respected and
 never repriced; close order placed exactly once on fill; both sides open
 independently and simultaneously; per-side cooldown; one-shot-per-side-per-
-day; 3:01 PM sweep matrix (<0.13 ride / 0.13–0.40 close / ≥0.40 close);
+day; 3:01 PM sweep matrix (<0.11 ride / 0.11–0.50 close / ≥0.50 close);
 sweep overrides nothing it shouldn't (no morning guard interaction); tag
 round-trip both forms; `entry_debit` recorded and debit-branch P&L; approval
 TTL expiry; `dte=0` POP engine behavior pinned. Paper instance for an
